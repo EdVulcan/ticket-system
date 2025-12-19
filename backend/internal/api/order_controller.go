@@ -37,8 +37,11 @@ func (c *OrderController) List(ctx *gin.Context) {
 	tenantID, _ := strconv.Atoi(ctx.DefaultQuery("tenant_id", "0"))
 	status := ctx.DefaultQuery("status", "")
 	channel := ctx.DefaultQuery("channel", "")
+	startDate := ctx.DefaultQuery("start_date", "")
+	endDate := ctx.DefaultQuery("end_date", "")
+	search := ctx.DefaultQuery("search", "")
 
-	orders, total, err := c.Service.List(page, pageSize, uint(tenantID), status, channel)
+	orders, total, err := c.Service.List(page, pageSize, uint(tenantID), status, channel, startDate, endDate, search)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

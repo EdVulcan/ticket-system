@@ -12,7 +12,17 @@
 
     <!-- Filter -->
     <div class="mb-4 flex gap-4">
-      <el-input v-model="searchQuery" placeholder="搜索订单号/手机号..." class="w-64" prefix-icon="Search" />
+      <el-input v-model="searchQuery" placeholder="搜索订单号/手机号..." class="w-64" prefix-icon="Search" @keyup.enter="fetchData" />
+      <el-date-picker
+        v-model="dateRange"
+        type="daterange"
+        range-separator="至"
+        start-placeholder="开始日期"
+        end-placeholder="结束日期"
+        value-format="YYYY-MM-DD"
+        class="w-64"
+        @change="fetchData"
+      />
       <el-select v-model="filterStatus" placeholder="订单状态" class="w-32" clearable>
         <el-option label="已支付" value="paid" />
         <el-option label="已完成" value="completed" />
@@ -146,6 +156,7 @@ const currentPage = ref(1)
 const pageSize = ref(10)
 const searchQuery = ref('')
 const filterStatus = ref('')
+const dateRange = ref<[string, string] | null>(null)
 
 const detailVisible = ref(false)
 const currentOrder = ref<any>(null)
@@ -196,14 +207,20 @@ const submitVerify = async () => {
 const fetchData = async () => {
   loading.value = true
   try {
-    const res = await axios.get(API_URL, {
-      params: {
-        page: currentPage.value,
-        page_size: pageSize.value,
-        status: filterStatus.value,
-        channel: 'online'
-      }
-    })
+    const params: any = {
+      page: currentPage.value,
+      page_size: pageSize.value,
+      channel: 'online'
+    }
+    if (filterStatus.value) params.status = filterStatus.value
+    if (searchQuery.value) params.search = searchQuery.value
+    
+    if (dateRange.value && dateRange.value.length === 2) {
+      params.start_date = dateRange.value[0]
+      params.end_date = dateRange.value[1]
+    }
+
+    const res = await axios.get(API_URL, { params })
     tableData.value = res.data.data
     total.value = res.data.total
   } catch (error) {

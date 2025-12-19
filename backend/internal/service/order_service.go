@@ -100,7 +100,7 @@ func (s *OrderService) Create(req *model.Order) error {
 	})
 }
 
-func (s *OrderService) List(page, pageSize int, tenantID uint, status string, channel string) ([]model.Order, int64, error) {
+func (s *OrderService) List(page, pageSize int, tenantID uint, status string, channel string, startDate string, endDate string, search string) ([]model.Order, int64, error) {
 	var orders []model.Order
 	var total int64
 
@@ -120,6 +120,15 @@ func (s *OrderService) List(page, pageSize int, tenantID uint, status string, ch
 		} else {
 			query = query.Where("channel = ?", channel)
 		}
+	}
+	if startDate != "" {
+		query = query.Where("created_at >= ?", startDate+" 00:00:00")
+	}
+	if endDate != "" {
+		query = query.Where("created_at <= ?", endDate+" 23:59:59")
+	}
+	if search != "" {
+		query = query.Where("order_no LIKE ? OR contact_name LIKE ? OR contact_phone LIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
 	}
 
 	err := query.Count(&total).Error

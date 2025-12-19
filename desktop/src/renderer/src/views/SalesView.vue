@@ -167,6 +167,17 @@
       <div v-if="currentView === 'orders'" class="p-6 h-full flex flex-col">
         <div class="bg-[#1f1f1f] p-4 rounded-lg mb-4 flex gap-3">
           <el-input v-model="orderSearchQuery" placeholder="输入订单号" style="width: 200px" prefix-icon="Search" class="dark-input" @keyup.enter="fetchOrders" />
+          <el-date-picker
+            v-model="orderDateRange"
+            type="daterange"
+            range-separator="至"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            value-format="YYYY-MM-DD"
+            style="width: 240px"
+            class="dark-input"
+            @change="fetchOrders"
+          />
           <el-select v-model="orderStatus" placeholder="状态" style="width: 120px" class="dark-select" @change="fetchOrders">
             <el-option label="全部" value="" />
             <el-option label="已支付" value="paid" />
@@ -458,8 +469,12 @@ const fetchOrders = async () => {
   ordersLoading.value = true
   try {
     const params: any = { page_size: 50, channel: 'window' }
-    if (orderSearchQuery.value) params.order_no = orderSearchQuery.value
+    if (orderSearchQuery.value) params.search = orderSearchQuery.value
     if (orderStatus.value) params.status = orderStatus.value
+    if (orderDateRange.value && orderDateRange.value.length === 2) {
+      params.start_date = orderDateRange.value[0]
+      params.end_date = orderDateRange.value[1]
+    }
     
     const res = await axios.get('http://127.0.0.1:8080/api/v1/orders', { params })
     orders.value = res.data.data
