@@ -1,0 +1,11 @@
+{
+    "contact_name": "张三",
+    "contact_phone": "13800138000",
+    "total_amount": 100,
+    "items": [
+        {
+            "product_id": 6,
+            "quantity": 2
+        }
+    ]
+}

@@ -1,0 +1,19 @@
+server:
+  port: 8080
+  mode: debug
+
+database:
+  driver: mysql
+  source: "root:123456@tcp(127.0.0.1:3306)/ticket_system?charset=utf8mb4&parseTime=True&loc=Local"
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 0
+
+log:
+  level: debug
+  filename: "app.log"
+  max_size: 10
+  max_age: 30
+  max_backups: 5
