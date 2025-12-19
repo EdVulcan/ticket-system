@@ -252,7 +252,12 @@
             <div class="bg-[#1f1f1f] rounded-lg p-6 border border-[#303030]">
                <div class="flex items-center gap-2 mb-5 text-lg font-bold text-[#ddd]"><el-icon><Printer /></el-icon> 设备管理</div>
                <el-form label-position="top">
-                  <el-form-item label="小票打印机"><el-select class="w-full" model-value="EPSON TM-T88V"><el-option label="EPSON TM-T88V" value="1"/></el-select></el-form-item>
+                  <el-form-item label="小票打印机">
+                    <el-select v-model="selectedPrinter" class="w-full" @change="saveSettings">
+                      <el-option label="EPSON TM-T88V" value="EPSON TM-T88V"/>
+                      <el-option label="Microsoft Print to PDF" value="Microsoft Print to PDF"/>
+                    </el-select>
+                  </el-form-item>
                   <el-button class="w-full">打印测试页</el-button>
                </el-form>
             </div>
@@ -267,6 +272,27 @@
                   </el-form-item>
                   <div class="text-xs text-gray-500 mt-2">设置后将用于核销验证记录</div>
                </el-form>
+            </div>
+
+            <div class="bg-[#1f1f1f] rounded-lg p-6 border border-[#303030]">
+               <div class="flex items-center gap-2 mb-5 text-lg font-bold text-[#ddd]"><el-icon><Notebook /></el-icon> 交接班管理</div>
+               <div class="flex flex-col gap-4">
+                 <div class="flex justify-between items-center bg-[#2b2b2b] p-3 rounded">
+                   <span class="text-gray-400">当前状态</span>
+                   <el-tag :type="shiftState.isOpen ? 'success' : 'info'">{{ shiftState.isOpen ? '当班中' : '未当班' }}</el-tag>
+                 </div>
+                 <div v-if="shiftState.isOpen" class="text-sm text-gray-500">
+                   <div>开始时间: {{ new Date(shiftState.startTime!).toLocaleString() }}</div>
+                   <div>操作员: {{ shiftState.operator }}</div>
+                 </div>
+                 <el-button 
+                   :type="shiftState.isOpen ? 'danger' : 'primary'" 
+                   class="w-full !h-[40px]" 
+                   @click="handleShiftAction"
+                 >
+                   {{ shiftState.isOpen ? '结束当班 / 交班' : '开始当班' }}
+                 </el-button>
+               </div>
             </div>
          </div>
       </div>
@@ -309,6 +335,13 @@ const checkpoints = ref<any[]>([])
 const currentCheckPointId = ref<number | null>(null)
 
 // --- Settings Logic ---
+const selectedPrinter = ref('EPSON TM-T88V')
+const shiftState = ref({
+  isOpen: false,
+  startTime: null as string | null,
+  operator: '李明 (007)'
+})
+
 const fetchCheckPoints = async () => {
   try {
     const res = await axios.get('http://127.0.0.1:8080/api/v1/checkpoints', { params: { page_size: 100 } })
@@ -321,14 +354,64 @@ const fetchCheckPoints = async () => {
 const saveSettings = () => {
   if (currentCheckPointId.value) {
     localStorage.setItem('pos_checkpoint_id', currentCheckPointId.value.toString())
-    ElMessage.success('设置已保存')
   }
+  localStorage.setItem('pos_printer', selectedPrinter.value)
+  ElMessage.success('设置已保存')
 }
 
 const loadSettings = () => {
   const savedId = localStorage.getItem('pos_checkpoint_id')
   if (savedId) {
     currentCheckPointId.value = parseInt(savedId)
+  }
+  const savedPrinter = localStorage.getItem('pos_printer')
+  if (savedPrinter) {
+    selectedPrinter.value = savedPrinter
+  }
+  
+  const savedShift = localStorage.getItem('pos_shift_state')
+  if (savedShift) {
+    try {
+      shiftState.value = JSON.parse(savedShift)
+    } catch (e) {}
+  }
+}
+
+const handleShiftAction = () => {
+  if (!shiftState.value.isOpen) {
+    // Start Shift
+    shiftState.value.isOpen = true
+    shiftState.value.startTime = new Date().toISOString()
+    localStorage.setItem('pos_shift_state', JSON.stringify(shiftState.value))
+    ElMessage.success('已开始当班')
+  } else {
+    // End Shift
+    ElMessageBox.confirm('确定要结束当前班次吗？', '交班确认', {
+      confirmButtonText: '确认交班',
+      cancelButtonText: '取消',
+      type: 'warning'
+    }).then(() => {
+      // Calculate stats (Mock for now, or filter orders if loaded)
+      // Ideally fetch from backend: orders created > startTime
+      const endTime = new Date()
+      const duration = shiftState.value.startTime ? 
+        ((endTime.getTime() - new Date(shiftState.value.startTime).getTime()) / 1000 / 60 / 60).toFixed(1) : '0'
+      
+      ElMessageBox.alert(`
+        <div class="text-left">
+          <p><strong>操作员：</strong>${shiftState.value.operator}</p>
+          <p><strong>当班时长：</strong>${duration} 小时</p>
+          <p><strong>开始时间：</strong>${new Date(shiftState.value.startTime!).toLocaleString()}</p>
+          <p><strong>结束时间：</strong>${endTime.toLocaleString()}</p>
+          <hr class="my-2"/>
+          <p>请在后台查看详细销售报表。</p>
+        </div>
+      `, '交班报告', { dangerouslyUseHTMLString: true })
+      
+      shiftState.value.isOpen = false
+      shiftState.value.startTime = null
+      localStorage.removeItem('pos_shift_state')
+    })
   }
 }
 
