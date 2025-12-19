@@ -36,8 +36,9 @@ func (c *OrderController) List(ctx *gin.Context) {
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "10"))
 	tenantID, _ := strconv.Atoi(ctx.DefaultQuery("tenant_id", "0"))
 	status := ctx.DefaultQuery("status", "")
+	channel := ctx.DefaultQuery("channel", "")
 
-	orders, total, err := c.Service.List(page, pageSize, uint(tenantID), status)
+	orders, total, err := c.Service.List(page, pageSize, uint(tenantID), status, channel)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

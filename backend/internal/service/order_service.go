@@ -26,6 +26,9 @@ func (s *OrderService) Create(req *model.Order) error {
 	return model.DB.Transaction(func(tx *gorm.DB) error {
 		// 1. Basic Info
 		req.OrderNo = s.GenerateOrderNo()
+		if req.Channel == "" {
+			req.Channel = "online"
+		}
 		req.Status = "paid" // Mock payment success
 
 		// 2. Process Items & Tickets
@@ -97,7 +100,7 @@ func (s *OrderService) Create(req *model.Order) error {
 	})
 }
 
-func (s *OrderService) List(page, pageSize int, tenantID uint, status string) ([]model.Order, int64, error) {
+func (s *OrderService) List(page, pageSize int, tenantID uint, status string, channel string) ([]model.Order, int64, error) {
 	var orders []model.Order
 	var total int64
 
@@ -109,6 +112,14 @@ func (s *OrderService) List(page, pageSize int, tenantID uint, status string) ([
 	}
 	if status != "" {
 		query = query.Where("status = ?", status)
+	}
+	if channel != "" {
+		if channel == "online" {
+			// Treat empty or null channel as online for backward compatibility
+			query = query.Where("channel = ? OR channel = '' OR channel IS NULL", "online")
+		} else {
+			query = query.Where("channel = ?", channel)
+		}
 	}
 
 	err := query.Count(&total).Error

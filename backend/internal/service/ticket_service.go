@@ -25,11 +25,6 @@ func (s *TicketService) Verify(code string, checkPointID uint, deviceID uint) er
 		}
 
 		// 3. Find Product & Rule
-		var product model.Product
-		if err := tx.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").First(&product, ticket.OrderItemID).Error; err != nil { // Note: OrderItemID is actually ProductID in OrderItem? No, OrderItem has ProductID.
-			// Wait, Ticket -> OrderItem -> Product.
-			// We need to load OrderItem first.
-		}
 
 		// Reload OrderItem to get ProductID
 		var orderItem model.OrderItem
@@ -38,6 +33,7 @@ func (s *TicketService) Verify(code string, checkPointID uint, deviceID uint) er
 		}
 
 		// Now load Product with Rule
+		var product model.Product
 		if err := tx.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").First(&product, orderItem.ProductID).Error; err != nil {
 			return errors.New("产品信息未找到")
 		}

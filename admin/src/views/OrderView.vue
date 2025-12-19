@@ -200,7 +200,8 @@ const fetchData = async () => {
       params: {
         page: currentPage.value,
         page_size: pageSize.value,
-        status: filterStatus.value
+        status: filterStatus.value,
+        channel: 'online'
       }
     })
     tableData.value = res.data.data

@@ -166,16 +166,40 @@
       <!-- View B: Orders -->
       <div v-if="currentView === 'orders'" class="p-6 h-full flex flex-col">
         <div class="bg-[#1f1f1f] p-4 rounded-lg mb-4 flex gap-3">
-          <el-input placeholder="输入订单号" style="width: 200px" prefix-icon="Search" class="dark-input" />
-          <el-date-picker type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" style="width: 300px" class="dark-date-picker" />
-          <el-select placeholder="状态" style="width: 120px" class="dark-select">
+          <el-input v-model="orderSearchQuery" placeholder="输入订单号" style="width: 200px" prefix-icon="Search" class="dark-input" @keyup.enter="fetchOrders" />
+          <el-select v-model="orderStatus" placeholder="状态" style="width: 120px" class="dark-select" @change="fetchOrders">
+            <el-option label="全部" value="" />
             <el-option label="已支付" value="paid" />
             <el-option label="已退款" value="refund" />
           </el-select>
-          <el-button type="primary">查询</el-button>
+          <el-button type="primary" @click="fetchOrders">查询</el-button>
         </div>
-        <div class="bg-[#1f1f1f] rounded-lg p-4 flex-1 overflow-hidden">
-           <el-empty description="暂无订单数据" />
+        <div class="bg-[#1f1f1f] rounded-lg p-4 flex-1 overflow-hidden flex flex-col">
+           <div class="flex justify-between text-gray-400 text-xs px-4 py-2 border-b border-[#333]">
+             <span class="w-[180px]">订单号</span>
+             <span class="w-[100px]">联系人</span>
+             <span class="w-[80px]">金额</span>
+             <span class="w-[80px]">状态</span>
+             <span class="w-[150px]">时间</span>
+             <span class="flex-1">商品</span>
+           </div>
+           <div class="flex-1 overflow-y-auto custom-scrollbar">
+             <div v-if="orders.length === 0" class="flex justify-center items-center h-full text-gray-500">暂无数据</div>
+             <div v-for="order in orders" :key="order.id" class="flex justify-between items-center px-4 py-3 border-b border-[#333] hover:bg-[#2b2b2b] text-sm">
+               <span class="w-[180px] font-mono text-[#1890ff]">{{ order.order_no }}</span>
+               <span class="w-[100px]">{{ order.contact_name || '-' }}</span>
+               <span class="w-[80px] font-bold text-[#faad14]">¥{{ order.total_amount }}</span>
+               <span class="w-[80px]">
+                 <span v-if="order.status==='paid'" class="text-green-500">已支付</span>
+                 <span v-else-if="order.status==='refund'" class="text-red-500">已退款</span>
+                 <span v-else>{{ order.status }}</span>
+               </span>
+               <span class="w-[150px] text-gray-400 text-xs">{{ new Date(order.created_at).toLocaleString() }}</span>
+               <span class="flex-1 text-gray-400 truncate">
+                 <span v-for="item in order.items" :key="item.id" class="mr-2">{{ item.product_name }} x{{ item.quantity }}</span>
+               </span>
+             </div>
+           </div>
         </div>
       </div>
 
@@ -183,9 +207,24 @@
       <div v-if="currentView === 'verify'" class="h-full flex gap-6 bg-[radial-gradient(circle_at_50%_30%,#1f2a36_0%,#141414_70%)]">
          <div class="flex-1 flex flex-col items-center justify-center">
             <div class="text-2xl font-bold text-gray-400 mb-8">请扫描票据二维码或输入票号</div>
-            <div class="w-[80%] max-w-[600px] relative">
-               <input class="w-full h-[80px] text-[32px] text-center tracking-[4px] bg-black/30 border-2 border-[#303030] text-[#1890ff] rounded-xl outline-none focus:border-[#1890ff] focus:shadow-[0_0_20px_rgba(24,144,255,0.2)] transition-all" placeholder="Waiting for scan..." autofocus />
-               <el-icon class="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500" :size="30"><FullScreen /></el-icon>
+            <div class="w-[80%] max-w-[600px] relative flex gap-2">
+               <div class="relative flex-1">
+                 <input 
+                   v-model="verifyInput"
+                   ref="verifyInputRef"
+                   class="w-full h-[80px] text-[32px] text-center tracking-[4px] bg-black/30 border-2 border-[#303030] text-[#1890ff] rounded-xl outline-none focus:border-[#1890ff] focus:shadow-[0_0_20px_rgba(24,144,255,0.2)] transition-all" 
+                   placeholder="Waiting for scan..." 
+                   autofocus 
+                   @keyup.enter="handleVerify"
+                 />
+                 <el-icon class="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500" :size="30"><FullScreen /></el-icon>
+               </div>
+               <button 
+                 class="w-[100px] h-[80px] bg-[#1890ff] rounded-xl text-white font-bold text-xl hover:bg-[#40a9ff] active:scale-95 transition-all shadow-lg shadow-blue-500/30"
+                 @click="handleVerify"
+               >
+                 核销
+               </button>
             </div>
          </div>
          <div class="w-[350px] bg-[#1f1f1f] border-l border-[#303030] p-5 flex flex-col">
@@ -204,6 +243,18 @@
                <el-form label-position="top">
                   <el-form-item label="小票打印机"><el-select class="w-full" model-value="EPSON TM-T88V"><el-option label="EPSON TM-T88V" value="1"/></el-select></el-form-item>
                   <el-button class="w-full">打印测试页</el-button>
+               </el-form>
+            </div>
+            
+            <div class="bg-[#1f1f1f] rounded-lg p-6 border border-[#303030]">
+               <div class="flex items-center gap-2 mb-5 text-lg font-bold text-[#ddd]"><el-icon><Place /></el-icon> 终端设置</div>
+               <el-form label-position="top">
+                  <el-form-item label="当前检票点">
+                    <el-select v-model="currentCheckPointId" placeholder="请选择检票点" class="w-full" @change="saveSettings">
+                      <el-option v-for="cp in checkpoints" :key="cp.id" :label="cp.name" :value="cp.id" />
+                    </el-select>
+                  </el-form-item>
+                  <div class="text-xs text-gray-500 mt-2">设置后将用于核销验证记录</div>
                </el-form>
             </div>
          </div>
@@ -231,6 +282,44 @@ const products = ref<any[]>([])
 const cart = ref<any[]>([])
 const searchInput = ref()
 const currentTime = ref('')
+
+// --- Orders State ---
+const orders = ref<any[]>([])
+const orderSearchQuery = ref('')
+const orderDateRange = ref<[string, string] | null>(null)
+const orderStatus = ref('')
+const ordersLoading = ref(false)
+
+// --- Verify State ---
+const verifyInput = ref('')
+const verifyHistory = ref<any[]>([])
+const verifyInputRef = ref()
+const checkpoints = ref<any[]>([])
+const currentCheckPointId = ref<number | null>(null)
+
+// --- Settings Logic ---
+const fetchCheckPoints = async () => {
+  try {
+    const res = await axios.get('http://127.0.0.1:8080/api/v1/checkpoints', { params: { page_size: 100 } })
+    checkpoints.value = res.data.data
+  } catch (e) {
+    console.error('Failed to fetch checkpoints', e)
+  }
+}
+
+const saveSettings = () => {
+  if (currentCheckPointId.value) {
+    localStorage.setItem('pos_checkpoint_id', currentCheckPointId.value.toString())
+    ElMessage.success('设置已保存')
+  }
+}
+
+const loadSettings = () => {
+  const savedId = localStorage.getItem('pos_checkpoint_id')
+  if (savedId) {
+    currentCheckPointId.value = parseInt(savedId)
+  }
+}
 
 // --- Computed ---
 const getPageTitle = computed(() => {
@@ -280,6 +369,7 @@ const fetchProducts = async () => {
   }
 }
 
+
 const addToCart = (product: any) => {
   const existing = cart.value.find(item => item.id === product.id)
   if (existing) {
@@ -324,10 +414,68 @@ const handleCheckout = async () => {
   }
 }
 
+const handleVerify = async () => {
+  const code = verifyInput.value.trim()
+  if (!code) return
+  
+  try {
+    // Determine if it's a ticket code or order no (simple heuristic or backend handles both)
+    // For now assume ticket code or order no.
+    // We need a checkpoint ID. For desktop POS, we might need to select a checkpoint or use a default one.
+    const checkPointId = currentCheckPointId.value
+    if (!checkPointId) {
+      ElMessage.warning('请先在设置中配置当前检票点')
+      return
+    }
+    
+    const res = await axios.post('http://127.0.0.1:8080/api/v1/tickets/verify', {
+      code: code,
+      check_point_id: checkPointId
+    })
+    
+    ElMessage.success('核销成功')
+    verifyHistory.value.unshift({
+      code: code,
+      status: 'success',
+      time: new Date().toLocaleString(),
+      msg: '核销成功'
+    })
+    verifyInput.value = ''
+  } catch (e: any) {
+    const msg = e.response?.data?.error || '核销失败'
+    ElMessage.error(msg)
+    verifyHistory.value.unshift({
+      code: code,
+      status: 'fail',
+      time: new Date().toLocaleString(),
+      msg: msg
+    })
+    verifyInput.value = ''
+  }
+}
+
+const fetchOrders = async () => {
+  ordersLoading.value = true
+  try {
+    const params: any = { page_size: 50, channel: 'window' }
+    if (orderSearchQuery.value) params.order_no = orderSearchQuery.value
+    if (orderStatus.value) params.status = orderStatus.value
+    
+    const res = await axios.get('http://127.0.0.1:8080/api/v1/orders', { params })
+    orders.value = res.data.data
+  } catch (e) {
+    ElMessage.error('获取订单失败')
+  } finally {
+    ordersLoading.value = false
+  }
+}
+
 // --- Lifecycle ---
 let timer: any
 onMounted(() => {
   fetchProducts()
+  fetchCheckPoints()
+  loadSettings()
   timer = setInterval(updateTime, 1000)
   updateTime()
   
@@ -336,6 +484,14 @@ onMounted(() => {
     if (e.key === 'F5') { e.preventDefault(); fetchProducts() }
     if (e.code === 'Space' && currentView.value === 'pos') { e.preventDefault(); handleCheckout() }
   })
+})
+
+import { watch } from 'vue'
+watch(currentView, (val) => {
+  if (val === 'orders') fetchOrders()
+  if (val === 'verify') {
+    setTimeout(() => verifyInputRef.value?.focus(), 100)
+  }
 })
 
 onUnmounted(() => clearInterval(timer))
