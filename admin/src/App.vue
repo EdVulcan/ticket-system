@@ -41,12 +41,19 @@
 
         <el-menu-item index="/product" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
           <el-icon><Ticket /></el-icon>
-          <span>门票管理</span>
+          <span>线上门票管理</span>
         </el-menu-item>
 
         <el-menu-item index="/order" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
           <el-icon><List /></el-icon>
-          <span>订单管理</span>
+          <span>线上订单管理</span>
+        </el-menu-item>
+
+        <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">线下销售</div>
+
+        <el-menu-item index="/product/offline" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+          <el-icon><Monitor /></el-icon>
+          <span>窗口门票管理</span>
         </el-menu-item>
         
         <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">系统设置</div>

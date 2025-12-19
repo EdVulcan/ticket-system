@@ -11,12 +11,24 @@ type ProductService struct{}
 // CreateRuleAndProduct 创建规则和产品 (事务处理)
 func (s *ProductService) Create(product *model.Product, rule *model.TicketRule) error {
 	return model.DB.Transaction(func(tx *gorm.DB) error {
+		// Force clear IDs to ensure creation
+		rule.ID = 0
+		for i := range rule.Groups {
+			rule.Groups[i].ID = 0
+			rule.Groups[i].RuleID = 0
+			for j := range rule.Groups[i].Items {
+				rule.Groups[i].Items[j].ID = 0
+				rule.Groups[i].Items[j].GroupID = 0
+			}
+		}
+
 		// 1. Create Rule
 		if err := tx.Create(rule).Error; err != nil {
 			return err
 		}
 
 		// 2. Link Rule to Product
+		product.ID = 0
 		product.RuleID = rule.ID
 		if err := tx.Create(product).Error; err != nil {
 			return err

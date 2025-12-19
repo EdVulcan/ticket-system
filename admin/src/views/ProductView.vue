@@ -94,27 +94,33 @@
               <el-form-item label="结算价格" prop="product.settlement_price">
                 <el-input-number v-model="form.product.settlement_price" :precision="2" :step="1" :min="0" class="w-full" />
               </el-form-item>
-              <el-form-item label="产品类型" prop="product.type">
-                 <el-radio-group v-model="form.product.type" @change="handleTypeChange">
-                   <el-radio label="online" border>线上票 (小程序/OTA)</el-radio>
-                   <el-radio label="offline" border>窗口票 (线下售卖)</el-radio>
-                 </el-radio-group>
+              
+              <el-form-item label="标签预设" class="col-span-2">
+                <el-select
+                  v-model="productTags"
+                  multiple
+                  filterable
+                  allow-create
+                  default-first-option
+                  :reserve-keyword="false"
+                  placeholder="输入标签后按回车 (如: 热销, 特惠)"
+                  class="w-full"
+                >
+                  <el-option label="热销" value="热销" />
+                  <el-option label="特惠" value="特惠" />
+                  <el-option label="推荐" value="推荐" />
+                  <el-option label="新品" value="新品" />
+                </el-select>
               </el-form-item>
+              <!-- Type is implicitly 'online' -->
 
-              <!-- Online Only Fields -->
-              <template v-if="form.product.type === 'online'">
                 <el-form-item label="发码模式" prop="product.code_mode">
                   <el-radio-group v-model="form.product.code_mode">
                     <el-radio label="order" border>一单一码 (全家一张)</el-radio>
                     <el-radio label="ticket" border>一票一码 (一人一张)</el-radio>
                   </el-radio-group>
                 </el-form-item>
-              </template>
               
-              <!-- Offline Hint -->
-              <div v-else class="ml-[100px] text-gray-400 text-sm mb-4">
-                * 窗口票默认强制为“一票一码”模式，且仅支持“当日有效”或“现场激活”。
-              </div>
             </div>
           </el-form>
         </el-tab-pane>
@@ -314,6 +320,7 @@ const enableTimeSlot = ref(false)
 const timeSlots = ref<any[]>([])
 const regionLimits = ref<string[]>([])
 const refundRules = ref<any[]>([])
+const productTags = ref<string[]>([])
 
 // Complex Form Structure
 const form = reactive({
@@ -337,7 +344,8 @@ const form = reactive({
     limit_per_phone: 0,
     limit_per_id: 0,
     refund_type: 'no_refund',
-    refund_rule: '' // JSON string
+    refund_rule: '', // JSON string
+    tags: '' // JSON string
   },
   rule: {
     name: '',
@@ -372,7 +380,7 @@ const fetchCheckPoints = async () => {
 const fetchData = async () => {
   loading.value = true
   try {
-    const res = await axios.get(API_URL)
+    const res = await axios.get(API_URL, { params: { type: 'online' } })
     tableData.value = res.data.data
   } catch (error) {
     ElMessage.error('获取数据失败')
@@ -405,6 +413,7 @@ const handleAdd = () => {
   timeSlots.value = []
   regionLimits.value = []
   refundRules.value = []
+  productTags.value = []
   
   dialogVisible.value = true
 }
@@ -442,6 +451,10 @@ const handleEdit = (row: any) => {
   try {
     refundRules.value = data.refund_rule ? JSON.parse(data.refund_rule) : []
   } catch(e) { refundRules.value = [] }
+
+  try {
+    productTags.value = data.tags ? JSON.parse(data.tags) : []
+  } catch(e) { productTags.value = [] }
 
   // Ensure groups and items are arrays
   if (form.rule.groups) {
@@ -546,6 +559,7 @@ const handleSubmit = async () => {
       form.product.time_slot_config = enableTimeSlot.value ? JSON.stringify(timeSlots.value) : ''
       form.product.region_limit = JSON.stringify(regionLimits.value)
       form.product.refund_rule = JSON.stringify(refundRules.value)
+      form.product.tags = JSON.stringify(productTags.value)
       
       // Sync rule name
       if (!form.rule.name) form.rule.name = form.product.name

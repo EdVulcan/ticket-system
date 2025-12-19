@@ -48,8 +48,12 @@ func (s *OrderService) Create(req *model.Order) error {
 				item.ValidityEnd = product.ValidityEndDate
 			} else {
 				item.ValidityStart = &now
-				end := now.AddDate(0, 0, product.ValidityDays)
-				item.ValidityEnd = &end
+				// Calculate end of the Nth day
+				// If ValidityDays = 0 (Today), End = Today 23:59:59
+				// If ValidityDays = 1 (Tomorrow), End = Tomorrow 23:59:59
+				endDate := now.AddDate(0, 0, product.ValidityDays)
+				endDate = time.Date(endDate.Year(), endDate.Month(), endDate.Day(), 23, 59, 59, 0, endDate.Location())
+				item.ValidityEnd = &endDate
 			}
 
 			// Generate Tickets

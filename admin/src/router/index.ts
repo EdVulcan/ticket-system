@@ -30,6 +30,11 @@ const router = createRouter({
             component: () => import('../views/ProductView.vue')
         },
         {
+            path: '/product/offline',
+            name: 'offline-product',
+            component: () => import('../views/OfflineProductView.vue')
+        },
+        {
             path: '/order',
             name: 'order',
             component: () => import('../views/OrderView.vue')
