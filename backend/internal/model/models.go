@@ -35,6 +35,17 @@ type User struct {
 	Tenant   Tenant `json:"tenant,omitempty"`
 }
 
+// Staff 员工 (一线作业人员)
+type Staff struct {
+	Base
+	Name      string `gorm:"size:50;not null" json:"name"`
+	JobNumber string `gorm:"size:50;uniqueIndex;not null" json:"job_number"` // 工号
+	Password  string `gorm:"size:100;not null" json:"-"`
+	Roles     string `gorm:"size:100;default:'seller'" json:"roles"` // seller, checker (comma separated)
+	Status    string `gorm:"size:20;default:'active'" json:"status"` // active, frozen
+	TenantID  uint   `json:"tenant_id"`
+}
+
 // CheckPoint 检票点
 type CheckPoint struct {
 	Base

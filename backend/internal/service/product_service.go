@@ -1,7 +1,10 @@
 package service
 
 import (
+	"encoding/json"
+	"fmt"
 	"ticket-backend/internal/model"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -40,6 +43,9 @@ func (s *ProductService) Create(product *model.Product, rule *model.TicketRule) 
 
 // Update 更新产品及规则 (事务处理)
 func (s *ProductService) Update(id uint, product *model.Product, rule *model.TicketRule) error {
+	// Invalidate Cache
+	model.RDB.Del(model.Ctx, fmt.Sprintf("product:%d", id))
+
 	return model.DB.Transaction(func(tx *gorm.DB) error {
 		// 1. Find existing product to get RuleID
 		var existingProduct model.Product
@@ -133,6 +139,34 @@ func (s *ProductService) Delete(id uint) error {
 	return model.DB.Delete(&model.Product{}, id).Error
 }
 
+func (s *ProductService) Get(id uint) (*model.Product, error) {
+	// 1. Try Redis
+	ctx := model.Ctx
+	key := fmt.Sprintf("product:%d", id)
+	val, err := model.RDB.Get(ctx, key).Result()
+	if err == nil {
+		var product model.Product
+		if jsonErr := json.Unmarshal([]byte(val), &product); jsonErr == nil {
+			return &product, nil
+		}
+	}
+
+	// 2. Fallback to DB
+	var product model.Product
+	if err := model.DB.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Preload("Rule.Groups.Items.CheckPoint").First(&product, id).Error; err != nil {
+		return nil, err
+	}
+
+	// 3. Set Redis
+	if data, err := json.Marshal(product); err == nil {
+		model.RDB.Set(ctx, key, data, time.Hour)
+	}
+
+	return &product, nil
+}
+
 func (s *ProductService) UpdateStatus(id uint, status string) error {
+	// Invalidate Cache
+	model.RDB.Del(model.Ctx, fmt.Sprintf("product:%d", id))
 	return model.DB.Model(&model.Product{}).Where("id = ?", id).Update("status", status).Error
 }

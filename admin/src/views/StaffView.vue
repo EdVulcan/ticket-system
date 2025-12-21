@@ -1,0 +1,169 @@
+<template>
+  <div class="staff-view">
+    <div class="header">
+      <h2>员工管理</h2>
+      <el-button type="primary" @click="dialogVisible = true">新增员工</el-button>
+    </div>
+
+    <el-table :data="staffList" style="width: 100%" v-loading="loading">
+      <el-table-column prop="job_number" label="工号" width="120" />
+      <el-table-column prop="name" label="姓名" width="120" />
+      <el-table-column prop="roles" label="角色">
+        <template #default="scope">
+          <el-tag v-for="role in scope.row.roles.split(',')" :key="role" class="mr-1">
+            {{ roleMap[role] || role }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="status" label="状态" width="100">
+        <template #default="scope">
+          <el-tag :type="scope.row.status === 'active' ? 'success' : 'danger'">
+            {{ scope.row.status === 'active' ? '正常' : '冻结' }}
+          </el-tag>
+        </template>
+      </el-table-column>
+      <el-table-column prop="created_at" label="创建时间" />
+      <el-table-column label="操作" width="200">
+        <template #default="scope">
+          <el-button size="small" type="warning" @click="handleResetPassword(scope.row)">重置密码</el-button>
+          <el-button size="small" type="danger" @click="handleDelete(scope.row)">删除</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+
+    <!-- Create Dialog -->
+    <el-dialog v-model="dialogVisible" title="新增员工" width="30%">
+      <el-form :model="form" label-width="80px">
+        <el-form-item label="工号">
+          <el-input v-model="form.job_number" placeholder="例如: 1001" />
+        </el-form-item>
+        <el-form-item label="姓名">
+          <el-input v-model="form.name" placeholder="员工真实姓名" />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="form.password" type="password" show-password />
+        </el-form-item>
+        <el-form-item label="角色">
+          <el-checkbox-group v-model="form.roles">
+            <el-checkbox label="seller">售票员</el-checkbox>
+            <el-checkbox label="checker">验票员</el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="handleCreate">确定</el-button>
+        </span>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, reactive, onMounted } from 'vue'
+import axios from 'axios'
+import { ElMessage, ElMessageBox } from 'element-plus'
+
+const staffList = ref([])
+const loading = ref(false)
+const dialogVisible = ref(false)
+
+const roleMap: Record<string, string> = {
+  seller: '售票员',
+  checker: '验票员'
+}
+
+const form = reactive({
+  job_number: '',
+  name: '',
+  password: '',
+  roles: [] as string[]
+})
+
+const fetchStaff = async () => {
+  loading.value = true
+  try {
+    const res = await axios.get('/api/v1/staff')
+    staffList.value = res.data
+  } catch (error) {
+    ElMessage.error('获取员工列表失败')
+  } finally {
+    loading.value = false
+  }
+}
+
+const handleCreate = async () => {
+  if (!form.job_number || !form.name || !form.password || form.roles.length === 0) {
+    ElMessage.warning('请填写完整信息')
+    return
+  }
+  
+  const payload = {
+    ...form,
+    roles: form.roles.join(',')
+  }
+
+  try {
+    await axios.post('/api/v1/staff', payload)
+    ElMessage.success('创建成功')
+    dialogVisible.value = false
+    fetchStaff()
+    // Reset form
+    form.job_number = ''
+    form.name = ''
+    form.password = ''
+    form.roles = []
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '创建失败')
+  }
+}
+
+const handleDelete = (row: any) => {
+  ElMessageBox.confirm('确定删除该员工吗?', '提示', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    type: 'warning'
+  }).then(async () => {
+    try {
+      await axios.delete(`/api/v1/staff/${row.id}`)
+      ElMessage.success('删除成功')
+      fetchStaff()
+    } catch (error) {
+      ElMessage.error('删除失败')
+    }
+  })
+}
+
+const handleResetPassword = (row: any) => {
+  ElMessageBox.prompt('请输入新密码', '重置密码', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    inputPattern: /.{6,}/,
+    inputErrorMessage: '密码长度至少6位'
+  }).then(async ({ value }) => {
+    try {
+      await axios.put(`/api/v1/staff/${row.id}/password`, { password: value })
+      ElMessage.success('密码重置成功')
+    } catch (error) {
+      ElMessage.error('重置失败')
+    }
+  })
+}
+
+onMounted(() => {
+  fetchStaff()
+})
+</script>
+
+<style scoped>
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.mr-1 {
+  margin-right: 4px;
+}
+</style>

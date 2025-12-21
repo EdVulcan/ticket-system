@@ -61,6 +61,11 @@
           <el-icon><Setting /></el-icon>
           <span>系统设置</span>
         </el-menu-item>
+
+        <el-menu-item index="/staff" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+          <el-icon><User /></el-icon>
+          <span>员工管理</span>
+        </el-menu-item>
       </el-menu>
 
       <!-- User Profile (Bottom) -->

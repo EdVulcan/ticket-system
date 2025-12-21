@@ -30,6 +30,7 @@ func InitDB() error {
 	err = DB.AutoMigrate(
 		&Tenant{},
 		&User{},
+		&Staff{},
 		&CheckPoint{},
 		&Device{},
 		&TicketRule{},
@@ -45,5 +46,6 @@ func InitDB() error {
 		return fmt.Errorf("failed to migrate database: %w", err)
 	}
 
+	InitRedis()
 	return nil
 }

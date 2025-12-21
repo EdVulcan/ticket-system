@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import SalesView from './views/SalesView.vue'
 </script>
 
 <template>
-  <SalesView />
+  <RouterView />
 </template>
 
 <style>

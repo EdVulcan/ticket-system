@@ -42,6 +42,16 @@ func (c *ProductController) Create(ctx *gin.Context) {
 	})
 }
 
+func (c *ProductController) Get(ctx *gin.Context) {
+	id, _ := strconv.Atoi(ctx.Param("id"))
+	product, err := c.Service.Get(uint(id))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "Product not found"})
+		return
+	}
+	ctx.JSON(http.StatusOK, product)
+}
+
 func (c *ProductController) Update(ctx *gin.Context) {
 	id, _ := strconv.Atoi(ctx.Param("id"))
 	var req CreateProductRequest
