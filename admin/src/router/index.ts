@@ -64,6 +64,12 @@ const router = createRouter({
             meta: { title: '员工管理' }
         },
         {
+            path: '/system-user',
+            name: 'system-user',
+            component: () => import('../views/UserView.vue'),
+            meta: { title: '系统员管理' }
+        },
+        {
             path: '/settings',
             name: 'settings',
             component: () => import('../views/HomeView.vue'), // Placeholder

@@ -81,23 +81,15 @@
             <el-icon><User /></el-icon>
             <span>员工管理</span>
           </el-menu-item>
+          
+          <el-menu-item index="/system-user" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+            <el-icon><UserFilled /></el-icon>
+            <span>系统员管理</span>
+          </el-menu-item>
         </el-menu>
 
         <!-- User Profile (Bottom) -->
-        <div class="p-4 border-t border-slate-800 bg-slate-950/50">
-          <div class="flex items-center gap-3 cursor-pointer hover:bg-slate-800 p-2 rounded-lg transition-colors group">
-            <el-avatar :size="36" class="ring-2 ring-indigo-500/50" src="https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png" />
-            <div class="flex flex-col overflow-hidden">
-              <span class="text-sm font-medium text-white truncate">{{ user.username || '商户' }}</span>
-              <div class="flex items-center gap-1 text-xs text-slate-400">
-                <span @click.stop="toggleDevRole" class="cursor-pointer hover:text-indigo-400 select-none" title="[开发调试] 点击切换角色">
-                    {{ isSuperAdmin ? '平台管理员 (Dev)' : '商户管理员' }}
-                </span>
-                <el-icon class="opacity-0 group-hover:opacity-100 transition-opacity hover:text-white" title="复制编号"><CopyDocument /></el-icon>
-              </div>
-            </div>
-          </div>
-        </div>
+        <!-- User Profile (Bottom) Removed -->
       </el-aside>
 
       <!-- Main Content -->
@@ -110,20 +102,55 @@
               <el-breadcrumb-item>{{ route.meta.title || '控制台' }}</el-breadcrumb-item>
             </el-breadcrumb>
           </div>
-          <div class="flex items-center gap-4">
-            <div class="flex items-center gap-4 transition-all duration-300">
-                <el-tooltip content="退出登录" placement="bottom">
-                  <el-button circle plain type="danger" @click="handleLogout">
-                    <el-icon><SwitchButton /></el-icon>
-                  </el-button>
+          <!-- Header Right Actions -->
+          <div class="flex items-center gap-6">
+            <!-- Tenant Badge -->
+            <div class="hidden md:flex items-center gap-2 bg-indigo-50 border border-indigo-100 rounded-full px-4 py-1.5 transition-all hover:shadow-sm hover:border-indigo-200 group cursor-default">
+                <el-icon class="text-indigo-600"><OfficeBuilding /></el-icon>
+                <span class="text-sm font-semibold text-indigo-900">{{ user.tenant_name || '商户' }}</span>
+                <div class="w-px h-3 bg-indigo-200 mx-1"></div>
+                <el-tooltip content="点击复制商户编号" placement="bottom">
+                    <span 
+                        class="text-xs font-mono font-medium text-indigo-500 hover:text-indigo-700 cursor-pointer select-none bg-white px-2 py-0.5 rounded border border-indigo-100"
+                        @click="copyCode"
+                    >
+                        {{ user.system_code || '---' }}
+                    </span>
                 </el-tooltip>
-                <el-button circle plain>
-                  <el-icon><Bell /></el-icon>
-                </el-button>
-                <el-button circle plain>
-                  <el-icon><FullScreen /></el-icon>
-                </el-button>
             </div>
+
+            <!-- Vertical Divider -->
+            <div class="w-px h-6 bg-gray-200 hidden md:block"></div>
+
+            <!-- User Profile Dropdown -->
+            <el-dropdown trigger="click" @command="handleCommand">
+                <div class="flex items-center gap-3 cursor-pointer outline-none select-none transition-opacity hover:opacity-80">
+                    <div class="flex flex-col items-end">
+                        <span class="text-sm font-bold text-gray-800 leading-tight">{{ user.username || 'User' }}</span>
+                        <span class="text-[10px] font-medium text-gray-500 uppercase tracking-wide bg-gray-100 px-1.5 py-px rounded mt-0.5">
+                            {{ user.role === 'admin' ? '管理员' : (user.role === 'sub_admin' ? '普通管理' : user.role) }}
+                        </span>
+                    </div>
+                    <el-avatar :size="40" class="ring-2 ring-gray-100 shadow-sm" src="https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png" />
+                    <el-icon class="text-gray-400"><CaretBottom /></el-icon>
+                </div>
+                <template #dropdown>
+                    <el-dropdown-menu class="w-48">
+                        <div class="px-4 py-3 border-b border-gray-100 mb-1">
+                            <p class="text-xs text-gray-400 mb-1">当前身份</p>
+                            <p class="text-sm font-bold text-gray-900">{{ user.role === 'admin' ? '商户主管理员' : '普通系统员' }}</p>
+                        </div>
+                        <el-dropdown-item command="switch_role" v-if="user.role === 'super_admin' || user.role === 'admin'">
+                            <el-icon><Switch /></el-icon>
+                            切换视角 (Dev)
+                        </el-dropdown-item>
+                        <el-dropdown-item command="logout" class="text-red-500 focus:text-red-600">
+                            <el-icon><SwitchButton /></el-icon>
+                            退出登录
+                        </el-dropdown-item>
+                    </el-dropdown-menu>
+                </template>
+            </el-dropdown>
           </div>
         </el-header>
 
@@ -144,11 +171,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { 
-  Odometer, Monitor, Location, Ticket, List, Setting, User, 
-  SwitchButton, Bell, FullScreen, CopyDocument, OfficeBuilding, Connection 
+  Odometer, Monitor, Location, Ticket, List, Setting, User, UserFilled,
+  SwitchButton, OfficeBuilding, Connection,
+  CaretBottom, Switch
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
@@ -178,23 +206,43 @@ const toggleDevRole = () => {
     user.value = newUser
     isSuperAdmin.value = newUser.role === 'super_admin'
     localStorage.setItem('user', JSON.stringify(newUser))
-    // reload to apply menu changes ensuring router/App state sync
     setTimeout(() => location.reload(), 500)
 }
 
-onMounted(() => {
+const handleCommand = (command: string) => {
+    if (command === 'logout') {
+        handleLogout()
+    } else if (command === 'switch_role') {
+        toggleDevRole()
+    }
+}
+
+const copyCode = () => {
+    if (user.value.system_code) {
+        navigator.clipboard.writeText(user.value.system_code)
+        ElMessage.success('系统编号已复制')
+    }
+}
+
+
+const loadUser = () => {
     const userStr = localStorage.getItem('user')
     if (userStr) {
         try {
             user.value = JSON.parse(userStr)
-            // Logic: standard tenants have role="admin" or "staff".
-            // Platform Operator must have role="super_admin".
-            // For testing: manually set localStorage user.role = 'super_admin' to see effect.
             isSuperAdmin.value = user.value.role === 'super_admin'
         } catch (e) {
             console.error('Failed to parse user info')
         }
     }
+}
+
+watch(() => route.path, () => {
+    loadUser()
+})
+
+onMounted(() => {
+    loadUser()
 })
 </script>
 

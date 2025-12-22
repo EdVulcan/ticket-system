@@ -33,9 +33,11 @@ func (c *AuthController) Login(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
-			"id":       user.ID,
-			"username": user.Username,
-			"role":     user.Role,
+			"id":          user.ID,
+			"username":    user.Username,
+			"role":        user.Role,
+			"system_code": user.Tenant.SystemCode,
+			"tenant_name": user.Tenant.Name,
 		},
 	})
 }
