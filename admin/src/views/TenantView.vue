@@ -1,27 +1,27 @@
 <template>
   <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
     <div class="flex justify-between items-center mb-6">
-      <h2 class="text-lg font-bold text-gray-900">Tenant Management</h2>
+      <h2 class="text-lg font-bold text-gray-900">商户开户管理 (Tenant Management)</h2>
       <el-button type="primary" @click="handleAdd">
-        <el-icon class="mr-2"><Plus /></el-icon> Add Tenant
+        <el-icon class="mr-2"><Plus /></el-icon> 新增商户主体
       </el-button>
     </div>
 
     <el-table :data="tableData" style="width: 100%" v-loading="loading">
       <el-table-column prop="id" label="ID" width="80" />
-      <el-table-column prop="name" label="Name" min-width="150" />
-      <el-table-column prop="system_code" label="System Code" width="150">
+      <el-table-column prop="name" label="商户名称" min-width="150" />
+      <el-table-column prop="system_code" label="系统编号 (System Code)" width="180">
         <template #default="{ row }">
-          <el-tag>{{ row.system_code }}</el-tag>
+          <el-tag effect="dark" type="warning" class="font-mono text-base font-bold">{{ row.system_code }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="contact" label="Contact" width="120" />
-      <el-table-column prop="phone" label="Phone" width="150" />
-      <el-table-column prop="address" label="Address" min-width="200" show-overflow-tooltip />
-      <el-table-column label="Actions" width="150" fixed="right">
+      <el-table-column prop="contact" label="联系人" width="120" />
+      <el-table-column prop="phone" label="联系电话" width="150" />
+      <el-table-column prop="address" label="地址" min-width="200" show-overflow-tooltip />
+      <el-table-column label="操作" width="150" fixed="right" align="center">
         <template #default="{ row }">
-          <el-button link type="primary" size="small" @click="handleEdit(row)">Edit</el-button>
-          <el-button link type="danger" size="small" @click="handleDelete(row)">Delete</el-button>
+          <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
+          <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -39,30 +39,42 @@
     <!-- Dialog -->
     <el-dialog
       v-model="dialogVisible"
-      :title="isEdit ? 'Edit Tenant' : 'Add Tenant'"
+      :title="isEdit ? '编辑商户信息' : '创建新商户主体'"
       width="500px"
     >
-      <el-form :model="form" label-width="100px" :rules="rules" ref="formRef">
-        <el-form-item label="Name" prop="name">
-          <el-input v-model="form.name" />
+      <el-form :model="form" label-width="100px" :rules="rules" ref="formRef" label-position="top">
+        <el-form-item label="商户主体名称" prop="name">
+          <el-input v-model="form.name" placeholder="请输入公司或景区名称" />
         </el-form-item>
-        <el-form-item label="System Code" prop="system_code">
-          <el-input v-model="form.system_code" placeholder="Unique ID" />
+        <el-form-item label="分配系统编号 (System Code)" prop="system_code">
+          <el-input v-model="form.system_code" placeholder="用于跨系统对接的唯一ID，如：SH001" />
+          <div class="text-xs text-gray-400 mt-1">此编号将用于 B2B 分销对接，创建后建议不要修改。</div>
         </el-form-item>
-        <el-form-item label="Contact" prop="contact">
-          <el-input v-model="form.contact" />
-        </el-form-item>
-        <el-form-item label="Phone" prop="phone">
-          <el-input v-model="form.phone" />
-        </el-form-item>
-        <el-form-item label="Address" prop="address">
+        <div class="grid grid-cols-2 gap-4">
+            <el-form-item label="联系人" prop="contact">
+            <el-input v-model="form.contact" />
+            </el-form-item>
+            <el-form-item label="联系电话" prop="phone">
+            <el-input v-model="form.phone" />
+            </el-form-item>
+        </div>
+        <el-form-item label="联系地址" prop="address">
           <el-input v-model="form.address" type="textarea" />
         </el-form-item>
+
+        <div v-if="!isEdit" class="grid grid-cols-2 gap-4 border-t border-gray-100 pt-4 mt-2">
+            <el-form-item label="管理员账号" prop="admin_username">
+              <el-input v-model="form.admin_username" placeholder="默认: admin" />
+            </el-form-item>
+            <el-form-item label="初始密码" prop="admin_password">
+              <el-input v-model="form.admin_password" type="password" show-password placeholder="必填" />
+            </el-form-item>
+        </div>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button @click="dialogVisible = false">Cancel</el-button>
-          <el-button type="primary" @click="handleSubmit">Confirm</el-button>
+          <el-button @click="dialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="handleSubmit">确认提交</el-button>
         </span>
       </template>
     </el-dialog>
@@ -70,12 +82,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
+import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import axios from 'axios'
-
-// API Base URL (Should be in env)
-const API_URL = 'http://localhost:8080/api/v1/tenants'
+import request from '@/utils/request'
 
 const loading = ref(false)
 const tableData = ref([])
@@ -92,24 +102,35 @@ const form = reactive({
   system_code: '',
   contact: '',
   phone: '',
-  address: ''
+  address: '',
+  admin_username: '',
+  admin_password: ''
 })
 
-const rules = {
-  name: [{ required: true, message: 'Please input name', trigger: 'blur' }],
-  system_code: [{ required: true, message: 'Please input system code', trigger: 'blur' }]
-}
+const rules = computed(() => {
+    const base = {
+        name: [{ required: true, message: '请输入商户名称', trigger: 'blur' }],
+        system_code: [{ required: true, message: '请输入系统编号', trigger: 'blur' }]
+    }
+    if (!isEdit.value) {
+        return {
+            ...base,
+            admin_password: [{ required: true, message: '请设置初始密码', trigger: 'blur' }]
+        }
+    }
+    return base
+})
 
 const fetchData = async () => {
   loading.value = true
   try {
-    const res = await axios.get(API_URL, {
+    const res = await request.get('/tenants', {
       params: { page: currentPage.value, page_size: pageSize.value }
     })
     tableData.value = res.data.data
     total.value = res.data.total
   } catch (error) {
-    ElMessage.error('Failed to fetch data')
+    ElMessage.error('数据获取失败')
   } finally {
     loading.value = false
   }
@@ -117,7 +138,10 @@ const fetchData = async () => {
 
 const handleAdd = () => {
   isEdit.value = false
-  Object.assign(form, { id: 0, name: '', system_code: '', contact: '', phone: '', address: '' })
+  Object.assign(form, { 
+    id: 0, name: '', system_code: '', contact: '', phone: '', address: '',
+    admin_username: '', admin_password: '' 
+  })
   dialogVisible.value = true
 }
 
@@ -128,17 +152,17 @@ const handleEdit = (row: any) => {
 }
 
 const handleDelete = (row: any) => {
-  ElMessageBox.confirm('Are you sure to delete this tenant?', 'Warning', {
-    confirmButtonText: 'OK',
-    cancelButtonText: 'Cancel',
+  ElMessageBox.confirm('确定要删除该商户主体吗？删除后其下所有数据将不可恢复！', '高风险操作警告', {
+    confirmButtonText: '确定删除',
+    cancelButtonText: '取消',
     type: 'warning',
   }).then(async () => {
     try {
-      await axios.delete(`${API_URL}/${row.id}`)
-      ElMessage.success('Delete completed')
+      await request.delete(`/tenants/${row.id}`)
+      ElMessage.success('已删除')
       fetchData()
     } catch (error) {
-      ElMessage.error('Delete failed')
+      ElMessage.error('删除失败')
     }
   })
 }
@@ -149,15 +173,15 @@ const handleSubmit = async () => {
     if (valid) {
       try {
         if (isEdit.value) {
-          await axios.put(`${API_URL}/${form.id}`, form)
+          await request.put(`/tenants/${form.id}`, form)
         } else {
-          await axios.post(API_URL, form)
+          await request.post('/tenants', form)
         }
-        ElMessage.success(isEdit.value ? 'Update completed' : 'Create completed')
+        ElMessage.success(isEdit.value ? '更新成功' : '创建成功')
         dialogVisible.value = false
         fetchData()
       } catch (error) {
-        ElMessage.error('Operation failed')
+        ElMessage.error('操作失败')
       }
     }
   })

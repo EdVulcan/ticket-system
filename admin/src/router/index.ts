@@ -6,48 +6,68 @@ const router = createRouter({
         {
             path: '/',
             name: 'home',
-            component: () => import('../views/HomeView.vue')
+            component: () => import('../views/HomeView.vue'),
+            meta: { title: '控制台' }
         },
-        // Tenant management removed as per user request
-        // {
-        //   path: '/tenant',
-        //   name: 'tenant',
-        //   component: () => import('../views/TenantView.vue')
-        // },
+        {
+            path: '/tenant',
+            name: 'tenant',
+            component: () => import('../views/TenantView.vue'),
+            meta: { role: 'super_admin', title: '商户管理 (平台)' }
+        },
+        {
+            path: '/distribution',
+            name: 'distribution',
+            component: () => import('../views/DistributionView.vue'),
+            meta: { role: 'admin', title: '分销中心' }
+        },
         {
             path: '/device',
             name: 'device',
-            component: () => import('../views/DeviceView.vue')
+            component: () => import('../views/DeviceView.vue'),
+            meta: { title: '设备管理' }
         },
         {
             path: '/checkpoint',
             name: 'checkpoint',
-            component: () => import('../views/CheckPointView.vue')
+            component: () => import('../views/CheckPointView.vue'),
+            meta: { title: '检票点管理' }
         },
         {
             path: '/product',
             name: 'product',
-            component: () => import('../views/ProductView.vue')
+            component: () => import('../views/ProductView.vue'),
+            meta: { title: '产品管理' }
         },
         {
             path: '/product/offline',
             name: 'offline-product',
-            component: () => import('../views/OfflineProductView.vue')
+            component: () => import('../views/OfflineProductView.vue'),
+            meta: { title: '窗口产品' }
         },
         {
             path: '/order',
             name: 'order',
-            component: () => import('../views/OrderView.vue')
+            component: () => import('../views/OrderView.vue'),
+            meta: { title: '订单管理' }
         },
         {
             path: '/login',
             name: 'login',
-            component: () => import('../views/LoginView.vue')
+            component: () => import('../views/LoginView.vue'),
+            meta: { title: '登录' }
         },
         {
             path: '/staff',
             name: 'staff',
-            component: () => import('../views/StaffView.vue')
+            component: () => import('../views/StaffView.vue'),
+            meta: { title: '员工管理' }
+        },
+        {
+            path: '/settings',
+            name: 'settings',
+            component: () => import('../views/HomeView.vue'), // Placeholder
+            meta: { title: '系统设置' }
         }
     ]
 })

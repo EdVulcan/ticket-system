@@ -1,13 +1,46 @@
 package service
 
 import (
+	"errors"
 	"ticket-backend/internal/model"
+
+	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 type TenantService struct{}
 
-func (s *TenantService) Create(tenant *model.Tenant) error {
-	return model.DB.Create(tenant).Error
+func (s *TenantService) Create(tenant *model.Tenant, adminUsername, adminPassword string) error {
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		// 1. Create Tenant
+		if err := tx.Create(tenant).Error; err != nil {
+			return err
+		}
+
+		// 2. Create Default Admin User
+		// Use provided username/password or defaults
+		if adminUsername == "" {
+			adminUsername = "admin"
+		}
+		if adminPassword == "" {
+			return errors.New("必须设置管理员初始密码")
+		}
+
+		hashedPassword, _ := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
+
+		adminUser := model.User{
+			Username: adminUsername,
+			Password: string(hashedPassword),
+			Role:     "admin", // Tenant Admin
+			TenantID: tenant.ID,
+		}
+
+		if err := tx.Create(&adminUser).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
 }
 
 func (s *TenantService) Update(id uint, tenant *model.Tenant) error {

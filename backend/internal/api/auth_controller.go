@@ -12,8 +12,9 @@ type AuthController struct {
 }
 
 type LoginRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
+	SystemCode string `json:"system_code" binding:"required"`
+	Username   string `json:"username" binding:"required"`
+	Password   string `json:"password" binding:"required"`
 }
 
 func (c *AuthController) Login(ctx *gin.Context) {
@@ -23,7 +24,7 @@ func (c *AuthController) Login(ctx *gin.Context) {
 		return
 	}
 
-	token, user, err := c.Service.Login(req.Username, req.Password)
+	token, user, err := c.Service.Login(req.SystemCode, req.Username, req.Password)
 	if err != nil {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
@@ -40,8 +41,9 @@ func (c *AuthController) Login(ctx *gin.Context) {
 }
 
 type StaffLoginRequest struct {
-	JobNumber string `json:"job_number" binding:"required"`
-	Password  string `json:"password" binding:"required"`
+	SystemCode string `json:"system_code" binding:"required"`
+	JobNumber  string `json:"job_number" binding:"required"`
+	Password   string `json:"password" binding:"required"`
 }
 
 func (c *AuthController) StaffLogin(ctx *gin.Context) {
@@ -51,7 +53,7 @@ func (c *AuthController) StaffLogin(ctx *gin.Context) {
 		return
 	}
 
-	token, staff, err := c.Service.StaffLogin(req.JobNumber, req.Password)
+	token, staff, err := c.Service.StaffLogin(req.SystemCode, req.JobNumber, req.Password)
 	if err != nil {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return

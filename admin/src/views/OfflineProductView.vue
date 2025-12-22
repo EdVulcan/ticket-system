@@ -200,11 +200,8 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import axios from 'axios'
+import request from '@/utils/request'
 import { Plus, Minus, Search } from '@element-plus/icons-vue'
-
-const API_URL = 'http://localhost:8080/api/v1/products'
-const CP_API_URL = 'http://localhost:8080/api/v1/checkpoints'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -250,7 +247,7 @@ const rules = {
 
 const fetchCheckPoints = async () => {
   try {
-    const res = await axios.get(CP_API_URL, { params: { page_size: 100 } })
+    const res = await request.get('/checkpoints', { params: { page_size: 100 } })
     checkpoints.value = res.data.data
   } catch (e) { console.error(e) }
 }
@@ -259,7 +256,7 @@ const fetchData = async () => {
   loading.value = true
   try {
     // Filter by type=offline
-    const res = await axios.get(API_URL, { params: { type: 'offline', page_size: 100 } })
+    const res = await request.get('/products', { params: { type: 'offline', page_size: 100 } })
     tableData.value = res.data.data
   } catch (error) {
     ElMessage.error('获取数据失败')
@@ -353,10 +350,10 @@ const handleSubmit = async () => {
       
       try {
         if (isEdit.value) {
-           await axios.put(`${API_URL}/${form.id}`, form)
+           await request.put(`/products/${form.id}`, form)
            ElMessage.success('更新成功')
         } else {
-           await axios.post(API_URL, form)
+           await request.post('/products', form)
            ElMessage.success('发布成功')
         }
         dialogVisible.value = false
@@ -372,7 +369,7 @@ const handleSubmit = async () => {
 
 const handleDelete = (row: any) => {
   ElMessageBox.confirm('确认删除该门票吗？', '警告', { type: 'warning' }).then(async () => {
-    await axios.delete(`${API_URL}/${row.id}`)
+    await request.delete(`/products/${row.id}`)
     fetchData()
   })
 }
@@ -380,7 +377,7 @@ const handleDelete = (row: any) => {
 const handleToggleStatus = (row: any) => {
   const newStatus = row.status === 'online' ? 'offline' : 'online'
   ElMessageBox.confirm(`确认${newStatus === 'online' ? '上架' : '下架'}吗？`, '提示').then(async () => {
-    await axios.patch(`${API_URL}/${row.id}/status`, { status: newStatus })
+    await request.patch(`/products/${row.id}/status`, { status: newStatus })
     fetchData()
   })
 }

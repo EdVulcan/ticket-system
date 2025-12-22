@@ -144,10 +144,8 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import axios from 'axios'
+import request from '@/utils/request'
 import { Search, Refresh } from '@element-plus/icons-vue'
-
-const API_URL = 'http://localhost:8080/api/v1/orders'
 
 const loading = ref(false)
 const tableData = ref([])
@@ -169,7 +167,7 @@ const verifyForm = reactive({ code: '', check_point_id: null })
 
 const fetchCheckPoints = async () => {
   try {
-    const res = await axios.get('http://localhost:8080/api/v1/checkpoints', { params: { page_size: 100 } })
+    const res = await request.get('/checkpoints', { params: { page_size: 100 } })
     checkpoints.value = res.data.data
   } catch (e) { console.error(e) }
 }
@@ -187,7 +185,7 @@ const submitVerify = async () => {
   }
   verifying.value = true
   try {
-    await axios.post('http://localhost:8080/api/v1/tickets/verify', {
+    await request.post('/tickets/verify', {
       code: verifyForm.code,
       check_point_id: verifyForm.check_point_id
     })
@@ -220,7 +218,7 @@ const fetchData = async () => {
       params.end_date = dateRange.value[1]
     }
 
-    const res = await axios.get(API_URL, { params })
+    const res = await request.get('/orders', { params })
     tableData.value = res.data.data
     total.value = res.data.total
   } catch (error) {

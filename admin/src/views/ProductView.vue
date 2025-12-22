@@ -297,11 +297,8 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import axios from 'axios'
+import request from '@/utils/request'
 import { Plus, Minus, Search, Monitor, Location, Ticket } from '@element-plus/icons-vue'
-
-const API_URL = 'http://localhost:8080/api/v1/products'
-const CP_API_URL = 'http://localhost:8080/api/v1/checkpoints'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -370,7 +367,7 @@ const rules = {
 
 const fetchCheckPoints = async () => {
   try {
-    const res = await axios.get(CP_API_URL, { params: { page_size: 100 } })
+    const res = await request.get('/checkpoints', { params: { page_size: 100 } })
     checkpoints.value = res.data.data
   } catch (e) {
     console.error(e)
@@ -380,7 +377,7 @@ const fetchCheckPoints = async () => {
 const fetchData = async () => {
   loading.value = true
   try {
-    const res = await axios.get(API_URL, { params: { type: 'online' } })
+    const res = await request.get('/products', { params: { type: 'online' } })
     tableData.value = res.data.data
   } catch (error) {
     ElMessage.error('获取数据失败')
@@ -493,7 +490,7 @@ const handleDelete = (row: any) => {
     confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning',
   }).then(async () => {
     try {
-      await axios.delete(`${API_URL}/${row.id}`)
+      await request.delete(`/products/${row.id}`)
       ElMessage.success('删除成功')
       fetchData()
     } catch (error) {
@@ -509,7 +506,7 @@ const handleToggleStatus = (row: any) => {
     confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning',
   }).then(async () => {
     try {
-      await axios.patch(`${API_URL}/${row.id}/status`, { status: newStatus })
+      await request.patch(`/products/${row.id}/status`, { status: newStatus })
       ElMessage.success(`${actionText}成功`)
       fetchData()
     } catch (error) {
@@ -578,10 +575,10 @@ const handleSubmit = async () => {
       // 3. Submit
       try {
         if (isEdit.value) {
-           await axios.put(`${API_URL}/${form.id}`, form)
+           await request.put(`/products/${form.id}`, form)
            ElMessage.success('更新成功')
         } else {
-           await axios.post(API_URL, form)
+           await request.post('/products', form)
            ElMessage.success('发布成功')
         }
         dialogVisible.value = false

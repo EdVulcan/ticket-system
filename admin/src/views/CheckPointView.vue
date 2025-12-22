@@ -56,9 +56,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import axios from 'axios'
-
-const API_URL = 'http://localhost:8080/api/v1/checkpoints'
+import request from '@/utils/request'
 
 const loading = ref(false)
 const tableData = ref([])
@@ -82,7 +80,7 @@ const rules = {
 const fetchData = async () => {
   loading.value = true
   try {
-    const res = await axios.get(API_URL, {
+    const res = await request.get('/checkpoints', {
       params: { page: currentPage.value, page_size: pageSize.value }
     })
     tableData.value = res.data.data
@@ -113,7 +111,7 @@ const handleDelete = (row: any) => {
     type: 'warning',
   }).then(async () => {
     try {
-      await axios.delete(`${API_URL}/${row.id}`)
+      await request.delete(`/checkpoints/${row.id}`)
       ElMessage.success('删除成功')
       fetchData()
     } catch (error) {
@@ -128,9 +126,9 @@ const handleSubmit = async () => {
     if (valid) {
       try {
         if (isEdit.value) {
-          await axios.put(`${API_URL}/${form.id}`, form)
+          await request.put(`/checkpoints/${form.id}`, form)
         } else {
-          await axios.post(API_URL, form)
+          await request.post('/checkpoints', form)
         }
         ElMessage.success(isEdit.value ? '更新成功' : '创建成功')
         dialogVisible.value = false

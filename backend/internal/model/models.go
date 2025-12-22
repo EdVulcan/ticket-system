@@ -28,10 +28,10 @@ type Tenant struct {
 // User 用户
 type User struct {
 	Base
-	Username string `gorm:"size:50;uniqueIndex;not null" json:"username"`
+	Username string `gorm:"size:50;uniqueIndex:idx_tenant_username;not null" json:"username"`
 	Password string `gorm:"size:100;not null" json:"-"`
 	Role     string `gorm:"size:20;default:'staff'" json:"role"` // admin, staff
-	TenantID uint   `json:"tenant_id"`
+	TenantID uint   `gorm:"uniqueIndex:idx_tenant_username" json:"tenant_id"`
 	Tenant   Tenant `json:"tenant,omitempty"`
 }
 
@@ -39,11 +39,11 @@ type User struct {
 type Staff struct {
 	Base
 	Name      string `gorm:"size:50;not null" json:"name"`
-	JobNumber string `gorm:"size:50;uniqueIndex;not null" json:"job_number"` // 工号
+	JobNumber string `gorm:"size:50;uniqueIndex:idx_tenant_job;not null" json:"job_number"` // 工号
 	Password  string `gorm:"size:100;not null" json:"-"`
 	Roles     string `gorm:"size:100;default:'seller'" json:"roles"` // seller, checker (comma separated)
 	Status    string `gorm:"size:20;default:'active'" json:"status"` // active, frozen
-	TenantID  uint   `json:"tenant_id"`
+	TenantID  uint   `gorm:"uniqueIndex:idx_tenant_job" json:"tenant_id"`
 }
 
 // CheckPoint 检票点

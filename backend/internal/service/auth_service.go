@@ -21,20 +21,22 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-func (s *AuthService) Login(username, password string) (string, *model.User, error) {
+func (s *AuthService) Login(systemCode, username, password string) (string, *model.User, error) {
+	// 1. Find Tenant by SystemCode
+	var tenant model.Tenant
+	if err := model.DB.Where("system_code = ?", systemCode).First(&tenant).Error; err != nil {
+		return "", nil, errors.New("系统编号无效")
+	}
+
+	// 2. Find User by Username AND TenantID
 	var user model.User
-	if err := model.DB.Where("username = ?", username).First(&user).Error; err != nil {
-		return "", nil, errors.New("invalid credentials")
+	if err := model.DB.Where("username = ? AND tenant_id = ?", username, tenant.ID).First(&user).Error; err != nil {
+		return "", nil, errors.New("用户名或密码错误")
 	}
 
 	// Compare password
-	// For initial admin, we might not have hashed password yet, so handle plain text for "123456" if needed
-	// But best practice is always hash. Let's assume we will seed with hash.
-	// For now, if password matches plain text "123456" and db has it, it works.
-	// But we should use bcrypt.
-
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err != nil {
-		return "", nil, errors.New("invalid credentials")
+		return "", nil, errors.New("用户名或密码错误")
 	}
 
 	// Generate Token
@@ -64,10 +66,17 @@ func (s *AuthService) GenerateToken(user *model.User) (string, error) {
 	return token.SignedString(jwtSecret)
 }
 
-func (s *AuthService) StaffLogin(jobNumber, password string) (string, *model.Staff, error) {
+func (s *AuthService) StaffLogin(systemCode, jobNumber, password string) (string, *model.Staff, error) {
+	// 1. Find Tenant
+	var tenant model.Tenant
+	if err := model.DB.Where("system_code = ?", systemCode).First(&tenant).Error; err != nil {
+		return "", nil, errors.New("系统编号无效")
+	}
+
+	// 2. Find Staff
 	var staff model.Staff
-	if err := model.DB.Where("job_number = ?", jobNumber).First(&staff).Error; err != nil {
-		return "", nil, errors.New("invalid credentials")
+	if err := model.DB.Where("job_number = ? AND tenant_id = ?", jobNumber, tenant.ID).First(&staff).Error; err != nil {
+		return "", nil, errors.New("工号或密码错误")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(staff.Password), []byte(password)); err != nil {

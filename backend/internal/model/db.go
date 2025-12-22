@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"strings"
 	"ticket-backend/internal/config"
 
 	"gorm.io/driver/mysql"
@@ -47,6 +48,9 @@ func InitDB() error {
 		&OrderItem{},
 		&Ticket{},
 		&CheckInRecord{},
+		&DistributorRelationship{},
+		&CapitalAccount{},
+		&TransactionRecord{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to migrate database: %w", err)
@@ -57,55 +61,31 @@ func InitDB() error {
 }
 
 func createDatabase(fullDSN string) error {
-	// Parse DSN to get database name and creating a DSN without it for initial connection
-	// Format assumption: user:pass@tcp(host:port)/dbname?params
-
-	// Find the database name start
-	slashIndex := -1
-	for i := len(fullDSN) - 1; i >= 0; i-- {
-		if fullDSN[i] == '/' {
-			if i > 0 && fullDSN[i-1] != ')' {
-				slashIndex = i
-				break
-			}
-		}
+	// 1. Strip parameters to find db name safely
+	dsnWithoutParams := fullDSN
+	if idx := strings.Index(fullDSN, "?"); idx != -1 {
+		dsnWithoutParams = fullDSN[:idx]
 	}
 
+	// 2. Find the last slash which separates address from dbname
+	slashIndex := strings.LastIndex(dsnWithoutParams, "/")
 	if slashIndex == -1 {
 		return nil // Could not verify, proceed to normal connection
 	}
 
-	// Extract DB name
-	dbNameAndParams := fullDSN[slashIndex+1:]
-	dbName := dbNameAndParams
-	if len(dbNameAndParams) > 0 {
-		for i, c := range dbNameAndParams {
-			if c == '?' {
-				dbName = dbNameAndParams[:i]
-				break
-			}
-		}
-	}
-
+	// 3. Extract DB name
+	dbName := dsnWithoutParams[slashIndex+1:]
 	if dbName == "" {
 		return nil
 	}
 
-	// Create root DSN (remove dbname)
-	// We replace /dbname with / to connect safely without selecting a DB
+	// 4. Create root DSN (remove dbname but keep params)
+	// We construct a DSN that connects to the server but not the specific DB
 	rootDSN := fullDSN[:slashIndex+1]
 
-	// Append parameters if any needed (often not needed for just CREATE DB, but charset might be good)
-	// Simple approach: just keep params
-	paramIndex := -1
-	for i := 0; i < len(fullDSN); i++ {
-		if fullDSN[i] == '?' {
-			paramIndex = i
-			break
-		}
-	}
-	if paramIndex != -1 {
-		rootDSN += fullDSN[paramIndex:]
+	// Append parameters if they existed
+	if idx := strings.Index(fullDSN, "?"); idx != -1 {
+		rootDSN += fullDSN[idx:]
 	}
 
 	db, err := gorm.Open(mysql.Open(rootDSN), &gorm.Config{})
@@ -116,6 +96,7 @@ func createDatabase(fullDSN string) error {
 	sqlDB, err := db.DB()
 	if err == nil {
 		defer sqlDB.Close()
+		// Use backticks for safety, though dbName from DSN should be safe enough if it's valid
 		query := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s` CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;", dbName)
 		_, err = sqlDB.Exec(query)
 		if err != nil {

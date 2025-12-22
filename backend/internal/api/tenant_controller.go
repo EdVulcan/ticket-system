@@ -13,19 +13,25 @@ type TenantController struct {
 	Service service.TenantService
 }
 
+type CreateTenantRequest struct {
+	model.Tenant
+	AdminUsername string `json:"admin_username"`
+	AdminPassword string `json:"admin_password" binding:"required"`
+}
+
 func (c *TenantController) Create(ctx *gin.Context) {
-	var tenant model.Tenant
-	if err := ctx.ShouldBindJSON(&tenant); err != nil {
+	var req CreateTenantRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := c.Service.Create(&tenant); err != nil {
+	if err := c.Service.Create(&req.Tenant, req.AdminUsername, req.AdminPassword); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	ctx.JSON(http.StatusCreated, tenant)
+	ctx.JSON(http.StatusCreated, req.Tenant)
 }
 
 func (c *TenantController) Update(ctx *gin.Context) {

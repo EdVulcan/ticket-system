@@ -98,4 +98,13 @@ func InitRouter(r *gin.Engine) {
 		cpGroup.PUT("/:id", cpController.Update)
 		cpGroup.DELETE("/:id", cpController.Delete)
 	}
+
+	// Distribution Routes (B2B)
+	distController := &api.DistributionController{Service: service.DistributionService{}}
+	distGroup := protected.Group("/distribution")
+	{
+		distGroup.GET("/search", distController.Search) // Search before apply
+		distGroup.POST("/apply", distController.Apply)
+		distGroup.GET("/suppliers", distController.ListSuppliers)
+	}
 }

@@ -62,7 +62,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
-import axios from 'axios'
+import request from '@/utils/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
 
 const staffList = ref([])
@@ -84,7 +84,7 @@ const form = reactive({
 const fetchStaff = async () => {
   loading.value = true
   try {
-    const res = await axios.get('/api/v1/staff')
+    const res = await request.get('/staff')
     staffList.value = res.data
   } catch (error) {
     ElMessage.error('获取员工列表失败')
@@ -105,7 +105,7 @@ const handleCreate = async () => {
   }
 
   try {
-    await axios.post('/api/v1/staff', payload)
+    await request.post('/staff', payload)
     ElMessage.success('创建成功')
     dialogVisible.value = false
     fetchStaff()
@@ -126,7 +126,7 @@ const handleDelete = (row: any) => {
     type: 'warning'
   }).then(async () => {
     try {
-      await axios.delete(`/api/v1/staff/${row.id}`)
+      await request.delete(`/staff/${row.id}`)
       ElMessage.success('删除成功')
       fetchStaff()
     } catch (error) {
@@ -143,7 +143,7 @@ const handleResetPassword = (row: any) => {
     inputErrorMessage: '密码长度至少6位'
   }).then(async ({ value }) => {
     try {
-      await axios.put(`/api/v1/staff/${row.id}/password`, { password: value })
+      await request.put(`/staff/${row.id}/password`, { password: value })
       ElMessage.success('密码重置成功')
     } catch (error) {
       ElMessage.error('重置失败')
