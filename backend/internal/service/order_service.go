@@ -44,6 +44,75 @@ func (s *OrderService) Create(req *model.Order) error {
 			item.Price = product.Price
 			item.ValidityType = product.ValidityType
 
+			// --- B2B Logic Start ---
+			if product.SourceProductID > 0 {
+				// 1. Calculate Cost
+				cost := product.SettlementPrice * float64(item.Quantity)
+
+				// 2. Load Capital Account
+				var account model.CapitalAccount
+				// Owner = Agent(Product.TenantID), Manager = Supplier(Product.SourceTenantID)
+				if err := tx.Where("owner_tenant_id = ? AND manager_tenant_id = ?", product.TenantID, product.SourceTenantID).First(&account).Error; err != nil {
+					return fmt.Errorf("分销资金账户不存在或异常")
+				}
+
+				// 3. Check Balance (Balance + CreditLine >= Cost)
+				if account.Balance+account.CreditLine < cost {
+					return fmt.Errorf("余额不足，无法采购 (需: %.2f, 余额: %.2f)", cost, account.Balance)
+				}
+
+				// 4. Deduct Balance
+				account.Balance -= cost
+				if account.Balance < 0 {
+					// Use Credit
+					account.UsedCredit += (0 - account.Balance)
+					// account.Balance = 0 // Keep negative? Or handle logically.
+					// Simplified: Allow balance to be negative if within credit line?
+					// Better: Split logic.
+					// MVP: Just subtract. If Balance becomes negative, it means we used credit (implicit).
+					// But usually Balance should floor at 0.
+					// Let's keep it simple: Balance is Cash. If Cost > Balance, deduct all Balance, rest adds to Usage?
+					// For MVP, just subtract from Balance. If negative, it means owed.
+					// wait, credit line check was (Balance + CreditLine < Cost).
+					// yes, so simple subtraction works.
+				}
+				if err := tx.Save(&account).Error; err != nil {
+					return err
+				}
+
+				// 5. Record Transaction
+				trans := model.TransactionRecord{
+					AccountID:      account.ID,
+					Type:           "payment",
+					Amount:         -cost,
+					BalanceAfter:   account.Balance,
+					RelatedOrderNo: req.OrderNo,
+					Memo:           fmt.Sprintf("分销采购: %s x%d", product.Name, item.Quantity),
+					OperatorID:     0, // System
+				}
+				if err := tx.Create(&trans).Error; err != nil {
+					return err
+				}
+
+				// 6. Decrement Source Stock (Optimistic Lock ideally, simplistic here)
+				// We need to load Source Product to update its stock?
+				// Or assume SourceProduct.StockType is handled?
+				var sourceProduct model.Product
+				if err := tx.First(&sourceProduct, product.SourceProductID).Error; err != nil {
+					return err
+				}
+				if sourceProduct.StockType != "unlimited" {
+					if sourceProduct.DailyStock < item.Quantity {
+						return fmt.Errorf("供应商库存不足")
+					}
+					sourceProduct.DailyStock -= item.Quantity
+					if err := tx.Save(&sourceProduct).Error; err != nil {
+						return err
+					}
+				}
+			}
+			// --- B2B Logic End ---
+
 			// Calculate Validity
 			now := time.Now()
 			if product.ValidityType == "date" {

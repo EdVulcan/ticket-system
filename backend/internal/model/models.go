@@ -107,6 +107,11 @@ type Product struct {
 	Type     string     `gorm:"size:20;default:'online'" json:"type"`   // online, offline
 	Status   string     `gorm:"size:20;default:'online'" json:"status"` // online, offline (下架)
 
+	// --- B2B Distribution Fields ---
+	IsDistributable bool `json:"is_distributable" gorm:"default:false"` // 是否允许分销(供应商设置)
+	SourceProductID uint `json:"source_product_id" gorm:"index"`        // 来源产品ID (分销商端)
+	SourceTenantID  uint `json:"source_tenant_id" gorm:"index"`         // 来源供应商ID (分销商端)
+
 	// --- New Fields for Ticket Management ---
 	// Basic
 	SettlementPrice float64 `gorm:"type:decimal(10,2)" json:"settlement_price"`

@@ -106,5 +106,23 @@ func InitRouter(r *gin.Engine) {
 		distGroup.GET("/search", distController.Search) // Search before apply
 		distGroup.POST("/apply", distController.Apply)
 		distGroup.GET("/suppliers", distController.ListSuppliers)
+
+		// Supplier Side
+		distGroup.GET("/agents", distController.ListAgents)
+		distGroup.POST("/agents/:id/audit", distController.AuditAgent)
+		distGroup.POST("/agents/:id/recharge", distController.RechargeAgent) // New Recharge Route
+
+		// Product Distribution
+		distGroup.GET("/products", distController.ListDistributableProducts)
+		distGroup.POST("/products/import", distController.ImportProduct)
+	}
+
+	// Finance Routes
+	financeController := &api.FinanceController{Service: service.FinanceService{}}
+	financeGroup := r.Group("/finance")
+	financeGroup.Use(middleware.JWTAuth())
+	{
+		financeGroup.GET("/accounts", financeController.ListAccounts)
+		financeGroup.GET("/transactions", financeController.ListTransactions)
 	}
 }

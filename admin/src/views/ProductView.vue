@@ -112,6 +112,14 @@
                   <el-option label="新品" value="新品" />
                 </el-select>
               </el-form-item>
+              
+               <el-form-item label="B2B分销" prop="product.is_distributable">
+                  <el-switch v-model="form.product.is_distributable" active-text="允许分销商代理销售" />
+                  <div class="text-xs text-gray-400 mt-1" v-if="form.product.is_distributable">
+                    开启后，已建立合作关系的分销商可在其后台看到并代理此产品。结算价为 ¥{{ form.product.settlement_price }}。
+                  </div>
+               </el-form-item>
+
               <!-- Type is implicitly 'online' -->
 
                 <el-form-item label="发码模式" prop="product.code_mode">
@@ -342,7 +350,8 @@ const form = reactive({
     limit_per_id: 0,
     refund_type: 'no_refund',
     refund_rule: '', // JSON string
-    tags: '' // JSON string
+    tags: '', // JSON string
+    is_distributable: false
   },
   rule: {
     name: '',
@@ -397,7 +406,7 @@ const handleAdd = () => {
     validity_type: 'date', validity_days: 0, validity_start_date: null, validity_end_date: null,
     stock_type: 'unlimited', daily_stock: 0, time_slot_config: '',
     real_name_required: false, region_limit: '', limit_per_phone: 0, limit_per_id: 0,
-    refund_type: 'no_refund', refund_rule: ''
+    refund_type: 'no_refund', refund_rule: '', tags: '', is_distributable: false
   }
   form.rule = {
     name: '', validity_type: 'date',

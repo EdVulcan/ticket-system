@@ -13,6 +13,9 @@ type CapitalAccount struct {
 	FrozenAmount float64 `json:"frozen_amount" gorm:"type:decimal(15,2);default:0"` // 冻结金额 (下单后未核销/结算前冻结)
 
 	Status string `json:"status" gorm:"size:20;default:'active'"` // active(正常), frozen(冻结)
+
+	// Relations
+	ManagerTenant Tenant `json:"manager_tenant" gorm:"foreignKey:ManagerTenantID"`
 }
 
 // TransactionRecord 资金流水表
