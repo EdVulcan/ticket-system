@@ -308,8 +308,29 @@ import {
   Search, Reading, Grid, Printer, Notebook, Refresh, 
   ShoppingCart, FullScreen 
 } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
+
+const router = useRouter()
+
+// Configure Axios
+axios.defaults.baseURL = 'http://127.0.0.1:8080/api/v1'
+axios.interceptors.request.use(config => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+axios.interceptors.response.use(res => res, err => {
+  if (err.response && err.response.status === 401) {
+    ElMessage.error('登录失效，请重新登录')
+    router.push('/login')
+  }
+  return Promise.reject(err)
+})
 
 // --- State ---
 const currentView = ref('pos')
@@ -344,7 +365,7 @@ const shiftState = ref({
 
 const fetchCheckPoints = async () => {
   try {
-    const res = await axios.get('http://127.0.0.1:8080/api/v1/checkpoints', { params: { page_size: 100 } })
+    const res = await axios.get('/checkpoints', { params: { page_size: 100 } })
     checkpoints.value = res.data.data
   } catch (e) {
     console.error('Failed to fetch checkpoints', e)
@@ -447,7 +468,7 @@ const updateTime = () => {
 
 const fetchProducts = async () => {
   try {
-    const res = await axios.get('http://127.0.0.1:8080/api/v1/products', { 
+    const res = await axios.get('/products', { 
       params: { page_size: 100, type: 'offline' } 
     })
     products.value = res.data.data.map((p: any) => {
@@ -498,7 +519,7 @@ const handleCheckout = async () => {
       total_amount: totalAmount.value,
       items: cart.value.map(item => ({ product_id: item.id, quantity: item.quantity }))
     }
-    const res = await axios.post('http://127.0.0.1:8080/api/v1/orders', orderData)
+    const res = await axios.post('/orders', orderData)
     ElMessage.success('下单成功！正在打印...')
     // @ts-ignore
     if (window.api && window.api.printTicket) await window.api.printTicket(res.data)
@@ -522,7 +543,7 @@ const handleVerify = async () => {
       return
     }
     
-    const res = await axios.post('http://127.0.0.1:8080/api/v1/tickets/verify', {
+    const res = await axios.post('/tickets/verify', {
       code: code,
       check_point_id: checkPointId
     })
@@ -559,7 +580,7 @@ const fetchOrders = async () => {
       params.end_date = orderDateRange.value[1]
     }
     
-    const res = await axios.get('http://127.0.0.1:8080/api/v1/orders', { params })
+    const res = await axios.get('/orders', { params })
     orders.value = res.data.data
   } catch (e) {
     ElMessage.error('获取订单失败')

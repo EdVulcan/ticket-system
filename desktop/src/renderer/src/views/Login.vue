@@ -6,6 +6,9 @@
         <h1>TicketPro POS</h1>
       </div>
       <el-form :model="form" :rules="rules" ref="formRef" size="large">
+        <el-form-item prop="system_code">
+          <el-input v-model="form.system_code" placeholder="商户系统编号" prefix-icon="OfficeBuilding" />
+        </el-form-item>
         <el-form-item prop="job_number">
           <el-input v-model="form.job_number" placeholder="工号" prefix-icon="User" />
         </el-form-item>
@@ -25,18 +28,20 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
-import { Ticket, User, Lock } from '@element-plus/icons-vue'
+import { Ticket, User, Lock, OfficeBuilding } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const formRef = ref()
 const loading = ref(false)
 
 const form = reactive({
+  system_code: '',
   job_number: '',
   password: ''
 })
 
 const rules = {
+  system_code: [{ required: true, message: '请输入商户系统编号', trigger: 'blur' }],
   job_number: [{ required: true, message: '请输入工号', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }]
 }
