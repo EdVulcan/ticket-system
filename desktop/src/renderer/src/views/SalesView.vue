@@ -302,6 +302,10 @@
         <Calculator />
       </el-dialog>
 
+      <el-dialog v-model="showPayment" title="收银台" width="500px" align-center class="dark-dialog" :close-on-click-modal="false">
+        <PaymentModal :amount="currentOrder?.total_amount || 0" :order-no="currentOrder?.order_no || ''" @success="handlePaymentSuccess" />
+      </el-dialog>
+
       <el-dialog v-model="showPolicy" title="百事通 (F3)" width="600px" align-center class="dark-dialog">
         <PolicyModal />
       </el-dialog>
@@ -351,6 +355,7 @@ axios.interceptors.response.use(res => res, err => {
 
 import Calculator from '../components/Calculator.vue'
 import PolicyModal from '../components/PolicyModal.vue'
+import PaymentModal from '../components/PaymentModal.vue'
 
 // --- State ---
 const currentView = ref('pos')
@@ -368,6 +373,8 @@ const showCalc = ref(false)
 const showPolicy = ref(false)
 const showNote = ref(false)
 const noteContent = ref('')
+const showPayment = ref(false)
+const currentOrder = ref<any>(null)
 
 // --- Orders State ---
 const orders = ref<any[]>([])
@@ -576,13 +583,22 @@ const handleCheckout = async () => {
       items: cart.value.map(item => ({ product_id: item.id, quantity: item.quantity }))
     }
     const res = await axios.post('/orders', orderData)
-    ElMessage.success('下单成功！正在打印...')
-    // @ts-ignore
-    if (window.api && window.api.printTicket) await window.api.printTicket(res.data)
-    cart.value = []
+    // ElMessage.success('下单成功！正在打印...') 
+    // OLD: Direct Success. NEW: Open Payment.
+    currentOrder.value = res.data
+    showPayment.value = true
   } catch (e) {
     ElMessage.error('下单失败')
   }
+}
+
+const handlePaymentSuccess = async () => {
+    showPayment.value = false
+    ElMessage.success('支付成功！正在打印...')
+    // @ts-ignore
+    if (window.api && window.api.printTicket) await window.api.printTicket(currentOrder.value)
+    cart.value = []
+    currentOrder.value = null
 }
 
 const handleVerify = async () => {

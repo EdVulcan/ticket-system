@@ -92,6 +92,10 @@
             <el-icon><UserFilled /></el-icon>
             <span>系统员管理</span>
           </el-menu-item>
+           <el-menu-item index="/payment-config" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+            <el-icon><CreditCard /></el-icon>
+            <span>支付参数配置</span>
+          </el-menu-item>
            <el-menu-item index="/settings" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
             <el-icon><Setting /></el-icon>
             <span>系统设置</span>
@@ -186,7 +190,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { 
   Odometer, Monitor, Location, Ticket, List, Setting, User, UserFilled,
   SwitchButton, OfficeBuilding, Connection, Money,
-  CaretBottom, Switch, Reading, TrendCharts
+  CaretBottom, Switch, Reading, TrendCharts, CreditCard
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 

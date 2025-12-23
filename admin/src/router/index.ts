@@ -92,6 +92,12 @@ const router = createRouter({
             name: 'report',
             component: () => import('../views/ReportView.vue'),
             meta: { title: '经营数据报表' }
+        },
+        {
+            path: '/payment-config',
+            name: 'payment-config',
+            component: () => import('../views/PaymentConfigView.vue'),
+            meta: { title: '支付参数配置' }
         }
     ]
 })

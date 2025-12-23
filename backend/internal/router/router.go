@@ -158,4 +158,15 @@ func InitRouter(r *gin.Engine) {
 		reportGroup.GET("/products", reportController.GetProducts)
 		reportGroup.GET("/channels", reportController.GetChannels)
 	}
+
+	// Payment Routes
+	paymentController := &api.PaymentController{Service: service.PaymentService{}}
+	configController := &api.PaymentConfigController{}
+	paymentGroup := protected.Group("/payments")
+	{
+		paymentGroup.POST("/pay", paymentController.Pay)
+		paymentGroup.GET("/:id", paymentController.Query)
+		paymentGroup.GET("/configs", configController.GetConfigs)
+		paymentGroup.POST("/configs", configController.SaveConfig)
+	}
 }

@@ -29,7 +29,7 @@ func (s *OrderService) Create(req *model.Order) error {
 		if req.Channel == "" {
 			req.Channel = "online"
 		}
-		req.Status = "paid" // Mock payment success
+		req.Status = "unpaid"
 
 		// 2. Process Items & Tickets
 		for i := range req.Items {
