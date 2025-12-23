@@ -257,3 +257,27 @@ func (s *OrderService) Cancel(orderNo string) error {
 		return nil
 	})
 }
+
+// MarkAsPaid 标记订单为已支付
+func (s *OrderService) MarkAsPaid(orderNo string) error {
+	var order model.Order
+	if err := model.DB.Where("order_no = ?", orderNo).First(&order).Error; err != nil {
+		return err
+	}
+
+	if order.Status == "paid" {
+		return nil // Already paid
+	}
+
+	if order.Status != "unpaid" {
+		return fmt.Errorf("订单状态异常，无法支付: %s", order.Status)
+	}
+
+	order.Status = "paid"
+	if err := model.DB.Save(&order).Error; err != nil {
+		return err
+	}
+
+	// Future: Trigger ticket activation or external notification here
+	return nil
+}

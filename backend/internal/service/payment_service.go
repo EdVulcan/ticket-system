@@ -13,7 +13,9 @@ import (
 	"github.com/go-pay/gopay/wechat/v3"
 )
 
-type PaymentService struct{}
+type PaymentService struct {
+	OrderService *OrderService
+}
 
 // GetConfig 获取指定Provider的配置
 func (s *PaymentService) GetConfig(tenantID uint, provider string) (*model.PaymentConfig, error) {
@@ -222,13 +224,19 @@ func (s *PaymentService) processMockPayment(paymentID uint, payType string) {
 func (s *PaymentService) onPaymentSuccess(payment *model.Payment) {
 	model.DB.Model(&model.Payment{}).Where("id = ?", payment.ID).Update("status", "paid")
 
-	var order model.Order
-	if err := model.DB.Where("order_no = ?", payment.OrderNo).First(&order).Error; err != nil {
-		return
-	}
-	if order.Status == "unpaid" {
-		order.Status = "paid"
-		model.DB.Save(&order)
+	if s.OrderService != nil {
+		if err := s.OrderService.MarkAsPaid(payment.OrderNo); err != nil {
+			fmt.Printf("Failed to update order status: %v\n", err)
+		}
+	} else {
+		// Fallback for safety (though wiring should be correct)
+		var order model.Order
+		if err := model.DB.Where("order_no = ?", payment.OrderNo).First(&order).Error; err == nil {
+			if order.Status == "unpaid" {
+				order.Status = "paid"
+				model.DB.Save(&order)
+			}
+		}
 	}
 }
 

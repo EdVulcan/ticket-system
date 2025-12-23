@@ -160,8 +160,12 @@ func InitRouter(r *gin.Engine) {
 	}
 
 	// Payment Routes
-	paymentController := &api.PaymentController{Service: service.PaymentService{}}
-	configController := &api.PaymentConfigController{}
+	orderSvc := service.OrderService{}
+	paymentSvc := service.PaymentService{OrderService: &orderSvc}
+
+	paymentController := &api.PaymentController{Service: paymentSvc}
+	configController := &api.PaymentConfigController{Service: paymentSvc}
+
 	paymentGroup := protected.Group("/payments")
 	{
 		paymentGroup.POST("/pay", paymentController.Pay)
