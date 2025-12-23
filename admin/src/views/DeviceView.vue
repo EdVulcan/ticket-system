@@ -26,6 +26,12 @@
           <span>{{ row.status === 'online' ? '在线' : '离线' }}</span>
         </template>
       </el-table-column>
+      <el-table-column prop="check_point.name" label="所属检票点" min-width="150">
+        <template #default="{ row }">
+          <el-tag v-if="row.check_point" type="warning" effect="plain">{{ row.check_point.name }}</el-tag>
+          <span v-else class="text-gray-400">未绑定</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="ip_address" label="IP地址" width="140" />
       <el-table-column label="操作" width="150" fixed="right">
         <template #default="{ row }">
@@ -57,6 +63,16 @@
         </el-form-item>
         <el-form-item label="序列号" prop="serial_number">
           <el-input v-model="form.serial_number" placeholder="请输入唯一序列号" />
+        </el-form-item>
+        <el-form-item label="所属检票点" prop="check_point_id">
+          <el-select v-model="form.check_point_id" placeholder="请选择检票点" class="w-full" clearable>
+            <el-option
+              v-for="item in checkPoints"
+              :key="item.id"
+              :label="item.name"
+              :value="item.id"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="设备类型" prop="type">
           <el-select v-model="form.type" placeholder="请选择类型" class="w-full">
@@ -100,11 +116,23 @@ const form = reactive({
   id: 0,
   name: '',
   serial_number: '',
+  check_point_id: undefined,
   type: 'gate',
   status: 'offline',
   ip_address: '',
   mac_address: ''
 })
+
+const checkPoints = ref([])
+
+const fetchCheckPoints = async () => {
+    try {
+        const res = await request.get('/checkpoints', { params: { page_size: 100 } })
+        checkPoints.value = res.data.data
+    } catch (error) {
+        console.error('Fetch CheckPoints Error', error)
+    }
+}
 
 const rules = {
   name: [{ required: true, message: '请输入设备名称', trigger: 'blur' }],
@@ -147,7 +175,7 @@ const fetchData = async () => {
 
 const handleAdd = () => {
   isEdit.value = false
-  Object.assign(form, { id: 0, name: '', serial_number: '', type: 'gate', status: 'offline', ip_address: '', mac_address: '' })
+  Object.assign(form, { id: 0, name: '', serial_number: '', check_point_id: undefined, type: 'gate', status: 'offline', ip_address: '', mac_address: '' })
   dialogVisible.value = true
 }
 
@@ -195,5 +223,6 @@ const handleSubmit = async () => {
 
 onMounted(() => {
   fetchData()
+  fetchCheckPoints()
 })
 </script>

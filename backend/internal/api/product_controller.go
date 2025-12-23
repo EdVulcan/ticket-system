@@ -27,8 +27,8 @@ func (c *ProductController) Create(ctx *gin.Context) {
 	}
 
 	// Ensure TenantID consistency
-	// In real app, get from JWT context
-	// req.Product.TenantID = ctx.GetUint("tenant_id")
+	tenantID, _ := ctx.Get("tenant_id")
+	req.Product.TenantID = tenantID.(uint)
 	req.Rule.TenantID = req.Product.TenantID
 
 	if err := c.Service.Create(&req.Product, &req.Rule); err != nil {

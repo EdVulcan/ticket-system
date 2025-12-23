@@ -20,8 +20,9 @@ func (c *OrderController) Create(ctx *gin.Context) {
 		return
 	}
 
-	// Mock TenantID
-	// req.TenantID = ctx.GetUint("tenant_id")
+	// Assign TenantID from context
+	tenantID, _ := ctx.Get("tenant_id")
+	req.TenantID = tenantID.(uint)
 
 	if err := c.Service.Create(&req); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

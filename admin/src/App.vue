@@ -47,9 +47,13 @@
                 <el-icon><Monitor /></el-icon>
                 <span>窗口门票</span>
              </el-menu-item>
-             <el-menu-item index="/order" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item index="/online-order" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><List /></el-icon>
-                <span>订单管理</span>
+                <span>线上订单</span>
+             </el-menu-item>
+             <el-menu-item index="/offline-order" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+                <el-icon><Tickets /></el-icon>
+                <span>线下/窗口订单</span>
              </el-menu-item>
 
              <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">分销中心 (B2B)</div>
@@ -190,7 +194,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { 
   Odometer, Monitor, Location, Ticket, List, Setting, User, UserFilled,
   SwitchButton, OfficeBuilding, Connection, Money,
-  CaretBottom, Switch, Reading, TrendCharts, CreditCard
+  CaretBottom, Switch, Reading, TrendCharts, CreditCard, Tickets
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 

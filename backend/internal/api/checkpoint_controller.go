@@ -20,6 +20,9 @@ func (c *CheckPointController) Create(ctx *gin.Context) {
 		return
 	}
 
+	tenantID, _ := ctx.Get("tenant_id")
+	cp.TenantID = tenantID.(uint)
+
 	if err := c.Service.Create(&cp); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

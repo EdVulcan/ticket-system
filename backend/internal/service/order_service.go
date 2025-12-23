@@ -143,6 +143,7 @@ func (s *OrderService) Create(req *model.Order) error {
 					{
 						TicketCode:   s.GenerateTicketCode(),
 						Status:       "unused",
+						TenantID:     req.TenantID,
 						VisitorName:  req.ContactName,
 						VisitorPhone: req.ContactPhone,
 					},
@@ -154,6 +155,7 @@ func (s *OrderService) Create(req *model.Order) error {
 					item.Tickets[j] = model.Ticket{
 						TicketCode:   s.GenerateTicketCode(),
 						Status:       "unused",
+						TenantID:     req.TenantID,
 						VisitorName:  req.ContactName, // Default to contact
 						VisitorPhone: req.ContactPhone,
 					}

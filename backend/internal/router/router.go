@@ -3,6 +3,7 @@ package router
 import (
 	"ticket-backend/internal/api"
 	"ticket-backend/internal/middleware"
+	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -55,7 +56,16 @@ func InitRouter(r *gin.Engine) {
 	}
 
 	// Device Routes
-	deviceController := &api.DeviceController{}
+	// Device Routes
+	deviceService := service.NewDeviceService(model.DB, &service.TicketService{})
+	deviceController := api.NewDeviceController(deviceService)
+
+	// Public Hardware APIs
+
+	apiGroup.POST("/hardware/heartbeat", deviceController.Heartbeat)
+	apiGroup.POST("/hardware/verify", deviceController.Verify)
+
+	// Admin APIs (Protected)
 	deviceGroup := protected.Group("/devices")
 	{
 		deviceGroup.POST("", deviceController.Create)

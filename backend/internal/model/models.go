@@ -59,15 +59,16 @@ type CheckPoint struct {
 // Device 终端设备
 type Device struct {
 	Base
-	Name         string      `gorm:"size:100;not null" json:"name"`
-	SerialNumber string      `gorm:"size:100;uniqueIndex;not null" json:"serial_number"` // 设备序列号
-	Type         string      `gorm:"size:20;not null" json:"type"`                       // gate, handheld, pos
-	Status       string      `gorm:"size:20;default:'offline'" json:"status"`            // online, offline, fault
-	IPAddress    string      `gorm:"size:50" json:"ip_address"`
-	MACAddress   string      `gorm:"size:50" json:"mac_address"`
-	TenantID     uint        `json:"tenant_id"`
-	CheckPointID *uint       `json:"check_point_id"` // 绑定检票点 (可选)
-	CheckPoint   *CheckPoint `json:"check_point,omitempty"`
+	Name          string      `gorm:"size:100;not null" json:"name"`
+	SerialNumber  string      `gorm:"size:100;uniqueIndex;not null" json:"serial_number"` // 设备序列号
+	Type          string      `gorm:"size:20;not null" json:"type"`                       // gate, handheld, pos
+	Status        string      `gorm:"size:20;default:'offline'" json:"status"`            // online, offline, fault
+	LastHeartbeat *time.Time  `json:"last_heartbeat"`
+	IPAddress     string      `gorm:"size:50" json:"ip_address"`
+	MACAddress    string      `gorm:"size:50" json:"mac_address"`
+	TenantID      uint        `json:"tenant_id"`
+	CheckPointID  *uint       `json:"check_point_id"` // 绑定检票点 (可选)
+	CheckPoint    *CheckPoint `json:"check_point,omitempty"`
 }
 
 // TicketRule 检票规则 (M选N核心)
@@ -161,6 +162,7 @@ type OrderItem struct {
 	Base
 	OrderID       uint       `json:"order_id"`
 	ProductID     uint       `json:"product_id"`
+	Product       Product    `gorm:"foreignKey:ProductID" json:"product,omitempty"` // Added relation
 	ProductName   string     `gorm:"size:100" json:"product_name"`
 	Price         float64    `gorm:"type:decimal(10,2)" json:"price"`
 	Quantity      int        `json:"quantity"`
@@ -176,6 +178,7 @@ type Ticket struct {
 	OrderItemID uint      `json:"order_item_id"`
 	OrderItem   OrderItem `gorm:"foreignKey:OrderItemID" json:"order_item,omitempty"` // Added relation
 	OrderID     uint      `json:"order_id"`
+	TenantID    uint      `gorm:"index" json:"tenant_id"`                          // 冗余TenantID方便查询
 	TicketCode  string    `gorm:"size:50;uniqueIndex;not null" json:"ticket_code"` // 核销码
 	Status      string    `gorm:"size:20;default:'unused'" json:"status"`          // unused, used, refunded, expired
 
@@ -191,6 +194,8 @@ type Ticket struct {
 // CheckInRecord 核销记录
 type CheckInRecord struct {
 	Base
+	TenantID     uint       `gorm:"index" json:"tenant_id"`           // 租户隔离
+	TicketCode   string     `gorm:"size:50;index" json:"ticket_code"` // 冗余存储，便于查询
 	TicketID     uint       `json:"ticket_id"`
 	CheckPointID uint       `json:"check_point_id"`
 	CheckPoint   CheckPoint `json:"check_point"`

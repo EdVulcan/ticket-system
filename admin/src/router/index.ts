@@ -52,10 +52,16 @@ const router = createRouter({
             meta: { title: '窗口产品' }
         },
         {
-            path: '/order',
-            name: 'order',
+            path: '/online-order',
+            name: 'online-order',
             component: () => import('../views/OrderView.vue'),
-            meta: { title: '订单管理' }
+            meta: { title: '线上订单' }
+        },
+        {
+            path: '/offline-order',
+            name: 'offline-order',
+            component: () => import('../views/OfflineOrderView.vue'),
+            meta: { title: '线下/窗口订单' }
         },
         {
             path: '/login',
@@ -98,6 +104,12 @@ const router = createRouter({
             name: 'payment-config',
             component: () => import('../views/PaymentConfigView.vue'),
             meta: { title: '支付参数配置' }
+        },
+        {
+            path: '/gate-simulator',
+            name: 'gate-simulator',
+            component: () => import('../views/GateSimulator.vue'),
+            meta: { title: '虚拟闸机模拟' }
         }
     ]
 })

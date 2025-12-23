@@ -24,7 +24,8 @@ func (c *TicketController) Verify(ctx *gin.Context) {
 		return
 	}
 
-	if err := c.Service.Verify(req.Code, req.CheckPointID, req.DeviceID); err != nil {
+	tenantID, _ := ctx.Get("tenant_id")
+	if err := c.Service.Verify(req.Code, req.CheckPointID, req.DeviceID, tenantID.(uint)); err != nil {
 		// Return 400 for business logic errors (invalid ticket, expired, etc.)
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
