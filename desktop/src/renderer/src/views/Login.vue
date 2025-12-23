@@ -55,8 +55,8 @@ const handleLogin = async () => {
         // Use full URL for Electron dev or configure proxy
         const res = await axios.post('http://127.0.0.1:8080/api/v1/auth/staff/login', form)
         const { token, staff } = res.data
-        localStorage.setItem('token', token)
-        localStorage.setItem('staff', JSON.stringify(staff))
+        sessionStorage.setItem('token', token)
+        sessionStorage.setItem('staff', JSON.stringify(staff))
         ElMessage.success('登录成功')
         router.push('/')
       } catch (error: any) {

@@ -13,23 +13,39 @@ type StaffController struct{}
 
 // Create Staff
 func (c *StaffController) Create(ctx *gin.Context) {
-	var staff model.Staff
-	if err := ctx.ShouldBindJSON(&staff); err != nil {
+	var req struct {
+		Name      string `json:"name" binding:"required"`
+		JobNumber string `json:"job_number" binding:"required"`
+		Password  string `json:"password" binding:"required"`
+		Roles     string `json:"roles"`
+	}
+
+	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	// Hash password
-	hashedPwd, err := service.HashPassword(staff.Password)
+	hashedPwd, err := service.HashPassword(req.Password)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
 		return
 	}
-	staff.Password = hashedPwd
 
 	// Set TenantID from context
 	tenantID := ctx.GetUint("tenant_id")
-	staff.TenantID = tenantID
+
+	staff := model.Staff{
+		Name:      req.Name,
+		JobNumber: req.JobNumber,
+		Password:  hashedPwd,
+		Roles:     req.Roles,
+		Status:    "active",
+		TenantID:  tenantID,
+	}
+	if staff.Roles == "" {
+		staff.Roles = "seller"
+	}
 
 	if err := model.DB.Create(&staff).Error; err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

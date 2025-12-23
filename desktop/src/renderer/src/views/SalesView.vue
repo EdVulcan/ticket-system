@@ -40,7 +40,7 @@
         <span class="text-[10px] mt-0.5">设置</span>
       </div>
 
-      <div class="mt-auto mb-6 w-[50px] h-[50px] rounded-xl flex flex-col items-center justify-center text-red-400 cursor-pointer hover:bg-red-900/20">
+      <div class="mt-auto mb-6 w-[50px] h-[50px] rounded-xl flex flex-col items-center justify-center text-red-400 cursor-pointer hover:bg-red-900/20" @click="handleLogout">
         <el-icon :size="24"><SwitchButton /></el-icon>
       </div>
     </div>
@@ -50,7 +50,7 @@
       <!-- Status Bar -->
       <div class="h-10 bg-[#1f1f1f] border-b border-[#303030] flex items-center justify-between px-4 text-xs text-gray-500">
         <div>当前位置: {{ getPageTitle }}</div>
-        <div>{{ currentTime }} | 操作员: 李明 (007)</div>
+        <div>{{ currentTime }} | 操作员: {{ currentStaff.name }} ({{ currentStaff.job_number }})</div>
       </div>
 
       <!-- View A: POS -->
@@ -334,7 +334,7 @@ const router = useRouter()
 // Configure Axios
 axios.defaults.baseURL = 'http://127.0.0.1:8080/api/v1'
 axios.interceptors.request.use(config => {
-  const token = localStorage.getItem('token')
+  const token = sessionStorage.getItem('token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
   }
@@ -360,6 +360,8 @@ const products = ref<any[]>([])
 const cart = ref<any[]>([])
 const searchInput = ref()
 const currentTime = ref('')
+const currentStaff = ref({ name: '?', job_number: '?' })
+
 
 // --- Modals State ---
 const showCalc = ref(false)
@@ -480,6 +482,14 @@ const saveNote = () => {
 const handleReprint = () => {
   ElMessage.info('指令已发送: 重打上一单')
   // In real app: ipcRenderer.send('print-last')
+}
+
+const handleLogout = () => {
+    ElMessageBox.confirm('确定要退出登录吗?', '提示', { type: 'warning' })
+        .then(() => {
+            sessionStorage.clear()
+            router.push('/login')
+        })
 }
 
 // --- Computed ---
@@ -643,6 +653,14 @@ onMounted(() => {
   loadSettings()
   timer = setInterval(updateTime, 1000)
   updateTime()
+
+  // Load Staff
+  const staffStr = sessionStorage.getItem('staff')
+  if (staffStr) {
+      try {
+          currentStaff.value = JSON.parse(staffStr)
+      } catch(e) {}
+  }
   
   window.addEventListener('keydown', (e) => {
     if (e.key === 'F2') { e.preventDefault(); searchInput.value?.focus() }
