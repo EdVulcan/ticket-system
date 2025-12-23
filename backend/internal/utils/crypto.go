@@ -1,54 +1,65 @@
 package utils
 
 import (
-	"crypto/md5"
-	"encoding/hex"
-	"math/rand"
-	"sort"
-	"strings"
-	"time"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"io"
 )
 
-// GenerateRandomString generates a random string of length n
-func GenerateRandomString(n int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = letters[r.Intn(len(letters))]
+// TODO: In production, load this from Environment Variable
+var SystemSecretKey = []byte("01234567890123456789012345678901") // 32 bytes
+
+// EncryptAES Encrypts text using AES-GCM
+func EncryptAES(plaintext string) (string, error) {
+	block, err := aes.NewCipher(SystemSecretKey)
+	if err != nil {
+		return "", err
 	}
-	return string(b)
+
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	nonce := make([]byte, aesGCM.NonceSize())
+	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+
+	ciphertext := aesGCM.Seal(nonce, nonce, []byte(plaintext), nil)
+	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
-// MD5 calculates MD5 hash of string
-func MD5(str string) string {
-	h := md5.New()
-	h.Write([]byte(str))
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-// SignParams signs the request parameters for OTA
-// Algo: MD5(k1=v1&k2=v2...&secret_key=SECRET)
-func SignParams(params map[string]string, secretKey string) string {
-	var keys []string
-	for k := range params {
-		if k != "sign" && params[k] != "" {
-			keys = append(keys, k)
-		}
+// DecryptAES Decrypts text using AES-GCM
+func DecryptAES(encryptedText string) (string, error) {
+	data, err := base64.StdEncoding.DecodeString(encryptedText)
+	if err != nil {
+		return "", err
 	}
-	sort.Strings(keys)
 
-	var sb strings.Builder
-	for i, k := range keys {
-		if i > 0 {
-			sb.WriteString("&")
-		}
-		sb.WriteString(k)
-		sb.WriteString("=")
-		sb.WriteString(params[k])
+	block, err := aes.NewCipher(SystemSecretKey)
+	if err != nil {
+		return "", err
 	}
-	sb.WriteString("&secret_key=")
-	sb.WriteString(secretKey)
 
-	return MD5(sb.String())
+	aesGCM, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	nonceSize := aesGCM.NonceSize()
+	if len(data) < nonceSize {
+		return "", errors.New("ciphertext too short")
+	}
+
+	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
+	plaintext, err := aesGCM.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", err
+	}
+
+	return string(plaintext), nil
 }

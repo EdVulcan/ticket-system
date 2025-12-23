@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"ticket-backend/internal/model"
+	"ticket-backend/internal/utils"
 	"time"
 
 	"github.com/go-pay/gopay"
@@ -20,6 +21,24 @@ func (s *PaymentService) GetConfig(tenantID uint, provider string) (*model.Payme
 	if err := model.DB.Where("tenant_id = ? AND provider = ?", tenantID, provider).First(&config).Error; err != nil {
 		return nil, err
 	}
+
+	// Decrypt Secrets
+	if config.Key != "" {
+		if dec, err := utils.DecryptAES(config.Key); err == nil {
+			config.Key = dec
+		}
+	}
+	if config.PrivateKey != "" {
+		if dec, err := utils.DecryptAES(config.PrivateKey); err == nil {
+			config.PrivateKey = dec
+		}
+	}
+	if config.PublicKey != "" {
+		if dec, err := utils.DecryptAES(config.PublicKey); err == nil {
+			config.PublicKey = dec
+		}
+	}
+
 	return &config, nil
 }
 
