@@ -19,6 +19,7 @@ type Tenant struct {
 	Base
 	Name       string `gorm:"size:100;not null" json:"name"`
 	SystemCode string `gorm:"size:50;uniqueIndex;not null" json:"system_code"` // 唯一系统编号
+	SecretKey  string `gorm:"size:50;not null" json:"secret_key"`              // API签名密钥
 	Contact    string `gorm:"size:50" json:"contact"`
 	Phone      string `gorm:"size:20" json:"phone"`
 	Address    string `gorm:"size:255" json:"address"`

@@ -24,7 +24,7 @@
           </div>
         </div>
         <div class="mt-4 pt-4 border-t border-gray-50 flex justify-end">
-             <el-button type="primary" link size="small">申请充值</el-button>
+             <el-button type="primary" link size="small" @click="handleRecharge(acc)">申请充值</el-button>
         </div>
       </div>
       
@@ -159,6 +159,22 @@ const getTypeTag = (type: string) => {
 const getTypeText = (type: string) => {
     const map: any = { deposit: '充值', payment: '消费', refund: '退款', credit_adjust: '授信' }
     return map[type] || type
+}
+
+// Recharge Logic
+import { ElMessageBox } from 'element-plus'
+const handleRecharge = (acc: any) => {
+    ElMessageBox.alert(
+        `请联系供应商进行线下充值。<br/><br/>
+         <strong>供应商</strong>：${acc.supplier_name}<br/>
+         <strong>联系人</strong>：${acc.supplier_contact || '未知'}<br/>
+         <strong>电话</strong>：${acc.supplier_phone || '未知'}`,
+        '充值指引',
+        {
+            dangerouslyUseHTMLString: true,
+            confirmButtonText: '知道了'
+        }
+    )
 }
 
 onMounted(() => {

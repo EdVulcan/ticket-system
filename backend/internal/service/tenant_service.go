@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"ticket-backend/internal/model"
+	"ticket-backend/internal/utils"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -12,7 +13,12 @@ type TenantService struct{}
 
 func (s *TenantService) Create(tenant *model.Tenant, adminUsername, adminPassword string) error {
 	return model.DB.Transaction(func(tx *gorm.DB) error {
-		// 1. Create Tenant
+		// 1. Generate SecretKey if missing
+		if tenant.SecretKey == "" {
+			tenant.SecretKey = utils.GenerateRandomString(32)
+		}
+
+		// 2. Create Tenant
 		if err := tx.Create(tenant).Error; err != nil {
 			return err
 		}

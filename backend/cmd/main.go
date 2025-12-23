@@ -5,6 +5,7 @@ import (
 	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/router"
+	"ticket-backend/internal/utils"
 	"ticket-backend/pkg/logger"
 
 	"github.com/gin-gonic/gin"
@@ -67,6 +68,7 @@ func seedAdminUser() error {
 		tenant := model.Tenant{
 			Name:       "Default Tenant",
 			SystemCode: "SYS001",
+			SecretKey:  utils.GenerateRandomString(32),
 		}
 		if err := model.DB.Create(&tenant).Error; err != nil {
 			return err

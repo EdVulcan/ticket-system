@@ -90,25 +90,25 @@
           <!-- Toolbar -->
           <div class="mt-3 pt-3 border-t border-[#333] grid grid-cols-5 gap-2.5">
             <el-tooltip content="查询优惠政策/入园规则 (Ctrl+F)" placement="top" :show-after="500">
-              <div class="bg-[#2b2b2b] border border-[#3d3d3d] rounded-md h-[60px] flex flex-col items-center justify-center text-[#ccc] cursor-pointer hover:bg-[#3d3d3d] hover:text-white hover:border-[#555] hover:-translate-y-0.5 transition-all active:translate-y-0 active:bg-[#222]">
+              <div class="bg-[#2b2b2b] border border-[#3d3d3d] rounded-md h-[60px] flex flex-col items-center justify-center text-[#ccc] cursor-pointer hover:bg-[#3d3d3d] hover:text-white hover:border-[#555] hover:-translate-y-0.5 transition-all active:translate-y-0 active:bg-[#222]" @click="showPolicy = true">
                 <el-icon class="text-xl mb-1 text-blue-400"><Reading /></el-icon>
                 <span class="text-xs">政策查询</span>
               </div>
             </el-tooltip>
             <el-tooltip content="打开简易计算器" placement="top" :show-after="500">
-              <div class="bg-[#2b2b2b] border border-[#3d3d3d] rounded-md h-[60px] flex flex-col items-center justify-center text-[#ccc] cursor-pointer hover:bg-[#3d3d3d] hover:text-white hover:border-[#555] hover:-translate-y-0.5 transition-all active:translate-y-0 active:bg-[#222]">
+              <div class="bg-[#2b2b2b] border border-[#3d3d3d] rounded-md h-[60px] flex flex-col items-center justify-center text-[#ccc] cursor-pointer hover:bg-[#3d3d3d] hover:text-white hover:border-[#555] hover:-translate-y-0.5 transition-all active:translate-y-0 active:bg-[#222]" @click="showCalc = true">
                 <el-icon class="text-xl mb-1"><Grid /></el-icon>
                 <span class="text-xs">计算器</span>
               </div>
             </el-tooltip>
             <el-tooltip content="重新打印上一笔订单" placement="top" :show-after="500">
-              <div class="bg-[#2b2b2b] border border-[#3d3d3d] rounded-md h-[60px] flex flex-col items-center justify-center text-[#ccc] cursor-pointer hover:bg-[#3d3d3d] hover:text-white hover:border-[#555] hover:-translate-y-0.5 transition-all active:translate-y-0 active:bg-[#222]">
+              <div class="bg-[#2b2b2b] border border-[#3d3d3d] rounded-md h-[60px] flex flex-col items-center justify-center text-[#ccc] cursor-pointer hover:bg-[#3d3d3d] hover:text-white hover:border-[#555] hover:-translate-y-0.5 transition-all active:translate-y-0 active:bg-[#222]" @click="handleReprint">
                 <el-icon class="text-xl mb-1"><Printer /></el-icon>
                 <span class="text-xs">重打</span>
               </div>
             </el-tooltip>
             <el-tooltip content="交班注意事项记录" placement="top" :show-after="500">
-              <div class="bg-[#2b2b2b] border border-[#3d3d3d] rounded-md h-[60px] flex flex-col items-center justify-center text-[#ccc] cursor-pointer hover:bg-[#3d3d3d] hover:text-white hover:border-[#555] hover:-translate-y-0.5 transition-all active:translate-y-0 active:bg-[#222]">
+              <div class="bg-[#2b2b2b] border border-[#3d3d3d] rounded-md h-[60px] flex flex-col items-center justify-center text-[#ccc] cursor-pointer hover:bg-[#3d3d3d] hover:text-white hover:border-[#555] hover:-translate-y-0.5 transition-all active:translate-y-0 active:bg-[#222]" @click="showNote = true">
                 <el-icon class="text-xl mb-1"><Notebook /></el-icon>
                 <span class="text-xs">便签</span>
               </div>
@@ -297,6 +297,23 @@
          </div>
       </div>
 
+      <!-- Modals -->
+      <el-dialog v-model="showCalc" title="计算器" width="300px" :modal="false" draggable align-center class="dark-dialog">
+        <Calculator />
+      </el-dialog>
+
+      <el-dialog v-model="showPolicy" title="百事通 (F3)" width="600px" align-center class="dark-dialog">
+        <PolicyModal />
+      </el-dialog>
+
+      <el-dialog v-model="showNote" title="交班便签" width="400px" align-center class="dark-dialog">
+        <el-input v-model="noteContent" type="textarea" rows="5" placeholder="请记录需要传达给下一班次的事项..." />
+        <template #footer>
+          <el-button @click="showNote = false">取消</el-button>
+          <el-button type="primary" @click="saveNote">保存</el-button>
+        </template>
+      </el-dialog>
+
     </div>
   </div>
 </template>
@@ -332,6 +349,9 @@ axios.interceptors.response.use(res => res, err => {
   return Promise.reject(err)
 })
 
+import Calculator from '../components/Calculator.vue'
+import PolicyModal from '../components/PolicyModal.vue'
+
 // --- State ---
 const currentView = ref('pos')
 const searchQuery = ref('')
@@ -340,6 +360,12 @@ const products = ref<any[]>([])
 const cart = ref<any[]>([])
 const searchInput = ref()
 const currentTime = ref('')
+
+// --- Modals State ---
+const showCalc = ref(false)
+const showPolicy = ref(false)
+const showNote = ref(false)
+const noteContent = ref('')
 
 // --- Orders State ---
 const orders = ref<any[]>([])
@@ -396,6 +422,10 @@ const loadSettings = () => {
       shiftState.value = JSON.parse(savedShift)
     } catch (e) {}
   }
+
+  // Load note
+  const savedNote = localStorage.getItem('pos_shift_note')
+  if (savedNote) noteContent.value = savedNote
 }
 
 const handleShiftAction = () => {
@@ -424,6 +454,7 @@ const handleShiftAction = () => {
           <p><strong>当班时长：</strong>${duration} 小时</p>
           <p><strong>开始时间：</strong>${new Date(shiftState.value.startTime!).toLocaleString()}</p>
           <p><strong>结束时间：</strong>${endTime.toLocaleString()}</p>
+          ${noteContent.value ? `<p><strong>交班便签：</strong>${noteContent.value}</p>` : ''}
           <hr class="my-2"/>
           <p>请在后台查看详细销售报表。</p>
         </div>
@@ -432,8 +463,23 @@ const handleShiftAction = () => {
       shiftState.value.isOpen = false
       shiftState.value.startTime = null
       localStorage.removeItem('pos_shift_state')
+      // Clear note
+      noteContent.value = ''
+      localStorage.removeItem('pos_shift_note')
     })
   }
+}
+
+// Actions
+const saveNote = () => {
+  localStorage.setItem('pos_shift_note', noteContent.value)
+  showNote.value = false
+  ElMessage.success('便签已保存')
+}
+
+const handleReprint = () => {
+  ElMessage.info('指令已发送: 重打上一单')
+  // In real app: ipcRenderer.send('print-last')
 }
 
 // --- Computed ---
@@ -600,7 +646,9 @@ onMounted(() => {
   
   window.addEventListener('keydown', (e) => {
     if (e.key === 'F2') { e.preventDefault(); searchInput.value?.focus() }
+    if (e.key === 'F3' || (e.ctrlKey && e.key === 'f')) { e.preventDefault(); showPolicy.value = true } // Policy
     if (e.key === 'F5') { e.preventDefault(); fetchProducts() }
+    if (e.key === 'Delete') { clearCart() } // Clear
     if (e.code === 'Space' && currentView.value === 'pos') { e.preventDefault(); handleCheckout() }
   })
 })

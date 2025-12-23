@@ -208,3 +208,52 @@ func (s *OrderService) List(page, pageSize int, tenantID uint, status string, ch
 	err = query.Order("created_at desc").Offset(offset).Limit(pageSize).Find(&orders).Error
 	return orders, total, err
 }
+
+func (s *OrderService) GetByOrderNo(orderNo string) (*model.Order, error) {
+	var order model.Order
+	err := model.DB.Preload("Items").Preload("Items.Tickets").Where("order_no = ?", orderNo).First(&order).Error
+	if err != nil {
+		return nil, err
+	}
+	return &order, nil
+}
+
+func (s *OrderService) Cancel(orderNo string) error {
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		var order model.Order
+		if err := tx.Where("order_no = ?", orderNo).First(&order).Error; err != nil {
+			return err
+		}
+
+		if order.Status == "cancelled" {
+			return fmt.Errorf("订单已取消")
+		}
+		if order.Status == "used" {
+			return fmt.Errorf("订单已核销，无法取消")
+		}
+
+		// Update Order Status
+		if err := tx.Model(&order).Update("status", "cancelled").Error; err != nil {
+			return err
+		}
+
+		// Invalidate Tickets
+		// Find all tickets for this order?
+		// Order -> Items -> Tickets.
+		// Use raw query or load associations.
+		// Update tickets set status = 'void' where item_id in (select id from order_items where order_id = ?)
+		// Or simpler logic:
+		var itemIDs []uint
+		tx.Model(&model.OrderItem{}).Where("order_id = ?", order.ID).Pluck("id", &itemIDs)
+
+		if len(itemIDs) > 0 {
+			if err := tx.Model(&model.Ticket{}).Where("order_item_id IN ?", itemIDs).Update("status", "void").Error; err != nil {
+				return err
+			}
+		}
+
+		// TODO: Refund Balance for B2B Orders (Future Scope)
+
+		return nil
+	})
+}

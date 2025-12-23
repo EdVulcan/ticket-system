@@ -38,53 +38,59 @@
 
           <!-- Tenant Only -->
           <template v-else>
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">B2B 分销</div>
-             <el-menu-item index="/distribution" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Connection /></el-icon>
-                <span>分销中心 (供应商)</span>
-             </el-menu-item>
-
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">运营管理</div>
-             <el-menu-item index="/device" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Monitor /></el-icon>
-                <span>终端设备管理</span>
-             </el-menu-item>
-             <el-menu-item index="/checkpoint" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Location /></el-icon>
-                <span>检票点位设置</span>
-             </el-menu-item>
-
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">线上销售</div>
+             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">销售中心 (Sales)</div>
              <el-menu-item index="/product" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Ticket /></el-icon>
-                <span>线上门票管理</span>
+                <span>线上门票</span>
+             </el-menu-item>
+             <el-menu-item index="/product/offline" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+                <el-icon><Monitor /></el-icon>
+                <span>窗口门票</span>
              </el-menu-item>
              <el-menu-item index="/order" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><List /></el-icon>
-                <span>线上订单管理</span>
+                <span>订单管理</span>
              </el-menu-item>
 
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">线下销售</div>
-             <el-menu-item index="/product/offline" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">分销中心 (B2B)</div>
+             <el-menu-item index="/distribution" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+                <el-icon><Connection /></el-icon>
+                <span>分销商管理</span>
+             </el-menu-item>
+
+             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">现场运营 (OPS)</div>
+             <el-menu-item index="/policy" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+                <el-icon><Reading /></el-icon>
+                <span>政策知识库</span>
+             </el-menu-item>
+             <el-menu-item index="/device" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Monitor /></el-icon>
-                <span>窗口门票管理</span>
+                <span>终端设备</span>
+             </el-menu-item>
+             <el-menu-item index="/checkpoint" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+                <el-icon><Location /></el-icon>
+                <span>检票点位</span>
+             </el-menu-item>
+
+             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">数据与财务 (Data)</div>
+             <el-menu-item index="/finance" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+                <el-icon><Money /></el-icon>
+                <span>财务报表</span>
              </el-menu-item>
           </template>
           
-          <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">系统设置</div>
-          <el-menu-item index="/settings" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-            <el-icon><Setting /></el-icon>
-            <span>系统设置</span>
-          </el-menu-item>
-
-          <el-menu-item index="/staff" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+          <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">组织与设置</div>
+           <el-menu-item index="/staff" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
             <el-icon><User /></el-icon>
             <span>员工管理</span>
           </el-menu-item>
-          
           <el-menu-item index="/system-user" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
             <el-icon><UserFilled /></el-icon>
             <span>系统员管理</span>
+          </el-menu-item>
+           <el-menu-item index="/settings" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+            <el-icon><Setting /></el-icon>
+            <span>系统设置</span>
           </el-menu-item>
         </el-menu>
 
@@ -175,8 +181,8 @@ import { computed, ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { 
   Odometer, Monitor, Location, Ticket, List, Setting, User, UserFilled,
-  SwitchButton, OfficeBuilding, Connection,
-  CaretBottom, Switch
+  SwitchButton, OfficeBuilding, Connection, Money,
+  CaretBottom, Switch, Reading
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 

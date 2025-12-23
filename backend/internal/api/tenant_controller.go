@@ -60,6 +60,26 @@ func (c *TenantController) Delete(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"message": "deleted successfully"})
 }
 
+func (c *TenantController) GetSelf(ctx *gin.Context) {
+	// 1. Get current tenant ID from JWT context (set by middleware)
+	// tenant_id is uint
+	tenantID, exists := ctx.Get("tenant_id")
+	if !exists {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	// 2. Fetch Tenant
+	tenant, err := c.Service.GetByID(tenantID.(uint))
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 3. Return Tenant Info (SecretKey is included in JSON)
+	ctx.JSON(http.StatusOK, tenant)
+}
+
 func (c *TenantController) List(ctx *gin.Context) {
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "10"))

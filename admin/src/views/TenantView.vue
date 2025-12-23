@@ -15,6 +15,14 @@
           <el-tag effect="dark" type="warning" class="font-mono text-base font-bold">{{ row.system_code }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="API 密钥 (Secret Key)" width="200">
+        <template #default="{ row }">
+           <div class="flex items-center gap-2">
+             <span class="font-mono text-xs text-gray-500 truncate w-[100px]">{{ row.secret_key }}</span>
+             <el-button link type="primary" size="small" @click="copyKey(row.secret_key)">复制</el-button>
+           </div>
+        </template>
+      </el-table-column>
       <el-table-column prop="contact" label="联系人" width="120" />
       <el-table-column prop="phone" label="联系电话" width="150" />
       <el-table-column prop="address" label="地址" min-width="200" show-overflow-tooltip />
@@ -184,6 +192,12 @@ const handleSubmit = async () => {
         ElMessage.error('操作失败')
       }
     }
+  })
+}
+
+const copyKey = (key: string) => {
+  navigator.clipboard.writeText(key).then(() => {
+    ElMessage.success('密钥已复制')
   })
 }
 

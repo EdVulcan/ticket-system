@@ -22,13 +22,15 @@ func (s *FinanceService) ListAccounts(agentTenantID uint) ([]map[string]interfac
 	result := make([]map[string]interface{}, 0)
 	for _, acc := range accounts {
 		result = append(result, map[string]interface{}{
-			"id":            acc.ID,
-			"supplier_name": acc.ManagerTenant.Name,
-			"supplier_code": acc.ManagerTenant.SystemCode,
-			"balance":       acc.Balance,
-			"credit_line":   acc.CreditLine,
-			"frozen":        acc.FrozenAmount,
-			"status":        acc.Status,
+			"id":               acc.ID,
+			"supplier_name":    acc.ManagerTenant.Name,
+			"supplier_code":    acc.ManagerTenant.SystemCode,
+			"supplier_contact": acc.ManagerTenant.Contact,
+			"supplier_phone":   acc.ManagerTenant.Phone,
+			"balance":          acc.Balance,
+			"credit_line":      acc.CreditLine,
+			"frozen":           acc.FrozenAmount,
+			"status":           acc.Status,
 		})
 	}
 	return result, nil

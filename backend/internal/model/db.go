@@ -51,6 +51,7 @@ func InitDB() error {
 		&DistributorRelationship{},
 		&CapitalAccount{},
 		&TransactionRecord{},
+		&Policy{},
 	)
 	if err != nil {
 		return fmt.Errorf("failed to migrate database: %w", err)

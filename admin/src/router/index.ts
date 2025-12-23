@@ -22,6 +22,12 @@ const router = createRouter({
             meta: { role: 'admin', title: '分销中心' }
         },
         {
+            path: '/finance',
+            name: 'finance',
+            component: () => import('../views/FinanceView.vue'),
+            meta: { title: '财务中心' }
+        },
+        {
             path: '/device',
             name: 'device',
             component: () => import('../views/DeviceView.vue'),
@@ -72,13 +78,19 @@ const router = createRouter({
         {
             path: '/settings',
             name: 'settings',
-            component: () => import('../views/HomeView.vue'), // Placeholder
+            component: () => import('../views/SettingsView.vue'),
             meta: { title: '系统设置' }
+        },
+        {
+            path: '/policy',
+            name: 'policy',
+            component: () => import('../views/PolicyView.vue'),
+            meta: { title: '政策知识库' }
         }
     ]
 })
 
-router.beforeEach((to, from, next) => {
+router.beforeEach((to, _from, next) => {
     const token = localStorage.getItem('token')
     if (to.name !== 'login' && !token) {
         next({ name: 'login' })

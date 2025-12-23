@@ -27,6 +27,7 @@ func InitRouter(r *gin.Engine) {
 	tenantController := &api.TenantController{}
 	tenantGroup := protected.Group("/tenants")
 	{
+		tenantGroup.GET("/me", tenantController.GetSelf)
 		tenantGroup.POST("", tenantController.Create)
 		tenantGroup.GET("", tenantController.List)
 		tenantGroup.PUT("/:id", tenantController.Update)
@@ -99,6 +100,16 @@ func InitRouter(r *gin.Engine) {
 		cpGroup.DELETE("/:id", cpController.Delete)
 	}
 
+	// Policy Routes
+	policyController := &api.PolicyController{Service: service.PolicyService{}}
+	policyGroup := protected.Group("/policies")
+	{
+		policyGroup.POST("", policyController.Create)
+		policyGroup.GET("", policyController.List)
+		policyGroup.PUT("/:id", policyController.Update)
+		policyGroup.DELETE("/:id", policyController.Delete)
+	}
+
 	// Distribution Routes (B2B)
 	distController := &api.DistributionController{Service: service.DistributionService{}}
 	distGroup := protected.Group("/distribution")
@@ -117,10 +128,23 @@ func InitRouter(r *gin.Engine) {
 		distGroup.POST("/products/import", distController.ImportProduct)
 	}
 
+	// OTA Routes (External Integration)
+	otaController := &api.OTAController{
+		OrderService:   service.OrderService{},
+		ProductService: service.ProductService{},
+	}
+	otaGroup := apiGroup.Group("/ota")
+	otaGroup.Use(middleware.OTASignMiddleware())
+	{
+		otaGroup.POST("/products", otaController.ListProducts)
+		otaGroup.POST("/orders/create", otaController.CreateOrder)
+		otaGroup.POST("/orders/cancel", otaController.CancelOrder)
+		otaGroup.POST("/orders/query", otaController.QueryOrder)
+	}
+
 	// Finance Routes
 	financeController := &api.FinanceController{Service: service.FinanceService{}}
-	financeGroup := r.Group("/finance")
-	financeGroup.Use(middleware.JWTAuth())
+	financeGroup := protected.Group("/finance")
 	{
 		financeGroup.GET("/accounts", financeController.ListAccounts)
 		financeGroup.GET("/transactions", financeController.ListTransactions)
