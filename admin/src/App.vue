@@ -77,6 +77,10 @@
                 <el-icon><Money /></el-icon>
                 <span>财务报表</span>
              </el-menu-item>
+             <el-menu-item index="/report" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors text-indigo-400">
+                <el-icon><TrendCharts /></el-icon>
+                <span>经营数据 (BI)</span>
+             </el-menu-item>
           </template>
           
           <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">组织与设置</div>
@@ -182,7 +186,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { 
   Odometer, Monitor, Location, Ticket, List, Setting, User, UserFilled,
   SwitchButton, OfficeBuilding, Connection, Money,
-  CaretBottom, Switch, Reading
+  CaretBottom, Switch, Reading, TrendCharts
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 

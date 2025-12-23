@@ -149,4 +149,13 @@ func InitRouter(r *gin.Engine) {
 		financeGroup.GET("/accounts", financeController.ListAccounts)
 		financeGroup.GET("/transactions", financeController.ListTransactions)
 	}
+
+	// Report Routes
+	reportController := &api.ReportController{Service: service.ReportService{}}
+	reportGroup := protected.Group("/reports")
+	{
+		reportGroup.GET("/sales", reportController.GetSales)
+		reportGroup.GET("/products", reportController.GetProducts)
+		reportGroup.GET("/channels", reportController.GetChannels)
+	}
 }

@@ -86,6 +86,12 @@ const router = createRouter({
             name: 'policy',
             component: () => import('../views/PolicyView.vue'),
             meta: { title: '政策知识库' }
+        },
+        {
+            path: '/report',
+            name: 'report',
+            component: () => import('../views/ReportView.vue'),
+            meta: { title: '经营数据报表' }
         }
     ]
 })
