@@ -1,196 +1,335 @@
 package service
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
-	"math/rand"
+	"math"
+	"strings"
 	"ticket-backend/internal/model"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
+
+var ErrDuplicateExternalOrder = errors.New("external order already exists")
 
 type OrderService struct{}
 
-// GenerateOrderNo 生成订单号
 func (s *OrderService) GenerateOrderNo() string {
-	return fmt.Sprintf("ORD%s%04d", time.Now().Format("20060102150405"), rand.Intn(10000))
+	random := make([]byte, 5)
+	if _, err := rand.Read(random); err != nil {
+		panic("secure random source unavailable: " + err.Error())
+	}
+	return fmt.Sprintf("ORD%d%s", time.Now().UnixMilli(), strings.ToUpper(hex.EncodeToString(random)))
 }
 
-// GenerateTicketCode 生成核销码
 func (s *OrderService) GenerateTicketCode() string {
-	return fmt.Sprintf("T%s%04d", time.Now().Format("0102150405"), rand.Intn(10000))
+	random := make([]byte, 8)
+	if _, err := rand.Read(random); err != nil {
+		panic("secure random source unavailable: " + err.Error())
+	}
+	return "T" + strings.ToUpper(hex.EncodeToString(random))
 }
 
-// Create 创建订单 (简化版，直接支付成功)
+func roundMoney(value float64) float64 {
+	return math.Round(value*100) / 100
+}
+
 func (s *OrderService) Create(req *model.Order) error {
-	return model.DB.Transaction(func(tx *gorm.DB) error {
-		// 1. Basic Info
-		req.OrderNo = s.GenerateOrderNo()
-		if req.Channel == "" {
-			req.Channel = "online"
-		}
-		req.Status = "unpaid"
-
-		// 2. Process Items & Tickets
-		for i := range req.Items {
-			item := &req.Items[i]
-
-			// Fetch Product Snapshot (In real app, verify price/stock)
-			var product model.Product
-			if err := tx.First(&product, item.ProductID).Error; err != nil {
+	if err := validateOrder(req); err != nil {
+		return err
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		if req.ExternalNo != nil {
+			var count int64
+			if err := tx.Model(&model.Order{}).Where(
+				"tenant_id = ? AND channel = ? AND external_no = ?", req.TenantID, req.Channel, *req.ExternalNo,
+			).Count(&count).Error; err != nil {
 				return err
 			}
+			if count > 0 {
+				return ErrDuplicateExternalOrder
+			}
+		}
+		req.Base = model.Base{}
+		req.OrderNo = s.GenerateOrderNo()
+		req.Status = "unpaid"
+		req.TotalAmount = 0
+
+		for i := range req.Items {
+			item := &req.Items[i]
+			item.Base = model.Base{}
+			item.OrderID = 0
+			item.Tickets = nil
+
+			var product model.Product
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("id = ? AND tenant_id = ? AND status = ?", item.ProductID, req.TenantID, "online").
+				First(&product).Error; err != nil {
+				return fmt.Errorf("product %d is unavailable", item.ProductID)
+			}
+
 			item.ProductName = product.Name
-			item.Price = product.Price
+			item.Price = roundMoney(product.Price)
+			item.SettlementPrice = roundMoney(product.SettlementPrice)
 			item.ValidityType = product.ValidityType
+			if err := applyValidity(item, &product); err != nil {
+				return fmt.Errorf("%s: %w", product.Name, err)
+			}
 
-			// --- B2B Logic Start ---
+			stockProduct := &product
 			if product.SourceProductID > 0 {
-				// 1. Calculate Cost
-				cost := product.SettlementPrice * float64(item.Quantity)
-
-				// 2. Load Capital Account
-				var account model.CapitalAccount
-				// Owner = Agent(Product.TenantID), Manager = Supplier(Product.SourceTenantID)
-				if err := tx.Where("owner_tenant_id = ? AND manager_tenant_id = ?", product.TenantID, product.SourceTenantID).First(&account).Error; err != nil {
-					return fmt.Errorf("分销资金账户不存在或异常")
-				}
-
-				// 3. Check Balance (Balance + CreditLine >= Cost)
-				if account.Balance+account.CreditLine < cost {
-					return fmt.Errorf("余额不足，无法采购 (需: %.2f, 余额: %.2f)", cost, account.Balance)
-				}
-
-				// 4. Deduct Balance
-				account.Balance -= cost
-				if account.Balance < 0 {
-					// Use Credit
-					account.UsedCredit += (0 - account.Balance)
-					// account.Balance = 0 // Keep negative? Or handle logically.
-					// Simplified: Allow balance to be negative if within credit line?
-					// Better: Split logic.
-					// MVP: Just subtract. If Balance becomes negative, it means we used credit (implicit).
-					// But usually Balance should floor at 0.
-					// Let's keep it simple: Balance is Cash. If Cost > Balance, deduct all Balance, rest adds to Usage?
-					// For MVP, just subtract from Balance. If negative, it means owed.
-					// wait, credit line check was (Balance + CreditLine < Cost).
-					// yes, so simple subtraction works.
-				}
-				if err := tx.Save(&account).Error; err != nil {
-					return err
-				}
-
-				// 5. Record Transaction
-				trans := model.TransactionRecord{
-					AccountID:      account.ID,
-					Type:           "payment",
-					Amount:         -cost,
-					BalanceAfter:   account.Balance,
-					RelatedOrderNo: req.OrderNo,
-					Memo:           fmt.Sprintf("分销采购: %s x%d", product.Name, item.Quantity),
-					OperatorID:     0, // System
-				}
-				if err := tx.Create(&trans).Error; err != nil {
-					return err
-				}
-
-				// 6. Decrement Source Stock (Optimistic Lock ideally, simplistic here)
-				// We need to load Source Product to update its stock?
-				// Or assume SourceProduct.StockType is handled?
 				var sourceProduct model.Product
-				if err := tx.First(&sourceProduct, product.SourceProductID).Error; err != nil {
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("id = ? AND tenant_id = ? AND status = ?", product.SourceProductID, product.SourceTenantID, "online").
+					First(&sourceProduct).Error; err != nil {
+					return fmt.Errorf("source product for %s is unavailable", product.Name)
+				}
+				stockProduct = &sourceProduct
+				if err := chargeDistributionAccount(tx, req, item, &product); err != nil {
 					return err
 				}
-				if sourceProduct.StockType != "unlimited" {
-					if sourceProduct.DailyStock < item.Quantity {
-						return fmt.Errorf("供应商库存不足")
-					}
-					sourceProduct.DailyStock -= item.Quantity
-					if err := tx.Save(&sourceProduct).Error; err != nil {
-						return err
-					}
-				}
 			}
-			// --- B2B Logic End ---
-
-			// Calculate Validity
-			now := time.Now()
-			if product.ValidityType == "date" {
-				item.ValidityStart = product.ValidityStartDate
-				item.ValidityEnd = product.ValidityEndDate
-			} else {
-				item.ValidityStart = &now
-				// Calculate end of the Nth day
-				// If ValidityDays = 0 (Today), End = Today 23:59:59
-				// If ValidityDays = 1 (Tomorrow), End = Tomorrow 23:59:59
-				endDate := now.AddDate(0, 0, product.ValidityDays)
-				endDate = time.Date(endDate.Year(), endDate.Month(), endDate.Day(), 23, 59, 59, 0, endDate.Location())
-				item.ValidityEnd = &endDate
+			if err := reserveStock(tx, stockProduct, item.UseDate, item.Quantity); err != nil {
+				return err
 			}
 
-			// Generate Tickets
-			// If CodeMode is 'order', all tickets share one code? Or just one ticket entry?
-			// For simplicity in this MVP, we generate N tickets for Quantity N,
-			// but if 'order' mode, they might share logic.
-			// Let's stick to: 1 Quantity = 1 Ticket Record for now to track usage individually.
-			// Or if 'order' mode, maybe we just have 1 Ticket record with Quantity?
-			// Let's assume 1 Item Quantity = N Tickets.
-
-			// Generate Tickets based on CodeMode
-			if product.CodeMode == "order" {
-				// One Order One Code: Create 1 Ticket
-				item.Tickets = []model.Ticket{
-					{
-						TicketCode:   s.GenerateTicketCode(),
-						Status:       "unused",
-						TenantID:     req.TenantID,
-						VisitorName:  req.ContactName,
-						VisitorPhone: req.ContactPhone,
-					},
-				}
-			} else {
-				// One Ticket One Code: Create N Tickets
-				item.Tickets = make([]model.Ticket, item.Quantity)
-				for j := 0; j < item.Quantity; j++ {
-					item.Tickets[j] = model.Ticket{
-						TicketCode:   s.GenerateTicketCode(),
-						Status:       "unused",
-						TenantID:     req.TenantID,
-						VisitorName:  req.ContactName, // Default to contact
-						VisitorPhone: req.ContactPhone,
-					}
-				}
-			}
+			req.TotalAmount = roundMoney(req.TotalAmount + item.Price*float64(item.Quantity))
+			item.Tickets = buildTickets(s, &product, item.Quantity, req)
 		}
 
-		if err := tx.Create(req).Error; err != nil {
-			return err
-		}
-
-		return nil
+		return tx.Create(req).Error
 	})
 }
 
-func (s *OrderService) List(page, pageSize int, tenantID uint, status string, channel string, startDate string, endDate string, search string) ([]model.Order, int64, error) {
+func validateOrder(req *model.Order) error {
+	if req.TenantID == 0 {
+		return fmt.Errorf("tenant is required")
+	}
+	if len(req.Items) == 0 {
+		return fmt.Errorf("order must contain at least one item")
+	}
+	if len(req.ContactName) > 50 || len(req.ContactPhone) > 20 {
+		return fmt.Errorf("contact information is too long")
+	}
+	if req.Channel == "" {
+		req.Channel = "online"
+	}
+	if req.Channel != "online" && req.Channel != "ota" && req.Channel != "window" {
+		return fmt.Errorf("invalid order channel")
+	}
+	if req.ExternalNo != nil {
+		externalNo := strings.TrimSpace(*req.ExternalNo)
+		if externalNo == "" {
+			req.ExternalNo = nil
+		} else if len(externalNo) > 100 {
+			return fmt.Errorf("external order number is too long")
+		} else {
+			req.ExternalNo = &externalNo
+		}
+	}
+	for _, item := range req.Items {
+		if item.ProductID == 0 || item.Quantity <= 0 || item.Quantity > 1000 {
+			return fmt.Errorf("item quantity must be between 1 and 1000")
+		}
+	}
+	return nil
+}
+
+func applyValidity(item *model.OrderItem, product *model.Product) error {
+	now := time.Now()
+	if item.UseDate != nil {
+		normalized := startOfDay(*item.UseDate)
+		item.UseDate = &normalized
+	}
+
+	switch product.ValidityType {
+	case "date":
+		item.ValidityStart = product.ValidityStartDate
+		item.ValidityEnd = product.ValidityEndDate
+		if item.UseDate != nil {
+			if product.ValidityStartDate != nil && item.UseDate.Before(startOfDay(*product.ValidityStartDate)) {
+				return fmt.Errorf("visit date is before the validity period")
+			}
+			if product.ValidityEndDate != nil && item.UseDate.After(startOfDay(*product.ValidityEndDate)) {
+				return fmt.Errorf("visit date is after the validity period")
+			}
+		}
+	case "days":
+		start := now
+		if item.UseDate != nil {
+			start = startOfDay(*item.UseDate)
+		}
+		end := start.AddDate(0, 0, product.ValidityDays)
+		end = time.Date(end.Year(), end.Month(), end.Day(), 23, 59, 59, 0, end.Location())
+		item.ValidityStart = &start
+		item.ValidityEnd = &end
+	default:
+		return fmt.Errorf("invalid validity type")
+	}
+
+	if product.StockType == "daily" && item.UseDate == nil {
+		return fmt.Errorf("visit date is required for daily stock")
+	}
+	return nil
+}
+
+func startOfDay(value time.Time) time.Time {
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, value.Location())
+}
+
+func reserveStock(tx *gorm.DB, product *model.Product, useDate *time.Time, quantity int) error {
+	switch product.StockType {
+	case "", "unlimited":
+		return nil
+	case "total":
+		result := tx.Model(&model.Product{}).
+			Where("id = ? AND daily_stock >= ?", product.ID, quantity).
+			UpdateColumn("daily_stock", gorm.Expr("daily_stock - ?", quantity))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("insufficient stock for %s", product.Name)
+		}
+		return nil
+	case "daily":
+		if useDate == nil {
+			return fmt.Errorf("visit date is required for daily stock")
+		}
+		stockDate := startOfDay(*useDate)
+		inventory := model.ProductInventory{
+			TenantID: product.TenantID, ProductID: product.ID, StockDate: stockDate, Capacity: product.DailyStock,
+		}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&inventory).Error; err != nil {
+			return err
+		}
+		result := tx.Model(&model.ProductInventory{}).
+			Where("tenant_id = ? AND product_id = ? AND stock_date = ? AND sold + ? <= capacity", product.TenantID, product.ID, stockDate, quantity).
+			UpdateColumn("sold", gorm.Expr("sold + ?", quantity))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("insufficient stock for %s on %s", product.Name, stockDate.Format("2006-01-02"))
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid stock type for %s", product.Name)
+	}
+}
+
+func releaseStock(tx *gorm.DB, product *model.Product, useDate *time.Time, quantity int) error {
+	switch product.StockType {
+	case "", "unlimited":
+		return nil
+	case "total":
+		return tx.Model(&model.Product{}).Where("id = ?", product.ID).
+			UpdateColumn("daily_stock", gorm.Expr("daily_stock + ?", quantity)).Error
+	case "daily":
+		if useDate == nil {
+			return fmt.Errorf("daily stock reservation has no visit date")
+		}
+		result := tx.Model(&model.ProductInventory{}).
+			Where("tenant_id = ? AND product_id = ? AND stock_date = ? AND sold >= ?", product.TenantID, product.ID, startOfDay(*useDate), quantity).
+			UpdateColumn("sold", gorm.Expr("sold - ?", quantity))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("stock reservation is inconsistent")
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid stock type for %s", product.Name)
+	}
+}
+
+func chargeDistributionAccount(tx *gorm.DB, order *model.Order, item *model.OrderItem, product *model.Product) error {
+	cost := roundMoney(item.SettlementPrice * float64(item.Quantity))
+	var account model.CapitalAccount
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("owner_tenant_id = ? AND manager_tenant_id = ? AND status = ?", product.TenantID, product.SourceTenantID, "active").
+		First(&account).Error; err != nil {
+		return fmt.Errorf("distribution capital account is unavailable")
+	}
+	availableCredit := account.CreditLine - account.UsedCredit
+	if account.Balance+availableCredit < cost {
+		return fmt.Errorf("insufficient distribution balance")
+	}
+	cashUsed := math.Min(account.Balance, cost)
+	creditUsed := cost - cashUsed
+	account.Balance = roundMoney(account.Balance - cashUsed)
+	account.UsedCredit = roundMoney(account.UsedCredit + creditUsed)
+	if err := tx.Save(&account).Error; err != nil {
+		return err
+	}
+	return tx.Create(&model.TransactionRecord{
+		AccountID: account.ID, Type: "payment", Amount: -cost, BalanceAfter: account.Balance,
+		RelatedOrderNo: order.OrderNo, Memo: fmt.Sprintf("distribution purchase: %s x%d", product.Name, item.Quantity),
+	}).Error
+}
+
+func refundDistributionAccount(tx *gorm.DB, order *model.Order, item *model.OrderItem, product *model.Product) error {
+	amount := roundMoney(item.SettlementPrice * float64(item.Quantity))
+	var account model.CapitalAccount
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("owner_tenant_id = ? AND manager_tenant_id = ?", product.TenantID, product.SourceTenantID).
+		First(&account).Error; err != nil {
+		return err
+	}
+	creditRepaid := math.Min(account.UsedCredit, amount)
+	account.UsedCredit = roundMoney(account.UsedCredit - creditRepaid)
+	account.Balance = roundMoney(account.Balance + amount - creditRepaid)
+	if err := tx.Save(&account).Error; err != nil {
+		return err
+	}
+	return tx.Create(&model.TransactionRecord{
+		AccountID: account.ID, Type: "refund", Amount: amount, BalanceAfter: account.Balance,
+		RelatedOrderNo: order.OrderNo, Memo: fmt.Sprintf("cancelled distribution purchase: %s x%d", product.Name, item.Quantity),
+	}).Error
+}
+
+func buildTickets(service *OrderService, product *model.Product, quantity int, order *model.Order) []model.Ticket {
+	count := quantity
+	if product.CodeMode == "order" {
+		count = 1
+	}
+	tickets := make([]model.Ticket, count)
+	for i := range tickets {
+		tickets[i] = model.Ticket{
+			TicketCode: service.GenerateTicketCode(), Status: "unused", TenantID: order.TenantID,
+			VisitorName: order.ContactName, VisitorPhone: order.ContactPhone,
+		}
+	}
+	return tickets
+}
+
+func (s *OrderService) List(page, pageSize int, tenantID uint, status, channel, startDate, endDate, search string) ([]model.Order, int64, error) {
 	var orders []model.Order
 	var total int64
-
-	offset := (page - 1) * pageSize
-
-	query := model.DB.Model(&model.Order{}).Preload("Items").Preload("Items.Tickets")
-	if tenantID > 0 {
-		query = query.Where("tenant_id = ?", tenantID)
+	if tenantID == 0 {
+		return nil, 0, fmt.Errorf("tenant is required")
 	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+
+	query := model.DB.Model(&model.Order{}).Preload("Items").Preload("Items.Tickets").Where("tenant_id = ?", tenantID)
 	if status != "" {
 		query = query.Where("status = ?", status)
 	}
 	if channel != "" {
-		if channel == "online" {
-			// Treat empty or null channel as online for backward compatibility
-			query = query.Where("channel = ? OR channel = '' OR channel IS NULL", "online")
-		} else {
-			query = query.Where("channel = ?", channel)
-		}
+		query = query.Where("channel = ?", channel)
 	}
 	if startDate != "" {
 		query = query.Where("created_at >= ?", startDate+" 00:00:00")
@@ -199,87 +338,100 @@ func (s *OrderService) List(page, pageSize int, tenantID uint, status string, ch
 		query = query.Where("created_at <= ?", endDate+" 23:59:59")
 	}
 	if search != "" {
-		query = query.Where("order_no LIKE ? OR contact_name LIKE ? OR contact_phone LIKE ?", "%"+search+"%", "%"+search+"%", "%"+search+"%")
+		like := "%" + search + "%"
+		query = query.Where("order_no LIKE ? OR external_no LIKE ? OR contact_name LIKE ? OR contact_phone LIKE ?", like, like, like, like)
 	}
-
-	err := query.Count(&total).Error
-	if err != nil {
+	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-
-	err = query.Order("created_at desc").Offset(offset).Limit(pageSize).Find(&orders).Error
+	err := query.Order("created_at desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&orders).Error
 	return orders, total, err
 }
 
-func (s *OrderService) GetByOrderNo(orderNo string) (*model.Order, error) {
+func (s *OrderService) GetByOrderNo(orderNo string, tenantID uint) (*model.Order, error) {
 	var order model.Order
-	err := model.DB.Preload("Items").Preload("Items.Tickets").Where("order_no = ?", orderNo).First(&order).Error
-	if err != nil {
-		return nil, err
-	}
-	return &order, nil
+	err := model.DB.Preload("Items").Preload("Items.Tickets").
+		Where("order_no = ? AND tenant_id = ?", orderNo, tenantID).First(&order).Error
+	return &order, err
 }
 
-func (s *OrderService) Cancel(orderNo string) error {
-	return model.DB.Transaction(func(tx *gorm.DB) error {
+func (s *OrderService) GetByExternalNo(externalNo, channel string, tenantID uint) (*model.Order, error) {
+	var order model.Order
+	err := model.DB.Preload("Items").Preload("Items.Tickets").
+		Where("external_no = ? AND channel = ? AND tenant_id = ?", externalNo, channel, tenantID).First(&order).Error
+	return &order, err
+}
+
+func (s *OrderService) Cancel(orderNo string, tenantID uint) error {
+	return model.Write(func(tx *gorm.DB) error {
 		var order model.Order
-		if err := tx.Where("order_no = ?", orderNo).First(&order).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Tickets").
+			Where("order_no = ? AND tenant_id = ?", orderNo, tenantID).First(&order).Error; err != nil {
 			return err
 		}
-
 		if order.Status == "cancelled" {
-			return fmt.Errorf("订单已取消")
+			return nil
 		}
-		if order.Status == "used" {
-			return fmt.Errorf("订单已核销，无法取消")
+		if order.Status != "unpaid" && !(order.Status == "paid" && order.Channel == "ota") {
+			return fmt.Errorf("paid orders must use the refund workflow")
+		}
+		for _, item := range order.Items {
+			for _, ticket := range item.Tickets {
+				if ticket.CheckInCount > 0 || ticket.Status == "used" {
+					return fmt.Errorf("used orders cannot be cancelled")
+				}
+			}
 		}
 
-		// Update Order Status
-		if err := tx.Model(&order).Update("status", "cancelled").Error; err != nil {
-			return err
-		}
-
-		// Invalidate Tickets
-		// Find all tickets for this order?
-		// Order -> Items -> Tickets.
-		// Use raw query or load associations.
-		// Update tickets set status = 'void' where item_id in (select id from order_items where order_id = ?)
-		// Or simpler logic:
-		var itemIDs []uint
-		tx.Model(&model.OrderItem{}).Where("order_id = ?", order.ID).Pluck("id", &itemIDs)
-
-		if len(itemIDs) > 0 {
-			if err := tx.Model(&model.Ticket{}).Where("order_item_id IN ?", itemIDs).Update("status", "void").Error; err != nil {
+		for i := range order.Items {
+			item := &order.Items[i]
+			var product model.Product
+			if err := tx.Where("id = ? AND tenant_id = ?", item.ProductID, tenantID).First(&product).Error; err != nil {
+				return err
+			}
+			stockProduct := &product
+			if product.SourceProductID > 0 {
+				var source model.Product
+				if err := tx.Where("id = ? AND tenant_id = ?", product.SourceProductID, product.SourceTenantID).First(&source).Error; err != nil {
+					return err
+				}
+				stockProduct = &source
+				if err := refundDistributionAccount(tx, &order, item, &product); err != nil {
+					return err
+				}
+			}
+			if err := releaseStock(tx, stockProduct, item.UseDate, item.Quantity); err != nil {
 				return err
 			}
 		}
 
-		// TODO: Refund Balance for B2B Orders (Future Scope)
-
+		if err := tx.Model(&order).Update("status", "cancelled").Error; err != nil {
+			return err
+		}
+		var itemIDs []uint
+		if err := tx.Model(&model.OrderItem{}).Where("order_id = ?", order.ID).Pluck("id", &itemIDs).Error; err != nil {
+			return err
+		}
+		if len(itemIDs) > 0 {
+			return tx.Model(&model.Ticket{}).Where("order_item_id IN ?", itemIDs).Update("status", "void").Error
+		}
 		return nil
 	})
 }
 
-// MarkAsPaid 标记订单为已支付
-func (s *OrderService) MarkAsPaid(orderNo string) error {
-	var order model.Order
-	if err := model.DB.Where("order_no = ?", orderNo).First(&order).Error; err != nil {
-		return err
-	}
-
-	if order.Status == "paid" {
-		return nil // Already paid
-	}
-
-	if order.Status != "unpaid" {
-		return fmt.Errorf("订单状态异常，无法支付: %s", order.Status)
-	}
-
-	order.Status = "paid"
-	if err := model.DB.Save(&order).Error; err != nil {
-		return err
-	}
-
-	// Future: Trigger ticket activation or external notification here
-	return nil
+func (s *OrderService) MarkAsPaid(orderNo string, tenantID uint) error {
+	return model.Write(func(tx *gorm.DB) error {
+		var order model.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("order_no = ? AND tenant_id = ?", orderNo, tenantID).First(&order).Error; err != nil {
+			return err
+		}
+		if order.Status == "paid" {
+			return nil
+		}
+		if order.Status != "unpaid" {
+			return fmt.Errorf("order cannot be paid from status %s", order.Status)
+		}
+		return tx.Model(&order).Update("status", "paid").Error
+	})
 }

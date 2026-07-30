@@ -7,14 +7,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"ticket-backend/internal/config"
 )
-
-// TODO: In production, load this from Environment Variable
-var SystemSecretKey = []byte("01234567890123456789012345678901") // 32 bytes
 
 // EncryptAES Encrypts text using AES-GCM
 func EncryptAES(plaintext string) (string, error) {
-	block, err := aes.NewCipher(SystemSecretKey)
+	block, err := aes.NewCipher([]byte(config.GlobalConfig.Security.EncryptionKey))
 	if err != nil {
 		return "", err
 	}
@@ -40,7 +38,7 @@ func DecryptAES(encryptedText string) (string, error) {
 		return "", err
 	}
 
-	block, err := aes.NewCipher(SystemSecretKey)
+	block, err := aes.NewCipher([]byte(config.GlobalConfig.Security.EncryptionKey))
 	if err != nil {
 		return "", err
 	}

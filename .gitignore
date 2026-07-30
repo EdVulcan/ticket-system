@@ -22,6 +22,7 @@ pnpm-debug.log*
 backend/bin/
 backend/vendor/
 backend/tmp/
+backend/data/
 *.exe
 *.dll
 *.so
@@ -37,3 +38,4 @@ logs/
 # Build
 build/
 release/
+desktop/out/

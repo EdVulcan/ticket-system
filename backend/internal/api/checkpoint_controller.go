@@ -39,7 +39,7 @@ func (c *CheckPointController) Update(ctx *gin.Context) {
 		return
 	}
 
-	if err := c.Service.Update(uint(id), &cp); err != nil {
+	if err := c.Service.Update(uint(id), ctx.GetUint("tenant_id"), &cp); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -49,7 +49,7 @@ func (c *CheckPointController) Update(ctx *gin.Context) {
 
 func (c *CheckPointController) Delete(ctx *gin.Context) {
 	id, _ := strconv.Atoi(ctx.Param("id"))
-	if err := c.Service.Delete(uint(id)); err != nil {
+	if err := c.Service.Delete(uint(id), ctx.GetUint("tenant_id")); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -60,9 +60,7 @@ func (c *CheckPointController) Delete(ctx *gin.Context) {
 func (c *CheckPointController) List(ctx *gin.Context) {
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "10"))
-	tenantID, _ := strconv.Atoi(ctx.DefaultQuery("tenant_id", "0"))
-
-	cps, total, err := c.Service.List(page, pageSize, uint(tenantID))
+	cps, total, err := c.Service.List(page, pageSize, ctx.GetUint("tenant_id"))
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

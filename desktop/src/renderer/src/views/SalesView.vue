@@ -303,7 +303,7 @@
       </el-dialog>
 
       <el-dialog v-model="showPayment" title="收银台" width="500px" align-center class="dark-dialog" :close-on-click-modal="false">
-        <PaymentModal :amount="currentOrder?.total_amount || 0" :order-no="currentOrder?.order_no || ''" @success="handlePaymentSuccess" />
+        <PaymentModal v-if="showPayment" :amount="currentOrder?.total_amount || 0" :order-no="currentOrder?.order_no || ''" @success="handlePaymentSuccess" />
       </el-dialog>
 
       <el-dialog v-model="showPolicy" title="百事通 (F3)" width="600px" align-center class="dark-dialog">
@@ -326,7 +326,7 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { 
   Monitor, List, Checked, Setting, SwitchButton, 
-  Search, Reading, Grid, Printer, Notebook, Refresh, 
+  Reading, Grid, Printer, Notebook, Refresh,
   ShoppingCart, FullScreen 
 } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
@@ -615,7 +615,7 @@ const handleVerify = async () => {
       return
     }
     
-    const res = await axios.post('/tickets/verify', {
+    await axios.post('/tickets/verify', {
       code: code,
       check_point_id: checkPointId
     })

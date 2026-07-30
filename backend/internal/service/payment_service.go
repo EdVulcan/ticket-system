@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"ticket-backend/internal/model"
@@ -11,241 +14,328 @@ import (
 	"github.com/go-pay/gopay"
 	"github.com/go-pay/gopay/alipay"
 	"github.com/go-pay/gopay/wechat/v3"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type PaymentService struct {
 	OrderService *OrderService
 }
 
-// GetConfig 获取指定Provider的配置
 func (s *PaymentService) GetConfig(tenantID uint, provider string) (*model.PaymentConfig, error) {
-	var config model.PaymentConfig
-	if err := model.DB.Where("tenant_id = ? AND provider = ?", tenantID, provider).First(&config).Error; err != nil {
+	var paymentConfig model.PaymentConfig
+	if err := model.DB.Where("tenant_id = ? AND provider = ? AND status = ?", tenantID, provider, true).First(&paymentConfig).Error; err != nil {
 		return nil, err
 	}
-
-	// Decrypt Secrets
-	if config.Key != "" {
-		if dec, err := utils.DecryptAES(config.Key); err == nil {
-			config.Key = dec
+	var err error
+	if paymentConfig.Key != "" {
+		paymentConfig.Key, err = utils.DecryptAES(paymentConfig.Key)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt payment key: %w", err)
 		}
 	}
-	if config.PrivateKey != "" {
-		if dec, err := utils.DecryptAES(config.PrivateKey); err == nil {
-			config.PrivateKey = dec
+	if paymentConfig.PrivateKey != "" {
+		paymentConfig.PrivateKey, err = utils.DecryptAES(paymentConfig.PrivateKey)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt private key: %w", err)
 		}
 	}
-	if config.PublicKey != "" {
-		if dec, err := utils.DecryptAES(config.PublicKey); err == nil {
-			config.PublicKey = dec
+	if paymentConfig.PublicKey != "" {
+		paymentConfig.PublicKey, err = utils.DecryptAES(paymentConfig.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt public key: %w", err)
 		}
 	}
-
-	return &config, nil
+	return &paymentConfig, nil
 }
 
-// CreatePayment 创建支付单并执行
 func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error {
-	req.TenantID = tenantID
-	req.Status = "pending"
-	// Generate TransactionID after success usually, but we need a unique OrderNo for the provider
-	// Payment.OrderNo is linked to Order.OrderNo.
-	// But in DB we might have multiple Payments for one Order (retries).
-	// So we should append suffix if retry? For simplicity, assume 1-to-1 for now or handle in OrderNo.
+	if tenantID == 0 || strings.TrimSpace(req.OrderNo) == "" {
+		return fmt.Errorf("order is required")
+	}
+	if req.Method == "auto" {
+		if req.PayType != "bscanc" {
+			return fmt.Errorf("automatic provider detection requires a payment auth code")
+		}
+		req.Method = getProviderType(strings.TrimSpace(req.AuthCode))
+		if req.Method == "" {
+			return fmt.Errorf("unrecognized payment auth code")
+		}
+	}
+	if req.Method != "cash" && req.Method != "wechat" && req.Method != "alipay" {
+		return fmt.Errorf("unsupported payment method")
+	}
+	if req.Method == "cash" {
+		req.PayType = "cash"
+	} else if req.PayType != "bscanc" && req.PayType != "cscanb" {
+		return fmt.Errorf("unsupported payment type")
+	}
+	if req.PayType == "bscanc" && strings.TrimSpace(req.AuthCode) == "" {
+		return fmt.Errorf("payment auth code is required")
+	}
 
-	if err := model.DB.Create(req).Error; err != nil {
+	var order model.Order
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_no = ? AND tenant_id = ?", req.OrderNo, tenantID).First(&order).Error; err != nil {
+			return fmt.Errorf("order not found")
+		}
+		if order.Status != "unpaid" {
+			return fmt.Errorf("order cannot be paid from status %s", order.Status)
+		}
+		var activeAttempts int64
+		if err := tx.Model(&model.Payment{}).
+			Where("tenant_id = ? AND order_no = ? AND status IN ?", tenantID, req.OrderNo, []string{"pending", "paid"}).
+			Count(&activeAttempts).Error; err != nil {
+			return err
+		}
+		if activeAttempts > 0 {
+			return fmt.Errorf("an active payment already exists for this order")
+		}
+		req.Base = model.Base{}
+		req.TenantID = tenantID
+		req.PaymentNo = generatePaymentNo()
+		req.Amount = order.TotalAmount
+		req.Status = "pending"
+		req.TransactionID = ""
+		req.CodeURL = ""
+		req.ErrorMessage = ""
+		return tx.Create(req).Error
+	}); err != nil {
 		return err
 	}
 
-	// Route Logic
 	var err error
-	if getProviderType(req.AuthCode) == "wechat" || req.Method == "wechat" {
+	switch req.Method {
+	case "cash":
+		req.Status = "paid"
+		req.TransactionID = "CASH_" + req.PaymentNo
+	case "wechat":
 		err = s.payWeChat(req)
-	} else if getProviderType(req.AuthCode) == "alipay" || req.Method == "alipay" {
+	case "alipay":
 		err = s.payAlipay(req)
-	} else {
-		// Fallback or Mock
-		if req.AuthCode == "" && req.PayType == "cscanb" {
-			// Explicit selection? Default to WeChat for now if not specified?
-			// Or check Method field.
-			// If Mock:
-			go s.processMockPayment(req.ID, req.PayType)
-			return nil
-		}
-		go s.processMockPayment(req.ID, req.PayType)
 	}
-
 	if err != nil {
 		req.Status = "failed"
 		req.ErrorMessage = err.Error()
-		model.DB.Save(req)
+		_ = model.Write(func(tx *gorm.DB) error {
+			return tx.Model(req).Updates(map[string]interface{}{"status": req.Status, "error_message": req.ErrorMessage}).Error
+		})
 		return err
 	}
-
-	// If sync success (Native BScanC might be sync), update status
-	model.DB.Save(req)
-	return nil
+	if req.Status == "paid" {
+		return s.completePayment(req)
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		return tx.Model(req).Updates(map[string]interface{}{
+			"status": req.Status, "transaction_id": req.TransactionID, "code_url": req.CodeURL,
+		}).Error
+	})
 }
 
-// Helper to identify provider from auth code
+func generatePaymentNo() string {
+	random := make([]byte, 5)
+	if _, err := rand.Read(random); err != nil {
+		panic("secure random source unavailable: " + err.Error())
+	}
+	return fmt.Sprintf("PAY%d%s", time.Now().UnixMilli(), strings.ToUpper(hex.EncodeToString(random)))
+}
+
 func getProviderType(code string) string {
-	if len(code) == 18 && (strings.HasPrefix(code, "10") || strings.HasPrefix(code, "11") || strings.HasPrefix(code, "12") || strings.HasPrefix(code, "13") || strings.HasPrefix(code, "14") || strings.HasPrefix(code, "15")) {
+	if len(code) == 18 && code >= "100000000000000000" && code <= "159999999999999999" {
 		return "wechat"
 	}
-	if (len(code) >= 25 && len(code) <= 30) && (strings.HasPrefix(code, "25") || strings.HasPrefix(code, "26") || strings.HasPrefix(code, "27") || strings.HasPrefix(code, "28") || strings.HasPrefix(code, "29") || strings.HasPrefix(code, "30")) {
+	if len(code) >= 25 && len(code) <= 30 && code >= "2500000000000000000000000" && code < "310000000000000000000000000000" {
 		return "alipay"
 	}
 	return ""
 }
 
-// --- WeChat Pay Implementation ---
 func (s *PaymentService) payWeChat(req *model.Payment) error {
+	if req.PayType == "bscanc" {
+		return fmt.Errorf("WeChat payment-code collection is not configured; use Alipay or customer-scan mode")
+	}
 	cfg, err := s.GetConfig(req.TenantID, "wechat")
 	if err != nil {
-		return fmt.Errorf("微信支付配置未找到")
+		return fmt.Errorf("WeChat payment is not configured")
 	}
-
 	client, err := wechat.NewClientV3(cfg.MchID, cfg.SerialNo, cfg.Key, cfg.PrivateKey)
 	if err != nil {
 		return err
 	}
-
-	amount := int64(req.Amount * 100) // 分
-
-	if req.PayType == "bscanc" {
-		// NOTE: WeChat V3 does not have a simple "Micropay" in standard public docs easily accessible in 'wechat-go' V3 standard calls sometimes.
-		// Need to check if 'Transactions' supports micropay.
-		// Standard V3 is JSAPI/Native/App/H5. Micropay is often kept in V2.
-		// However, many service providers use V3 'FacePay' or specialized 'auth_code' flows.
-		// If V3 library doesn't support Micropay, we might fail here.
-		// Let's assume Native for CScanB, and check V2 for BScanC?
-		// go-pay/gopay supports V2.
-		// Let's stick to V3 Native for CScanB.
-		// For BScanC, if V3 isn't available, we use V2?
-		// Actually, Native is CScanB.
-		// Let's try to stick to Mock for BScanC if standard V3 is missing, BUT user asked for REAL.
-		return fmt.Errorf("WeChat V3 BScanC not implemented yet (requires V2)")
-	} else if req.PayType == "cscanb" {
-		// Native Pay
-		bm := make(gopay.BodyMap)
-		bm.Set("appid", cfg.AppID).
-			Set("mchid", cfg.MchID).
-			Set("description", "Ticket Sales").
-			Set("out_trade_no", req.OrderNo).
-			Set("notify_url", cfg.NotifyURL).
-			SetBodyMap("amount", func(bm gopay.BodyMap) {
-				bm.Set("total", amount).Set("currency", "CNY")
-			})
-
-		res, err := client.V3TransactionNative(context.Background(), bm)
-		if err != nil {
-			return err
-		}
-		if res.Code != 200 {
-			return fmt.Errorf("wechat error: %s", res.Error) // Adjust error reading
-		}
-		// res.Response.CodeUrl is the QR code
-		// We can save it to a field in Payment or just return it?
-		// Payment model doesn't have CodeURL.
-		// For now, assume success logic flow.
-		// Update: We need to return CodeURL to frontend!
-		// But CreatePayment currently returns error only.
-		// Maybe store in ErrorMessage temporary or add a field?
-		req.TransactionID = res.Response.CodeUrl // HACK: Store CodeURL in TransactionID for CScanB Pending state
-	}
-
-	return nil
-}
-
-// --- Alipay Implementation ---
-func (s *PaymentService) payAlipay(req *model.Payment) error {
-	cfg, err := s.GetConfig(req.TenantID, "alipay")
-	if err != nil {
-		return fmt.Errorf("支付宝配置未找到")
-	}
-
-	// Init Client
-	client, err := alipay.NewClient(cfg.AppID, cfg.PrivateKey, false)
+	bm := make(gopay.BodyMap)
+	bm.Set("appid", cfg.AppID).
+		Set("mchid", cfg.MchID).
+		Set("description", "Ticket Sales").
+		Set("out_trade_no", req.PaymentNo).
+		Set("notify_url", cfg.NotifyURL).
+		SetBodyMap("amount", func(amount gopay.BodyMap) {
+			amount.Set("total", int64(req.Amount*100)).Set("currency", "CNY")
+		})
+	res, err := client.V3TransactionNative(context.Background(), bm)
 	if err != nil {
 		return err
 	}
-	// If Cert mode, need more config. Assume Secret Key mode.
+	if res.Code != 200 || res.Response == nil {
+		return fmt.Errorf("WeChat payment request failed: %s", res.Error)
+	}
+	req.CodeURL = res.Response.CodeUrl
+	return nil
+}
 
+func (s *PaymentService) alipayClient(tenantID uint) (*alipay.Client, error) {
+	cfg, err := s.GetConfig(tenantID, "alipay")
+	if err != nil {
+		return nil, fmt.Errorf("Alipay is not configured")
+	}
+	client, err := alipay.NewClient(cfg.AppID, cfg.PrivateKey, false)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.PublicKey == "" {
+		return nil, fmt.Errorf("Alipay public key is required")
+	}
+	client.AutoVerifySign([]byte(cfg.PublicKey))
+	return client, nil
+}
+
+func (s *PaymentService) payAlipay(req *model.Payment) error {
+	client, err := s.alipayClient(req.TenantID)
+	if err != nil {
+		return err
+	}
 	bm := make(gopay.BodyMap)
 	bm.Set("subject", "Ticket Sales").
-		Set("out_trade_no", req.OrderNo).
+		Set("out_trade_no", req.PaymentNo).
 		Set("total_amount", fmt.Sprintf("%.2f", req.Amount))
 
 	if req.PayType == "bscanc" {
-		// alipay.trade.pay
+		if getProviderType(req.AuthCode) != "alipay" {
+			return fmt.Errorf("invalid Alipay auth code")
+		}
 		bm.Set("scene", "bar_code").Set("auth_code", req.AuthCode)
 		res, err := client.TradePay(context.Background(), bm)
 		if err != nil {
 			return err
 		}
-		if res.Response.Code == "10000" {
+		if res.Response == nil {
+			return fmt.Errorf("empty Alipay response")
+		}
+		switch res.Response.Code {
+		case "10000":
 			req.Status = "paid"
 			req.TransactionID = res.Response.TradeNo
-			s.onPaymentSuccess(req)
-		} else if res.Response.Code == "10003" {
-			req.Status = "pending" // User needs password
-		} else {
-			return fmt.Errorf("alipay error: %s - %s", res.Response.Code, res.Response.SubMsg)
+		case "10003":
+			req.Status = "pending"
+		default:
+			return fmt.Errorf("Alipay error: %s", res.Response.SubMsg)
 		}
-	} else if req.PayType == "cscanb" {
-		// alipay.trade.precreate
-		res, err := client.TradePrecreate(context.Background(), bm)
-		if err != nil {
-			return err
-		}
-		if res.Response.Code == "10000" {
-			req.TransactionID = res.Response.QrCode // HACK: Store QR in TransactionID
-		} else {
-			return fmt.Errorf("alipay error: %s", res.Response.SubMsg)
-		}
+		return nil
 	}
+
+	res, err := client.TradePrecreate(context.Background(), bm)
+	if err != nil {
+		return err
+	}
+	if res.Response == nil || res.Response.Code != "10000" {
+		return fmt.Errorf("Alipay QR request failed")
+	}
+	req.CodeURL = res.Response.QrCode
 	return nil
 }
 
-// --- Mock Logic (Retained for testing) ---
-func (s *PaymentService) processMockPayment(paymentID uint, payType string) {
-	time.Sleep(2 * time.Second)
-	var payment model.Payment
-	if err := model.DB.First(&payment, paymentID).Error; err != nil {
-		return
-	}
-	payment.Status = "paid"
-	payment.TransactionID = fmt.Sprintf("MOCK_%d", time.Now().Unix())
-	model.DB.Save(&payment)
-	s.onPaymentSuccess(&payment)
-}
-
-// onPaymentSuccess 支付成功回调
-func (s *PaymentService) onPaymentSuccess(payment *model.Payment) {
-	model.DB.Model(&model.Payment{}).Where("id = ?", payment.ID).Update("status", "paid")
-
-	if s.OrderService != nil {
-		if err := s.OrderService.MarkAsPaid(payment.OrderNo); err != nil {
-			fmt.Printf("Failed to update order status: %v\n", err)
+func (s *PaymentService) completePayment(payment *model.Payment) error {
+	return model.Write(func(tx *gorm.DB) error {
+		var stored model.Payment
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND tenant_id = ?", payment.ID, payment.TenantID).First(&stored).Error; err != nil {
+			return err
 		}
-	} else {
-		// Fallback for safety (though wiring should be correct)
+		if stored.Status == "paid" {
+			return nil
+		}
 		var order model.Order
-		if err := model.DB.Where("order_no = ?", payment.OrderNo).First(&order).Error; err == nil {
-			if order.Status == "unpaid" {
-				order.Status = "paid"
-				model.DB.Save(&order)
-			}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("order_no = ? AND tenant_id = ?", stored.OrderNo, stored.TenantID).First(&order).Error; err != nil {
+			return err
 		}
-	}
+		if order.Status != "unpaid" {
+			return fmt.Errorf("order cannot be paid from status %s", order.Status)
+		}
+		if err := tx.Model(&stored).Updates(map[string]interface{}{
+			"status": "paid", "transaction_id": payment.TransactionID, "code_url": payment.CodeURL,
+		}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&order).Update("status", "paid").Error
+	})
 }
 
-// GetStatus 查询支付状态
-func (s *PaymentService) GetStatus(paymentID uint) (*model.Payment, error) {
+func (s *PaymentService) GetStatus(paymentID, tenantID uint) (*model.Payment, error) {
 	var payment model.Payment
-	if err := model.DB.First(&payment, paymentID).Error; err != nil {
+	if err := model.DB.Where("id = ? AND tenant_id = ?", paymentID, tenantID).First(&payment).Error; err != nil {
 		return nil, err
 	}
-	// TODO: If pending, query Real API to update status
+	if payment.Status != "pending" {
+		return &payment, nil
+	}
+	if err := s.refreshProviderStatus(&payment); err != nil {
+		return &payment, nil
+	}
+	if payment.Status == "paid" {
+		if err := s.completePayment(&payment); err != nil {
+			return nil, err
+		}
+	}
 	return &payment, nil
+}
+
+func (s *PaymentService) refreshProviderStatus(payment *model.Payment) error {
+	switch payment.Method {
+	case "wechat":
+		cfg, err := s.GetConfig(payment.TenantID, "wechat")
+		if err != nil {
+			return err
+		}
+		client, err := wechat.NewClientV3(cfg.MchID, cfg.SerialNo, cfg.Key, cfg.PrivateKey)
+		if err != nil {
+			return err
+		}
+		res, err := client.V3TransactionQueryOrder(context.Background(), wechat.OutTradeNo, payment.PaymentNo)
+		if err != nil || res.Response == nil {
+			return err
+		}
+		if res.Response.TradeState == wechat.TradeStateSuccess {
+			payment.Status = "paid"
+			payment.TransactionID = res.Response.TransactionId
+		} else if res.Response.TradeState == wechat.TradeStateClosed || res.Response.TradeState == wechat.TradeStatePayError || res.Response.TradeState == wechat.TradeStateRevoked {
+			payment.Status = "failed"
+			payment.ErrorMessage = res.Response.TradeStateDesc
+			return model.Write(func(tx *gorm.DB) error {
+				return tx.Model(payment).Updates(map[string]interface{}{"status": payment.Status, "error_message": payment.ErrorMessage}).Error
+			})
+		}
+	case "alipay":
+		client, err := s.alipayClient(payment.TenantID)
+		if err != nil {
+			return err
+		}
+		bm := make(gopay.BodyMap)
+		bm.Set("out_trade_no", payment.PaymentNo)
+		res, err := client.TradeQuery(context.Background(), bm)
+		if err != nil || res.Response == nil {
+			return err
+		}
+		if res.Response.TradeStatus == "TRADE_SUCCESS" || res.Response.TradeStatus == "TRADE_FINISHED" {
+			payment.Status = "paid"
+			payment.TransactionID = res.Response.TradeNo
+		} else if res.Response.TradeStatus == "TRADE_CLOSED" {
+			payment.Status = "failed"
+			return model.Write(func(tx *gorm.DB) error {
+				return tx.Model(payment).Update("status", payment.Status).Error
+			})
+		}
+	default:
+		return errors.New("unsupported payment provider")
+	}
+	return nil
 }

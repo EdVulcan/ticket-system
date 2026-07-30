@@ -29,15 +29,16 @@ func InitRouter(r *gin.Engine) {
 	tenantGroup := protected.Group("/tenants")
 	{
 		tenantGroup.GET("/me", tenantController.GetSelf)
-		tenantGroup.POST("", tenantController.Create)
-		tenantGroup.GET("", tenantController.List)
-		tenantGroup.PUT("/:id", tenantController.Update)
-		tenantGroup.DELETE("/:id", tenantController.Delete)
+		tenantGroup.POST("", middleware.RequireAnyRole("super_admin"), tenantController.Create)
+		tenantGroup.GET("", middleware.RequireAnyRole("super_admin"), tenantController.List)
+		tenantGroup.PUT("/:id", middleware.RequireAnyRole("super_admin"), tenantController.Update)
+		tenantGroup.DELETE("/:id", middleware.RequireAnyRole("super_admin"), tenantController.Delete)
 	}
 
 	// User Routes (Staff Management)
 	userController := &api.UserController{}
 	userGroup := protected.Group("/users")
+	userGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
 	{
 		userGroup.POST("", userController.Create)
 		userGroup.GET("", userController.List)
@@ -48,6 +49,7 @@ func InitRouter(r *gin.Engine) {
 	// Staff Routes (Employee Management)
 	staffController := &api.StaffController{}
 	staffGroup := protected.Group("/staff")
+	staffGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
 	{
 		staffGroup.POST("", staffController.Create)
 		staffGroup.GET("", staffController.List)
@@ -67,10 +69,12 @@ func InitRouter(r *gin.Engine) {
 
 	// Admin APIs (Protected)
 	deviceGroup := protected.Group("/devices")
+	deviceGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
 	{
 		deviceGroup.POST("", deviceController.Create)
 		deviceGroup.GET("", deviceController.List)
 		deviceGroup.PUT("/:id", deviceController.Update)
+		deviceGroup.POST("/:id/rotate-key", deviceController.RotateKey)
 		deviceGroup.DELETE("/:id", deviceController.Delete)
 	}
 
@@ -78,16 +82,17 @@ func InitRouter(r *gin.Engine) {
 	productController := &api.ProductController{}
 	productGroup := protected.Group("/products")
 	{
-		productGroup.POST("", productController.Create)
-		productGroup.PUT("/:id", productController.Update)
-		productGroup.GET("", productController.List)
-		productGroup.GET("/:id", productController.Get)
-		productGroup.DELETE("/:id", productController.Delete)
-		productGroup.PATCH("/:id/status", productController.UpdateStatus)
+		productGroup.POST("", middleware.RequireAnyRole("admin", "super_admin"), productController.Create)
+		productGroup.PUT("/:id", middleware.RequireAnyRole("admin", "super_admin"), productController.Update)
+		productGroup.GET("", middleware.RequireAnyRole("seller", "checker", "admin", "super_admin"), productController.List)
+		productGroup.GET("/:id", middleware.RequireAnyRole("seller", "checker", "admin", "super_admin"), productController.Get)
+		productGroup.DELETE("/:id", middleware.RequireAnyRole("admin", "super_admin"), productController.Delete)
+		productGroup.PATCH("/:id/status", middleware.RequireAnyRole("admin", "super_admin"), productController.UpdateStatus)
 	}
 
 	orderController := &api.OrderController{}
 	orderGroup := protected.Group("/orders")
+	orderGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"))
 	{
 		orderGroup.POST("", orderController.Create)
 		orderGroup.GET("", orderController.List)
@@ -96,6 +101,7 @@ func InitRouter(r *gin.Engine) {
 	// Ticket Routes
 	ticketController := &api.TicketController{}
 	ticketGroup := protected.Group("/tickets")
+	ticketGroup.Use(middleware.RequireAnyRole("checker", "admin", "super_admin"))
 	{
 		ticketGroup.POST("/verify", ticketController.Verify)
 	}
@@ -104,25 +110,26 @@ func InitRouter(r *gin.Engine) {
 	cpController := &api.CheckPointController{}
 	cpGroup := protected.Group("/checkpoints")
 	{
-		cpGroup.POST("", cpController.Create)
-		cpGroup.GET("", cpController.List)
-		cpGroup.PUT("/:id", cpController.Update)
-		cpGroup.DELETE("/:id", cpController.Delete)
+		cpGroup.POST("", middleware.RequireAnyRole("admin", "super_admin"), cpController.Create)
+		cpGroup.GET("", middleware.RequireAnyRole("seller", "checker", "admin", "super_admin"), cpController.List)
+		cpGroup.PUT("/:id", middleware.RequireAnyRole("admin", "super_admin"), cpController.Update)
+		cpGroup.DELETE("/:id", middleware.RequireAnyRole("admin", "super_admin"), cpController.Delete)
 	}
 
 	// Policy Routes
 	policyController := &api.PolicyController{Service: service.PolicyService{}}
 	policyGroup := protected.Group("/policies")
 	{
-		policyGroup.POST("", policyController.Create)
-		policyGroup.GET("", policyController.List)
-		policyGroup.PUT("/:id", policyController.Update)
-		policyGroup.DELETE("/:id", policyController.Delete)
+		policyGroup.POST("", middleware.RequireAnyRole("admin", "super_admin"), policyController.Create)
+		policyGroup.GET("", middleware.RequireAnyRole("seller", "admin", "super_admin"), policyController.List)
+		policyGroup.PUT("/:id", middleware.RequireAnyRole("admin", "super_admin"), policyController.Update)
+		policyGroup.DELETE("/:id", middleware.RequireAnyRole("admin", "super_admin"), policyController.Delete)
 	}
 
 	// Distribution Routes (B2B)
 	distController := &api.DistributionController{Service: service.DistributionService{}}
 	distGroup := protected.Group("/distribution")
+	distGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
 	{
 		distGroup.GET("/search", distController.Search) // Search before apply
 		distGroup.POST("/apply", distController.Apply)
@@ -155,6 +162,7 @@ func InitRouter(r *gin.Engine) {
 	// Finance Routes
 	financeController := &api.FinanceController{Service: service.FinanceService{}}
 	financeGroup := protected.Group("/finance")
+	financeGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
 	{
 		financeGroup.GET("/accounts", financeController.ListAccounts)
 		financeGroup.GET("/transactions", financeController.ListTransactions)
@@ -163,6 +171,7 @@ func InitRouter(r *gin.Engine) {
 	// Report Routes
 	reportController := &api.ReportController{Service: service.ReportService{}}
 	reportGroup := protected.Group("/reports")
+	reportGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
 	{
 		reportGroup.GET("/sales", reportController.GetSales)
 		reportGroup.GET("/products", reportController.GetProducts)
@@ -178,9 +187,9 @@ func InitRouter(r *gin.Engine) {
 
 	paymentGroup := protected.Group("/payments")
 	{
-		paymentGroup.POST("/pay", paymentController.Pay)
-		paymentGroup.GET("/:id", paymentController.Query)
-		paymentGroup.GET("/configs", configController.GetConfigs)
-		paymentGroup.POST("/configs", configController.SaveConfig)
+		paymentGroup.POST("/pay", middleware.RequireAnyRole("seller", "admin", "super_admin"), paymentController.Pay)
+		paymentGroup.GET("/configs", middleware.RequireAnyRole("admin", "super_admin"), configController.GetConfigs)
+		paymentGroup.POST("/configs", middleware.RequireAnyRole("admin", "super_admin"), configController.SaveConfig)
+		paymentGroup.GET("/:id", middleware.RequireAnyRole("seller", "admin", "super_admin"), paymentController.Query)
 	}
 }

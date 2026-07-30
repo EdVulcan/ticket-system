@@ -1,10 +1,8 @@
 package service
 
 import (
-	"encoding/json"
 	"fmt"
 	"ticket-backend/internal/model"
-	"time"
 
 	"gorm.io/gorm"
 )
@@ -13,7 +11,10 @@ type ProductService struct{}
 
 // CreateRuleAndProduct 创建规则和产品 (事务处理)
 func (s *ProductService) Create(product *model.Product, rule *model.TicketRule) error {
-	return model.DB.Transaction(func(tx *gorm.DB) error {
+	return model.Write(func(tx *gorm.DB) error {
+		if err := validateProduct(tx, product.TenantID, product, rule); err != nil {
+			return err
+		}
 		// Force clear IDs to ensure creation
 		rule.ID = 0
 		for i := range rule.Groups {
@@ -42,14 +43,14 @@ func (s *ProductService) Create(product *model.Product, rule *model.TicketRule) 
 }
 
 // Update 更新产品及规则 (事务处理)
-func (s *ProductService) Update(id uint, product *model.Product, rule *model.TicketRule) error {
-	// Invalidate Cache
-	model.RDB.Del(model.Ctx, fmt.Sprintf("product:%d", id))
-
-	return model.DB.Transaction(func(tx *gorm.DB) error {
+func (s *ProductService) Update(id, tenantID uint, product *model.Product, rule *model.TicketRule) error {
+	return model.Write(func(tx *gorm.DB) error {
 		// 1. Find existing product to get RuleID
 		var existingProduct model.Product
-		if err := tx.First(&existingProduct, id).Error; err != nil {
+		if err := tx.Where("id = ? AND tenant_id = ?", id, tenantID).First(&existingProduct).Error; err != nil {
+			return err
+		}
+		if err := validateProduct(tx, tenantID, product, rule); err != nil {
 			return err
 		}
 
@@ -116,12 +117,22 @@ func (s *ProductService) List(page, pageSize int, tenantID uint, productType str
 	var products []model.Product
 	var total int64
 
+	if tenantID == 0 {
+		return nil, 0, fmt.Errorf("tenant is required")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
 	offset := (page - 1) * pageSize
 
 	query := model.DB.Model(&model.Product{}).Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Preload("Rule.Groups.Items.CheckPoint")
-	if tenantID > 0 {
-		query = query.Where("tenant_id = ?", tenantID)
-	}
+	query = query.Where("tenant_id = ?", tenantID)
 	if productType != "" {
 		query = query.Where("type = ?", productType)
 	}
@@ -135,38 +146,92 @@ func (s *ProductService) List(page, pageSize int, tenantID uint, productType str
 	return products, total, err
 }
 
-func (s *ProductService) Delete(id uint) error {
-	return model.DB.Delete(&model.Product{}, id).Error
-}
-
-func (s *ProductService) Get(id uint) (*model.Product, error) {
-	// 1. Try Redis
-	ctx := model.Ctx
-	key := fmt.Sprintf("product:%d", id)
-	val, err := model.RDB.Get(ctx, key).Result()
-	if err == nil {
-		var product model.Product
-		if jsonErr := json.Unmarshal([]byte(val), &product); jsonErr == nil {
-			return &product, nil
+func validateProduct(tx *gorm.DB, tenantID uint, product *model.Product, rule *model.TicketRule) error {
+	if tenantID == 0 || product.Name == "" || rule.Name == "" {
+		return fmt.Errorf("product name, rule name, and tenant are required")
+	}
+	if product.Price < 0 || product.SettlementPrice < 0 {
+		return fmt.Errorf("product prices cannot be negative")
+	}
+	if product.Type != "online" && product.Type != "offline" {
+		return fmt.Errorf("invalid product type")
+	}
+	if product.Status != "online" && product.Status != "offline" {
+		return fmt.Errorf("invalid product status")
+	}
+	if product.CodeMode != "order" && product.CodeMode != "ticket" {
+		return fmt.Errorf("invalid ticket code mode")
+	}
+	if product.ValidityType != "date" && product.ValidityType != "days" {
+		return fmt.Errorf("invalid validity type")
+	}
+	if product.StockType != "unlimited" && product.StockType != "daily" && product.StockType != "total" {
+		return fmt.Errorf("invalid stock type")
+	}
+	if product.StockType != "unlimited" && product.DailyStock < 0 {
+		return fmt.Errorf("stock cannot be negative")
+	}
+	seenCheckpoints := make(map[uint]struct{})
+	for _, group := range rule.Groups {
+		if len(group.Items) == 0 {
+			return fmt.Errorf("every rule group must contain a checkpoint")
+		}
+		for _, item := range group.Items {
+			if item.MaxPerCheckIn <= 0 {
+				return fmt.Errorf("checkpoint admission limit must be greater than zero")
+			}
+			if _, duplicate := seenCheckpoints[item.CheckPointID]; duplicate {
+				return fmt.Errorf("checkpoint %d appears more than once in the rule", item.CheckPointID)
+			}
+			seenCheckpoints[item.CheckPointID] = struct{}{}
+			var count int64
+			if err := tx.Model(&model.CheckPoint{}).Where("id = ? AND tenant_id = ?", item.CheckPointID, tenantID).Count(&count).Error; err != nil {
+				return err
+			}
+			if count == 0 {
+				return fmt.Errorf("checkpoint %d does not belong to this tenant", item.CheckPointID)
+			}
+		}
+		if group.MaxTotalCheckIn < 0 || (group.MaxTotalCheckIn > 0 && group.MaxTotalCheckIn > len(group.Items)) {
+			return fmt.Errorf("invalid rule group limit")
 		}
 	}
+	return nil
+}
 
-	// 2. Fallback to DB
+func (s *ProductService) Delete(id, tenantID uint) error {
+	return model.Write(func(tx *gorm.DB) error {
+		result := tx.Where("id = ? AND tenant_id = ?", id, tenantID).Delete(&model.Product{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+}
+
+func (s *ProductService) Get(id, tenantID uint) (*model.Product, error) {
 	var product model.Product
-	if err := model.DB.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Preload("Rule.Groups.Items.CheckPoint").First(&product, id).Error; err != nil {
+	if err := model.DB.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Preload("Rule.Groups.Items.CheckPoint").Where("id = ? AND tenant_id = ?", id, tenantID).First(&product).Error; err != nil {
 		return nil, err
 	}
-
-	// 3. Set Redis
-	if data, err := json.Marshal(product); err == nil {
-		model.RDB.Set(ctx, key, data, time.Hour)
-	}
-
 	return &product, nil
 }
 
-func (s *ProductService) UpdateStatus(id uint, status string) error {
-	// Invalidate Cache
-	model.RDB.Del(model.Ctx, fmt.Sprintf("product:%d", id))
-	return model.DB.Model(&model.Product{}).Where("id = ?", id).Update("status", status).Error
+func (s *ProductService) UpdateStatus(id, tenantID uint, status string) error {
+	if status != "online" && status != "offline" {
+		return fmt.Errorf("invalid product status")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		result := tx.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", id, tenantID).Update("status", status)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
 }

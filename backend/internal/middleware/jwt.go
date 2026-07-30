@@ -3,13 +3,12 @@ package middleware
 import (
 	"net/http"
 	"strings"
+	"ticket-backend/internal/config"
 	"ticket-backend/internal/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
-
-var jwtSecret = []byte("your_jwt_secret_key") // Same as in AuthService
 
 func JWTAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -31,7 +30,10 @@ func JWTAuth() gin.HandlerFunc {
 		claims := &service.Claims{}
 
 		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-			return jwtSecret, nil
+			if token.Method != jwt.SigningMethodHS256 {
+				return nil, jwt.ErrSignatureInvalid
+			}
+			return []byte(config.GlobalConfig.Security.JWTSecret), nil
 		})
 
 		if err != nil || !token.Valid {
@@ -47,5 +49,22 @@ func JWTAuth() gin.HandlerFunc {
 		c.Set("tenant_id", claims.TenantID)
 
 		c.Next()
+	}
+}
+
+func RequireAnyRole(allowed ...string) gin.HandlerFunc {
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, role := range allowed {
+		allowedSet[role] = struct{}{}
+	}
+
+	return func(c *gin.Context) {
+		for _, role := range strings.Split(c.GetString("role"), ",") {
+			if _, ok := allowedSet[strings.TrimSpace(role)]; ok {
+				c.Next()
+				return
+			}
+		}
+		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "permission denied"})
 	}
 }

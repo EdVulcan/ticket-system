@@ -1,12 +1,15 @@
 package api
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
 	"ticket-backend/internal/utils"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type PaymentConfigController struct {
@@ -48,31 +51,47 @@ func (c *PaymentConfigController) SaveConfig(ctx *gin.Context) {
 		return
 	}
 	req.TenantID = tenantID
+	if req.Provider != "wechat" && req.Provider != "alipay" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported payment provider"})
+		return
+	}
 
 	// Encrypt Secrets
 	if req.Key != "" && req.Key != "******" {
 		enc, err := utils.EncryptAES(req.Key)
-		if err == nil {
-			req.Key = enc
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("encrypt payment key: %v", err)})
+			return
 		}
+		req.Key = enc
 	}
 	if req.PrivateKey != "" && req.PrivateKey != "******" {
 		enc, err := utils.EncryptAES(req.PrivateKey)
-		if err == nil {
-			req.PrivateKey = enc
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("encrypt private key: %v", err)})
+			return
 		}
+		req.PrivateKey = enc
 	}
 	if req.PublicKey != "" && req.PublicKey != "******" {
 		enc, err := utils.EncryptAES(req.PublicKey)
-		if err == nil {
-			req.PublicKey = enc
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("encrypt public key: %v", err)})
+			return
 		}
+		req.PublicKey = enc
 	}
 
-	// Upsert based on TenantID + Provider
-	var existing model.PaymentConfig
-	if err := model.DB.Where("tenant_id = ? AND provider = ?", tenantID, req.Provider).First(&existing).Error; err == nil {
-		// Update logic: preserve existing secrets if not changed
+	if err := model.Write(func(tx *gorm.DB) error {
+		var existing model.PaymentConfig
+		err := tx.Where("tenant_id = ? AND provider = ?", tenantID, req.Provider).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			req.Base = model.Base{}
+			return tx.Create(&req).Error
+		}
+		if err != nil {
+			return err
+		}
 		if req.Key == "******" || req.Key == "" {
 			req.Key = existing.Key
 		}
@@ -82,19 +101,19 @@ func (c *PaymentConfigController) SaveConfig(ctx *gin.Context) {
 		if req.PublicKey == "******" || req.PublicKey == "" {
 			req.PublicKey = existing.PublicKey
 		}
-
 		req.ID = existing.ID
-		if err := model.DB.Save(&req).Error; err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
-	} else {
-		// Create
-		if err := model.DB.Create(&req).Error; err != nil {
-			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-			return
-		}
+		return tx.Model(&existing).Updates(map[string]interface{}{
+			"app_id": req.AppID, "mch_id": req.MchID, "key": req.Key,
+			"private_key": req.PrivateKey, "public_key": req.PublicKey,
+			"serial_no": req.SerialNo, "notify_url": req.NotifyURL, "status": req.Status,
+		}).Error
+	}); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 
+	req.Key = "******"
+	req.PrivateKey = "******"
+	req.PublicKey = "******"
 	ctx.JSON(http.StatusOK, req)
 }

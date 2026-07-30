@@ -77,14 +77,14 @@ const hasMatches = (group: any[]) => {
     return group.some(p => matches(p))
 }
 
-const getCategoryLabel = (val: string) => {
+const getCategoryLabel = (val: string | number) => {
     const map: any = { 'Admission': '入园/免票', 'Discount': '优惠政策', 'Refund': '退改说明', 'Pet': '宠物政策', 'Other': '其他' }
-    return map[val] || val
+    return map[String(val)] || String(val)
 }
 
-const getCategoryColor = (val: string) => {
+const getCategoryColor = (val: string | number) => {
     const map: any = { 'Admission': 'text-blue-400', 'Discount': 'text-green-400', 'Refund': 'text-red-400', 'Pet': 'text-orange-400', 'Other': 'text-gray-400' }
-    return map[val] || 'text-gray-400'
+    return map[String(val)] || 'text-gray-400'
 }
 
 onMounted(() => {

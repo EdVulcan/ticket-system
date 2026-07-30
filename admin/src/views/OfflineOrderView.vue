@@ -147,7 +147,6 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
-import { Search, Refresh } from '@element-plus/icons-vue'
 
 const loading = ref(false)
 const tableData = ref([])
@@ -234,7 +233,7 @@ const handleDetail = (row: any) => {
   detailVisible.value = true
 }
 
-const handleRefund = (row: any) => {
+const handleRefund = (_row: any) => {
   ElMessageBox.confirm('确认全额退款吗？此操作不可逆。', '退款确认', {
     confirmButtonText: '确定退款',
     cancelButtonText: '取消',

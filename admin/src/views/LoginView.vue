@@ -32,7 +32,6 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { User, Lock, OfficeBuilding } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 
 const router = useRouter()

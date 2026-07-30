@@ -1,11 +1,17 @@
 package middleware
 
 import (
+	"crypto/subtle"
 	"net/http"
+	"strconv"
+	"strings"
+	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/utils"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 // OTASignMiddleware verifies the signature of OTA requests
@@ -40,9 +46,22 @@ func OTASignMiddleware() gin.HandlerFunc {
 
 		appKey := ctx.Query("app_key")
 		sign := ctx.Query("sign")
+		timestamp := ctx.Query("timestamp")
+		nonce := ctx.Query("nonce")
 
-		if appKey == "" || sign == "" {
-			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Missing app_key or sign"})
+		if appKey == "" || sign == "" || timestamp == "" || nonce == "" {
+			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing app_key, sign, timestamp, or nonce"})
+			return
+		}
+		unixTime, err := strconv.ParseInt(timestamp, 10, 64)
+		if err != nil {
+			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid timestamp"})
+			return
+		}
+		maxSkew := time.Duration(config.GlobalConfig.Security.OTAMaxClockSkewSeconds) * time.Second
+		requestTime := time.Unix(unixTime, 0)
+		if delta := time.Since(requestTime); delta > maxSkew || delta < -maxSkew {
+			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "request timestamp expired"})
 			return
 		}
 
@@ -56,17 +75,22 @@ func OTASignMiddleware() gin.HandlerFunc {
 		// 3. Verify Signature
 		// Re-calculate sign: MD5(k=v&...&secret_key=SECRET)
 		// We sign ALL query params except 'sign' itself.
-		calculatedSign := utils.SignParams(params, tenant.SecretKey)
+		calculatedSign := strings.ToUpper(utils.SignParams(params, tenant.SecretKey))
+		providedSign := strings.ToUpper(sign)
+		if len(calculatedSign) != len(providedSign) || subtle.ConstantTimeCompare([]byte(calculatedSign), []byte(providedSign)) != 1 {
+			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid signature"})
+			return
+		}
 
-		// Case-insensitive comparison often needed for MD5
-		if calculatedSign != sign && calculatedSign != utils.MD5(sign) { // strict match usually
-			// My implementation returns lowercase hex.
-			if calculatedSign != sign {
-				// Debug mode:
-				// ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature", "debug_sign": calculatedSign})
-				ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature"})
-				return
+		nonceRecord := model.OTANonce{TenantID: tenant.ID, Nonce: nonce, ExpiresAt: time.Now().Add(maxSkew)}
+		if err := model.Write(func(tx *gorm.DB) error {
+			if err := tx.Where("expires_at < ?", time.Now()).Delete(&model.OTANonce{}).Error; err != nil {
+				return err
 			}
+			return tx.Create(&nonceRecord).Error
+		}); err != nil {
+			ctx.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": "replayed request"})
+			return
 		}
 
 		// 4. Set Context

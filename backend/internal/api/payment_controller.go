@@ -14,11 +14,17 @@ type PaymentController struct {
 }
 
 func (c *PaymentController) Pay(ctx *gin.Context) {
-	var req model.Payment
-	if err := ctx.ShouldBindJSON(&req); err != nil {
+	var body struct {
+		OrderNo  string `json:"order_no" binding:"required"`
+		Method   string `json:"method" binding:"required"`
+		PayType  string `json:"pay_type"`
+		AuthCode string `json:"auth_code"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req := model.Payment{OrderNo: body.OrderNo, Method: body.Method, PayType: body.PayType, AuthCode: body.AuthCode}
 
 	tenantID := ctx.GetUint("tenant_id")
 	if err := c.Service.CreatePayment(tenantID, &req); err != nil {
@@ -31,7 +37,7 @@ func (c *PaymentController) Pay(ctx *gin.Context) {
 
 func (c *PaymentController) Query(ctx *gin.Context) {
 	id, _ := strconv.Atoi(ctx.Param("id"))
-	payment, err := c.Service.GetStatus(uint(id))
+	payment, err := c.Service.GetStatus(uint(id), ctx.GetUint("tenant_id"))
 	if err != nil {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": "Payment not found"})
 		return

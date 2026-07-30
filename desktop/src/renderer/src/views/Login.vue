@@ -28,7 +28,7 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
-import { Ticket, User, Lock, OfficeBuilding } from '@element-plus/icons-vue'
+import { Ticket } from '@element-plus/icons-vue'
 
 const router = useRouter()
 const formRef = ref()

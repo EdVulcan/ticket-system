@@ -20,7 +20,7 @@ const router = createRouter({
     routes
 })
 
-router.beforeEach((to, from, next) => {
+router.beforeEach((to, _from, next) => {
     const token = sessionStorage.getItem('token')
     if (to.name !== 'login' && !token) {
         next({ name: 'login' })

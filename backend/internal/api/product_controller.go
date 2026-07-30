@@ -44,7 +44,7 @@ func (c *ProductController) Create(ctx *gin.Context) {
 
 func (c *ProductController) Get(ctx *gin.Context) {
 	id, _ := strconv.Atoi(ctx.Param("id"))
-	product, err := c.Service.Get(uint(id))
+	product, err := c.Service.Get(uint(id), ctx.GetUint("tenant_id"))
 	if err != nil {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": "Product not found"})
 		return
@@ -60,7 +60,7 @@ func (c *ProductController) Update(ctx *gin.Context) {
 		return
 	}
 
-	if err := c.Service.Update(uint(id), &req.Product, &req.Rule); err != nil {
+	if err := c.Service.Update(uint(id), ctx.GetUint("tenant_id"), &req.Product, &req.Rule); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -71,10 +71,9 @@ func (c *ProductController) Update(ctx *gin.Context) {
 func (c *ProductController) List(ctx *gin.Context) {
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "10"))
-	tenantID, _ := strconv.Atoi(ctx.DefaultQuery("tenant_id", "0"))
 	productType := ctx.DefaultQuery("type", "")
 
-	products, total, err := c.Service.List(page, pageSize, uint(tenantID), productType)
+	products, total, err := c.Service.List(page, pageSize, ctx.GetUint("tenant_id"), productType)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -89,7 +88,7 @@ func (c *ProductController) List(ctx *gin.Context) {
 
 func (c *ProductController) Delete(ctx *gin.Context) {
 	id, _ := strconv.Atoi(ctx.Param("id"))
-	if err := c.Service.Delete(uint(id)); err != nil {
+	if err := c.Service.Delete(uint(id), ctx.GetUint("tenant_id")); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -107,7 +106,7 @@ func (c *ProductController) UpdateStatus(ctx *gin.Context) {
 		return
 	}
 
-	if err := c.Service.UpdateStatus(uint(id), req.Status); err != nil {
+	if err := c.Service.UpdateStatus(uint(id), ctx.GetUint("tenant_id"), req.Status); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

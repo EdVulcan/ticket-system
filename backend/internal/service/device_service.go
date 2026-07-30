@@ -1,9 +1,13 @@
 package service
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"ticket-backend/internal/model"
+	"ticket-backend/internal/utils"
 	"time"
 
 	"gorm.io/gorm"
@@ -25,6 +29,7 @@ type HeartbeatRequest struct {
 	SerialNumber string `json:"serial_number"`
 	IP           string `json:"ip"`
 	Status       string `json:"status"` // online, fault, etc.
+	DeviceKey    string `json:"device_key"`
 }
 
 type VerifyRequest struct {
@@ -33,6 +38,7 @@ type VerifyRequest struct {
 	TicketCode   string `json:"ticket_code"`
 	MediaType    string `json:"media_type"` // qr_code, id_card
 	ScanTime     string `json:"scan_time"`
+	DeviceKey    string `json:"device_key"`
 }
 
 type VerifyResponse struct {
@@ -46,29 +52,29 @@ type VerifyResponse struct {
 // --- Hardware API Methods ---
 
 func (s *DeviceService) Heartbeat(req HeartbeatRequest) error {
-	var tenant model.Tenant
-	if err := s.DB.Where("system_code = ?", req.SystemCode).First(&tenant).Error; err != nil {
-		return errors.New("invalid system_code")
-	}
-
-	var device model.Device
-	// Find device by SN and Tenant
-	if err := s.DB.Where("serial_number = ? AND tenant_id = ?", req.SerialNumber, tenant.ID).First(&device).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return errors.New("device not registered")
+	return model.Write(func(tx *gorm.DB) error {
+		var tenant model.Tenant
+		if err := tx.Where("system_code = ?", req.SystemCode).First(&tenant).Error; err != nil {
+			return errors.New("invalid system_code")
 		}
-		return err
-	}
 
-	// Update status
-	device.Status = "online"
-	now := time.Now()
-	device.LastHeartbeat = &now
-	if req.IP != "" {
-		device.IPAddress = req.IP
-	}
+		var device model.Device
+		if err := tx.Where("serial_number = ? AND tenant_id = ?", req.SerialNumber, tenant.ID).First(&device).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("device not registered")
+			}
+			return err
+		}
+		if !validDeviceKey(&device, req.DeviceKey) {
+			return errors.New("invalid device key")
+		}
 
-	return s.DB.Save(&device).Error
+		updates := map[string]interface{}{"status": "online", "last_heartbeat": time.Now()}
+		if req.IP != "" {
+			updates["ip_address"] = req.IP
+		}
+		return tx.Model(&device).Updates(updates).Error
+	})
 }
 
 func (s *DeviceService) Verify(req VerifyRequest) (*VerifyResponse, error) {
@@ -83,6 +89,9 @@ func (s *DeviceService) Verify(req VerifyRequest) (*VerifyResponse, error) {
 	if err := s.DB.Where("serial_number = ? AND tenant_id = ?", req.SerialNumber, tenant.ID).First(&device).Error; err != nil {
 		return &VerifyResponse{Code: 403, Result: "deny", DisplayText: "Unauthorized Device"}, nil
 	}
+	if !validDeviceKey(&device, req.DeviceKey) {
+		return &VerifyResponse{Code: 403, Result: "deny", DisplayText: "Unauthorized Device"}, nil
+	}
 
 	// 3. Delegate Verification to TicketService (Common Logic)
 	// Determines CheckPointID (if bound)
@@ -94,24 +103,25 @@ func (s *DeviceService) Verify(req VerifyRequest) (*VerifyResponse, error) {
 	err := s.TicketService.Verify(req.TicketCode, checkPointID, device.ID, tenant.ID)
 	if err != nil {
 		// Map error to Voice/Display
-		errMsg := err.Error()
 		resp := &VerifyResponse{Code: 403, Result: "deny", VoiceFile: "invalid.mp3"}
 
-		if errMsg == "无效的票码" || errMsg == "Ticket Not Found" {
+		if errors.Is(err, ErrInvalidTicket) {
 			resp.DisplayText = "无效票\nInvalid Ticket"
-		} else if errMsg == "票据已过期" || errMsg == "Expired" {
+		} else if errors.Is(err, ErrTicketExpired) {
 			resp.DisplayText = "已过期\nExpired"
-		} else if errMsg == "未到生效时间" {
+		} else if errors.Is(err, ErrTicketNotStarted) {
 			resp.DisplayText = "未生效\nNot Started"
-		} else if errMsg == "该票据无法在此检票点使用" || errMsg == "Access Denied (No Rule)" {
+		} else if errors.Is(err, ErrOrderNotPaid) {
+			resp.DisplayText = "订单未支付\nUnpaid Order"
+		} else if errors.Is(err, ErrAccessDenied) || errors.Is(err, ErrCheckpointNotFound) {
 			resp.DisplayText = "区域无权\nAccess Denied"
-		} else if errMsg == "该检票点通行次数已用完" || errMsg == "Point Limit Reached" {
+		} else if errors.Is(err, ErrPointLimitReached) || errors.Is(err, ErrTicketUnavailable) {
 			resp.DisplayText = "次数已满\nLimit Reached"
 			resp.VoiceFile = "already_used.mp3"
-		} else if errMsg == "已达到该规则组允许的可选点位数量上限" || errMsg == "Group Limit Reached" {
+		} else if errors.Is(err, ErrGroupLimitReached) {
 			resp.DisplayText = "权益已尽\nNo Quota"
 		} else {
-			resp.DisplayText = "验证失败\n" + errMsg
+			resp.DisplayText = "验证失败\n" + err.Error()
 		}
 		return resp, nil
 	}
@@ -133,21 +143,94 @@ func (s *DeviceService) Verify(req VerifyRequest) (*VerifyResponse, error) {
 
 // --- CRUD Methods (Admin UI) ---
 
-func (s *DeviceService) Create(device *model.Device) error {
-	return s.DB.Create(device).Error
+func (s *DeviceService) validateCheckPoint(db *gorm.DB, tenantID uint, checkPointID *uint) error {
+	if checkPointID == nil {
+		return nil
+	}
+	var count int64
+	if err := db.Model(&model.CheckPoint{}).Where("id = ? AND tenant_id = ?", *checkPointID, tenantID).Count(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		return errors.New("checkpoint not found")
+	}
+	return nil
 }
 
-func (s *DeviceService) Update(id uint, device *model.Device) error {
-	return s.DB.Model(&model.Device{}).Where("id = ?", id).Updates(device).Error
+func (s *DeviceService) Create(device *model.Device, tenantID uint) error {
+	device.AuthKey = utils.GenerateRandomString(40)
+	device.AuthKeyHash = hashDeviceKey(device.AuthKey)
+	return model.Write(func(tx *gorm.DB) error {
+		if err := s.validateCheckPoint(tx, tenantID, device.CheckPointID); err != nil {
+			return err
+		}
+		device.Base = model.Base{}
+		device.TenantID = tenantID
+		return tx.Omit("CheckPoint").Create(device).Error
+	})
 }
 
-func (s *DeviceService) Delete(id uint) error {
-	return s.DB.Delete(&model.Device{}, id).Error
+func (s *DeviceService) Update(id, tenantID uint, device *model.Device) error {
+	return model.Write(func(tx *gorm.DB) error {
+		if err := s.validateCheckPoint(tx, tenantID, device.CheckPointID); err != nil {
+			return err
+		}
+		result := tx.Model(&model.Device{}).Where("id = ? AND tenant_id = ?", id, tenantID).
+			Omit("tenant_id", "serial_number", "auth_key_hash").Updates(device)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
 }
 
-func (s *DeviceService) GetByID(id uint) (*model.Device, error) {
+func (s *DeviceService) RotateKey(id, tenantID uint) (string, error) {
+	key := utils.GenerateRandomString(40)
+	err := model.Write(func(tx *gorm.DB) error {
+		result := tx.Model(&model.Device{}).Where("id = ? AND tenant_id = ?", id, tenantID).Update("auth_key_hash", hashDeviceKey(key))
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+	return key, err
+}
+
+func hashDeviceKey(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:])
+}
+
+func validDeviceKey(device *model.Device, key string) bool {
+	if device.AuthKeyHash == "" || key == "" {
+		return false
+	}
+	provided := hashDeviceKey(key)
+	return subtle.ConstantTimeCompare([]byte(device.AuthKeyHash), []byte(provided)) == 1
+}
+
+func (s *DeviceService) Delete(id, tenantID uint) error {
+	return model.Write(func(tx *gorm.DB) error {
+		result := tx.Where("id = ? AND tenant_id = ?", id, tenantID).Delete(&model.Device{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+}
+
+func (s *DeviceService) GetByID(id, tenantID uint) (*model.Device, error) {
 	var device model.Device
-	err := s.DB.Preload("CheckPoint").First(&device, id).Error
+	err := s.DB.Preload("CheckPoint").Where("id = ? AND tenant_id = ?", id, tenantID).First(&device).Error
 	return &device, err
 }
 
@@ -155,12 +238,22 @@ func (s *DeviceService) List(page, pageSize int, tenantID uint) ([]model.Device,
 	var devices []model.Device
 	var total int64
 
+	if tenantID == 0 {
+		return nil, 0, gorm.ErrInvalidData
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
 	offset := (page - 1) * pageSize
 
 	query := s.DB.Model(&model.Device{})
-	if tenantID > 0 {
-		query = query.Where("tenant_id = ?", tenantID)
-	}
+	query = query.Where("tenant_id = ?", tenantID)
 
 	err := query.Count(&total).Error
 	if err != nil {

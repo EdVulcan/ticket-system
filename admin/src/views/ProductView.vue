@@ -303,10 +303,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, watch } from 'vue'
+import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
-import { Plus, Minus, Search, Monitor, Location, Ticket } from '@element-plus/icons-vue'
+import { Plus, Minus } from '@element-plus/icons-vue'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -532,17 +532,6 @@ const isCheckPointDisabled = (cpId: number, currentVal: number | null) => {
     }
   }
   return false
-}
-
-const handleTypeChange = (val: string) => {
-  if (val === 'offline') {
-    // Force defaults for Offline Ticket
-    form.product.code_mode = 'ticket'
-    form.product.validity_type = 'days' // Simplified to N days (usually 0 or 1)
-    form.product.validity_days = 0 // Default today
-    form.product.stock_type = 'unlimited'
-    form.product.refund_type = 'no_refund'
-  }
 }
 
 const handleSubmit = async () => {

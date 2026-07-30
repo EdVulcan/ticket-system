@@ -103,7 +103,7 @@ func (c *DistributionController) AuditAgent(ctx *gin.Context) {
 func (c *DistributionController) ListDistributableProducts(ctx *gin.Context) {
 	supplierID, _ := strconv.Atoi(ctx.Query("supplier_id"))
 
-	products, err := c.Service.ListDistributableProducts(uint(supplierID))
+	products, err := c.Service.ListDistributableProducts(ctx.GetUint("tenant_id"), uint(supplierID))
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

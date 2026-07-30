@@ -19,7 +19,7 @@ type Tenant struct {
 	Base
 	Name       string `gorm:"size:100;not null" json:"name"`
 	SystemCode string `gorm:"size:50;uniqueIndex;not null" json:"system_code"` // 唯一系统编号
-	SecretKey  string `gorm:"size:50;not null" json:"secret_key"`              // API签名密钥
+	SecretKey  string `gorm:"size:50;not null" json:"-"`                       // API签名密钥
 	Contact    string `gorm:"size:50" json:"contact"`
 	Phone      string `gorm:"size:20" json:"phone"`
 	Address    string `gorm:"size:255" json:"address"`
@@ -69,6 +69,8 @@ type Device struct {
 	TenantID      uint        `json:"tenant_id"`
 	CheckPointID  *uint       `json:"check_point_id"` // 绑定检票点 (可选)
 	CheckPoint    *CheckPoint `json:"check_point,omitempty"`
+	AuthKeyHash   string      `gorm:"size:64" json:"-"`
+	AuthKey       string      `gorm:"-" json:"auth_key,omitempty"`
 }
 
 // TicketRule 检票规则 (M选N核心)
@@ -148,28 +150,31 @@ type Product struct {
 type Order struct {
 	Base
 	OrderNo      string      `gorm:"size:50;uniqueIndex;not null" json:"order_no"`
-	TenantID     uint        `json:"tenant_id"`
+	TenantID     uint        `gorm:"uniqueIndex:idx_order_external,priority:1" json:"tenant_id"`
 	TotalAmount  float64     `gorm:"type:decimal(10,2)" json:"total_amount"`
 	Status       string      `gorm:"size:20;default:'unpaid'" json:"status"` // unpaid, paid, cancelled, refunded, partial_refunded, completed
 	ContactName  string      `gorm:"size:50" json:"contact_name"`
 	ContactPhone string      `gorm:"size:20" json:"contact_phone"`
-	Channel      string      `gorm:"size:50;default:'miniapp'" json:"channel"` // miniapp, ota, window
+	Channel      string      `gorm:"size:50;default:'online';uniqueIndex:idx_order_external,priority:2" json:"channel"` // online, ota, window
+	ExternalNo   *string     `gorm:"size:100;uniqueIndex:idx_order_external,priority:3" json:"external_no,omitempty"`
 	Items        []OrderItem `gorm:"foreignKey:OrderID" json:"items,omitempty"`
 }
 
 // OrderItem 订单明细 (按产品聚合)
 type OrderItem struct {
 	Base
-	OrderID       uint       `json:"order_id"`
-	ProductID     uint       `json:"product_id"`
-	Product       Product    `gorm:"foreignKey:ProductID" json:"product,omitempty"` // Added relation
-	ProductName   string     `gorm:"size:100" json:"product_name"`
-	Price         float64    `gorm:"type:decimal(10,2)" json:"price"`
-	Quantity      int        `json:"quantity"`
-	ValidityType  string     `gorm:"size:20" json:"validity_type"`
-	ValidityStart *time.Time `json:"validity_start"`
-	ValidityEnd   *time.Time `json:"validity_end"`
-	Tickets       []Ticket   `gorm:"foreignKey:OrderItemID" json:"tickets,omitempty"`
+	OrderID         uint       `json:"order_id"`
+	ProductID       uint       `json:"product_id"`
+	Product         Product    `gorm:"foreignKey:ProductID" json:"product,omitempty"` // Added relation
+	ProductName     string     `gorm:"size:100" json:"product_name"`
+	Price           float64    `gorm:"type:decimal(10,2)" json:"price"`
+	SettlementPrice float64    `gorm:"type:decimal(10,2)" json:"settlement_price"`
+	Quantity        int        `json:"quantity"`
+	UseDate         *time.Time `gorm:"type:date" json:"use_date"`
+	ValidityType    string     `gorm:"size:20" json:"validity_type"`
+	ValidityStart   *time.Time `json:"validity_start"`
+	ValidityEnd     *time.Time `json:"validity_end"`
+	Tickets         []Ticket   `gorm:"foreignKey:OrderItemID" json:"tickets,omitempty"`
 }
 
 // Ticket 具体票据 (对应一个游客或一个二维码)
@@ -203,4 +208,22 @@ type CheckInRecord struct {
 	CheckInTime  time.Time  `json:"check_in_time"`
 	Result       string     `gorm:"size:20" json:"result"` // success, fail
 	Message      string     `gorm:"size:255" json:"message"`
+}
+
+// ProductInventory tracks daily capacity independently for each visit date.
+type ProductInventory struct {
+	Base
+	TenantID  uint      `gorm:"uniqueIndex:idx_product_stock_date,priority:1;not null" json:"tenant_id"`
+	ProductID uint      `gorm:"uniqueIndex:idx_product_stock_date,priority:2;not null" json:"product_id"`
+	StockDate time.Time `gorm:"type:date;uniqueIndex:idx_product_stock_date,priority:3;not null" json:"stock_date"`
+	Capacity  int       `gorm:"not null" json:"capacity"`
+	Sold      int       `gorm:"not null;default:0" json:"sold"`
+}
+
+// OTANonce prevents replay of signed OTA requests within the accepted time window.
+type OTANonce struct {
+	ID        uint      `gorm:"primarykey"`
+	TenantID  uint      `gorm:"uniqueIndex:idx_ota_nonce,priority:1;not null"`
+	Nonce     string    `gorm:"size:100;uniqueIndex:idx_ota_nonce,priority:2;not null"`
+	ExpiresAt time.Time `gorm:"index;not null"`
 }

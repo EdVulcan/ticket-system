@@ -76,7 +76,6 @@ func (c *TenantController) GetSelf(ctx *gin.Context) {
 		return
 	}
 
-	// 3. Return Tenant Info (SecretKey is included in JSON)
 	ctx.JSON(http.StatusOK, tenant)
 }
 

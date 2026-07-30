@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"time"
 
@@ -10,8 +11,6 @@ import (
 )
 
 type AuthService struct{}
-
-var jwtSecret = []byte("your_jwt_secret_key") // In production, load from config
 
 type Claims struct {
 	UserID   uint   `json:"user_id"`
@@ -63,7 +62,7 @@ func (s *AuthService) GenerateToken(user *model.User) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtSecret)
+	return token.SignedString([]byte(config.GlobalConfig.Security.JWTSecret))
 }
 
 func (s *AuthService) StaffLogin(systemCode, jobNumber, password string) (string, *model.Staff, error) {
@@ -111,7 +110,7 @@ func (s *AuthService) GenerateStaffToken(staff *model.Staff) (string, error) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString(jwtSecret)
+	return token.SignedString([]byte(config.GlobalConfig.Security.JWTSecret))
 }
 
 // Helper to hash password (used for seeding or creating users)

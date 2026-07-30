@@ -33,9 +33,10 @@
         </template>
       </el-table-column>
       <el-table-column prop="ip_address" label="IP地址" width="140" />
-      <el-table-column label="操作" width="150" fixed="right">
+      <el-table-column label="操作" width="230" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
+          <el-button link type="warning" size="small" @click="handleRotateKey(row)">轮换密钥</el-button>
           <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -95,6 +96,20 @@
         </span>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="credentialVisible" title="设备接入密钥" width="520px" :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" show-icon class="mb-4">
+        此密钥只显示一次。请立即配置到设备 {{ credentialDeviceName }}，系统不会保存明文。
+      </el-alert>
+      <el-input v-model="credentialKey" readonly>
+        <template #append>
+          <el-button @click="copyCredential">复制</el-button>
+        </template>
+      </el-input>
+      <template #footer>
+        <el-button type="primary" @click="credentialVisible = false">我已保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -111,6 +126,9 @@ const total = ref(0)
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref()
+const credentialVisible = ref(false)
+const credentialKey = ref('')
+const credentialDeviceName = ref('')
 
 const form = reactive({
   id: 0,
@@ -123,7 +141,7 @@ const form = reactive({
   mac_address: ''
 })
 
-const checkPoints = ref([])
+const checkPoints = ref<any[]>([])
 
 const fetchCheckPoints = async () => {
     try {
@@ -201,6 +219,35 @@ const handleDelete = (row: any) => {
   })
 }
 
+const showCredential = (deviceName: string, key: string) => {
+  credentialDeviceName.value = deviceName
+  credentialKey.value = key
+  credentialVisible.value = true
+}
+
+const copyCredential = async () => {
+  try {
+    await navigator.clipboard.writeText(credentialKey.value)
+    ElMessage.success('密钥已复制')
+  } catch {
+    ElMessage.error('复制失败，请手动选择密钥')
+  }
+}
+
+const handleRotateKey = async (row: any) => {
+  try {
+    await ElMessageBox.confirm('旧密钥会立即失效，确认轮换吗？', '轮换设备密钥', {
+      confirmButtonText: '确认轮换',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    const response = await request.post(`/devices/${row.id}/rotate-key`)
+    showCredential(row.name, response.data.auth_key)
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error('密钥轮换失败')
+  }
+}
+
 const handleSubmit = async () => {
   if (!formRef.value) return
   await formRef.value.validate(async (valid: boolean) => {
@@ -209,7 +256,8 @@ const handleSubmit = async () => {
         if (isEdit.value) {
           await request.put(`/devices/${form.id}`, form)
         } else {
-          await request.post('/devices', form)
+          const response = await request.post('/devices', form)
+          showCredential(form.name, response.data.auth_key)
         }
         ElMessage.success(isEdit.value ? '更新成功' : '创建成功')
         dialogVisible.value = false

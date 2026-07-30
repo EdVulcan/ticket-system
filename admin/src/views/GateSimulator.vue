@@ -17,6 +17,9 @@
         <el-form-item label="设备序列号 S/N">
           <el-input v-model="form.serial_number" placeholder="例如: GT-8888" />
         </el-form-item>
+        <el-form-item label="设备密钥 Key">
+          <el-input v-model="form.device_key" type="password" show-password placeholder="设备创建或轮换时获得的密钥" />
+        </el-form-item>
         
         <el-divider content-position="left">设备动作 (Actions)</el-divider>
 
@@ -88,6 +91,7 @@ import axios from 'axios' // Directly use axios to bypass interceptors if needed
 const form = reactive({
   system_code: 'SYS001',
   serial_number: 'GT-001',
+  device_key: '',
   ticket_code: 'T202312240001'
 })
 
@@ -115,6 +119,7 @@ const sendHeartbeat = async () => {
     await axios.post(`${API_BASE}/heartbeat`, {
       system_code: form.system_code,
       serial_number: form.serial_number,
+      device_key: form.device_key,
       ip: '127.0.0.1',
       status: 'ok'
     })
@@ -141,6 +146,7 @@ const verifyTicket = async () => {
     const response = await axios.post(`${API_BASE}/verify`, {
       system_code: form.system_code,
       serial_number: form.serial_number,
+      device_key: form.device_key,
       ticket_code: form.ticket_code,
       media_type: 'qr_code',
       scan_time: new Date().toISOString()

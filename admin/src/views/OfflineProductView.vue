@@ -201,7 +201,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
-import { Plus, Minus, Search } from '@element-plus/icons-vue'
+import { Plus, Minus } from '@element-plus/icons-vue'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -227,7 +227,7 @@ const form = reactive({
     stock_type: 'unlimited', // Force Unlimited
     refund_type: 'no_refund', // Force No Refund
     // Unused fields
-    validity_start_date: null, validity_end_date: null, daily_stock: 0, time_slot_config: '',
+    validity_start_date: null as string | null, validity_end_date: null as string | null, daily_stock: 0, time_slot_config: '',
     real_name_required: false, region_limit: '', limit_per_phone: 0, limit_per_id: 0, refund_rule: '',
     tags: '' // JSON string
   },

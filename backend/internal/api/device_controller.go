@@ -68,7 +68,7 @@ func (c *DeviceController) Create(ctx *gin.Context) {
 		device.TenantID = tid.(uint)
 	}
 
-	if err := c.Service.Create(&device); err != nil {
+	if err := c.Service.Create(&device, device.TenantID); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -84,7 +84,7 @@ func (c *DeviceController) Update(ctx *gin.Context) {
 		return
 	}
 
-	if err := c.Service.Update(uint(id), &device); err != nil {
+	if err := c.Service.Update(uint(id), ctx.GetUint("tenant_id"), &device); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -94,7 +94,7 @@ func (c *DeviceController) Update(ctx *gin.Context) {
 
 func (c *DeviceController) Delete(ctx *gin.Context) {
 	id, _ := strconv.Atoi(ctx.Param("id"))
-	if err := c.Service.Delete(uint(id)); err != nil {
+	if err := c.Service.Delete(uint(id), ctx.GetUint("tenant_id")); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -105,9 +105,7 @@ func (c *DeviceController) Delete(ctx *gin.Context) {
 func (c *DeviceController) List(ctx *gin.Context) {
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "10"))
-	tenantID, _ := strconv.Atoi(ctx.DefaultQuery("tenant_id", "0"))
-
-	devices, total, err := c.Service.List(page, pageSize, uint(tenantID))
+	devices, total, err := c.Service.List(page, pageSize, ctx.GetUint("tenant_id"))
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -118,4 +116,18 @@ func (c *DeviceController) List(ctx *gin.Context) {
 		"total": total,
 		"page":  page,
 	})
+}
+
+func (c *DeviceController) RotateKey(ctx *gin.Context) {
+	id, err := strconv.Atoi(ctx.Param("id"))
+	if err != nil || id <= 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid device id"})
+		return
+	}
+	key, err := c.Service.RotateKey(uint(id), ctx.GetUint("tenant_id"))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "device not found"})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"auth_key": key})
 }

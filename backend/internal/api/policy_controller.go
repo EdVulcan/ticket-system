@@ -39,7 +39,7 @@ func (c *PolicyController) Update(ctx *gin.Context) {
 		return
 	}
 
-	if err := c.Service.Update(uint(id), &policy); err != nil {
+	if err := c.Service.Update(uint(id), ctx.GetUint("tenant_id"), &policy); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -49,7 +49,7 @@ func (c *PolicyController) Update(ctx *gin.Context) {
 
 func (c *PolicyController) Delete(ctx *gin.Context) {
 	id, _ := strconv.Atoi(ctx.Param("id"))
-	if err := c.Service.Delete(uint(id)); err != nil {
+	if err := c.Service.Delete(uint(id), ctx.GetUint("tenant_id")); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

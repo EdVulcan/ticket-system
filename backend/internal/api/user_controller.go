@@ -1,13 +1,18 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
+
+var errUsernameExists = errors.New("username already exists")
 
 type UserController struct{}
 
@@ -23,6 +28,15 @@ func (c *UserController) Create(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if len(req.Password) < 8 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "password must be at least 8 characters"})
+		return
+	}
+	if req.Role != "admin" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid user role"})
+		return
+	}
+	req.Username = strings.TrimSpace(req.Username)
 
 	// Hash password
 	hashedPwd, err := service.HashPassword(req.Password)
@@ -34,14 +48,6 @@ func (c *UserController) Create(ctx *gin.Context) {
 	// Set TenantID from context (Admin creates staff for their tenant)
 	tenantID := ctx.GetUint("tenant_id")
 
-	// Check for existing soft-deleted user and hard delete it to allow reuse
-	var existingUser model.User
-	if err := model.DB.Unscoped().Where("username = ? AND tenant_id = ?", req.Username, tenantID).First(&existingUser).Error; err == nil {
-		if existingUser.DeletedAt.Valid {
-			model.DB.Unscoped().Delete(&existingUser)
-		}
-	}
-
 	user := model.User{
 		Username: req.Username,
 		Password: hashedPwd,
@@ -49,7 +55,33 @@ func (c *UserController) Create(ctx *gin.Context) {
 		TenantID: tenantID,
 	}
 
-	if err := model.DB.Create(&user).Error; err != nil {
+	if err := model.Write(func(tx *gorm.DB) error {
+		var existing model.User
+		err := tx.Unscoped().Where("username = ? AND tenant_id = ?", req.Username, tenantID).First(&existing).Error
+		if err == nil {
+			if !existing.DeletedAt.Valid {
+				return errUsernameExists
+			}
+			if err := tx.Unscoped().Model(&existing).Updates(map[string]interface{}{
+				"password": hashedPwd, "role": req.Role, "deleted_at": nil,
+			}).Error; err != nil {
+				return err
+			}
+			user = existing
+			user.Password = hashedPwd
+			user.Role = req.Role
+			user.DeletedAt.Valid = false
+			return nil
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return tx.Create(&user).Error
+	}); err != nil {
+		if errors.Is(err, errUsernameExists) {
+			ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -86,9 +118,20 @@ func (c *UserController) Delete(ctx *gin.Context) {
 		return
 	}
 
-	// 3. Perform Hard Delete (Unscoped) to free up the username
-	if err := model.DB.Unscoped().Delete(&model.User{}, id).Error; err != nil {
+	// 3. Soft delete while preserving the account's audit identity.
+	tenantID := ctx.GetUint("tenant_id")
+	var rowsAffected int64
+	err := model.Write(func(tx *gorm.DB) error {
+		result := tx.Where("id = ? AND tenant_id = ?", id, tenantID).Delete(&model.User{})
+		rowsAffected = result.RowsAffected
+		return result.Error
+	})
+	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if rowsAffected == 0 {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"message": "deleted successfully"})
@@ -104,6 +147,10 @@ func (c *UserController) ResetPassword(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if len(req.Password) < 8 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "password must be at least 8 characters"})
+		return
+	}
 
 	hashedPwd, err := service.HashPassword(req.Password)
 	if err != nil {
@@ -111,8 +158,18 @@ func (c *UserController) ResetPassword(ctx *gin.Context) {
 		return
 	}
 
-	if err := model.DB.Model(&model.User{}).Where("id = ?", id).Update("password", hashedPwd).Error; err != nil {
+	var rowsAffected int64
+	err = model.Write(func(tx *gorm.DB) error {
+		result := tx.Model(&model.User{}).Where("id = ? AND tenant_id = ?", id, ctx.GetUint("tenant_id")).Update("password", hashedPwd)
+		rowsAffected = result.RowsAffected
+		return result.Error
+	})
+	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if rowsAffected == 0 {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
 		return
 	}
 

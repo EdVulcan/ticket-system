@@ -1,11 +1,13 @@
 package api
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -76,7 +78,7 @@ type OTACreateOrderRequest struct {
 	Date         string `json:"date"` // Visit Date YYYY-MM-DD
 	ContactName  string `json:"contact_name"`
 	ContactPhone string `json:"contact_phone"`
-	ExternalNo   string `json:"external_no"` // OTA's Order No
+	ExternalNo   string `json:"external_no" binding:"required"` // OTA's Order No
 }
 
 func (c *OTAController) CreateOrder(ctx *gin.Context) {
@@ -89,26 +91,51 @@ func (c *OTAController) CreateOrder(ctx *gin.Context) {
 	tenant := ctx.MustGet("tenant").(model.Tenant)
 	tenantID := tenant.ID
 
-	// Construct Order
+	var useDate *time.Time
+	if req.Date != "" {
+		parsed, err := time.ParseInLocation("2006-01-02", req.Date, time.Local)
+		if err != nil {
+			OTAResponse(ctx, fmt.Errorf("invalid visit date"), nil)
+			return
+		}
+		useDate = &parsed
+	}
+	externalNo := req.ExternalNo
 	order := model.Order{
 		TenantID:     tenantID,
 		ContactName:  req.ContactName,
 		ContactPhone: req.ContactPhone,
 		Channel:      "ota", // Mark as OTA
+		ExternalNo:   &externalNo,
 		Items: []model.OrderItem{
 			{
 				ProductID: req.ProductID,
 				Quantity:  req.Quantity,
-				// UseDate:   nil, // Removed
+				UseDate:   useDate,
 			},
 		},
-		// Memo: fmt.Sprintf("OTA Order: %s", req.ExternalNo), // Removed
 	}
 
 	if err := c.OrderService.Create(&order); err != nil {
+		if errors.Is(err, service.ErrDuplicateExternalOrder) {
+			existing, findErr := c.OrderService.GetByExternalNo(req.ExternalNo, "ota", tenantID)
+			if findErr != nil {
+				OTAResponse(ctx, findErr, nil)
+				return
+			}
+			order = *existing
+		} else {
+			OTAResponse(ctx, err, nil)
+			return
+		}
+	}
+	// OTA orders are prepaid by the upstream channel. Repeating the same external
+	// number is idempotent and can safely complete a prior interrupted request.
+	if err := c.OrderService.MarkAsPaid(order.OrderNo, tenantID); err != nil {
 		OTAResponse(ctx, err, nil)
 		return
 	}
+	order.Status = "paid"
 
 	OTAResponse(ctx, nil, gin.H{
 		"order_no":     order.OrderNo,
@@ -131,19 +158,14 @@ func (c *OTAController) CancelOrder(ctx *gin.Context) {
 	}
 
 	// Verify Tenant matches Order?
-	order, err := c.OrderService.GetByOrderNo(req.OrderNo)
+	tenantID := ctx.GetUint("tenant_id")
+	_, err := c.OrderService.GetByOrderNo(req.OrderNo, tenantID)
 	if err != nil {
 		OTAResponse(ctx, fmt.Errorf("order not found"), nil)
 		return
 	}
 
-	tenantID := ctx.GetUint("tenant_id")
-	if order.TenantID != tenantID {
-		OTAResponse(ctx, fmt.Errorf("order not found"), nil) // Hide existence
-		return
-	}
-
-	if err := c.OrderService.Cancel(req.OrderNo); err != nil {
+	if err := c.OrderService.Cancel(req.OrderNo, tenantID); err != nil {
 		OTAResponse(ctx, err, nil)
 		return
 	}
@@ -160,14 +182,9 @@ func (c *OTAController) QueryOrder(ctx *gin.Context) {
 		return
 	}
 
-	order, err := c.OrderService.GetByOrderNo(req.OrderNo)
-	if err != nil {
-		OTAResponse(ctx, fmt.Errorf("order not found"), nil)
-		return
-	}
-
 	tenantID := ctx.GetUint("tenant_id")
-	if order.TenantID != tenantID {
+	order, err := c.OrderService.GetByOrderNo(req.OrderNo, tenantID)
+	if err != nil {
 		OTAResponse(ctx, fmt.Errorf("order not found"), nil)
 		return
 	}
