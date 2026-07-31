@@ -133,6 +133,9 @@ func (s *TeamService) CreateGroup(tenantID uint, group *model.TourGroup) error {
 				return errors.New("active supplier relationship not found")
 			}
 		}
+		if err := validateTeamContractTx(tx, tenantID, group); err != nil {
+			return err
+		}
 		group.Base = model.Base{}
 		group.TenantID = tenantID
 		group.SalesOrderID = 0
@@ -173,6 +176,9 @@ func (s *TeamService) AddMembers(tenantID, groupID uint, members []model.TourGro
 		var group model.TourGroup
 		if err := tx.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
 			return errors.New("group not found")
+		}
+		if group.Status == "entered" || group.Status == "cancelled" {
+			return errors.New("cannot add members to a completed or cancelled group")
 		}
 		for i := range members {
 			if strings.TrimSpace(members[i].Name) == "" {
@@ -226,7 +232,7 @@ func (s *TeamService) EnterBatch(tenantID, groupID, deviceID, operatorID uint, m
 			return errors.New("group sales order is not paid")
 		}
 		var device model.Device
-		if err := tx.Where("id = ? AND tenant_id = ? AND scenic_area_id = ? AND check_point_id IS NOT NULL", deviceID, group.SupplierTenantID, group.ScenicAreaID).First(&device).Error; err != nil {
+		if err := tx.Where("id = ? AND tenant_id = ? AND scenic_area_id = ? AND status = ? AND check_point_id IS NOT NULL", deviceID, group.SupplierTenantID, group.ScenicAreaID, "online").First(&device).Error; err != nil {
 			return errors.New("entry device does not belong to group scenic area")
 		}
 		var operatorCount int64
@@ -255,6 +261,9 @@ func (s *TeamService) EnterBatch(tenantID, groupID, deviceID, operatorID uint, m
 			var ticket model.Ticket
 			if err := tx.Preload("OrderItem").Where("ticket_code = ? AND order_id = ? AND fulfillment_tenant_id = ? AND fulfillment_scenic_area_id = ? AND status IN ?", member.TicketCode, order.ID, group.SupplierTenantID, group.ScenicAreaID, []string{"unused", "active"}).First(&ticket).Error; err != nil {
 				return fmt.Errorf("member %d has no valid ticket entitlement", memberID)
+			}
+			if ticket.OrderItem.UseDate == nil || !sameTeamDate(*ticket.OrderItem.UseDate, group.VisitDate) {
+				return fmt.Errorf("member %d ticket visit date does not match team", memberID)
 			}
 			if ticket.CodeMode == "order" {
 				return errors.New("team admission requires one ticket entitlement per member")
@@ -306,8 +315,16 @@ func (s *TeamService) AttachOrder(tenantID, groupID, orderID uint) error {
 			return errors.New("group not found")
 		}
 		var order model.Order
-		if err := tx.Where("id = ? AND tenant_id = ? AND status IN ?", orderID, tenantID, []string{"paid", "completed", "partial_refunded"}).First(&order).Error; err != nil {
+		if err := tx.Preload("Items").Where("id = ? AND tenant_id = ? AND status IN ?", orderID, tenantID, []string{"paid", "completed", "partial_refunded"}).First(&order).Error; err != nil {
 			return errors.New("sales order not found")
+		}
+		if err := validateTeamContractTx(tx, tenantID, &group); err != nil {
+			return err
+		}
+		for _, item := range order.Items {
+			if item.UseDate == nil || !sameTeamDate(*item.UseDate, group.VisitDate) {
+				return errors.New("sales order visit date does not match team visit date")
+			}
 		}
 		var count int64
 		if err := tx.Model(&model.FulfillmentOrder{}).Where("sales_order_id = ? AND supplier_tenant_id = ? AND scenic_area_id = ?", order.ID, group.SupplierTenantID, group.ScenicAreaID).Count(&count).Error; err != nil {
@@ -334,4 +351,32 @@ func (s *TeamService) AttachOrder(tenantID, groupID, orderID uint) error {
 		}
 		return tx.Model(&group).Updates(map[string]interface{}{"sales_order_id": order.ID, "status": "confirmed"}).Error
 	})
+}
+
+func sameTeamDate(left, right time.Time) bool {
+	return startOfDay(left).Equal(startOfDay(right))
+}
+
+func validateTeamContractTx(tx *gorm.DB, tenantID uint, group *model.TourGroup) error {
+	if group == nil || group.SupplierTenantID == 0 || group.VisitDate.IsZero() {
+		return errors.New("team supplier and visit date are required")
+	}
+	if tenantID == group.SupplierTenantID {
+		return requireActiveTenantCapability(tx, tenantID, "supplier")
+	}
+	if group.ContractID == 0 {
+		return errors.New("active travel contract is required")
+	}
+	var contract model.TravelContract
+	if err := tx.Where("id = ? AND travel_tenant_id = ? AND supplier_tenant_id = ? AND status = ?", group.ContractID, tenantID, group.SupplierTenantID, "active").First(&contract).Error; err != nil {
+		return errors.New("active travel contract not found")
+	}
+	visit := startOfDay(group.VisitDate)
+	if contract.StartsAt != nil && visit.Before(startOfDay(*contract.StartsAt)) {
+		return errors.New("travel contract is not active on team visit date")
+	}
+	if contract.EndsAt != nil && visit.After(startOfDay(*contract.EndsAt)) {
+		return errors.New("travel contract is not active on team visit date")
+	}
+	return nil
 }

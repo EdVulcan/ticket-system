@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -68,6 +69,11 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid channel account"})
 			return
 		}
+		remoteIP := requestRemoteIP(ctx.Request)
+		if !channelIPAllowed(account.AllowedIPsJSON, remoteIP) {
+			ctx.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "channel client IP is not allowed"})
+			return
+		}
 		if !channelPermissionAllows(account.PermissionsJSON, channelPermissionForPath(ctx.Request.URL.Path)) {
 			ctx.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "channel permission denied"})
 			return
@@ -88,15 +94,20 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 			return
 		}
 		var replayResponse string
+		replayStatus := http.StatusOK
 		if err := model.Write(func(tx *gorm.DB) error {
+			now := time.Now()
 			var existing model.ChannelRequest
 			err := tx.Where("channel_account_id = ? AND request_id = ?", account.ID, requestID).First(&existing).Error
 			if err == nil {
 				if existing.BodyHash != hex.EncodeToString(bodyHash[:]) || existing.Endpoint != ctx.Request.URL.Path {
 					return errors.New("channel request id reused with different data")
 				}
-				if existing.Status == "completed" && existing.ResponseJSON != "" {
+				if (existing.Status == "completed" || existing.Status == "rejected") && existing.ResponseJSON != "" {
 					replayResponse = existing.ResponseJSON
+					if existing.ResponseStatus > 0 {
+						replayStatus = existing.ResponseStatus
+					}
 					return nil
 				}
 				return errors.New("channel request is already processing")
@@ -104,14 +115,23 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
 			}
-			return tx.Create(&model.ChannelRequest{ChannelAccountID: account.ID, RequestID: requestID, Endpoint: ctx.Request.URL.Path, BodyHash: hex.EncodeToString(bodyHash[:]), Status: "processing"}).Error
+			if account.RateLimitPerMin > 0 {
+				var recent int64
+				if err := tx.Model(&model.ChannelRequest{}).Where("channel_account_id = ? AND created_at >= ?", account.ID, now.Add(-time.Minute)).Count(&recent).Error; err != nil {
+					return err
+				}
+				if recent >= int64(account.RateLimitPerMin) {
+					return errors.New("channel rate limit exceeded")
+				}
+			}
+			return tx.Create(&model.ChannelRequest{ChannelAccountID: account.ID, RequestID: requestID, Endpoint: ctx.Request.URL.Path, BodyHash: hex.EncodeToString(bodyHash[:]), Status: "processing", ResponseStatus: http.StatusOK, RemoteIP: remoteIP}).Error
 		}); err != nil {
 			ctx.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
 		}
 		if replayResponse != "" {
 			ctx.Header("Content-Type", "application/json; charset=utf-8")
-			ctx.Status(http.StatusOK)
+			ctx.Status(replayStatus)
 			_, _ = ctx.Writer.WriteString(replayResponse)
 			ctx.Abort()
 			return
@@ -130,10 +150,11 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 		if ctx.Writer.Status() >= http.StatusInternalServerError {
 			status = "rejected"
 		}
+		responseStatus := ctx.Writer.Status()
 		_ = model.Write(func(tx *gorm.DB) error {
 			return tx.Model(&model.ChannelRequest{}).
 				Where("channel_account_id = ? AND request_id = ? AND status = ?", account.ID, requestID, "processing").
-				Updates(map[string]interface{}{"status": status, "response_json": capture.body.String()}).Error
+				Updates(map[string]interface{}{"status": status, "response_json": capture.body.String(), "response_status": responseStatus}).Error
 		})
 	}
 }
@@ -175,6 +196,37 @@ func channelPermissionAllows(raw, required string) bool {
 	var values map[string]bool
 	if json.Unmarshal([]byte(raw), &values) == nil {
 		return values["*"] || values[required]
+	}
+	return false
+}
+
+func requestRemoteIP(req *http.Request) string {
+	if req == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(strings.TrimSpace(req.RemoteAddr))
+	if err == nil {
+		return host
+	}
+	return strings.TrimSpace(req.RemoteAddr)
+}
+
+func channelIPAllowed(raw, ip string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return true
+	}
+	var values []string
+	if json.Unmarshal([]byte(raw), &values) != nil {
+		return false
+	}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "*" || value == ip {
+			return true
+		}
+		if _, network, err := net.ParseCIDR(value); err == nil && network.Contains(net.ParseIP(ip)) {
+			return true
+		}
 	}
 	return false
 }

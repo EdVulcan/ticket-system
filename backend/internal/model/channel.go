@@ -20,6 +20,7 @@ type ChannelAccount struct {
 	KeyVersion          int        `gorm:"not null;default:1" json:"key_version"`
 	LastUsedAt          *time.Time `json:"last_used_at,omitempty"`
 	RateLimitPerMin     int        `gorm:"not null;default:600" json:"rate_limit_per_min"`
+	AllowedIPsJSON      string     `gorm:"type:text" json:"allowed_ips_json,omitempty"`
 }
 
 // ChannelProductMapping maps a channel product identifier to a seller-owned
@@ -43,4 +44,6 @@ type ChannelRequest struct {
 	BodyHash         string `gorm:"size:64;not null" json:"body_hash"`
 	ResponseJSON     string `gorm:"type:text" json:"response_json,omitempty"`
 	Status           string `gorm:"size:20;not null;default:'processing'" json:"status"` // processing, completed, rejected
+	ResponseStatus   int    `gorm:"not null;default:200" json:"response_status"`
+	RemoteIP         string `gorm:"size:64" json:"remote_ip,omitempty"`
 }

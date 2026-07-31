@@ -410,16 +410,21 @@ func TestTeamRosterAndEntryStayTenantScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	var area model.ScenicArea
+	var contract model.TravelContract
 	if err := model.Write(func(tx *gorm.DB) error {
 		area = model.ScenicArea{TenantID: supplier.ID, Code: "MAIN", Name: "Main", Status: "active"}
 		if err := tx.Create(&area).Error; err != nil {
 			return err
 		}
-		return tx.Create(&model.DistributorRelationship{AgentTenantID: travel.ID, SupplierTenantID: supplier.ID, Status: "active"}).Error
+		if err := tx.Create(&model.DistributorRelationship{AgentTenantID: travel.ID, SupplierTenantID: supplier.ID, Status: "active"}).Error; err != nil {
+			return err
+		}
+		contract = model.TravelContract{TravelTenantID: travel.ID, SupplierTenantID: supplier.ID, ContractNo: "CONTRACT-TEAM-1", Status: "active"}
+		return tx.Create(&contract).Error
 	}); err != nil {
 		t.Fatal(err)
 	}
-	group := model.TourGroup{Name: "Team 1", SupplierTenantID: supplier.ID, ScenicAreaID: area.ID, VisitDate: time.Now().AddDate(0, 0, 1)}
+	group := model.TourGroup{Name: "Team 1", SupplierTenantID: supplier.ID, ScenicAreaID: area.ID, ContractID: contract.ID, VisitDate: time.Now().AddDate(0, 0, 1)}
 	if err := (&TeamService{}).CreateGroup(travel.ID, &group); err != nil {
 		t.Fatal(err)
 	}
@@ -640,14 +645,24 @@ func TestTeamMultiBatchAdmissionUsesSupplierTicketsAndDevice(t *testing.T) {
 	if err := model.DB.First(&source, scenario.sourceProductID).Error; err != nil {
 		t.Fatal(err)
 	}
-	order := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 2}}}
+	visitDate := time.Now().Truncate(24 * time.Hour)
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Create(&model.TravelContract{TravelTenantID: scenario.distributorID, SupplierTenantID: scenario.supplierID, ContractNo: "CONTRACT-TEAM-2", Status: "active"}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var contract model.TravelContract
+	if err := model.DB.Where("contract_no = ?", "CONTRACT-TEAM-2").First(&contract).Error; err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 2, UseDate: &visitDate}}}
 	if err := (&OrderService{}).Create(&order); err != nil {
 		t.Fatal(err)
 	}
 	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, scenario.distributorID); err != nil {
 		t.Fatal(err)
 	}
-	group := model.TourGroup{Name: "Paid Team", SupplierTenantID: scenario.supplierID, ScenicAreaID: source.ScenicAreaID, VisitDate: time.Now()}
+	group := model.TourGroup{Name: "Paid Team", SupplierTenantID: scenario.supplierID, ScenicAreaID: source.ScenicAreaID, ContractID: contract.ID, VisitDate: visitDate}
 	teamService := &TeamService{}
 	if err := teamService.CreateGroup(scenario.distributorID, &group); err != nil {
 		t.Fatal(err)

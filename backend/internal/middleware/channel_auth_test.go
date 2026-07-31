@@ -53,7 +53,7 @@ func TestChannelSignatureCoversBodyAndRejectsConflict(t *testing.T) {
 	if err := db.Create(&model.TenantCapability{TenantID: tenant.ID, Capability: "distributor", Status: "active"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	account := model.ChannelAccount{Code: "travel-test", Type: "travel-agency", PermissionsJSON: `["orders:create"]`}
+	account := model.ChannelAccount{Code: "travel-test", Type: "travel-agency", PermissionsJSON: `["orders:create"]`, RateLimitPerMin: 1}
 	secret, err := (&service.ChannelService{}).Create(tenant.ID, &account, "channel-secret")
 	if err != nil {
 		t.Fatal(err)
@@ -87,6 +87,22 @@ func TestChannelSignatureCoversBodyAndRejectsConflict(t *testing.T) {
 	}
 	if resp := request([]byte(`{"product_id":2}`)); resp.Code != http.StatusConflict {
 		t.Fatalf("conflicting channel request status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	requestID = "request-rate-limited"
+	nonce = "nonce-rate-limited"
+	if resp := request(body); resp.Code != http.StatusConflict || !strings.Contains(resp.Body.String(), "rate limit") {
+		t.Fatalf("rate-limited channel request status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if err := db.Model(&account).Update("allowed_ips_json", `["203.0.113.9/32"]`).Error; err != nil {
+		t.Fatal(err)
+	}
+	requestID = "request-ip-denied"
+	nonce = "nonce-ip-denied"
+	if resp := request(body); resp.Code != http.StatusForbidden {
+		t.Fatalf("IP-denied channel request status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	if err := db.Model(&account).Update("allowed_ips_json", "").Error; err != nil {
+		t.Fatal(err)
 	}
 	if err := db.Model(&tenant).Update("status", "frozen").Error; err != nil {
 		t.Fatal(err)
