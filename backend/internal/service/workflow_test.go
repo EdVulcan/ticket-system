@@ -198,3 +198,44 @@ func TestChannelReservationConvertsWithoutDoubleBookingStock(t *testing.T) {
 		}
 	}
 }
+
+func TestRechargeIsIdempotentAndLeavesCentLedgerEvidence(t *testing.T) {
+	resetBusinessData(t)
+	var supplier, distributor model.Tenant
+	if err := model.Write(func(tx *gorm.DB) error {
+		supplier = model.Tenant{Name: "Supplier", SystemCode: "FIN-S", SecretKey: "s"}
+		distributor = model.Tenant{Name: "Distributor", SystemCode: "FIN-D", SecretKey: "d"}
+		if err := tx.Create(&supplier).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&distributor).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.CapitalAccount{OwnerTenantID: distributor.ID, ManagerTenantID: supplier.ID, Status: "active", Balance: 10}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	finance := &FinanceService{}
+	first, err := finance.RechargeAccount(supplier.ID, distributor.ID, 2500, "topup-1", 7, "bank receipt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := finance.RechargeAccount(supplier.ID, distributor.ID, 2500, "topup-1", 7, "bank receipt")
+	if err != nil || first.ID != second.ID {
+		t.Fatalf("recharge idempotency first=%+v second=%+v err=%v", first, second, err)
+	}
+	var account model.CapitalAccount
+	if err := model.DB.Where("owner_tenant_id = ? AND manager_tenant_id = ?", distributor.ID, supplier.ID).First(&account).Error; err != nil {
+		t.Fatal(err)
+	}
+	if account.Balance != 35 {
+		t.Fatalf("balance=%v, want 35", account.Balance)
+	}
+	var entries []model.LedgerEntry
+	if err := model.DB.Where("account_id = ? AND entry_type = ?", account.ID, "recharge").Find(&entries).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].AmountCents != 2500 {
+		t.Fatalf("recharge ledger=%+v", entries)
+	}
+}

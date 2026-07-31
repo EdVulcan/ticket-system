@@ -19,6 +19,7 @@ type Claims struct {
 	TenantID       uint   `json:"tenant_id"`
 	Scope          string `json:"scope"` // tenant, platform
 	PlatformUserID uint   `json:"platform_user_id,omitempty"`
+	TokenVersion   int    `json:"token_version"`
 	jwt.RegisteredClaims
 }
 
@@ -60,6 +61,7 @@ func (s *AuthService) GenerateToken(user *model.User) (string, error) {
 		Role:     user.Role,
 		TenantID: user.TenantID,
 		Scope:    "tenant",
+		TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -111,6 +113,7 @@ func (s *AuthService) GenerateStaffToken(staff *model.Staff) (string, error) {
 		Role:     staff.Roles,
 		TenantID: staff.TenantID,
 		Scope:    "tenant",
+		TokenVersion: staff.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -141,7 +144,7 @@ func (s *AuthService) PlatformLogin(username, password string) (string, *model.P
 func (s *AuthService) GeneratePlatformToken(user *model.PlatformUser) (string, error) {
 	expirationTime := time.Now().Add(24 * time.Hour)
 	claims := &Claims{
-		Username: user.Username, Role: user.Role, Scope: "platform", PlatformUserID: user.ID,
+		Username: user.Username, Role: user.Role, Scope: "platform", PlatformUserID: user.ID, TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime), IssuedAt: jwt.NewNumericDate(time.Now()),
 			Issuer: "ticket-system", Subject: "platform:" + user.Username,

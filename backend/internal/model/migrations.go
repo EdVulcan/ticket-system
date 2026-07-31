@@ -53,6 +53,8 @@ func runMigrations(db *gorm.DB) error {
 		{version: 23, name: "check-in ownership constraints", apply: migrateCheckInOwnership},
 		{version: 24, name: "after-sales policy slots and durable external workflows", apply: migrateAfterSalesAndWorkflows},
 		{version: 25, name: "channel reservation conversion and uniqueness", apply: migrateChannelReservationHardening},
+		{version: 26, name: "financial document idempotency", apply: migrateFinancialDocumentIdempotency},
+		{version: 27, name: "session token revocation versions", apply: migrateSessionTokenVersions},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -132,6 +134,30 @@ func migrateChannelReservationHardening(db *gorm.DB) error {
 		return err
 	}
 	return db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_reservation_external ON channel_reservations(channel_account_id, external_no)").Error
+}
+
+func migrateFinancialDocumentIdempotency(db *gorm.DB) error {
+	if err := addColumnIfMissing(db, "financial_documents", "idempotency_key", `ALTER TABLE financial_documents ADD COLUMN idempotency_key TEXT`); err != nil {
+		return err
+	}
+	return db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_document_idempotency ON financial_documents(tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != ''").Error
+}
+
+func migrateSessionTokenVersions(db *gorm.DB) error {
+	for _, column := range []struct {
+		table string
+		name  string
+		ddl   string
+	}{
+		{"users", "token_version", `ALTER TABLE users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1`},
+		{"staffs", "token_version", `ALTER TABLE staffs ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1`},
+		{"platform_users", "token_version", `ALTER TABLE platform_users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 1`},
+	} {
+		if err := addColumnIfMissing(db, column.table, column.name, column.ddl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func migrateCheckInOwnership(db *gorm.DB) error {

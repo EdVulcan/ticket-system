@@ -142,7 +142,7 @@ func (c *StaffController) ResetPassword(ctx *gin.Context) {
 
 	var rowsAffected int64
 	err = model.Write(func(tx *gorm.DB) error {
-		result := tx.Model(&model.Staff{}).Where("id = ? AND tenant_id = ?", id, ctx.GetUint("tenant_id")).Update("password", hashedPwd)
+		result := tx.Model(&model.Staff{}).Where("id = ? AND tenant_id = ?", id, ctx.GetUint("tenant_id")).Updates(map[string]interface{}{"password": hashedPwd, "token_version": gorm.Expr("token_version + 1")})
 		rowsAffected = result.RowsAffected
 		return result.Error
 	})

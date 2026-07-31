@@ -34,7 +34,8 @@ type User struct {
 	Username string `gorm:"size:50;uniqueIndex:idx_tenant_username;not null" json:"username"`
 	Password string `gorm:"size:100;not null" json:"-"`
 	Role     string `gorm:"size:20;default:'staff'" json:"role"` // admin, staff
-	TenantID uint   `gorm:"uniqueIndex:idx_tenant_username" json:"tenant_id"`
+	TenantID     uint   `gorm:"uniqueIndex:idx_tenant_username" json:"tenant_id"`
+	TokenVersion int    `gorm:"not null;default:1" json:"-"`
 	Tenant   Tenant `json:"tenant,omitempty"`
 }
 
@@ -47,6 +48,7 @@ type Staff struct {
 	Roles          string               `gorm:"size:100;default:'seller'" json:"roles"` // seller, checker (comma separated)
 	Status         string               `gorm:"size:20;default:'active'" json:"status"` // active, frozen
 	TenantID       uint                 `gorm:"uniqueIndex:idx_tenant_job" json:"tenant_id"`
+	TokenVersion   int                  `gorm:"not null;default:1" json:"-"`
 	ResourceScopes []StaffResourceScope `gorm:"foreignKey:StaffID" json:"resource_scopes,omitempty"`
 }
 

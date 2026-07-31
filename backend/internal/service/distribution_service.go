@@ -293,25 +293,10 @@ func (s *DistributionService) ImportProduct(agentTenantID, sourceProductID uint,
 	})
 }
 
-func (s *DistributionService) RechargeAgent(supplierTenantID, agentTenantID uint, amount float64) error {
-	if amount <= 0 {
-		return errors.New("recharge amount must be greater than zero")
+func (s *DistributionService) RechargeAgent(supplierTenantID, agentTenantID uint, amount float64, idempotencyKey string, operatorID uint) (*model.FinancialDocument, error) {
+	amountCents := moneyCents(amount)
+	if amountCents <= 0 {
+		return nil, errors.New("recharge amount must be greater than zero")
 	}
-	return model.Write(func(tx *gorm.DB) error {
-		var account model.CapitalAccount
-		if err := tx.Where("owner_tenant_id = ? AND manager_tenant_id = ?", agentTenantID, supplierTenantID).First(&account).Error; err != nil {
-			return errors.New("distribution capital account not found")
-		}
-		account.Balance += amount
-		if err := tx.Model(&account).Update("balance", account.Balance).Error; err != nil {
-			return err
-		}
-		if err := tx.Create(&model.TransactionRecord{
-			AccountID: account.ID, Type: "deposit", Amount: amount,
-			BalanceAfter: account.Balance, Memo: "supplier recharge",
-		}).Error; err != nil {
-			return err
-		}
-		return appendLedgerEntryTx(tx, &account, "recharge", moneyCents(amount), fmt.Sprintf("recharge:%d:%d", account.ID, time.Now().UnixNano()), "", "", "supplier recharge", 0)
-	})
+	return (&FinanceService{}).RechargeAccount(supplierTenantID, agentTenantID, amountCents, idempotencyKey, operatorID, "supplier recharge")
 }

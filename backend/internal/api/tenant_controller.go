@@ -71,6 +71,19 @@ func (c *TenantController) UpdateStatus(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"message": "tenant status updated"})
 }
 
+func (c *TenantController) RevokeSessions(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid tenant id"})
+		return
+	}
+	if err := c.Service.RevokeSessions(uint(id), platformActorID(ctx), ctx.GetString("role")); err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"status": "sessions_revoked"})
+}
+
 func (c *TenantController) SetCapability(ctx *gin.Context) {
 	id, _ := strconv.Atoi(ctx.Param("id"))
 	var body struct {

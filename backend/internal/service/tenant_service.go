@@ -15,6 +15,25 @@ import (
 
 type TenantService struct{}
 
+func (s *TenantService) RevokeSessions(id uint, actorID uint, actorRole string) error {
+	if id == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var tenant model.Tenant
+		if err := tx.First(&tenant, id).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.User{}).Where("tenant_id = ?", id).UpdateColumn("token_version", gorm.Expr("token_version + 1")).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.Staff{}).Where("tenant_id = ?", id).UpdateColumn("token_version", gorm.Expr("token_version + 1")).Error; err != nil {
+			return err
+		}
+		return recordAuditTx(tx, actorID, id, actorRole, "platform", "tenant.sessions.revoke", "tenant", id, "revoke all tenant sessions", "{}", "{\"revoked\":true}")
+	})
+}
+
 func (s *TenantService) Create(tenant *model.Tenant, adminUsername, adminPassword string) error {
 	tenant.Name = strings.TrimSpace(tenant.Name)
 	tenant.SystemCode = strings.TrimSpace(tenant.SystemCode)
@@ -94,6 +113,14 @@ func (s *TenantService) UpdateStatusAudited(id uint, status string, actorID uint
 		}
 		if result.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
+		}
+		if tenant.Status != status {
+			if err := tx.Model(&model.User{}).Where("tenant_id = ?", id).UpdateColumn("token_version", gorm.Expr("token_version + 1")).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&model.Staff{}).Where("tenant_id = ?", id).UpdateColumn("token_version", gorm.Expr("token_version + 1")).Error; err != nil {
+				return err
+			}
 		}
 		return recordAuditTx(tx, actorID, id, actorRole, "platform", "tenant.status.update", "tenant", id, "platform lifecycle change", string(before), string(after))
 	})

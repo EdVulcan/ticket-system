@@ -8,8 +8,9 @@ import "time"
 // independent from legacy float columns.
 type FinancialDocument struct {
 	Base
-	TenantID             uint       `gorm:"index;not null" json:"tenant_id"`
+	TenantID             uint       `gorm:"index;uniqueIndex:idx_financial_document_idempotency,priority:1;not null" json:"tenant_id"`
 	DocumentNo           string     `gorm:"size:50;uniqueIndex;not null" json:"document_no"`
+	IdempotencyKey       string     `gorm:"size:100;uniqueIndex:idx_financial_document_idempotency,priority:2" json:"idempotency_key,omitempty"`
 	Type                 string     `gorm:"size:30;not null;index" json:"type"`             // invoice, payout, receipt, reconciliation_difference
 	Status               string     `gorm:"size:20;not null;default:'draft'" json:"status"` // draft, submitted, approved, rejected, settled
 	AmountCents          int64      `json:"amount_cents"`

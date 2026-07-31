@@ -1,6 +1,7 @@
 package api
 
 import (
+	"math"
 	"net/http"
 	"strconv"
 	"ticket-backend/internal/model"
@@ -166,7 +167,9 @@ func (c *DistributionController) RechargeAgent(ctx *gin.Context) {
 	agentID, _ := strconv.Atoi(ctx.Param("id"))
 
 	var req struct {
-		Amount float64 `json:"amount" binding:"required"`
+		Amount         float64 `json:"amount"`
+		AmountCents    int64   `json:"amount_cents"`
+		IdempotencyKey string  `json:"idempotency_key" binding:"required"`
 	}
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -209,10 +212,17 @@ func (c *DistributionController) RechargeAgent(ctx *gin.Context) {
 		return
 	}
 
-	if err := c.Service.RechargeAgent(supplierTenantID.(uint), rel.AgentTenantID, req.Amount); err != nil {
+	if req.AmountCents <= 0 {
+		req.AmountCents = int64(math.Round(req.Amount * 100))
+	}
+	if req.AmountCents <= 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "recharge amount must be greater than zero"})
+		return
+	}
+	document, err := c.Service.RechargeAgent(supplierTenantID.(uint), rel.AgentTenantID, float64(req.AmountCents)/100, req.IdempotencyKey, ctx.GetUint("user_id"))
+	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-
-	ctx.JSON(http.StatusOK, gin.H{"message": "充值成功"})
+	ctx.JSON(http.StatusOK, document)
 }

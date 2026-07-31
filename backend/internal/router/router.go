@@ -38,6 +38,7 @@ func InitRouter(r *gin.Engine) {
 		tenantGroup.GET("", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.List)
 		tenantGroup.PUT("/:id", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.Update)
 		tenantGroup.PATCH("/:id/status", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.UpdateStatus)
+		tenantGroup.POST("/:id/revoke-sessions", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.RevokeSessions)
 		tenantGroup.PUT("/:id/capabilities/:capability", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.SetCapability)
 		tenantGroup.DELETE("/:id", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.Delete)
 	}
@@ -265,6 +266,9 @@ func InitRouter(r *gin.Engine) {
 		financeGroup.GET("/accounts", financeController.ListAccounts)
 		financeGroup.GET("/transactions", financeController.ListTransactions)
 		financeGroup.GET("/ledger", financeController.ListLedger)
+		financeGroup.GET("/documents", financeController.ListDocuments)
+		financeGroup.POST("/documents", financeController.CreateDocument)
+		financeGroup.POST("/documents/:id/approve", financeController.ApproveDocument)
 	}
 
 	settlementController := &api.SettlementController{Service: service.SettlementService{}}
