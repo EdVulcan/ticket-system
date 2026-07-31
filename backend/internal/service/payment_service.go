@@ -135,12 +135,23 @@ func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error 
 		err = s.payAlipay(req)
 	}
 	if err != nil {
+		// A transport timeout can happen after the provider accepted the
+		// request. Keep the payment pending and let the durable reconciliation
+		// worker query it instead of cancelling a potentially paid order.
 		req.Status = "failed"
+		mayHaveBeenAccepted := providerRequestMayHaveBeenAccepted(req.Method, err)
+		if mayHaveBeenAccepted {
+			req.Status = "pending"
+		}
 		req.ErrorMessage = err.Error()
 		_ = model.Write(func(tx *gorm.DB) error {
 			return tx.Model(req).Updates(map[string]interface{}{"status": req.Status, "error_message": req.ErrorMessage}).Error
 		})
-		if s.OrderService != nil {
+		if mayHaveBeenAccepted {
+			if enqueueErr := s.enqueuePaymentTask(req); enqueueErr != nil {
+				return fmt.Errorf("payment request unresolved and reconciliation could not be queued: %w", enqueueErr)
+			}
+		} else if s.OrderService != nil {
 			_ = s.OrderService.Cancel(req.OrderNo, tenantID)
 		}
 		return err
@@ -176,6 +187,24 @@ func getProviderType(code string) string {
 		return "alipay"
 	}
 	return ""
+}
+
+func providerRequestMayHaveBeenAccepted(method string, cause error) bool {
+	if cause == nil || method == "cash" {
+		return false
+	}
+	message := strings.ToLower(cause.Error())
+	// These errors are produced before a provider request can be accepted.
+	// All other provider failures are treated as ambiguous and reconciled.
+	for _, permanent := range []string{
+		"not configured", "not config", "invalid alipay auth code", "unsupported payment",
+		"payment-code collection is not configured", "public key is required", "private key",
+	} {
+		if strings.Contains(message, permanent) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *PaymentService) payWeChat(req *model.Payment) error {

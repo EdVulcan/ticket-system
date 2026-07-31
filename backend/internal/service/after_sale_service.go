@@ -170,7 +170,10 @@ func (s *AfterSaleService) Execute(tenantID, requestID uint, actor uint) (*model
 			}
 			return completeAfterSaleTx(tx, &req, actor)
 		case "exchange":
-			return failAfterSaleTx(tx, &req, actor, errors.New("exchange requires a supplier-approved target product workflow"))
+			if err := executeExchangeTx(tx, &req); err != nil {
+				return failAfterSaleTx(tx, &req, actor, err)
+			}
+			return completeAfterSaleTx(tx, &req, actor)
 		case "reissue":
 			return executeReissueTx(tx, &req, actor)
 		case "refund":
@@ -203,6 +206,165 @@ func (s *AfterSaleService) Execute(tenantID, requestID uint, actor uint) (*model
 		}
 	}
 	return s.Get(tenantID, requestID)
+}
+
+// executeExchangeTx performs the first production-safe exchange variant. The
+// replacement keeps the same seller, supplier, scenic area, retail price and
+// settlement price, so the original payment and settlement facts remain
+// balanced. A whole order item must be exchanged; partial item exchanges use
+// the refund + new order workflow until per-ticket price allocation exists.
+func executeExchangeTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
+	if req.TargetProductID == 0 {
+		return errors.New("target product is required")
+	}
+	var order model.Order
+	if err := tx.Preload("Items.Product").Preload("Items.Tickets").
+		Where("order_no = ? AND tenant_id = ?", req.OrderNo, req.TenantID).First(&order).Error; err != nil {
+		return err
+	}
+	if order.Status != "paid" && order.Status != "completed" && order.Status != "partial_refunded" {
+		return fmt.Errorf("order cannot be exchanged from status %s", order.Status)
+	}
+	var codes []string
+	if err := json.Unmarshal([]byte(req.TicketCodesJSON), &codes); err != nil {
+		return err
+	}
+	wanted := codeSet(codes)
+	if len(wanted) == 0 {
+		return errors.New("exchange requires ticket codes")
+	}
+
+	var targetListing model.Product
+	if err := tx.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").
+		Where("id = ? AND tenant_id = ? AND status = ?", req.TargetProductID, req.TenantID, "online").First(&targetListing).Error; err != nil {
+		return errors.New("target product is unavailable")
+	}
+	target, _, err := resolveFulfillmentProduct(tx, &targetListing, req.TenantID, order.Channel)
+	if err != nil {
+		return err
+	}
+	if target.CurrentRevisionID == 0 {
+		if _, err := ensureProductRevisionTx(tx, target); err != nil {
+			return err
+		}
+	}
+	if target.ScenicAreaID == 0 {
+		return errors.New("target product has no scenic area")
+	}
+	targetDate := req.TargetDate
+	if targetDate == nil {
+		for _, item := range order.Items {
+			for _, ticket := range item.Tickets {
+				if _, ok := wanted[ticket.TicketCode]; ok {
+					targetDate = item.UseDate
+					break
+				}
+			}
+			if targetDate != nil {
+				break
+			}
+		}
+	}
+	if targetDate == nil {
+		return errors.New("exchange requires a visit date")
+	}
+
+	matched := 0
+	for itemIndex := range order.Items {
+		item := &order.Items[itemIndex]
+		selected := 0
+		for _, ticket := range item.Tickets {
+			if _, ok := wanted[ticket.TicketCode]; ok {
+				selected++
+				if ticket.Status != "unused" || ticket.CheckInCount != 0 {
+					return fmt.Errorf("ticket %s is already used", ticket.TicketCode)
+				}
+			}
+		}
+		if selected == 0 {
+			continue
+		}
+		matched += selected
+		if selected != len(item.Tickets) {
+			return errors.New("partial item exchange is not supported; exchange all tickets in the item")
+		}
+		if moneyCents(item.Price) != moneyCents(targetListing.Price) || moneyCents(item.SettlementPrice) != moneyCents(target.SettlementPrice) {
+			return errors.New("exchange requires equal retail and settlement prices")
+		}
+		if item.FulfillmentTenantID != 0 && item.FulfillmentTenantID != target.TenantID {
+			return errors.New("exchange must stay with the same supplier")
+		}
+		if item.FulfillmentScenicAreaID != 0 && item.FulfillmentScenicAreaID != target.ScenicAreaID {
+			return errors.New("exchange must stay within the same scenic area")
+		}
+		if !isVisitDateValid(targetDate, target.ValidityStartDate, target.ValidityEndDate) {
+			return errors.New("target product is not valid on the requested date")
+		}
+		stockSlot := req.TargetSlot
+		if strings.TrimSpace(stockSlot) == "" {
+			stockSlot = item.StockSlot
+		}
+		probe := &model.OrderItem{UseDate: targetDate, StockSlot: stockSlot}
+		if err := validateTimeSlot(target.TimeSlotConfig, probe); err != nil {
+			return err
+		}
+		var oldListing model.Product
+		if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", item.ProductID, req.TenantID).First(&oldListing).Error; err != nil {
+			return err
+		}
+		oldProduct, _, err := loadStoredFulfillmentProduct(tx, &oldListing, item, req.TenantID)
+		if err != nil {
+			return err
+		}
+		if err := releaseStock(tx, oldProduct, item.UseDate, item.StockSlot, item.Quantity); err != nil {
+			return err
+		}
+		if err := reserveStock(tx, target, targetDate, stockSlot, item.Quantity); err != nil {
+			return err
+		}
+		ruleSnapshot, err := json.Marshal(target.Rule)
+		if err != nil {
+			return err
+		}
+		updates := map[string]interface{}{
+			"product_id": req.TargetProductID, "product_name": targetListing.Name,
+			"price": targetListing.Price, "settlement_price": target.SettlementPrice,
+			"use_date": targetDate, "stock_slot": stockSlot,
+			"validity_type": target.ValidityType, "validity_start": target.ValidityStartDate,
+			"validity_end": target.ValidityEndDate, "fulfillment_product_id": target.ID,
+			"fulfillment_tenant_id": target.TenantID, "fulfillment_scenic_area_id": target.ScenicAreaID,
+			"product_offer_id": targetListing.ProductOfferID, "product_revision_id": target.CurrentRevisionID,
+		}
+		if err := tx.Model(&model.OrderItem{}).Where("id = ?", item.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+		for ticketIndex := range item.Tickets {
+			ticket := &item.Tickets[ticketIndex]
+			if err := tx.Model(ticket).Updates(map[string]interface{}{
+				"fulfillment_product_id": target.ID, "fulfillment_tenant_id": target.TenantID,
+				"scenic_area_id": target.ScenicAreaID, "fulfillment_scenic_area_id": target.ScenicAreaID,
+				"product_revision_id": target.CurrentRevisionID, "rule_snapshot": string(ruleSnapshot),
+				"code_mode": target.CodeMode,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		if item.FulfillmentOrderID > 0 {
+			var itemCount int64
+			if err := tx.Model(&model.OrderItem{}).Where("fulfillment_order_id = ?", item.FulfillmentOrderID).Count(&itemCount).Error; err != nil {
+				return err
+			}
+			if itemCount == 1 {
+				if err := tx.Model(&model.FulfillmentOrder{}).Where("id = ?", item.FulfillmentOrderID).Updates(map[string]interface{}{"product_revision_id": target.CurrentRevisionID, "scenic_area_id": target.ScenicAreaID}).Error; err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if matched != len(wanted) {
+		return errors.New("one or more exchange tickets do not belong to the order")
+	}
+	return nil
 }
 
 func (s *AfterSaleService) executeRefund(req *model.AfterSaleRequest) (*model.Refund, error) {

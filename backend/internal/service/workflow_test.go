@@ -40,6 +40,18 @@ func TestProductSalePolicyRejectsIdentityAndLimitViolations(t *testing.T) {
 	}
 }
 
+func TestAmbiguousProviderFailureIsReconciled(t *testing.T) {
+	if !providerRequestMayHaveBeenAccepted("wechat", errors.New("provider request timeout")) {
+		t.Fatal("transport timeout must remain reconcilable")
+	}
+	if providerRequestMayHaveBeenAccepted("wechat", errors.New("WeChat payment is not configured")) {
+		t.Fatal("missing provider configuration must fail before reconciliation")
+	}
+	if providerRequestMayHaveBeenAccepted("cash", errors.New("cashier error")) {
+		t.Fatal("cash payments cannot have an ambiguous provider request")
+	}
+}
+
 func TestTimeSlotInventoryIsolatedByDateAndSlot(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "daily", 2)
@@ -123,6 +135,78 @@ func TestAfterSaleRescheduleMovesInventoryAndVoidReleasesOnce(t *testing.T) {
 	}
 	if count, err := (&OrderService{}).ExpireUnpaid(time.Now()); err != nil || count != 0 {
 		t.Fatalf("void order was left expirable count=%d err=%v", count, err)
+	}
+}
+
+func TestAfterSaleExchangeReplacesWholeItemWithoutChangingMoney(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, sourceID := seedSellableProduct(t, "daily", 5)
+	var targetID uint
+	if err := model.Write(func(tx *gorm.DB) error {
+		var source model.Product
+		if err := tx.Preload("Rule").First(&source, sourceID).Error; err != nil {
+			return err
+		}
+		target := source
+		target.Base = model.Base{}
+		target.Name = "Adult Ticket Exchange Target"
+		target.CurrentRevisionID = 0
+		if err := tx.Omit("Rule").Create(&target).Error; err != nil {
+			return err
+		}
+		targetID = target.ID
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	visitDate := startOfDay(time.Now().AddDate(0, 0, 1))
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: sourceID, Quantity: 1, UseDate: &visitDate}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "exchange-1", TargetProductID: targetID, OperatorID: 1}
+	if err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 2, "same-price exchange"); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := (&AfterSaleService{}).Execute(tenantID, request.ID, 2)
+	if err != nil || completed.Status != "completed" {
+		t.Fatalf("exchange=%+v err=%v", completed, err)
+	}
+	var item model.OrderItem
+	if err := model.DB.Where("order_id = ?", order.ID).First(&item).Error; err != nil {
+		t.Fatal(err)
+	}
+	if item.ProductID != targetID || item.Price != 99.50 {
+		t.Fatalf("exchanged item=%+v", item)
+	}
+	var storedTicket model.Ticket
+	if err := model.DB.First(&storedTicket, ticket.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedTicket.FulfillmentProductID != targetID || storedTicket.Status != "unused" {
+		t.Fatalf("exchanged ticket=%+v", storedTicket)
+	}
+	var rows []model.ProductInventory
+	if err := model.DB.Where("tenant_id = ? AND product_id IN ?", tenantID, []uint{sourceID, targetID}).Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.ProductID == sourceID && row.Sold != 0 {
+			t.Fatalf("source inventory remained reserved: %+v", row)
+		}
+		if row.ProductID == targetID && row.Sold != 1 {
+			t.Fatalf("target inventory not reserved: %+v", row)
+		}
 	}
 }
 
