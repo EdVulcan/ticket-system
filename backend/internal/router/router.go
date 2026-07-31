@@ -191,7 +191,10 @@ func InitRouter(r *gin.Engine) {
 		OrderService:   service.OrderService{},
 		ProductService: service.ProductService{},
 	}
-	channelController := &api.ChannelController{Service: service.ChannelService{}, Workflow: service.ChannelWorkflowService{OrderService: &service.OrderService{}}}
+	channelRegistry := service.NewChannelAdapterRegistry(service.NewCoreChannelAdapter())
+	channelGateway := &service.ChannelGatewayService{Registry: channelRegistry}
+	otaController.Gateway = channelGateway
+	channelController := &api.ChannelController{Service: service.ChannelService{}, Gateway: channelGateway}
 
 	// Independently credentialed channel routes. The legacy /ota routes remain
 	// available for migration and continue using the tenant OTA secret.
@@ -202,6 +205,7 @@ func InitRouter(r *gin.Engine) {
 		channelGroup.POST("/orders/create", otaController.CreateOrder)
 		channelGroup.POST("/orders/cancel", otaController.CancelOrder)
 		channelGroup.POST("/orders/query", otaController.QueryOrder)
+		channelGroup.POST("/orders/refund", otaController.RefundOrder)
 		channelGroup.POST("/reservations/create", channelController.Reserve)
 		channelGroup.POST("/reservations/confirm", channelController.Confirm)
 		channelGroup.POST("/reservations/release", channelController.Release)

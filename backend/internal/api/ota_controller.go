@@ -15,6 +15,7 @@ import (
 type OTAController struct {
 	OrderService   service.OrderService
 	ProductService service.ProductService
+	Gateway        *service.ChannelGatewayService
 }
 
 // Response Wrapper
@@ -142,6 +143,27 @@ func (c *OTAController) CreateOrder(ctx *gin.Context) {
 		useDate = &parsed
 	}
 	externalNo := req.ExternalNo
+	if channelAccountID := ctx.GetUint("channel_account_id"); channelAccountID > 0 {
+		if c.Gateway == nil {
+			OTAResponse(ctx, errors.New("channel gateway is not configured"), nil)
+			return
+		}
+		response, err := c.Gateway.CreateOrder(ctx, ctx.GetString("channel_type"), service.ChannelCreateOrderRequest{
+			TenantID: tenantID, AccountID: channelAccountID, Channel: channel, ExternalNo: req.ExternalNo,
+			ExternalProductCode: req.ExternalProductCode, Quantity: req.Quantity, UseDate: useDate,
+			ContactName: req.ContactName, ContactPhone: req.ContactPhone, TTL: service.DefaultOrderReservationTTL,
+		})
+		if err != nil {
+			OTAResponse(ctx, err, nil)
+			return
+		}
+		if response.Order == nil {
+			OTAResponse(ctx, errors.New("channel adapter returned an empty order"), nil)
+			return
+		}
+		OTAResponse(ctx, nil, gin.H{"order_no": response.Order.OrderNo, "order_status": response.Status, "ticket_codes": response.TicketCodes, "external_no": response.ExternalNo})
+		return
+	}
 	order := model.Order{
 		TenantID:         tenantID,
 		ContactName:      req.ContactName,
@@ -232,6 +254,18 @@ func (c *OTAController) CancelOrder(ctx *gin.Context) {
 	if channel == "" {
 		channel = "ota"
 	}
+	if accountID := ctx.GetUint("channel_account_id"); accountID > 0 {
+		if c.Gateway == nil {
+			OTAResponse(ctx, errors.New("channel gateway is not configured"), nil)
+			return
+		}
+		if err := c.Gateway.CancelOrder(ctx, ctx.GetString("channel_type"), service.ChannelCancelRequest{TenantID: tenantID, AccountID: accountID, Channel: channel, ExternalNo: req.OrderNo, Reason: "channel request"}); err != nil {
+			OTAResponse(ctx, err, nil)
+			return
+		}
+		OTAResponse(ctx, nil, gin.H{"external_no": req.OrderNo, "status": "cancelled"})
+		return
+	}
 	order, err := c.OrderService.GetByOrderNo(req.OrderNo, tenantID)
 	if err != nil {
 		OTAResponse(ctx, fmt.Errorf("order not found"), nil)
@@ -264,6 +298,23 @@ func (c *OTAController) QueryOrder(ctx *gin.Context) {
 	if channel == "" {
 		channel = "ota"
 	}
+	if accountID := ctx.GetUint("channel_account_id"); accountID > 0 {
+		if c.Gateway == nil {
+			OTAResponse(ctx, errors.New("channel gateway is not configured"), nil)
+			return
+		}
+		response, err := c.Gateway.QueryOrder(ctx, ctx.GetString("channel_type"), service.ChannelQueryRequest{TenantID: tenantID, AccountID: accountID, Channel: channel, ExternalNo: req.OrderNo})
+		if err != nil {
+			OTAResponse(ctx, fmt.Errorf("order not found"), nil)
+			return
+		}
+		if response.Order == nil {
+			OTAResponse(ctx, errors.New("channel adapter returned an empty order"), nil)
+			return
+		}
+		OTAResponse(ctx, nil, gin.H{"order_no": response.Order.OrderNo, "external_no": response.ExternalNo, "status": response.Status, "ticket_codes": response.TicketCodes})
+		return
+	}
 	order, err := c.OrderService.GetByOrderNo(req.OrderNo, tenantID)
 	if err != nil {
 		OTAResponse(ctx, fmt.Errorf("order not found"), nil)
@@ -290,4 +341,32 @@ func (c *OTAController) QueryOrder(ctx *gin.Context) {
 		"status":   order.Status,
 		"tickets":  tickets,
 	})
+}
+
+// RefundOrder delegates refund semantics to the configured external channel
+// adapter. The core adapter intentionally rejects this call until an upstream
+// refund protocol is configured, avoiding a false local success.
+func (c *OTAController) RefundOrder(ctx *gin.Context) {
+	var req struct {
+		OrderNo     string `json:"order_no" binding:"required"`
+		AmountCents int64  `json:"amount_cents" binding:"required"`
+		Reason      string `json:"reason"`
+	}
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		OTAResponse(ctx, err, nil)
+		return
+	}
+	if ctx.GetUint("channel_account_id") == 0 || c.Gateway == nil {
+		OTAResponse(ctx, errors.New("channel refund requires an authenticated channel adapter"), nil)
+		return
+	}
+	response, err := c.Gateway.RefundOrder(ctx, ctx.GetString("channel_type"), service.ChannelRefundRequest{
+		TenantID: ctx.GetUint("tenant_id"), AccountID: ctx.GetUint("channel_account_id"), Channel: ctx.GetString("channel_code"),
+		ExternalNo: req.OrderNo, AmountCents: req.AmountCents, Reason: req.Reason,
+	})
+	if err != nil {
+		OTAResponse(ctx, err, nil)
+		return
+	}
+	OTAResponse(ctx, nil, response)
 }

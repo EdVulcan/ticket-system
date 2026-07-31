@@ -11,8 +11,8 @@ import (
 )
 
 type ChannelController struct {
-	Service  service.ChannelService
-	Workflow service.ChannelWorkflowService
+	Service service.ChannelService
+	Gateway *service.ChannelGatewayService
 }
 
 func (c *ChannelController) List(ctx *gin.Context) {
@@ -152,11 +152,6 @@ func (c *ChannelController) Reserve(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	var mapping model.ChannelProductMapping
-	if err := model.DB.Where("channel_account_id = ? AND external_code = ? AND status = ?", ctx.GetUint("channel_account_id"), body.ExternalProductCode, "active").First(&mapping).Error; err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "external product is not mapped"})
-		return
-	}
 	var useDate *time.Time
 	if body.Date != "" {
 		value, err := time.ParseInLocation("2006-01-02", body.Date, time.Local)
@@ -166,7 +161,15 @@ func (c *ChannelController) Reserve(ctx *gin.Context) {
 		}
 		useDate = &value
 	}
-	reservation, err := c.Workflow.Reserve(ctx.GetUint("tenant_id"), ctx.GetUint("channel_account_id"), ctx.GetString("channel_code"), mapping.ProductID, body.ExternalNo, body.Quantity, useDate, body.StockSlot, time.Duration(body.TTLSeconds)*time.Second)
+	if c.Gateway == nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "channel gateway is not configured"})
+		return
+	}
+	reservation, err := c.Gateway.CreateReservation(ctx, ctx.GetString("channel_type"), service.ChannelReservationRequest{
+		TenantID: ctx.GetUint("tenant_id"), AccountID: ctx.GetUint("channel_account_id"), Channel: ctx.GetString("channel_code"),
+		ExternalProductCode: body.ExternalProductCode, ExternalNo: body.ExternalNo, Quantity: body.Quantity,
+		UseDate: useDate, StockSlot: body.StockSlot, TTL: time.Duration(body.TTLSeconds) * time.Second,
+	})
 	if err != nil {
 		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
@@ -184,12 +187,19 @@ func (c *ChannelController) Confirm(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	order, err := c.Workflow.Confirm(ctx.GetUint("tenant_id"), ctx.GetUint("channel_account_id"), ctx.GetString("channel_code"), body.ReservationID, body.ContactName, body.ContactPhone)
+	if c.Gateway == nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "channel gateway is not configured"})
+		return
+	}
+	order, err := c.Gateway.ConfirmOrder(ctx, ctx.GetString("channel_type"), service.ChannelConfirmRequest{
+		TenantID: ctx.GetUint("tenant_id"), AccountID: ctx.GetUint("channel_account_id"), Channel: ctx.GetString("channel_code"),
+		ReservationID: body.ReservationID, ContactName: body.ContactName, ContactPhone: body.ContactPhone,
+	})
 	if err != nil {
 		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
-	ctx.JSON(http.StatusOK, gin.H{"order_no": order.OrderNo, "status": order.Status, "items": order.Items})
+	ctx.JSON(http.StatusOK, gin.H{"order_no": order.Order.OrderNo, "status": order.Status, "items": order.Order.Items, "ticket_codes": order.TicketCodes})
 }
 
 func (c *ChannelController) Release(ctx *gin.Context) {
@@ -200,7 +210,14 @@ func (c *ChannelController) Release(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := c.Workflow.Release(ctx.GetUint("tenant_id"), ctx.GetUint("channel_account_id"), body.ReservationID, "channel request"); err != nil {
+	if c.Gateway == nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "channel gateway is not configured"})
+		return
+	}
+	if err := c.Gateway.ReleaseReservation(ctx, ctx.GetString("channel_type"), service.ChannelReleaseRequest{
+		TenantID: ctx.GetUint("tenant_id"), AccountID: ctx.GetUint("channel_account_id"), Channel: ctx.GetString("channel_code"),
+		ReservationID: body.ReservationID, Reason: "channel request",
+	}); err != nil {
 		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}

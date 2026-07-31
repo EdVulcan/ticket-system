@@ -3,6 +3,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -11,6 +12,52 @@ import (
 
 	"gorm.io/gorm"
 )
+
+func TestCoreChannelAdapterUsesMappingAndAccountScope(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 2)
+	account := model.ChannelAccount{TenantID: tenantID, Code: "core-channel", Type: "ota", Status: "active", PermissionsJSON: `["inventory:reserve","orders:create","orders:query"]`}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&account).Error }); err != nil {
+		t.Fatal(err)
+	}
+	mapping := model.ChannelProductMapping{ChannelAccountID: account.ID, ProductID: productID, ExternalCode: "EXT-CORE-1", Status: "active"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&mapping).Error }); err != nil {
+		t.Fatal(err)
+	}
+	visit := startOfDay(time.Now().AddDate(0, 0, 1))
+	adapter := NewCoreChannelAdapter()
+	reservation, err := adapter.CreateReservation(context.Background(), ChannelReservationRequest{
+		TenantID: tenantID, AccountID: account.ID, Channel: account.Code, ExternalNo: "EXT-ORDER-1",
+		ExternalProductCode: "EXT-CORE-1", Quantity: 1, UseDate: &visit, TTL: 10 * time.Minute,
+	})
+	if err != nil || reservation.ReservationID == 0 {
+		t.Fatalf("reservation=%+v err=%v", reservation, err)
+	}
+	confirmed, err := adapter.ConfirmOrder(context.Background(), ChannelConfirmRequest{
+		TenantID: tenantID, AccountID: account.ID, Channel: account.Code, ReservationID: reservation.ReservationID,
+		ContactName: "渠道游客", ContactPhone: "13800138000",
+	})
+	if err != nil || confirmed.Order == nil || confirmed.Status != "paid" || len(confirmed.TicketCodes) != 1 {
+		t.Fatalf("confirmed=%+v err=%v", confirmed, err)
+	}
+	queried, err := adapter.QueryOrder(context.Background(), ChannelQueryRequest{TenantID: tenantID, AccountID: account.ID, Channel: account.Code, ExternalNo: "EXT-ORDER-1"})
+	if err != nil || queried.Order == nil || queried.Order.OrderNo != confirmed.Order.OrderNo {
+		t.Fatalf("queried=%+v err=%v", queried, err)
+	}
+	if _, err := adapter.CreateReservation(context.Background(), ChannelReservationRequest{
+		TenantID: tenantID, AccountID: account.ID, Channel: account.Code, ExternalNo: "EXT-ORDER-2",
+		ExternalProductCode: "UNMAPPED", Quantity: 1, UseDate: &visit,
+	}); err == nil {
+		t.Fatal("unmapped external product was accepted")
+	}
+	other := model.ChannelAccount{TenantID: tenantID, Code: "other-channel", Type: "ota", Status: "active"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&other).Error }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.QueryOrder(context.Background(), ChannelQueryRequest{TenantID: tenantID, AccountID: other.ID, Channel: other.Code, ExternalNo: "EXT-ORDER-1"}); err == nil {
+		t.Fatal("channel account could query another account's order")
+	}
+}
 
 func TestProductSalePolicyRejectsIdentityAndLimitViolations(t *testing.T) {
 	resetBusinessData(t)
