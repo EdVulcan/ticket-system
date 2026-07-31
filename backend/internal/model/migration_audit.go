@@ -86,6 +86,52 @@ func AuditLegacyMigration(db *gorm.DB) (*MigrationAuditReport, error) {
 		}
 	}
 
+	// Zero-value checks are not enough: a nonzero scenic-area ID can still
+	// point at another tenant's physical area. These joins make the migration
+	// gate prove ownership before the database is promoted to strict mode.
+	for _, check := range []struct {
+		tables     []string
+		table      string
+		entity     string
+		selectExpr string
+		where      string
+		detail     string
+	}{
+		{[]string{"check_points", "scenic_areas"}, "check_points", "checkpoint", "check_points.id, check_points.tenant_id, check_points.scenic_area_id", "check_points.scenic_area_id != 0 AND NOT EXISTS (SELECT 1 FROM scenic_areas WHERE scenic_areas.id = check_points.scenic_area_id AND scenic_areas.tenant_id = check_points.tenant_id)", "checkpoint scenic area belongs to another tenant or is missing"},
+		{[]string{"devices", "scenic_areas"}, "devices", "device", "devices.id, devices.tenant_id, devices.scenic_area_id", "devices.scenic_area_id != 0 AND NOT EXISTS (SELECT 1 FROM scenic_areas WHERE scenic_areas.id = devices.scenic_area_id AND scenic_areas.tenant_id = devices.tenant_id)", "device scenic area belongs to another tenant or is missing"},
+		{[]string{"devices", "check_points"}, "devices", "device", "devices.id, devices.tenant_id, devices.scenic_area_id", "devices.check_point_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM check_points WHERE check_points.id = devices.check_point_id AND check_points.tenant_id = devices.tenant_id AND check_points.scenic_area_id = devices.scenic_area_id)", "device checkpoint does not match tenant and scenic area"},
+		{[]string{"products", "scenic_areas"}, "products", "product", "products.id, products.tenant_id, products.scenic_area_id", "products.source_product_id = 0 AND products.scenic_area_id != 0 AND NOT EXISTS (SELECT 1 FROM scenic_areas WHERE scenic_areas.id = products.scenic_area_id AND scenic_areas.tenant_id = products.tenant_id)", "supplier product scenic area belongs to another tenant or is missing"},
+		{[]string{"order_items", "orders", "products"}, "order_items", "order_item", "order_items.id, COALESCE((SELECT tenant_id FROM orders WHERE orders.id = order_items.order_id), 0) AS tenant_id, order_items.fulfillment_scenic_area_id", "NOT EXISTS (SELECT 1 FROM orders WHERE orders.id = order_items.order_id) OR NOT EXISTS (SELECT 1 FROM products WHERE products.id = order_items.product_id AND products.tenant_id = (SELECT tenant_id FROM orders WHERE orders.id = order_items.order_id))", "order item does not match its sales order and seller product"},
+		{[]string{"order_items", "products"}, "order_items", "order_item", "order_items.id, order_items.fulfillment_tenant_id, order_items.fulfillment_scenic_area_id", "order_items.fulfillment_product_id != 0 AND NOT EXISTS (SELECT 1 FROM products WHERE products.id = order_items.fulfillment_product_id AND products.tenant_id = order_items.fulfillment_tenant_id AND products.scenic_area_id = order_items.fulfillment_scenic_area_id)", "order item fulfillment product, tenant and scenic area do not match"},
+		{[]string{"tickets", "order_items"}, "tickets", "ticket", "tickets.id, tickets.tenant_id, tickets.fulfillment_scenic_area_id", "NOT EXISTS (SELECT 1 FROM order_items WHERE order_items.id = tickets.order_item_id AND order_items.order_id = tickets.order_id)", "ticket does not match its order item"},
+		{[]string{"tickets", "order_items"}, "tickets", "ticket", "tickets.id, tickets.fulfillment_tenant_id, tickets.fulfillment_scenic_area_id", "tickets.fulfillment_product_id != 0 AND NOT EXISTS (SELECT 1 FROM order_items WHERE order_items.id = tickets.order_item_id AND order_items.fulfillment_product_id = tickets.fulfillment_product_id AND order_items.fulfillment_tenant_id = tickets.fulfillment_tenant_id AND order_items.fulfillment_scenic_area_id = tickets.fulfillment_scenic_area_id)", "ticket fulfillment snapshot does not match its order item"},
+		{[]string{"fulfillment_orders", "orders"}, "fulfillment_orders", "fulfillment_order", "fulfillment_orders.id, fulfillment_orders.supplier_tenant_id, fulfillment_orders.scenic_area_id", "NOT EXISTS (SELECT 1 FROM orders WHERE orders.id = fulfillment_orders.sales_order_id AND orders.tenant_id = fulfillment_orders.sales_tenant_id)", "fulfillment order does not match its sales order tenant"},
+		{[]string{"ticket_entitlements", "fulfillment_orders", "tickets"}, "ticket_entitlements", "ticket_entitlement", "ticket_entitlements.id, ticket_entitlements.supplier_tenant_id, ticket_entitlements.scenic_area_id", "NOT EXISTS (SELECT 1 FROM fulfillment_orders WHERE fulfillment_orders.id = ticket_entitlements.fulfillment_order_id AND fulfillment_orders.supplier_tenant_id = ticket_entitlements.supplier_tenant_id AND fulfillment_orders.scenic_area_id = ticket_entitlements.scenic_area_id) OR NOT EXISTS (SELECT 1 FROM tickets WHERE tickets.id = ticket_entitlements.ticket_id AND tickets.fulfillment_scenic_area_id = ticket_entitlements.scenic_area_id)", "ticket entitlement does not match supplier fulfillment ownership"},
+	} {
+		available := true
+		for _, table := range check.tables {
+			if !hasTable(db, table) {
+				available = false
+				break
+			}
+		}
+		if !available {
+			continue
+		}
+		var rows []struct {
+			ID           uint
+			TenantID     uint `gorm:"column:tenant_id"`
+			ScenicAreaID uint `gorm:"column:scenic_area_id"`
+		}
+		query := db.Table(check.table).Select(check.selectExpr).Where(check.where).Limit(10000)
+		if err := query.Scan(&rows).Error; err != nil {
+			return nil, fmt.Errorf("audit ownership %s: %w", check.table, err)
+		}
+		for _, row := range rows {
+			add("error", "ownership_mismatch", check.entity, row.ID, row.TenantID, row.ScenicAreaID, check.detail)
+		}
+	}
+
 	// Legacy offers with no trustworthy supplier price or revision are never
 	// promoted into an active authorization.
 	if hasTable(db, "product_offers") {

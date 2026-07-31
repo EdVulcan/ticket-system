@@ -29,8 +29,8 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if err := db.Order("version DESC").First(&latest).Error; err != nil {
 		t.Fatal(err)
 	}
-	if latest.Version != 38 {
-		t.Fatalf("latest migration=%d, want 38", latest.Version)
+	if latest.Version != 39 {
+		t.Fatalf("latest migration=%d, want 39", latest.Version)
 	}
 	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "pos_shifts", "pos_holds", "settlement_statements", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements", "channel_bill_records", "channel_reconciliations", "migration_audit_issues"} {
 		var count int64
@@ -40,6 +40,34 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("table %s missing", table)
 		}
+	}
+}
+
+func TestStrictOwnershipGuardsRejectCrossTenantRows(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "guards.db")+"?_foreign_keys=on"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sqlDB, dbErr := db.DB(); dbErr == nil {
+		defer sqlDB.Close()
+	}
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	first := Tenant{Name: "Guard A", SystemCode: "GUARD-A", SecretKey: "a", Status: "active"}
+	second := Tenant{Name: "Guard B", SystemCode: "GUARD-B", SecretKey: "b", Status: "active"}
+	if err := db.Create(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	area := ScenicArea{TenantID: second.ID, Code: "B", Name: "B", Status: "active"}
+	if err := db.Create(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&CheckPoint{TenantID: first.ID, ScenicAreaID: area.ID, Name: "forbidden"}).Error; err == nil {
+		t.Fatal("cross-tenant checkpoint was accepted by database guard")
 	}
 }
 
@@ -217,5 +245,52 @@ func TestLegacyMigrationAuditReportsAndQuarantinesUnsafeRows(t *testing.T) {
 	}
 	if len(stored) != 1 || stored[0].Status != "open" || stored[0].EntityID != unsafe.ID {
 		t.Fatalf("stored migration issues=%+v", stored)
+	}
+}
+
+func TestLegacyMigrationAuditReportsCrossTenantOwnership(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "ownership-audit.db")+"?_foreign_keys=on"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sqlDB, dbErr := db.DB(); dbErr == nil {
+		defer sqlDB.Close()
+	}
+	if err := migrateInitialSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	first := Tenant{Name: "First", SystemCode: "OWN-A", SecretKey: "a", Status: "active"}
+	second := Tenant{Name: "Second", SystemCode: "OWN-B", SecretKey: "b", Status: "active"}
+	if err := db.Create(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	area := ScenicArea{TenantID: second.ID, Code: "SECOND", Name: "Second Park", Status: "active"}
+	if err := db.Create(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	// This row can exist in a legacy database because the old schema only had
+	// independent integer columns. The audit must reject it before migration.
+	if err := db.Create(&CheckPoint{TenantID: first.ID, ScenicAreaID: area.ID, Name: "wrong owner"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	report, err := AuditLegacyMigration(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SafeToMigrate {
+		t.Fatal("cross-tenant checkpoint was considered safe")
+	}
+	found := false
+	for _, issue := range report.Issues {
+		if issue.Code == "ownership_mismatch" && issue.EntityType == "checkpoint" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("ownership mismatch was not reported: %+v", report.Issues)
 	}
 }

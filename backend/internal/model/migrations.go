@@ -66,6 +66,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 36, name: "legacy migration audit quarantine", apply: migrateMigrationAudit},
 		{version: 37, name: "payment success timestamps", apply: migratePaymentSuccessTimestamps},
 		{version: 38, name: "durable POS holds", apply: migratePOSHolds},
+		{version: 39, name: "strict ownership database guards", apply: migrateStrictOwnershipGuards},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -161,6 +162,61 @@ func migratePaymentSuccessTimestamps(db *gorm.DB) error {
 
 func migratePOSHolds(db *gorm.DB) error {
 	return db.AutoMigrate(&POSHold{})
+}
+
+// migrateStrictOwnershipGuards adds database-level checks for relationships
+// whose ownership cannot be represented by a single foreign key in the
+// legacy schema. Existing rows must pass the migration-audit command before
+// strict mode is enabled; the guards then prevent new drift. Distributed
+// seller listings intentionally remain exempt from the
+// supplier scenic-area check because their Product row belongs to the seller
+// while fulfillment ownership is stored in the explicit snapshot columns.
+func migrateStrictOwnershipGuards(db *gorm.DB) error {
+	checks := []struct {
+		name string
+		sql  string
+	}{
+		{"checkpoints_owner_insert", `CREATE TRIGGER IF NOT EXISTS checkpoints_owner_insert BEFORE INSERT ON check_points
+			WHEN NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM scenic_areas WHERE id = NEW.scenic_area_id AND tenant_id = NEW.tenant_id)
+			BEGIN SELECT RAISE(ABORT, 'checkpoint scenic area ownership mismatch'); END`},
+		{"checkpoints_owner_update", `CREATE TRIGGER IF NOT EXISTS checkpoints_owner_update BEFORE UPDATE OF tenant_id, scenic_area_id ON check_points
+			WHEN NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM scenic_areas WHERE id = NEW.scenic_area_id AND tenant_id = NEW.tenant_id)
+			BEGIN SELECT RAISE(ABORT, 'checkpoint scenic area ownership mismatch'); END`},
+		{"devices_owner_insert", `CREATE TRIGGER IF NOT EXISTS devices_owner_insert BEFORE INSERT ON devices
+			WHEN NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM scenic_areas WHERE id = NEW.scenic_area_id AND tenant_id = NEW.tenant_id)
+			   OR (NEW.check_point_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM check_points WHERE id = NEW.check_point_id AND tenant_id = NEW.tenant_id AND scenic_area_id = NEW.scenic_area_id))
+			BEGIN SELECT RAISE(ABORT, 'device ownership mismatch'); END`},
+		{"devices_owner_update", `CREATE TRIGGER IF NOT EXISTS devices_owner_update BEFORE UPDATE OF tenant_id, scenic_area_id, check_point_id ON devices
+			WHEN NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM scenic_areas WHERE id = NEW.scenic_area_id AND tenant_id = NEW.tenant_id)
+			   OR (NEW.check_point_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM check_points WHERE id = NEW.check_point_id AND tenant_id = NEW.tenant_id AND scenic_area_id = NEW.scenic_area_id))
+			BEGIN SELECT RAISE(ABORT, 'device ownership mismatch'); END`},
+		{"fulfillment_orders_owner_insert", `CREATE TRIGGER IF NOT EXISTS fulfillment_orders_owner_insert BEFORE INSERT ON fulfillment_orders
+			WHEN NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM orders WHERE id = NEW.sales_order_id AND tenant_id = NEW.sales_tenant_id)
+			BEGIN SELECT RAISE(ABORT, 'fulfillment order ownership mismatch'); END`},
+		{"fulfillment_orders_owner_update", `CREATE TRIGGER IF NOT EXISTS fulfillment_orders_owner_update BEFORE UPDATE OF sales_order_id, sales_tenant_id, scenic_area_id ON fulfillment_orders
+			WHEN NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM orders WHERE id = NEW.sales_order_id AND tenant_id = NEW.sales_tenant_id)
+			BEGIN SELECT RAISE(ABORT, 'fulfillment order ownership mismatch'); END`},
+		{"tickets_owner_insert", `CREATE TRIGGER IF NOT EXISTS tickets_owner_insert BEFORE INSERT ON tickets
+			WHEN NEW.fulfillment_scenic_area_id = 0 OR (NEW.order_id != 0 AND NOT EXISTS (SELECT 1 FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id = NEW.order_item_id AND oi.order_id = NEW.order_id AND o.tenant_id = NEW.tenant_id))
+			BEGIN SELECT RAISE(ABORT, 'ticket ownership mismatch'); END`},
+		{"tickets_owner_update", `CREATE TRIGGER IF NOT EXISTS tickets_owner_update BEFORE UPDATE OF order_item_id, order_id, tenant_id, fulfillment_scenic_area_id ON tickets
+			WHEN NEW.fulfillment_scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.id = NEW.order_item_id AND oi.order_id = NEW.order_id AND o.tenant_id = NEW.tenant_id)
+			BEGIN SELECT RAISE(ABORT, 'ticket ownership mismatch'); END`},
+		{"entitlements_owner_insert", `CREATE TRIGGER IF NOT EXISTS entitlements_owner_insert BEFORE INSERT ON ticket_entitlements
+			WHEN NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM fulfillment_orders f WHERE f.id = NEW.fulfillment_order_id AND f.supplier_tenant_id = NEW.supplier_tenant_id AND f.scenic_area_id = NEW.scenic_area_id)
+			   OR NOT EXISTS (SELECT 1 FROM tickets t WHERE t.id = NEW.ticket_id AND t.ticket_code = NEW.ticket_code AND t.fulfillment_scenic_area_id = NEW.scenic_area_id)
+			BEGIN SELECT RAISE(ABORT, 'ticket entitlement ownership mismatch'); END`},
+		{"entitlements_owner_update", `CREATE TRIGGER IF NOT EXISTS entitlements_owner_update BEFORE UPDATE OF fulfillment_order_id, ticket_id, ticket_code, supplier_tenant_id, scenic_area_id ON ticket_entitlements
+			WHEN NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM fulfillment_orders f WHERE f.id = NEW.fulfillment_order_id AND f.supplier_tenant_id = NEW.supplier_tenant_id AND f.scenic_area_id = NEW.scenic_area_id)
+			   OR NOT EXISTS (SELECT 1 FROM tickets t WHERE t.id = NEW.ticket_id AND t.ticket_code = NEW.ticket_code AND t.fulfillment_scenic_area_id = NEW.scenic_area_id)
+			BEGIN SELECT RAISE(ABORT, 'ticket entitlement ownership mismatch'); END`},
+	}
+	for _, check := range checks {
+		if err := db.Exec(check.sql).Error; err != nil {
+			return fmt.Errorf("create ownership trigger %s: %w", check.name, err)
+		}
+	}
+	return nil
 }
 
 func migrateAfterSalesAndWorkflows(db *gorm.DB) error {
