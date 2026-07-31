@@ -88,6 +88,7 @@ func (s *OrderService) Create(req *model.Order) error {
 		req.TotalAmount = 0
 		expiresAt := time.Now().Add(DefaultOrderReservationTTL)
 		req.ExpiresAt = &expiresAt
+		policyContext := newSalePolicyContext()
 
 		for i := range req.Items {
 			item := &req.Items[i]
@@ -138,7 +139,7 @@ func (s *OrderService) Create(req *model.Order) error {
 			if err := applyValidity(item, fulfillment); err != nil {
 				return fmt.Errorf("%s: %w", listing.Name, err)
 			}
-			if err := validateSalePolicyTx(tx, fulfillment, req, item); err != nil {
+			if err := validateSalePolicyTx(tx, fulfillment, req, item, policyContext); err != nil {
 				return err
 			}
 

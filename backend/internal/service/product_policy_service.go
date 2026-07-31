@@ -18,11 +18,25 @@ type timeSlotRule struct {
 	Capacity int    `json:"capacity"`
 }
 
+// salePolicyContext carries quantities already validated in the current
+// order. Historical orders are queried from SQLite, but a single request can
+// contain multiple lines for the same product and visitor. Keeping this
+// context inside the transaction prevents that request from bypassing a
+// phone/identity purchase limit by splitting its lines.
+type salePolicyContext struct {
+	phone map[string]int
+	id    map[string]int
+}
+
+func newSalePolicyContext() *salePolicyContext {
+	return &salePolicyContext{phone: make(map[string]int), id: make(map[string]int)}
+}
+
 // validateSalePolicyTx is deliberately called inside the order write
 // transaction. It validates the supplier's immutable policy against the
 // visitor data supplied by the seller, so a client cannot bypass the policy by
 // calling a different sales channel.
-func validateSalePolicyTx(tx *gorm.DB, product *model.Product, order *model.Order, item *model.OrderItem) error {
+func validateSalePolicyTx(tx *gorm.DB, product *model.Product, order *model.Order, item *model.OrderItem, context *salePolicyContext) error {
 	if product == nil || order == nil || item == nil {
 		return errors.New("product and order are required")
 	}
@@ -49,8 +63,15 @@ func validateSalePolicyTx(tx *gorm.DB, product *model.Product, order *model.Orde
 		if err != nil {
 			return err
 		}
+		key := fmt.Sprintf("%d:%s", product.ID, strings.TrimSpace(item.VisitorPhone))
+		if context != nil {
+			used += context.phone[key]
+		}
 		if used+item.Quantity > product.LimitPerPhone {
 			return fmt.Errorf("phone purchase limit exceeded for %s", product.Name)
+		}
+		if context != nil {
+			context.phone[key] += item.Quantity
 		}
 	}
 	if product.LimitPerID > 0 {
@@ -61,8 +82,15 @@ func validateSalePolicyTx(tx *gorm.DB, product *model.Product, order *model.Orde
 		if err != nil {
 			return err
 		}
+		key := fmt.Sprintf("%d:%s", product.ID, strings.TrimSpace(item.VisitorID))
+		if context != nil {
+			used += context.id[key]
+		}
 		if used+item.Quantity > product.LimitPerID {
 			return fmt.Errorf("identity purchase limit exceeded for %s", product.Name)
+		}
+		if context != nil {
+			context.id[key] += item.Quantity
 		}
 	}
 	if err := validateRegion(product.RegionLimit, item.VisitorRegion); err != nil {

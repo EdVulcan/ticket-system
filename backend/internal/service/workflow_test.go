@@ -147,6 +147,28 @@ func TestProductSalePolicyRejectsIdentityAndLimitViolations(t *testing.T) {
 	}
 }
 
+func TestProductSalePolicyCountsDuplicateLinesInOneOrder(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&model.Product{}).Where("id = ?", productID).Updates(map[string]interface{}{
+			"limit_per_phone": 2, "limit_per_id": 2,
+		}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{
+		TenantID: tenantID, Channel: "online", ContactName: "游客", ContactPhone: "13800000000", VisitorID: "ID-DUP-1",
+		Items: []model.OrderItem{
+			{ProductID: productID, Quantity: 1},
+			{ProductID: productID, Quantity: 2},
+		},
+	}
+	if err := (&OrderService{}).Create(&order); err == nil {
+		t.Fatal("duplicate product lines bypassed phone or identity purchase limit")
+	}
+}
+
 func TestAmbiguousProviderFailureIsReconciled(t *testing.T) {
 	if !providerRequestMayHaveBeenAccepted("wechat", errors.New("provider request timeout")) {
 		t.Fatal("transport timeout must remain reconcilable")
