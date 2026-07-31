@@ -59,6 +59,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 29, name: "channel request policy facts", apply: migrateChannelRequestPolicyFacts},
 		{version: 30, name: "team contract settlement facts", apply: migrateTeamSettlementFacts},
 		{version: 31, name: "integer capital account projections", apply: migrateIntegerCapitalAccountProjections},
+		{version: 32, name: "channel bill reconciliation facts", apply: migrateChannelBillReconciliation},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -97,6 +98,10 @@ func migrateIntegerCapitalAccountProjections(db *gorm.DB) error {
 		    used_credit_cents = CAST(ROUND(used_credit * 100.0) AS INTEGER),
 		    frozen_cents = CAST(ROUND(frozen_amount * 100.0) AS INTEGER)
 	`).Error
+}
+
+func migrateChannelBillReconciliation(db *gorm.DB) error {
+	return db.AutoMigrate(&ChannelBillRecord{}, &ChannelReconciliation{})
 }
 
 func migrateAfterSalesAndWorkflows(db *gorm.DB) error {

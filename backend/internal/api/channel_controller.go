@@ -101,6 +101,44 @@ func (c *ChannelController) ListMappings(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"data": rows})
 }
 
+func (c *ChannelController) ImportBill(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	var body struct {
+		IdempotencyKey string                     `json:"idempotency_key" binding:"required"`
+		Records        []service.ChannelBillInput `json:"records" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	report, err := c.Service.ImportBill(ctx.GetUint("tenant_id"), uint(id), body.IdempotencyKey, body.Records)
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusCreated, report)
+}
+
+func (c *ChannelController) ListReconciliations(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
+	rows, total, err := c.Service.ListReconciliations(ctx.GetUint("tenant_id"), uint(id), page, pageSize)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": rows, "total": total, "page": page, "page_size": pageSize})
+}
+
 func (c *ChannelController) Reserve(ctx *gin.Context) {
 	var body struct {
 		ExternalProductCode string `json:"external_product_code" binding:"required"`

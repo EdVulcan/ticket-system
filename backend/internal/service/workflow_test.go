@@ -283,6 +283,38 @@ func TestChannelReservationConvertsWithoutDoubleBookingStock(t *testing.T) {
 	}
 }
 
+func TestChannelBillImportMatchesOrdersAndReplaysIdempotently(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	account := model.ChannelAccount{TenantID: tenantID, Code: "bill-channel", Type: "ota", Status: "active"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&account).Error }); err != nil {
+		t.Fatal(err)
+	}
+	externalNo := "BILL-ORDER-1"
+	order := model.Order{TenantID: tenantID, Channel: "ota", ChannelAccountID: account.ID, ExternalNo: &externalNo, Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	report, err := (&ChannelService{}).ImportBill(tenantID, account.ID, "bill-batch-1", []ChannelBillInput{{ExternalNo: externalNo, Operation: "sale", AmountCents: moneyCents(order.TotalAmount)}})
+	if err != nil || report.Status != "completed" || report.MatchedCount != 1 || report.DifferenceCents != 0 {
+		t.Fatalf("report=%+v err=%v", report, err)
+	}
+	retry, err := (&ChannelService{}).ImportBill(tenantID, account.ID, "bill-batch-1", []ChannelBillInput{{ExternalNo: externalNo, Operation: "sale", AmountCents: moneyCents(order.TotalAmount)}})
+	if err != nil || retry.ID != report.ID {
+		t.Fatalf("retry=%+v err=%v", retry, err)
+	}
+	mismatch, err := (&ChannelService{}).ImportBill(tenantID, account.ID, "bill-batch-2", []ChannelBillInput{{ExternalNo: externalNo, Operation: "payment", AmountCents: moneyCents(order.TotalAmount) + 1}})
+	if err != nil || mismatch.Status != "needs_review" || mismatch.DifferenceCents != 1 {
+		t.Fatalf("mismatch=%+v err=%v", mismatch, err)
+	}
+	if _, err := (&ChannelService{}).ImportBill(tenantID, account.ID, "bill-batch-3", []ChannelBillInput{{ExternalNo: externalNo, Operation: "payment", AmountCents: moneyCents(order.TotalAmount) + 2}}); err == nil {
+		t.Fatal("duplicate bill fact with conflicting batch was accepted")
+	}
+}
+
 func TestRechargeIsIdempotentAndLeavesCentLedgerEvidence(t *testing.T) {
 	resetBusinessData(t)
 	var supplier, distributor model.Tenant
