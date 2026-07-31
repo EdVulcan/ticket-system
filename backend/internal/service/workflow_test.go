@@ -92,6 +92,43 @@ func TestPlatformWorklistsRespectTargetTenantFilter(t *testing.T) {
 	}
 }
 
+func TestPlatformLifecycleAndGlobalWorklists(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 1)
+	service := &TenantService{}
+	if err := service.UpdateLifecycleAudited(tenantID, TenantLifecycleUpdate{
+		QualificationStatus: "approved", QualificationNo: "QUAL-001",
+		QualificationExpiresAt: ptrTime(time.Now().Add(time.Hour)), ContractExpiresAt: ptrTime(time.Now().Add(time.Hour)), Reason: "qualification reviewed",
+	}, 99, "platform_admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.UpdateStatusAudited(tenantID, "active", 99, "platform_admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.UpdateLifecycleAudited(tenantID, TenantLifecycleUpdate{QualificationStatus: "expired", Reason: "certificate expired"}, 99, "platform_admin"); err == nil {
+		t.Fatal("active tenant accepted an expired qualification")
+	}
+	if err := service.UpdateStatusAudited(tenantID, "frozen", 99, "platform_admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.UpdateLifecycleAudited(tenantID, TenantLifecycleUpdate{QualificationStatus: "expired", Reason: "certificate expired"}, 99, "platform_admin"); err != nil {
+		t.Fatal(err)
+	}
+	platform := &PlatformService{}
+	devices, total, err := platform.ListDevices(tenantID, "online", 1, 20)
+	if err != nil || total != 1 || len(devices) != 1 || devices[0].TenantID != tenantID {
+		t.Fatalf("devices=%+v total=%d err=%v", devices, total, err)
+	}
+	finance, err := platform.FinanceOverview(tenantID)
+	if err != nil || finance == nil {
+		t.Fatalf("finance=%+v err=%v", finance, err)
+	}
+	logs, logTotal, err := platform.ListAuditLogs(tenantID, "tenant.lifecycle.update", 1, 20)
+	if err != nil || logTotal < 2 || len(logs) < 2 {
+		t.Fatalf("audit logs=%+v total=%d err=%v", logs, logTotal, err)
+	}
+}
+
 func TestPOSHoldIsDurableOperatorScopedAndRevalidatesOnResume(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)

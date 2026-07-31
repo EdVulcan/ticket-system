@@ -17,15 +17,21 @@ type Base struct {
 // Tenant 租户/主体
 type Tenant struct {
 	Base
-	Name         string             `gorm:"size:100;not null" json:"name"`
-	SystemCode   string             `gorm:"size:50;uniqueIndex;not null" json:"system_code"`       // 唯一系统编号
-	SecretKey    string             `gorm:"size:50;not null" json:"-"`                             // API签名密钥
-	Status       string             `gorm:"size:20;not null;default:'active';index" json:"status"` // active, frozen, closed
-	Contact      string             `gorm:"size:50" json:"contact"`
-	Phone        string             `gorm:"size:20" json:"phone"`
-	Address      string             `gorm:"size:255" json:"address"`
-	Users        []User             `json:"users,omitempty"`
-	Capabilities []TenantCapability `json:"capabilities,omitempty"`
+	Name                   string             `gorm:"size:100;not null" json:"name"`
+	SystemCode             string             `gorm:"size:50;uniqueIndex;not null" json:"system_code"`                      // 唯一系统编号
+	SecretKey              string             `gorm:"size:50;not null" json:"-"`                                            // API签名密钥
+	Status                 string             `gorm:"size:20;not null;default:'active';index" json:"status"`                // active, frozen, closed
+	QualificationStatus    string             `gorm:"size:20;not null;default:'pending';index" json:"qualification_status"` // pending, approved, rejected, expired
+	QualificationNo        string             `gorm:"size:100" json:"qualification_no,omitempty"`
+	QualificationExpiresAt *time.Time         `json:"qualification_expires_at,omitempty"`
+	ContractExpiresAt      *time.Time         `json:"contract_expires_at,omitempty"`
+	ClosedAt               *time.Time         `json:"closed_at,omitempty"`
+	CloseReason            string             `gorm:"size:255" json:"close_reason,omitempty"`
+	Contact                string             `gorm:"size:50" json:"contact"`
+	Phone                  string             `gorm:"size:20" json:"phone"`
+	Address                string             `gorm:"size:255" json:"address"`
+	Users                  []User             `json:"users,omitempty"`
+	Capabilities           []TenantCapability `json:"capabilities,omitempty"`
 }
 
 // User 用户

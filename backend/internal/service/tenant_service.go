@@ -41,8 +41,16 @@ func (s *TenantService) Create(tenant *model.Tenant, adminUsername, adminPasswor
 	if tenant.Name == "" || tenant.SystemCode == "" {
 		return errors.New("tenant name and system code are required")
 	}
+	if tenant.QualificationStatus == "" {
+		tenant.QualificationStatus = "pending"
+	}
+	if !validQualificationStatus(tenant.QualificationStatus) {
+		return errors.New("invalid qualification status")
+	}
 	if tenant.Status == "" {
-		tenant.Status = "active"
+		// A newly provisioned tenant must be explicitly approved by the
+		// platform before it can sell or operate a scenic area.
+		tenant.Status = "frozen"
 	}
 	if !validTenantStatus(tenant.Status) {
 		return errors.New("invalid tenant status")
@@ -90,6 +98,28 @@ func validTenantStatus(status string) bool {
 	return status == "active" || status == "frozen" || status == "closed"
 }
 
+func validQualificationStatus(status string) bool {
+	return status == "pending" || status == "approved" || status == "rejected" || status == "expired"
+}
+
+func qualificationAllowsActivation(tenant *model.Tenant, now time.Time) bool {
+	if tenant == nil {
+		return false
+	}
+	// Empty is a legacy value. Migration marks existing rows approved, but
+	// treating an empty value as approved keeps older fixtures readable.
+	if tenant.QualificationStatus != "" && tenant.QualificationStatus != "approved" {
+		return false
+	}
+	if tenant.QualificationExpiresAt != nil && !tenant.QualificationExpiresAt.After(now) {
+		return false
+	}
+	if tenant.ContractExpiresAt != nil && !tenant.ContractExpiresAt.After(now) {
+		return false
+	}
+	return true
+}
+
 // UpdateStatus is a platform-only lifecycle transition. Ordinary tenant
 // routes never accept a status field, so a tenant cannot unfreeze itself.
 func (s *TenantService) UpdateStatus(id uint, status string) error {
@@ -105,9 +135,20 @@ func (s *TenantService) UpdateStatusAudited(id uint, status string, actorID uint
 		if err := tx.Where("id = ?", id).First(&tenant).Error; err != nil {
 			return err
 		}
+		if status == "active" && !qualificationAllowsActivation(&tenant, time.Now()) {
+			return errors.New("tenant qualification or contract is not active")
+		}
 		before, _ := json.Marshal(map[string]string{"status": tenant.Status})
 		after, _ := json.Marshal(map[string]string{"status": status})
-		result := tx.Model(&tenant).Update("status", status)
+		updates := map[string]interface{}{"status": status}
+		if status == "closed" {
+			now := time.Now()
+			updates["closed_at"] = now
+		} else if tenant.Status == "closed" {
+			updates["closed_at"] = nil
+			updates["close_reason"] = ""
+		}
+		result := tx.Model(&tenant).Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -123,6 +164,64 @@ func (s *TenantService) UpdateStatusAudited(id uint, status string, actorID uint
 			}
 		}
 		return recordAuditTx(tx, actorID, id, actorRole, "platform", "tenant.status.update", "tenant", id, "platform lifecycle change", string(before), string(after))
+	})
+}
+
+// TenantLifecycleUpdate is intentionally platform-scoped. Qualification,
+// contract expiry and closure reason change the ability to operate and must be
+// committed together with the audit record.
+type TenantLifecycleUpdate struct {
+	QualificationStatus    string     `json:"qualification_status"`
+	QualificationNo        string     `json:"qualification_no"`
+	QualificationExpiresAt *time.Time `json:"qualification_expires_at"`
+	ContractExpiresAt      *time.Time `json:"contract_expires_at"`
+	CloseReason            string     `json:"close_reason"`
+	Reason                 string     `json:"reason"`
+}
+
+func (s *TenantService) UpdateLifecycleAudited(id uint, update TenantLifecycleUpdate, actorID uint, actorRole string) error {
+	if id == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	if update.QualificationStatus != "" && !validQualificationStatus(update.QualificationStatus) {
+		return errors.New("invalid qualification status")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var tenant model.Tenant
+		if err := tx.Where("id = ?", id).First(&tenant).Error; err != nil {
+			return err
+		}
+		before, _ := json.Marshal(tenant)
+		values := map[string]interface{}{}
+		if update.QualificationStatus != "" {
+			values["qualification_status"] = update.QualificationStatus
+		}
+		if strings.TrimSpace(update.QualificationNo) != "" {
+			values["qualification_no"] = strings.TrimSpace(update.QualificationNo)
+		}
+		if update.QualificationExpiresAt != nil {
+			values["qualification_expires_at"] = update.QualificationExpiresAt
+		}
+		if update.ContractExpiresAt != nil {
+			values["contract_expires_at"] = update.ContractExpiresAt
+		}
+		if strings.TrimSpace(update.CloseReason) != "" {
+			values["close_reason"] = strings.TrimSpace(update.CloseReason)
+		}
+		if len(values) == 0 {
+			return errors.New("lifecycle update is empty")
+		}
+		if err := tx.Model(&tenant).Updates(values).Error; err != nil {
+			return err
+		}
+		if err := tx.First(&tenant, id).Error; err != nil {
+			return err
+		}
+		if tenant.Status == "active" && !qualificationAllowsActivation(&tenant, time.Now()) {
+			return errors.New("cannot keep tenant active with expired or unapproved qualification")
+		}
+		after, _ := json.Marshal(tenant)
+		return recordAuditTx(tx, actorID, id, actorRole, "platform", "tenant.lifecycle.update", "tenant", id, strings.TrimSpace(update.Reason), string(before), string(after))
 	})
 }
 

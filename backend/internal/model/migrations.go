@@ -70,6 +70,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 40, name: "payment and refund cent facts", apply: migratePaymentCentFacts},
 		{version: 41, name: "digital refund task leases", apply: migrateDigitalRefundTaskLeases},
 		{version: 42, name: "channel request leases", apply: migrateChannelRequestLeases},
+		{version: 43, name: "tenant qualification and lifecycle facts", apply: migrateTenantLifecycleFacts},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -97,6 +98,16 @@ func migrateDigitalRefundTaskLeases(db *gorm.DB) error {
 
 func migrateChannelRequestLeases(db *gorm.DB) error {
 	return db.AutoMigrate(&ChannelRequest{})
+}
+
+func migrateTenantLifecycleFacts(db *gorm.DB) error {
+	if err := db.AutoMigrate(&Tenant{}); err != nil {
+		return err
+	}
+	// Existing tenants were provisioned before platform qualification existed.
+	// Preserve their current ability to operate, while making every new tenant
+	// explicitly qualify before a platform operator can reactivate it.
+	return db.Exec("UPDATE tenants SET qualification_status = 'approved' WHERE qualification_status IS NULL OR qualification_status = ''").Error
 }
 
 func migrateTeamSettlementFacts(db *gorm.DB) error {

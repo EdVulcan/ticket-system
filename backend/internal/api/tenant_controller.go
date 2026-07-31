@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"ticket-backend/internal/model"
@@ -82,6 +83,28 @@ func (c *TenantController) RevokeSessions(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"status": "sessions_revoked"})
+}
+
+func (c *TenantController) UpdateLifecycle(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid tenant id"})
+		return
+	}
+	var body service.TenantLifecycleUpdate
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.UpdateLifecycleAudited(uint(id), body, platformActorID(ctx), ctx.GetString("role")); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+		}
+		ctx.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"status": "lifecycle_updated"})
 }
 
 func (c *TenantController) SetCapability(ctx *gin.Context) {

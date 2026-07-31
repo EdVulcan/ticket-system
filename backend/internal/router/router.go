@@ -28,8 +28,12 @@ func InitRouter(r *gin.Engine) {
 	platformGroup := protected.Group("/platform")
 	platformGroup.Use(middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"))
 	platformGroup.GET("/overview", platformController.Overview)
+	platformGroup.GET("/finance", platformController.FinanceOverview)
 	platformGroup.GET("/orders", platformController.ListOrders)
 	platformGroup.GET("/issues", platformController.ListIssues)
+	platformGroup.GET("/devices", platformController.ListDevices)
+	platformGroup.GET("/settlements", platformController.ListSettlements)
+	platformGroup.GET("/audit-logs", platformController.ListAuditLogs)
 
 	// Tenant Routes
 	tenantController := &api.TenantController{}
@@ -40,6 +44,7 @@ func InitRouter(r *gin.Engine) {
 		tenantGroup.GET("", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.List)
 		tenantGroup.PUT("/:id", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.Update)
 		tenantGroup.PATCH("/:id/status", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.UpdateStatus)
+		tenantGroup.PATCH("/:id/lifecycle", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.UpdateLifecycle)
 		tenantGroup.POST("/:id/revoke-sessions", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.RevokeSessions)
 		tenantGroup.PUT("/:id/capabilities/:capability", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.SetCapability)
 		tenantGroup.DELETE("/:id", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.Delete)
