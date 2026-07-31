@@ -296,17 +296,17 @@ func (s *OperationsService) closeShift(tenantID, shiftID, operatorID uint, role 
 		if shift.Status != "open" {
 			return fmt.Errorf("shift cannot close from status %s", shift.Status)
 		}
-		var paidAmount float64
-		if err := tx.Model(&model.Payment{}).Where("tenant_id = ? AND shift_id = ? AND method = ? AND status IN ?", tenantID, shift.ID, "cash", []string{"paid", "refunded"}).Select("COALESCE(SUM(amount), 0)").Scan(&paidAmount).Error; err != nil {
+		var paidCents int64
+		if err := tx.Model(&model.Payment{}).Where("tenant_id = ? AND shift_id = ? AND method = ? AND status IN ?", tenantID, shift.ID, "cash", []string{"paid", "refunded"}).Select("COALESCE(SUM(CASE WHEN amount_cents != 0 THEN amount_cents ELSE CAST(ROUND(amount * 100.0) AS INTEGER) END), 0)").Scan(&paidCents).Error; err != nil {
 			return err
 		}
-		var refundedAmount float64
-		if err := tx.Table("refunds").Joins("JOIN payments ON payments.id = refunds.payment_id").Where("refunds.tenant_id = ? AND payments.shift_id = ? AND refunds.method = ? AND refunds.status = ? AND refunds.created_at >= ?", tenantID, shift.ID, "cash", "succeeded", shift.OpenedAt).Select("COALESCE(SUM(refunds.amount), 0)").Scan(&refundedAmount).Error; err != nil {
+		var refundedCents int64
+		if err := tx.Table("refunds").Joins("JOIN payments ON payments.id = refunds.payment_id").Where("refunds.tenant_id = ? AND payments.shift_id = ? AND refunds.method = ? AND refunds.status = ? AND refunds.created_at >= ?", tenantID, shift.ID, "cash", "succeeded", shift.OpenedAt).Select("COALESCE(SUM(CASE WHEN refunds.amount_cents != 0 THEN refunds.amount_cents ELSE CAST(ROUND(refunds.amount * 100.0) AS INTEGER) END), 0)").Scan(&refundedCents).Error; err != nil {
 			return err
 		}
 		now := time.Now()
 		shift.ClosingCents = closingCents
-		shift.ExpectedCents = shift.OpeningCents + moneyCents(paidAmount-refundedAmount)
+		shift.ExpectedCents = shift.OpeningCents + paidCents - refundedCents
 		shift.Status = "closed"
 		shift.ClosedAt = &now
 		shift.Notes = strings.TrimSpace(notes)

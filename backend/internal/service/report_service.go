@@ -113,15 +113,15 @@ func (s *ReportService) GetDailyReport(tenantID uint, startDate, endDate string)
 	}
 	if err := model.DB.Table("orders").Select(`DATE(orders.created_at) AS date, COUNT(orders.id) AS order_count,
 		COALESCE(SUM(CAST(ROUND(orders.total_amount * 100.0) AS INTEGER)), 0) AS gross_cents,
-		COALESCE(SUM((SELECT COALESCE(SUM(CAST(ROUND(refunds.amount * 100.0) AS INTEGER)), 0) FROM refunds WHERE refunds.tenant_id = orders.tenant_id AND refunds.order_no = orders.order_no AND refunds.status = 'succeeded')), 0) AS refund_cents,
-		COALESCE(SUM(CAST(ROUND(orders.total_amount * 100.0) AS INTEGER)), 0) - COALESCE(SUM((SELECT COALESCE(SUM(CAST(ROUND(refunds.amount * 100.0) AS INTEGER)), 0) FROM refunds WHERE refunds.tenant_id = orders.tenant_id AND refunds.order_no = orders.order_no AND refunds.status = 'succeeded')), 0) AS net_cents`).
+		COALESCE(SUM((SELECT COALESCE(SUM(CASE WHEN refunds.amount_cents != 0 THEN refunds.amount_cents ELSE CAST(ROUND(refunds.amount * 100.0) AS INTEGER) END), 0) FROM refunds WHERE refunds.tenant_id = orders.tenant_id AND refunds.order_no = orders.order_no AND refunds.status = 'succeeded')), 0) AS refund_cents,
+		COALESCE(SUM(CAST(ROUND(orders.total_amount * 100.0) AS INTEGER)), 0) - COALESCE(SUM((SELECT COALESCE(SUM(CASE WHEN refunds.amount_cents != 0 THEN refunds.amount_cents ELSE CAST(ROUND(refunds.amount * 100.0) AS INTEGER) END), 0) FROM refunds WHERE refunds.tenant_id = orders.tenant_id AND refunds.order_no = orders.order_no AND refunds.status = 'succeeded')), 0) AS net_cents`).
 		Where("orders.tenant_id = ? AND orders.status IN ? AND orders.created_at BETWEEN ? AND ?", tenantID, completedSalesStatuses(), start, end).
 		Group("DATE(orders.created_at)").Order("date ASC").Scan(&report.Sales).Error; err != nil {
 		return nil, err
 	}
 	if err := model.DB.Table("payments").Select(`DATE(COALESCE(payments.paid_at, payments.created_at)) AS date, COUNT(payments.id) AS payment_count,
-		COALESCE(SUM(CAST(ROUND(payments.amount * 100.0) AS INTEGER)), 0) AS paid_cents,
-		COALESCE(SUM(CAST(ROUND(payments.refunded_amount * 100.0) AS INTEGER)), 0) AS refund_cents`).
+		COALESCE(SUM(CASE WHEN payments.amount_cents != 0 THEN payments.amount_cents ELSE CAST(ROUND(payments.amount * 100.0) AS INTEGER) END), 0) AS paid_cents,
+		COALESCE(SUM(CASE WHEN payments.refunded_amount_cents != 0 THEN payments.refunded_amount_cents ELSE CAST(ROUND(payments.refunded_amount * 100.0) AS INTEGER) END), 0) AS refund_cents`).
 		Where("payments.tenant_id = ? AND payments.status IN ? AND COALESCE(payments.paid_at, payments.created_at) BETWEEN ? AND ?", tenantID, []string{"paid", "partial_refunded", "refunded"}, start, end).
 		Group("DATE(COALESCE(payments.paid_at, payments.created_at))").Order("date ASC").Scan(&report.Payments).Error; err != nil {
 		return nil, err
@@ -199,9 +199,9 @@ func (s *ReportService) GetSalesStats(tenantID uint, startDate, endDate string) 
 
 	err = model.DB.Table("orders").
 		Select(`DATE(orders.created_at) as date,
-			SUM(orders.total_amount) as total_amount,
-			COALESCE(SUM((SELECT COALESCE(SUM(refunds.amount), 0) FROM refunds WHERE refunds.tenant_id = orders.tenant_id AND refunds.order_no = orders.order_no AND refunds.status = 'succeeded')), 0) as refunded_amount,
-			SUM(orders.total_amount) - COALESCE(SUM((SELECT COALESCE(SUM(refunds.amount), 0) FROM refunds WHERE refunds.tenant_id = orders.tenant_id AND refunds.order_no = orders.order_no AND refunds.status = 'succeeded')), 0) as net_amount,
+			SUM(CAST(ROUND(orders.total_amount * 100.0) AS INTEGER)) / 100.0 as total_amount,
+			COALESCE(SUM((SELECT COALESCE(SUM(CASE WHEN refunds.amount_cents != 0 THEN refunds.amount_cents ELSE CAST(ROUND(refunds.amount * 100.0) AS INTEGER) END), 0) FROM refunds WHERE refunds.tenant_id = orders.tenant_id AND refunds.order_no = orders.order_no AND refunds.status = 'succeeded')), 0) / 100.0 as refunded_amount,
+			(SUM(CAST(ROUND(orders.total_amount * 100.0) AS INTEGER)) - COALESCE(SUM((SELECT COALESCE(SUM(CASE WHEN refunds.amount_cents != 0 THEN refunds.amount_cents ELSE CAST(ROUND(refunds.amount * 100.0) AS INTEGER) END), 0) FROM refunds WHERE refunds.tenant_id = orders.tenant_id AND refunds.order_no = orders.order_no AND refunds.status = 'succeeded')), 0)) / 100.0 as net_amount,
 			COUNT(orders.id) as order_count`).
 		Where("orders.tenant_id = ? AND orders.status IN ? AND orders.created_at BETWEEN ? AND ?", tenantID, completedSalesStatuses(), start, end).
 		Group("DATE(created_at)").
@@ -223,7 +223,7 @@ func (s *ReportService) GetProductStats(tenantID uint, startDate, endDate string
 		Joins("JOIN orders ON orders.id = order_items.order_id").
 		Select(`order_items.product_name,
 			SUM(order_items.quantity - COALESCE((SELECT SUM(CASE WHEN tickets.code_mode = 'order' THEN order_items.quantity ELSE 1 END) FROM tickets WHERE tickets.order_item_id = order_items.id AND tickets.status = 'refunded'), 0)) as total_sold,
-			SUM(order_items.price * (order_items.quantity - COALESCE((SELECT SUM(CASE WHEN tickets.code_mode = 'order' THEN order_items.quantity ELSE 1 END) FROM tickets WHERE tickets.order_item_id = order_items.id AND tickets.status = 'refunded'), 0))) as total_amount`).
+			SUM(CAST(ROUND(order_items.price * 100.0) AS INTEGER) * (order_items.quantity - COALESCE((SELECT SUM(CASE WHEN tickets.code_mode = 'order' THEN order_items.quantity ELSE 1 END) FROM tickets WHERE tickets.order_item_id = order_items.id AND tickets.status = 'refunded'), 0))) / 100.0 as total_amount`).
 		Where("orders.tenant_id = ? AND orders.status IN ? AND orders.created_at BETWEEN ? AND ?", tenantID, completedSalesStatuses(), start, end).
 		Group("order_items.product_name").
 		Order("total_sold DESC").
@@ -242,9 +242,9 @@ func (s *ReportService) GetChannelStats(tenantID uint, startDate, endDate string
 	}
 
 	err = model.DB.Model(&model.Order{}).
-		Select(`channel, COUNT(id) as order_count, SUM(total_amount) as total_amount,
-			COALESCE(SUM((SELECT COALESCE(SUM(refunds.amount), 0) FROM refunds WHERE refunds.tenant_id = orders.tenant_id AND refunds.order_no = orders.order_no AND refunds.status = 'succeeded')), 0) as refunded_amount,
-			SUM(total_amount) - COALESCE(SUM((SELECT COALESCE(SUM(refunds.amount), 0) FROM refunds WHERE refunds.tenant_id = orders.tenant_id AND refunds.order_no = orders.order_no AND refunds.status = 'succeeded')), 0) as net_amount`).
+		Select(`channel, COUNT(id) as order_count, SUM(CAST(ROUND(total_amount * 100.0) AS INTEGER)) / 100.0 as total_amount,
+			COALESCE(SUM((SELECT COALESCE(SUM(CASE WHEN refunds.amount_cents != 0 THEN refunds.amount_cents ELSE CAST(ROUND(refunds.amount * 100.0) AS INTEGER) END), 0) FROM refunds WHERE refunds.tenant_id = orders.tenant_id AND refunds.order_no = orders.order_no AND refunds.status = 'succeeded')), 0) / 100.0 as refunded_amount,
+			(SUM(CAST(ROUND(total_amount * 100.0) AS INTEGER)) - COALESCE(SUM((SELECT COALESCE(SUM(CASE WHEN refunds.amount_cents != 0 THEN refunds.amount_cents ELSE CAST(ROUND(refunds.amount * 100.0) AS INTEGER) END), 0) FROM refunds WHERE refunds.tenant_id = orders.tenant_id AND refunds.order_no = orders.order_no AND refunds.status = 'succeeded')), 0)) / 100.0 as net_amount`).
 		Where("tenant_id = ? AND status IN ? AND created_at BETWEEN ? AND ?", tenantID, completedSalesStatuses(), start, end).
 		Group("channel").
 		Scan(&stats).Error

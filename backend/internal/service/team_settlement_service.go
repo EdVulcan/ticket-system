@@ -41,11 +41,10 @@ func (s *TeamService) GenerateTeamSettlement(travelTenantID, groupID uint) (*mod
 		if gross <= 0 {
 			gross = moneyCents(order.TotalAmount)
 		}
-		var refunded float64
-		if err := tx.Model(&model.Refund{}).Where("tenant_id = ? AND order_no = ? AND status = ?", travelTenantID, order.OrderNo, "succeeded").Select("COALESCE(SUM(amount), 0)").Scan(&refunded).Error; err != nil {
+		var refundCents int64
+		if err := tx.Model(&model.Refund{}).Where("tenant_id = ? AND order_no = ? AND status = ?", travelTenantID, order.OrderNo, "succeeded").Select("COALESCE(SUM(CASE WHEN amount_cents != 0 THEN amount_cents ELSE CAST(ROUND(amount * 100.0) AS INTEGER) END), 0)").Scan(&refundCents).Error; err != nil {
 			return err
 		}
-		refundCents := moneyCents(refunded)
 		if refundCents > gross {
 			refundCents = gross
 		}

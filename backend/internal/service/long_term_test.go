@@ -405,6 +405,42 @@ func TestPOSShiftsAndPrintJobsStayTerminalScoped(t *testing.T) {
 	}
 }
 
+func TestPOSShiftUsesPaymentAndRefundCentFacts(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	var area model.ScenicArea
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	device := model.Device{TenantID: tenantID, ScenicAreaID: area.ID, Name: "Cent POS", SerialNumber: "POS-CENTS", Type: "pos", Status: "online"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&device).Error }); err != nil {
+		t.Fatal(err)
+	}
+	ops := &OperationsService{}
+	shift, err := ops.OpenShift(tenantID, device.ID, 301, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payment model.Payment
+	if err := model.Write(func(tx *gorm.DB) error {
+		paidAt := time.Now()
+		payment = model.Payment{TenantID: tenantID, PaymentNo: "PAY-CENTS", OrderNo: "ORDER-CENTS", Amount: 0.28, AmountCents: 29, Method: "cash", Status: "paid", PaidAt: &paidAt, ShiftID: shift.ID, DeviceID: device.ID, OperatorID: 301}
+		if err := tx.Create(&payment).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.Refund{TenantID: tenantID, RefundNo: "REF-CENTS", IdempotencyKey: "REF-CENTS", OrderNo: "ORDER-CENTS", PaymentID: payment.ID, Amount: 0.08, AmountCents: 7, Method: "cash", Status: "succeeded"}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := ops.CloseShiftForOperator(tenantID, shift.ID, 301, "admin", 122, "cent facts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed.ExpectedCents != 122 {
+		t.Fatalf("expected cent total=%d, want 122", closed.ExpectedCents)
+	}
+}
+
 func TestStaffResourceScopesFailClosed(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
