@@ -167,6 +167,8 @@ func channelPermissionForPath(path string) string {
 		return "orders:create"
 	case strings.HasSuffix(path, "/orders/cancel"):
 		return "orders:cancel"
+	case strings.HasSuffix(path, "/orders/refund"):
+		return "orders:refund"
 	case strings.HasSuffix(path, "/orders/query"):
 		return "orders:query"
 	case strings.HasSuffix(path, "/reservations/create"):

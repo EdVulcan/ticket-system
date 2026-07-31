@@ -115,6 +115,15 @@ func TestChannelSignatureCoversBodyAndRejectsConflict(t *testing.T) {
 	}
 }
 
+func TestChannelPermissionCoversRefundEndpoint(t *testing.T) {
+	if got := channelPermissionForPath("/api/v1/channels/demo/orders/refund"); got != "orders:refund" {
+		t.Fatalf("refund permission=%q", got)
+	}
+	if !channelPermissionAllows(`["orders:refund"]`, "orders:refund") {
+		t.Fatal("refund permission was not accepted")
+	}
+}
+
 func channelSignature(secret, timestamp, nonce, method, path string, body []byte) string {
 	hash := sha256.Sum256(body)
 	canonical := strings.Join([]string{timestamp, nonce, method, path, hex.EncodeToString(hash[:])}, "\n")

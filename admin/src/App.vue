@@ -101,6 +101,10 @@
                 <el-icon><Warning /></el-icon>
                 <span>退款待办</span>
              </el-menu-item>
+             <el-menu-item v-if="user.role === 'seller' || user.role === 'admin' || user.role === 'super_admin'" index="/after-sales" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+                <el-icon><Warning /></el-icon>
+                <span>售后工作台</span>
+             </el-menu-item>
           </template>
           
           <template v-if="!isSuperAdmin">

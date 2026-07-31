@@ -40,6 +40,12 @@ const router = createRouter({
             meta: { scope: 'tenant', roles: ['admin', 'super_admin'], title: '退款待办' }
         },
         {
+            path: '/after-sales',
+            name: 'after-sales',
+            component: () => import('../views/AfterSaleView.vue'),
+            meta: { scope: 'tenant', roles: ['seller', 'admin', 'super_admin'], title: '售后工作台' }
+        },
+        {
             path: '/finance',
             name: 'finance',
             component: () => import('../views/FinanceView.vue'),
