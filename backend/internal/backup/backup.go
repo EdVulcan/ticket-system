@@ -2,13 +2,16 @@ package backup
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"gorm.io/gorm"
 )
 
@@ -59,6 +62,121 @@ func Create(db *gorm.DB, directory, keyFile string, retention int) (string, erro
 		return "", err
 	}
 	return target, nil
+}
+
+// Verify checks a SQLite backup before it is used for recovery. It deliberately
+// opens the file read-only and requires both SQLite integrity_check and a
+// readable migration table when present.
+func Verify(databasePath string) error {
+	abs, err := filepath.Abs(databasePath)
+	if err != nil {
+		return fmt.Errorf("resolve database path: %w", err)
+	}
+	db, err := sql.Open("sqlite3", "file:"+filepath.ToSlash(abs)+"?mode=ro&_foreign_keys=on")
+	if err != nil {
+		return fmt.Errorf("open backup: %w", err)
+	}
+	defer db.Close()
+	var result string
+	if err := db.QueryRow("PRAGMA integrity_check").Scan(&result); err != nil {
+		return fmt.Errorf("run SQLite integrity check: %w", err)
+	}
+	if strings.ToLower(strings.TrimSpace(result)) != "ok" {
+		return fmt.Errorf("SQLite integrity check failed: %s", result)
+	}
+	var tableCount int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").Scan(&tableCount); err != nil {
+		return fmt.Errorf("inspect migration table: %w", err)
+	}
+	if tableCount == 1 {
+		var latest int
+		if err := db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&latest); err != nil {
+			return fmt.Errorf("read schema version: %w", err)
+		}
+		if latest <= 0 {
+			return fmt.Errorf("backup has no applied schema migration")
+		}
+	}
+	return nil
+}
+
+// Restore verifies the source, keeps a copy of the existing target, and then
+// atomically replaces the target through a temporary file. The returned path
+// is the pre-restore target copy and can be used for rollback.
+func Restore(sourceDB, sourceKey, targetDB, targetKey string) (string, error) {
+	source, err := filepath.Abs(sourceDB)
+	if err != nil {
+		return "", fmt.Errorf("resolve source database: %w", err)
+	}
+	target, err := filepath.Abs(targetDB)
+	if err != nil {
+		return "", fmt.Errorf("resolve target database: %w", err)
+	}
+	if source == target {
+		return "", fmt.Errorf("source and target database must differ")
+	}
+	if err := Verify(source); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0750); err != nil {
+		return "", fmt.Errorf("create target directory: %w", err)
+	}
+	rollback := ""
+	if _, err := os.Stat(target); err == nil {
+		rollback = target + ".before-restore-" + time.Now().Format("20060102-150405.000")
+		if err := copyFile(target, rollback, 0600); err != nil {
+			return "", fmt.Errorf("preserve current database: %w", err)
+		}
+	}
+	temporary := target + ".restore.tmp"
+	_ = os.Remove(temporary)
+	if err := copyFile(source, temporary, 0600); err != nil {
+		return "", fmt.Errorf("stage restored database: %w", err)
+	}
+	if err := Verify(temporary); err != nil {
+		_ = os.Remove(temporary)
+		return "", fmt.Errorf("verify staged database: %w", err)
+	}
+	if err := os.Rename(temporary, target); err != nil {
+		_ = os.Remove(temporary)
+		return "", fmt.Errorf("replace target database: %w", err)
+	}
+	if strings.TrimSpace(sourceKey) != "" && strings.TrimSpace(targetKey) != "" {
+		if _, err := os.Stat(sourceKey); err != nil {
+			return rollback, fmt.Errorf("source key file is unavailable: %w", err)
+		}
+		keyRollback := targetKey + ".before-restore-" + time.Now().Format("20060102-150405.000")
+		if _, err := os.Stat(targetKey); err == nil {
+			if err := copyFile(targetKey, keyRollback, 0600); err != nil {
+				return rollback, fmt.Errorf("preserve current key file: %w", err)
+			}
+		}
+		if err := copyFile(sourceKey, targetKey, 0600); err != nil {
+			return rollback, fmt.Errorf("restore key file: %w", err)
+		}
+	}
+	return rollback, nil
+}
+
+func copyFile(source, target string, mode os.FileMode) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	output, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(output, input); err != nil {
+		_ = output.Close()
+		return err
+	}
+	if err := output.Sync(); err != nil {
+		_ = output.Close()
+		return err
+	}
+	return output.Close()
 }
 
 func copyKeyFile(source, target string) error {
