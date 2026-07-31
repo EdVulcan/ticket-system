@@ -55,3 +55,11 @@ func (c *OrderController) List(ctx *gin.Context) {
 		"page":  page,
 	})
 }
+
+func (c *OrderController) Cancel(ctx *gin.Context) {
+	if err := c.Service.Cancel(ctx.Param("orderNo"), ctx.GetUint("tenant_id")); err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"status": "cancelled"})
+}

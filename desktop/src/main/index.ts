@@ -11,8 +11,8 @@ function createWindow(): void {
         ...(process.platform === 'linux' ? { icon: '' } : {}),
         webPreferences: {
             preload: join(__dirname, '../preload/index.js'),
-            sandbox: false,
-            webSecurity: false
+            sandbox: true,
+            webSecurity: true
         }
     })
 
@@ -53,18 +53,12 @@ app.whenReady().then(() => {
 
     // Hardware IPC Handlers
     ipcMain.handle('print-ticket', async (_, data) => {
-        console.log('Printing ticket:', data)
-        // Mock print delay
-        await new Promise(resolve => setTimeout(resolve, 1000))
-        return { success: true, message: 'Print job sent' }
+        void data
+        return { success: false, message: 'printer adapter is not configured' }
     })
 
     ipcMain.handle('read-card', async () => {
-        console.log('Reading card...')
-        // Mock read delay
-        await new Promise(resolve => setTimeout(resolve, 500))
-        // Mock card ID
-        return { success: true, card_id: 'ID' + Math.floor(Math.random() * 1000000) }
+        return { success: false, message: 'identity card reader adapter is not configured' }
     })
 
     createWindow()

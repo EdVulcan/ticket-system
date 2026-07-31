@@ -270,6 +270,9 @@
                       <el-option v-for="cp in checkpoints" :key="cp.id" :label="cp.name" :value="cp.id" />
                     </el-select>
                   </el-form-item>
+                  <el-form-item label="POS 设备编号">
+                    <el-input-number v-model="posDeviceId" :min="1" class="w-full" controls-position="right" @change="saveSettings" />
+                  </el-form-item>
                   <div class="text-xs text-gray-500 mt-2">设置后将用于核销验证记录</div>
                </el-form>
             </div>
@@ -303,7 +306,7 @@
       </el-dialog>
 
       <el-dialog v-model="showPayment" title="收银台" width="500px" align-center class="dark-dialog" :close-on-click-modal="false">
-        <PaymentModal v-if="showPayment" :amount="currentOrder?.total_amount || 0" :order-no="currentOrder?.order_no || ''" @success="handlePaymentSuccess" />
+        <PaymentModal v-if="showPayment" :amount="currentOrder?.total_amount || 0" :order-no="currentOrder?.order_no || ''" :shift-id="shiftState.shiftId || 0" :device-id="posDeviceId || 0" @success="handlePaymentSuccess" />
       </el-dialog>
 
       <el-dialog v-model="showPolicy" title="百事通 (F3)" width="600px" align-center class="dark-dialog">
@@ -336,7 +339,7 @@ import axios from 'axios'
 const router = useRouter()
 
 // Configure Axios
-axios.defaults.baseURL = 'http://127.0.0.1:8080/api/v1'
+axios.defaults.baseURL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8080/api/v1'
 axios.interceptors.request.use(config => {
   const token = sessionStorage.getItem('token')
   if (token) {
@@ -389,11 +392,13 @@ const verifyHistory = ref<any[]>([])
 const verifyInputRef = ref()
 const checkpoints = ref<any[]>([])
 const currentCheckPointId = ref<number | null>(null)
+const posDeviceId = ref<number | null>(null)
 
 // --- Settings Logic ---
 const selectedPrinter = ref('EPSON TM-T88V')
 const shiftState = ref({
   isOpen: false,
+  shiftId: null as number | null,
   startTime: null as string | null,
   operator: '李明 (007)'
 })
@@ -411,6 +416,9 @@ const saveSettings = () => {
   if (currentCheckPointId.value) {
     localStorage.setItem('pos_checkpoint_id', currentCheckPointId.value.toString())
   }
+  if (posDeviceId.value) {
+    localStorage.setItem('pos_device_id', posDeviceId.value.toString())
+  }
   localStorage.setItem('pos_printer', selectedPrinter.value)
   ElMessage.success('设置已保存')
 }
@@ -420,6 +428,8 @@ const loadSettings = () => {
   if (savedId) {
     currentCheckPointId.value = parseInt(savedId)
   }
+  const savedDeviceId = localStorage.getItem('pos_device_id')
+  if (savedDeviceId) posDeviceId.value = parseInt(savedDeviceId)
   const savedPrinter = localStorage.getItem('pos_printer')
   if (savedPrinter) {
     selectedPrinter.value = savedPrinter
@@ -437,45 +447,68 @@ const loadSettings = () => {
   if (savedNote) noteContent.value = savedNote
 }
 
-const handleShiftAction = () => {
+const handleShiftAction = async () => {
+  const deviceId = Number(localStorage.getItem('pos_device_id') || 0)
+  if (!deviceId) {
+    ElMessage.warning('请先在终端配置中设置 POS 设备编号')
+    return
+  }
   if (!shiftState.value.isOpen) {
-    // Start Shift
-    shiftState.value.isOpen = true
-    shiftState.value.startTime = new Date().toISOString()
-    localStorage.setItem('pos_shift_state', JSON.stringify(shiftState.value))
-    ElMessage.success('已开始当班')
+    try {
+      const res = await axios.post('/operations/shifts', { device_id: deviceId, opening_cents: 0 })
+      const shift = res.data
+      shiftState.value = { isOpen: true, shiftId: shift.id, startTime: shift.opened_at, operator: currentStaff.value.name || '当前操作员' }
+      localStorage.setItem('pos_shift_state', JSON.stringify(shiftState.value))
+      ElMessage.success('已开始当班')
+    } catch (error: any) {
+      ElMessage.error(error.response?.data?.error || '开班失败')
+    }
   } else {
-    // End Shift
-    ElMessageBox.confirm('确定要结束当前班次吗？', '交班确认', {
-      confirmButtonText: '确认交班',
-      cancelButtonText: '取消',
-      type: 'warning'
-    }).then(() => {
-      // Calculate stats (Mock for now, or filter orders if loaded)
-      // Ideally fetch from backend: orders created > startTime
+    if (!shiftState.value.shiftId) { ElMessage.error('当前班次缺少服务端编号，请重新开班'); return }
+    try {
+      await ElMessageBox.confirm('确定要结束当前班次吗？', '交班确认', { confirmButtonText: '确认交班', cancelButtonText: '取消', type: 'warning' })
+      const input = await ElMessageBox.prompt('请输入钱箱实收金额（元）', '交班金额', { inputPattern: /^\d+(\.\d{1,2})?$/, inputErrorMessage: '请输入有效金额', confirmButtonText: '提交', cancelButtonText: '取消' })
+      const closingCents = Math.round(Number(input.value) * 100)
+      const res = await axios.post(`/operations/shifts/${shiftState.value.shiftId}/close`, { closing_cents: closingCents, notes: noteContent.value })
+      const shift = res.data
       const endTime = new Date()
       const duration = shiftState.value.startTime ? 
         ((endTime.getTime() - new Date(shiftState.value.startTime).getTime()) / 1000 / 60 / 60).toFixed(1) : '0'
       
-      ElMessageBox.alert(`
-        <div class="text-left">
-          <p><strong>操作员：</strong>${shiftState.value.operator}</p>
-          <p><strong>当班时长：</strong>${duration} 小时</p>
-          <p><strong>开始时间：</strong>${new Date(shiftState.value.startTime!).toLocaleString()}</p>
-          <p><strong>结束时间：</strong>${endTime.toLocaleString()}</p>
-          ${noteContent.value ? `<p><strong>交班便签：</strong>${noteContent.value}</p>` : ''}
-          <hr class="my-2"/>
-          <p>请在后台查看详细销售报表。</p>
-        </div>
-      `, '交班报告', { dangerouslyUseHTMLString: true })
-      
+      const report = [
+        `操作员：${shiftState.value.operator}`,
+        `当班时长：${duration} 小时`,
+        `开始时间：${new Date(shiftState.value.startTime!).toLocaleString()}`,
+        `结束时间：${endTime.toLocaleString()}`,
+        noteContent.value ? `交班便签：${noteContent.value}` : '',
+        '请在后台查看详细销售报表。'
+      ].filter(Boolean).join('\n')
+      ElMessageBox.alert(`${report}\n\n应收：¥${(shift.expected_cents / 100).toFixed(2)}\n实收：¥${(shift.closing_cents / 100).toFixed(2)}`, '交班报告')
       shiftState.value.isOpen = false
+      shiftState.value.shiftId = null
       shiftState.value.startTime = null
       localStorage.removeItem('pos_shift_state')
       // Clear note
       noteContent.value = ''
       localStorage.removeItem('pos_shift_note')
-    })
+    } catch (error: any) {
+      if (error !== 'cancel' && error !== 'close') ElMessage.error(error.response?.data?.error || '交班失败')
+    }
+  }
+}
+
+const restoreOpenShift = async () => {
+  const deviceId = Number(localStorage.getItem('pos_device_id') || 0)
+  if (!deviceId) return
+  try {
+    const { data: shift } = await axios.get('/operations/shifts/open', { params: { device_id: deviceId } })
+    shiftState.value = { isOpen: true, shiftId: shift.id, startTime: shift.opened_at, operator: currentStaff.value.name || 'Current operator' }
+    localStorage.setItem('pos_shift_state', JSON.stringify(shiftState.value))
+  } catch (error: any) {
+    if (error.response?.status === 404) {
+      shiftState.value = { isOpen: false, shiftId: null, startTime: null, operator: currentStaff.value.name || 'Current operator' }
+      localStorage.removeItem('pos_shift_state')
+    }
   }
 }
 
@@ -486,9 +519,27 @@ const saveNote = () => {
   ElMessage.success('便签已保存')
 }
 
-const handleReprint = () => {
-  ElMessage.info('指令已发送: 重打上一单')
-  // In real app: ipcRenderer.send('print-last')
+const handleReprint = async () => {
+  if (!posDeviceId.value) {
+    ElMessage.warning('Please configure the POS device first')
+    return
+  }
+  try {
+    const { data } = await axios.get('/operations/print-jobs', { params: { device_id: posDeviceId.value, status: 'failed' } })
+    const job = data.data?.[0]
+    if (!job) {
+      ElMessage.info('No failed print job is waiting')
+      return
+    }
+    await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printing' })
+    // @ts-ignore
+    const result = window.api?.printTicket ? await window.api.printTicket({ order_no: job.order_no, ticket_code: job.ticket_code }) : { success: false, message: 'printer bridge is unavailable' }
+    if (!result?.success) throw new Error(result?.message || 'printer failed')
+    await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printed' })
+    ElMessage.success('Reprint completed')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || error.message || 'Reprint failed')
+  }
 }
 
 const handleLogout = () => {
@@ -574,6 +625,10 @@ const clearCart = () => {
 
 const handleCheckout = async () => {
   if (cart.value.length === 0) return
+  if (!shiftState.value.isOpen || !shiftState.value.shiftId || !posDeviceId.value) {
+    ElMessage.warning('Please open a shift on this POS terminal before selling tickets')
+    return
+  }
   try {
     const orderData = {
       contact_name: '窗口散客',
@@ -595,10 +650,24 @@ const handleCheckout = async () => {
 const handlePaymentSuccess = async () => {
     showPayment.value = false
     ElMessage.success('支付成功！正在打印...')
-    // @ts-ignore
-    if (window.api && window.api.printTicket) await window.api.printTicket(currentOrder.value)
-    cart.value = []
-    currentOrder.value = null
+    if (!currentOrder.value || !posDeviceId.value || !shiftState.value.shiftId) return
+    let job: any
+    try {
+      const queued = await axios.post('/operations/print-jobs', { device_id: posDeviceId.value, shift_id: shiftState.value.shiftId, order_no: currentOrder.value.order_no })
+      job = queued.data
+      await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printing' })
+      // @ts-ignore
+      const result = window.api?.printTicket ? await window.api.printTicket(currentOrder.value) : { success: false, message: 'printer bridge is unavailable' }
+      if (!result?.success) throw new Error(result?.message || 'printer failed')
+      await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printed' })
+      cart.value = []
+      currentOrder.value = null
+    } catch (error: any) {
+      if (job) {
+        await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'failed', error: error.message || 'printer failed' }).catch(() => undefined)
+      }
+      ElMessage.error('Payment succeeded but printing failed. The order and print task were retained for retry.')
+    }
 }
 
 const handleVerify = async () => {
@@ -663,7 +732,7 @@ const fetchOrders = async () => {
 
 // --- Lifecycle ---
 let timer: any
-onMounted(() => {
+onMounted(async () => {
   fetchProducts()
   fetchCheckPoints()
   loadSettings()
@@ -677,6 +746,7 @@ onMounted(() => {
           currentStaff.value = JSON.parse(staffStr)
       } catch(e) {}
   }
+  await restoreOpenShift()
   
   window.addEventListener('keydown', (e) => {
     if (e.key === 'F2') { e.preventDefault(); searchInput.value?.focus() }

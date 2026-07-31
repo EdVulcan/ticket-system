@@ -1,0 +1,4 @@
+interface:
+  display_name: "Scenic Ticketing Platform"
+  short_description: "Project guardrails for multi-tenant scenic ticketing"
+  default_prompt: "Use $scenic-ticketing-platform to follow the project domain model and tenant-isolation rules before implementing ticketing changes."

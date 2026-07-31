@@ -7,6 +7,7 @@ import (
 	"ticket-backend/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type TenantController struct {
@@ -48,6 +49,54 @@ func (c *TenantController) Update(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "updated successfully"})
+}
+
+func (c *TenantController) UpdateStatus(ctx *gin.Context) {
+	id, _ := strconv.Atoi(ctx.Param("id"))
+	var body struct {
+		Status string `json:"status" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.UpdateStatusAudited(uint(id), body.Status, platformActorID(ctx), ctx.GetString("role")); err != nil {
+		status := http.StatusInternalServerError
+		if err == gorm.ErrRecordNotFound {
+			status = http.StatusNotFound
+		}
+		ctx.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"message": "tenant status updated"})
+}
+
+func (c *TenantController) SetCapability(ctx *gin.Context) {
+	id, _ := strconv.Atoi(ctx.Param("id"))
+	var body struct {
+		Status string `json:"status" binding:"required"`
+		Reason string `json:"reason"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.SetCapabilityAudited(uint(id), ctx.Param("capability"), body.Status, body.Reason, platformActorID(ctx), ctx.GetString("role")); err != nil {
+		status := http.StatusInternalServerError
+		if err == gorm.ErrRecordNotFound {
+			status = http.StatusNotFound
+		}
+		ctx.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"message": "tenant capability updated"})
+}
+
+func platformActorID(ctx *gin.Context) uint {
+	if id := ctx.GetUint("platform_user_id"); id != 0 {
+		return id
+	}
+	return ctx.GetUint("user_id")
 }
 
 func (c *TenantController) Delete(ctx *gin.Context) {

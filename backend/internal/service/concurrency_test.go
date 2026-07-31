@@ -34,10 +34,14 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	if err := db.AutoMigrate(
-		&model.Tenant{}, &model.CheckPoint{}, &model.TicketRule{}, &model.RuleGroup{}, &model.RuleItem{},
-		&model.Product{}, &model.ProductInventory{}, &model.Order{}, &model.OrderItem{}, &model.Ticket{},
+		&model.Tenant{}, &model.TenantCapability{}, &model.User{}, &model.Staff{}, &model.ScenicArea{}, &model.PlatformUser{}, &model.CheckPoint{}, &model.Device{}, &model.TicketRule{}, &model.RuleGroup{}, &model.RuleItem{},
+		&model.Product{}, &model.ProductOffer{}, &model.SellerListing{}, &model.ProductInventory{}, &model.Order{}, &model.OrderItem{}, &model.Ticket{}, &model.FulfillmentOrder{}, &model.TicketEntitlement{},
 		&model.CheckInRecord{}, &model.DistributorRelationship{}, &model.CapitalAccount{}, &model.TransactionRecord{},
-		&model.Payment{}, &model.PaymentConfig{},
+		&model.LedgerEntry{}, &model.DigitalRefundTask{}, &model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{},
+		&model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{},
+		&model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.TourGroup{}, &model.TourGroupMember{}, &model.TourEntryBatch{},
+		&model.POSShift{}, &model.PrintJob{}, &model.DeviceAlert{},
+		&model.ProductRevision{}, &model.SettlementStatement{}, &model.SettlementLine{}, &model.StaffResourceScope{},
 	); err != nil {
 		panic(err)
 	}
@@ -59,10 +63,13 @@ func resetBusinessData(t *testing.T) {
 	t.Helper()
 	err := model.Write(func(tx *gorm.DB) error {
 		for _, table := range []interface{}{
-			&model.Payment{}, &model.PaymentConfig{},
+			&model.StaffResourceScope{}, &model.User{}, &model.Staff{},
+			&model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{}, &model.LedgerEntry{}, &model.DigitalRefundTask{},
+			&model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{}, &model.TourGroupMember{}, &model.TourGroup{}, &model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.TourEntryBatch{}, &model.POSShift{}, &model.PrintJob{}, &model.DeviceAlert{},
+			&model.ProductRevision{}, &model.SettlementLine{}, &model.SettlementStatement{},
 			&model.CheckInRecord{}, &model.Ticket{}, &model.OrderItem{}, &model.Order{}, &model.ProductInventory{},
-			&model.Product{}, &model.RuleItem{}, &model.RuleGroup{}, &model.TicketRule{}, &model.CheckPoint{},
-			&model.TransactionRecord{}, &model.CapitalAccount{}, &model.DistributorRelationship{}, &model.Tenant{},
+			&model.Product{}, &model.RuleItem{}, &model.RuleGroup{}, &model.TicketRule{}, &model.Device{}, &model.CheckPoint{},
+			&model.TransactionRecord{}, &model.CapitalAccount{}, &model.DistributorRelationship{}, &model.TenantCapability{}, &model.ScenicArea{}, &model.PlatformUser{}, &model.TicketEntitlement{}, &model.FulfillmentOrder{}, &model.SellerListing{}, &model.ProductOffer{}, &model.Tenant{},
 		} {
 			if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(table).Error; err != nil {
 				return err
@@ -73,6 +80,15 @@ func resetBusinessData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reset database: %v", err)
 	}
+}
+
+func verificationDeviceID(t *testing.T, tenantID, checkpointID uint) uint {
+	t.Helper()
+	var device model.Device
+	if err := model.DB.Where("tenant_id = ? AND check_point_id = ?", tenantID, checkpointID).First(&device).Error; err != nil {
+		t.Fatalf("load verification device: %v", err)
+	}
+	return device.ID
 }
 
 func TestConcurrentExternalOrderIsIdempotent(t *testing.T) {
@@ -173,7 +189,8 @@ func TestMultiPersonOrderTicketRemainsActiveUntilBenefitsExhausted(t *testing.T)
 		t.Fatal(err)
 	}
 	service := &TicketService{}
-	if err := service.Verify(ticket.TicketCode, checkpoint.ID, 1, tenantID); err != nil {
+	deviceID := verificationDeviceID(t, tenantID, checkpoint.ID)
+	if err := service.Verify(ticket.TicketCode, checkpoint.ID, deviceID, tenantID); err != nil {
 		t.Fatalf("first admission: %v", err)
 	}
 	if err := model.DB.First(&ticket, ticket.ID).Error; err != nil {
@@ -182,7 +199,7 @@ func TestMultiPersonOrderTicketRemainsActiveUntilBenefitsExhausted(t *testing.T)
 	if ticket.Status != "active" || ticket.CheckInCount != 1 {
 		t.Fatalf("after first admission status=%s count=%d", ticket.Status, ticket.CheckInCount)
 	}
-	if err := service.Verify(ticket.TicketCode, checkpoint.ID, 1, tenantID); err != nil {
+	if err := service.Verify(ticket.TicketCode, checkpoint.ID, deviceID, tenantID); err != nil {
 		t.Fatalf("second admission: %v", err)
 	}
 	if err := model.DB.First(&ticket, ticket.ID).Error; err != nil {
@@ -191,7 +208,7 @@ func TestMultiPersonOrderTicketRemainsActiveUntilBenefitsExhausted(t *testing.T)
 	if ticket.Status != "used" || ticket.CheckInCount != 2 {
 		t.Fatalf("after second admission status=%s count=%d", ticket.Status, ticket.CheckInCount)
 	}
-	if err := service.Verify(ticket.TicketCode, checkpoint.ID, 1, tenantID); !errors.Is(err, ErrTicketUnavailable) {
+	if err := service.Verify(ticket.TicketCode, checkpoint.ID, deviceID, tenantID); !errors.Is(err, ErrTicketUnavailable) {
 		t.Fatalf("third admission error = %v, want unavailable", err)
 	}
 }
@@ -199,7 +216,7 @@ func TestMultiPersonOrderTicketRemainsActiveUntilBenefitsExhausted(t *testing.T)
 func TestCashPaymentUsesStoredAmountAndTenantScope(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
-	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	order := model.Order{TenantID: tenantID, Channel: "online", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
 	if err := (&OrderService{}).Create(&order); err != nil {
 		t.Fatal(err)
 	}
@@ -222,6 +239,439 @@ func TestCashPaymentUsesStoredAmountAndTenantScope(t *testing.T) {
 	}
 }
 
+func TestCashRefundIsTicketScopedAndIdempotent(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{TenantID: tenantID, Channel: "online", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{OrderNo: order.OrderNo, Method: "cash"}
+	if err := (&PaymentService{}).CreatePayment(tenantID, &payment); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_item_id IN (SELECT id FROM order_items WHERE order_id = ?)", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	refundService := &RefundService{}
+	refund, err := refundService.CreateCashRefund(tenantID, order.OrderNo, "REFUND-1", order.TotalAmount, []string{ticket.TicketCode}, "visitor request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate, err := refundService.CreateCashRefund(tenantID, order.OrderNo, "REFUND-1", order.TotalAmount, []string{ticket.TicketCode}, "visitor request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refund.ID != duplicate.ID || refund.Status != "succeeded" {
+		t.Fatalf("refund idempotency IDs=%d/%d status=%s", refund.ID, duplicate.ID, refund.Status)
+	}
+	var storedOrder model.Order
+	if err := model.DB.Where("order_no = ?", order.OrderNo).First(&storedOrder).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedOrder.Status != "refunded" {
+		t.Fatalf("order status=%s, want refunded", storedOrder.Status)
+	}
+	var storedTicket model.Ticket
+	if err := model.DB.First(&storedTicket, ticket.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedTicket.Status != "refunded" {
+		t.Fatalf("ticket status=%s, want refunded", storedTicket.Status)
+	}
+	var storedPayment model.Payment
+	if err := model.DB.First(&storedPayment, payment.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedPayment.RefundedAmount != storedPayment.Amount {
+		t.Fatalf("refunded amount=%v paid=%v", storedPayment.RefundedAmount, storedPayment.Amount)
+	}
+	stats, err := (&ReportService{}).GetSalesStats(tenantID, time.Now().AddDate(0, 0, -1).Format("2006-01-02"), time.Now().Format("2006-01-02"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stats) == 0 || stats[len(stats)-1].RefundedAmount != storedPayment.Amount || stats[len(stats)-1].NetAmount != 0 {
+		t.Fatalf("refund report=%+v, want refunded=%v net=0", stats, storedPayment.Amount)
+	}
+	if _, err := refundService.CreateCashRefund(tenantID, order.OrderNo, "REFUND-2", order.TotalAmount, []string{ticket.TicketCode}, "duplicate"); err == nil {
+		t.Fatal("refunded ticket was refunded again")
+	}
+}
+
+func TestPaymentNotificationCompletesOrderIdempotently(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{
+		TenantID: tenantID,
+		Channel:  "window",
+		Items:    []model.OrderItem{{ProductID: productID, Quantity: 1}},
+	}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{
+		TenantID:  tenantID,
+		PaymentNo: "PAY-NOTIFY-IDEMPOTENT",
+		OrderNo:   order.OrderNo,
+		Amount:    order.TotalAmount,
+		Method:    "wechat",
+		Status:    "pending",
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&payment).Error }); err != nil {
+		t.Fatal(err)
+	}
+
+	service := &PaymentService{}
+	if err := service.CompleteNotification(tenantID, payment.PaymentNo, "wechat", "WX-TXN-1", order.TotalAmount); err != nil {
+		t.Fatalf("first notification: %v", err)
+	}
+	if err := service.CompleteNotification(tenantID, payment.PaymentNo, "wechat", "WX-TXN-1", order.TotalAmount); err != nil {
+		t.Fatalf("duplicate notification: %v", err)
+	}
+	var storedPayment model.Payment
+	if err := model.DB.Where("payment_no = ? AND tenant_id = ?", payment.PaymentNo, tenantID).First(&storedPayment).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedPayment.Status != "paid" || storedPayment.TransactionID != "WX-TXN-1" {
+		t.Fatalf("payment status=%s transaction=%s", storedPayment.Status, storedPayment.TransactionID)
+	}
+	var storedOrder model.Order
+	if err := model.DB.Where("order_no = ? AND tenant_id = ?", order.OrderNo, tenantID).First(&storedOrder).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedOrder.Status != "paid" {
+		t.Fatalf("order status=%s, want paid", storedOrder.Status)
+	}
+}
+
+func TestPaymentNotificationRejectsAmountAndTenantMismatch(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{
+		TenantID:  tenantID,
+		PaymentNo: "PAY-NOTIFY-MISMATCH",
+		OrderNo:   order.OrderNo,
+		Amount:    order.TotalAmount,
+		Method:    "alipay",
+		Status:    "pending",
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&payment).Error }); err != nil {
+		t.Fatal(err)
+	}
+	service := &PaymentService{}
+	if err := service.CompleteNotification(tenantID, payment.PaymentNo, "alipay", "ALI-TXN-1", order.TotalAmount+1); err == nil {
+		t.Fatal("amount mismatch was accepted")
+	}
+	if err := service.CompleteNotification(tenantID+999, payment.PaymentNo, "alipay", "ALI-TXN-1", order.TotalAmount); err == nil {
+		t.Fatal("wrong tenant notification was accepted")
+	}
+	var storedPayment model.Payment
+	if err := model.DB.Where("payment_no = ?", payment.PaymentNo).First(&storedPayment).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedPayment.Status != "pending" {
+		t.Fatalf("payment status=%s, want pending", storedPayment.Status)
+	}
+	var storedOrder model.Order
+	if err := model.DB.Where("order_no = ?", order.OrderNo).First(&storedOrder).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedOrder.Status != "unpaid" {
+		t.Fatalf("order status=%s, want unpaid", storedOrder.Status)
+	}
+}
+
+func TestFailedPaymentNotificationReleasesDistributionReservation(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	order := model.Order{
+		TenantID: scenario.distributorID,
+		Channel:  "window",
+		Items:    []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}},
+	}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{
+		TenantID:  scenario.distributorID,
+		PaymentNo: "PAY-NOTIFY-FAIL",
+		OrderNo:   order.OrderNo,
+		Amount:    order.TotalAmount,
+		Method:    "alipay",
+		Status:    "pending",
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&payment).Error }); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&PaymentService{}).FailNotification(scenario.distributorID, payment.PaymentNo, "alipay", "TRADE_CLOSED"); err != nil {
+		t.Fatalf("failure notification: %v", err)
+	}
+	if err := (&PaymentService{}).FailNotification(scenario.distributorID, payment.PaymentNo, "alipay", "TRADE_CLOSED"); err != nil {
+		t.Fatalf("duplicate failure notification: %v", err)
+	}
+	var storedOrder model.Order
+	if err := model.DB.Where("order_no = ?", order.OrderNo).First(&storedOrder).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedOrder.Status != "cancelled" {
+		t.Fatalf("order status=%s, want cancelled", storedOrder.Status)
+	}
+	var source model.Product
+	if err := model.DB.First(&source, scenario.sourceProductID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if source.DailyStock != 1 {
+		t.Fatalf("supplier stock=%d, want 1 after release", source.DailyStock)
+	}
+	var account model.CapitalAccount
+	if err := model.DB.Where("owner_tenant_id = ? AND manager_tenant_id = ?", scenario.distributorID, scenario.supplierID).First(&account).Error; err != nil {
+		t.Fatal(err)
+	}
+	if account.Balance != 100 || account.UsedCredit != 0 || account.FrozenAmount != 0 {
+		t.Fatalf("account after release balance=%v used_credit=%v frozen=%v", account.Balance, account.UsedCredit, account.FrozenAmount)
+	}
+}
+
+func TestPaymentReconciliationRepairsMissingTaskAfterRestart(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{
+		TenantID:  tenantID,
+		PaymentNo: "PAY-RECOVERY-MISSING-TASK",
+		OrderNo:   order.OrderNo,
+		Amount:    order.TotalAmount,
+		Method:    "wechat",
+		Status:    "pending",
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&payment).Error }); err != nil {
+		t.Fatal(err)
+	}
+	service := &PaymentService{OrderService: &OrderService{}}
+	now := time.Now()
+	if err := service.EnsurePaymentReconciliationTasks(now); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.EnsurePaymentReconciliationTasks(now); err != nil {
+		t.Fatal(err)
+	}
+	var tasks []model.PaymentReconciliationTask
+	if err := model.DB.Where("payment_id = ?", payment.ID).Find(&tasks).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("reconciliation tasks=%d, want 1", len(tasks))
+	}
+	// A payment already completed before the crash is reconciled without any
+	// provider call and its task is closed on the next startup pass.
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&model.Payment{}).Where("id = ?", payment.ID).Update("status", "paid").Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ProcessPaymentReconciliationTasks(context.Background(), now, 1); err != nil {
+		t.Fatal(err)
+	}
+	var task model.PaymentReconciliationTask
+	if err := model.DB.First(&task, tasks[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != "completed" {
+		t.Fatalf("task status=%s, want completed", task.Status)
+	}
+}
+
+func TestPaymentReconciliationBacksOffProviderErrors(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{
+		TenantID:  tenantID,
+		PaymentNo: "PAY-RECOVERY-RETRY",
+		OrderNo:   order.OrderNo,
+		Amount:    order.TotalAmount,
+		Method:    "unsupported",
+		Status:    "pending",
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&payment).Error }); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Create(&model.PaymentReconciliationTask{
+			TenantID: tenantID, PaymentID: payment.ID, PaymentNo: payment.PaymentNo,
+			Status: "pending", NextRunAt: time.Now().Add(-time.Second),
+		}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := &PaymentService{}
+	if _, err := service.ProcessPaymentReconciliationTasks(context.Background(), time.Now(), 1); err != nil {
+		t.Fatal(err)
+	}
+	var task model.PaymentReconciliationTask
+	if err := model.DB.Where("payment_id = ?", payment.ID).First(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != "pending" || task.Attempts != 1 || task.LastError == "" || !task.NextRunAt.After(time.Now()) {
+		t.Fatalf("task retry state status=%s attempts=%d next=%s error=%q", task.Status, task.Attempts, task.NextRunAt, task.LastError)
+	}
+}
+
+func TestTenantLifecycleAndCapabilitiesAreIndependent(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	tenantService := &TenantService{}
+	hashedPassword, err := HashPassword("platform-pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	platformUser := model.PlatformUser{Username: "platform-admin", Password: hashedPassword, Role: "platform_admin", Status: "active"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&platformUser).Error }); err != nil {
+		t.Fatal(err)
+	}
+	if token, user, err := (&AuthService{}).PlatformLogin("platform-admin", "platform-pass"); err != nil || token == "" || user.ID != platformUser.ID {
+		t.Fatalf("platform login token=%q user=%v err=%v", token, user, err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Model(&platformUser).Update("status", "frozen").Error }); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := (&AuthService{}).PlatformLogin("platform-admin", "platform-pass"); err == nil {
+		t.Fatal("frozen platform user was allowed to login")
+	}
+	if err := tenantService.SetCapability(tenantID, "supplier", "active", "verified supplier"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tenantService.SetCapability(tenantID, "distributor", "active", "verified distributor"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tenantService.UpdateStatus(tenantID, "frozen"); err != nil {
+		t.Fatal(err)
+	}
+	var tenant model.Tenant
+	if err := model.DB.First(&tenant, tenantID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if tenant.Status != "frozen" {
+		t.Fatalf("tenant status=%s, want frozen", tenant.Status)
+	}
+	var capabilities []model.TenantCapability
+	if err := model.DB.Where("tenant_id = ?", tenantID).Order("capability").Find(&capabilities).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(capabilities) != 2 || capabilities[0].Status != "active" || capabilities[1].Status != "active" {
+		t.Fatalf("capabilities=%+v, want independent active capabilities", capabilities)
+	}
+	if err := tenantService.SetCapability(tenantID, "distributor", "suspended", "agreement expired"); err != nil {
+		t.Fatal(err)
+	}
+	var distributorCapability model.TenantCapability
+	if err := model.DB.Where("tenant_id = ? AND capability = ?", tenantID, "distributor").First(&distributorCapability).Error; err != nil {
+		t.Fatal(err)
+	}
+	if distributorCapability.Status != "suspended" {
+		t.Fatalf("distributor capability=%s, want suspended", distributorCapability.Status)
+	}
+}
+
+func TestTicketCannotCrossScenicAreaWithinSameSupplier(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	var firstArea, secondArea model.ScenicArea
+	var firstCheckpoint model.CheckPoint
+	if err := model.Write(func(tx *gorm.DB) error {
+		firstArea = model.ScenicArea{TenantID: tenantID, Code: "A", Name: "Park A", Status: "active"}
+		if err := tx.Create(&firstArea).Error; err != nil {
+			return err
+		}
+		secondArea = model.ScenicArea{TenantID: tenantID, Code: "B", Name: "Park B", Status: "active"}
+		if err := tx.Create(&secondArea).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.CheckPoint{}).Where("tenant_id = ?", tenantID).First(&firstCheckpoint).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&firstCheckpoint).Update("scenic_area_id", firstArea.ID).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.Product{}).Where("id = ?", productID).Update("scenic_area_id", firstArea.ID).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	secondCheckpoint := model.CheckPoint{Name: "Park B Gate", TenantID: tenantID, ScenicAreaID: secondArea.ID}
+	var secondDevice model.Device
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create(&secondCheckpoint).Error; err != nil {
+			return err
+		}
+		checkpointID := secondCheckpoint.ID
+		secondDevice = model.Device{Name: "Park B Device", SerialNumber: fmt.Sprintf("PARK-B-%d", time.Now().UnixNano()), Type: "gate", Status: "online", TenantID: tenantID, ScenicAreaID: secondArea.ID, CheckPointID: &checkpointID, AuthKeyHash: hashDeviceKey("test-device-key")}
+		return tx.Create(&secondDevice).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_item_id IN (SELECT id FROM order_items WHERE order_id = ?)", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ticket.FulfillmentScenicAreaID != firstArea.ID {
+		t.Fatalf("ticket scenic area=%d, want %d", ticket.FulfillmentScenicAreaID, firstArea.ID)
+	}
+	if err := (&TicketService{}).Verify(ticket.TicketCode, secondCheckpoint.ID, secondDevice.ID, tenantID); !errors.Is(err, ErrInvalidTicket) {
+		t.Fatalf("cross-area verification error=%v, want invalid ticket", err)
+	}
+}
+
+func TestScenicAreaServiceKeepsTenantScopeAndProtectsReferencedAreas(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	otherTenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	service := &ScenicAreaService{}
+	area := &model.ScenicArea{Code: "NORTH", Name: "North Park"}
+	if err := service.Create(tenantID, area); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Update(area.ID, otherTenantID, &model.ScenicArea{Code: "NORTH", Name: "Hijack", Status: "active"}); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("cross-tenant area update error=%v, want not found", err)
+	}
+	if err := service.Delete(area.ID, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint model.CheckPoint
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&checkpoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	areaWithReference := &model.ScenicArea{Code: "SOUTH", Name: "South Park"}
+	if err := service.Create(tenantID, areaWithReference); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&checkpoint).Update("scenic_area_id", areaWithReference.ID).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Delete(areaWithReference.ID, tenantID); err == nil {
+		t.Fatal("referenced scenic area was deleted")
+	}
+}
+
 func seedSellableProduct(t *testing.T, stockType string, stock int) (uint, uint) {
 	t.Helper()
 	var tenantID, productID uint
@@ -230,8 +680,19 @@ func seedSellableProduct(t *testing.T, stockType string, stock int) (uint, uint)
 		if err := tx.Create(&tenant).Error; err != nil {
 			return err
 		}
-		checkpoint := model.CheckPoint{Name: "Main Gate", TenantID: tenant.ID}
+		if err := tx.Create(&model.TenantCapability{TenantID: tenant.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
+			return err
+		}
+		area := model.ScenicArea{TenantID: tenant.ID, Code: fmt.Sprintf("AREA-%d", tenant.ID), Name: "Main Park", Status: "active"}
+		if err := tx.Create(&area).Error; err != nil {
+			return err
+		}
+		checkpoint := model.CheckPoint{Name: "Main Gate", TenantID: tenant.ID, ScenicAreaID: area.ID}
 		if err := tx.Create(&checkpoint).Error; err != nil {
+			return err
+		}
+		checkpointID := checkpoint.ID
+		if err := tx.Create(&model.Device{Name: "Main Gate Device", SerialNumber: fmt.Sprintf("DEV-%d", time.Now().UnixNano()), Type: "gate", Status: "online", TenantID: tenant.ID, ScenicAreaID: area.ID, CheckPointID: &checkpointID, AuthKeyHash: hashDeviceKey("test-device-key")}).Error; err != nil {
 			return err
 		}
 		rule := model.TicketRule{Name: "Single Entry", TenantID: tenant.ID, ValidityType: "date"}
@@ -247,7 +708,7 @@ func seedSellableProduct(t *testing.T, stockType string, stock int) (uint, uint)
 		}
 		product := model.Product{
 			Name: "Adult Ticket", Price: 99.50, SettlementPrice: 60,
-			TenantID: tenant.ID, RuleID: rule.ID, Type: "online", Status: "online",
+			TenantID: tenant.ID, ScenicAreaID: area.ID, RuleID: rule.ID, Type: "online", Status: "online",
 			ValidityType: "date", StockType: stockType, DailyStock: stock, CodeMode: "ticket",
 		}
 		if err := tx.Omit("Rule").Create(&product).Error; err != nil {
@@ -339,9 +800,10 @@ func TestConcurrentVerificationConsumesOneAdmission(t *testing.T) {
 	var successes atomic.Int32
 	var lockErrors atomic.Int32
 	var wait sync.WaitGroup
+	deviceID := verificationDeviceID(t, tenantID, checkpoint.ID)
 	for i := 0; i < 20; i++ {
 		wait.Add(1)
-		go func(deviceID uint) {
+		go func() {
 			defer wait.Done()
 			err := (&TicketService{}).Verify(ticket.TicketCode, checkpoint.ID, deviceID, tenantID)
 			if err == nil {
@@ -351,7 +813,7 @@ func TestConcurrentVerificationConsumesOneAdmission(t *testing.T) {
 			} else if !errors.Is(err, ErrTicketUnavailable) && !errors.Is(err, ErrPointLimitReached) {
 				t.Errorf("unexpected verification error: %v", err)
 			}
-		}(uint(i + 1))
+		}()
 	}
 	wait.Wait()
 	if successes.Load() != 1 {
@@ -366,5 +828,582 @@ func TestConcurrentVerificationConsumesOneAdmission(t *testing.T) {
 	}
 	if successfulRecords != 1 {
 		t.Fatalf("successful check-in records = %d, want 1", successfulRecords)
+	}
+}
+
+type distributionScenario struct {
+	supplierID           uint
+	distributorID        uint
+	sourceProductID      uint
+	supplierCheckpointID uint
+	supplierDeviceID     uint
+	listingID            uint
+}
+
+func seedDistributionScenario(t *testing.T) distributionScenario {
+	t.Helper()
+	var scenario distributionScenario
+	err := model.Write(func(tx *gorm.DB) error {
+		supplier := model.Tenant{Name: "Supplier A", SystemCode: fmt.Sprintf("SUP-%d", time.Now().UnixNano()), SecretKey: "supplier-secret"}
+		if err := tx.Create(&supplier).Error; err != nil {
+			return err
+		}
+		distributor := model.Tenant{Name: "Distributor D", SystemCode: fmt.Sprintf("DIST-%d", time.Now().UnixNano()), SecretKey: "distributor-secret"}
+		if err := tx.Create(&distributor).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&model.TenantCapability{TenantID: supplier.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&model.TenantCapability{TenantID: distributor.ID, Capability: "distributor", Status: "active"}).Error; err != nil {
+			return err
+		}
+		area := model.ScenicArea{TenantID: supplier.ID, Code: fmt.Sprintf("SUP-AREA-%d", supplier.ID), Name: "Supplier Park", Status: "active"}
+		if err := tx.Create(&area).Error; err != nil {
+			return err
+		}
+		checkpoint := model.CheckPoint{Name: "Supplier Gate", TenantID: supplier.ID, ScenicAreaID: area.ID}
+		if err := tx.Create(&checkpoint).Error; err != nil {
+			return err
+		}
+		checkpointID := checkpoint.ID
+		device := model.Device{Name: "Supplier Gate Device", SerialNumber: fmt.Sprintf("SUP-DEV-%d", time.Now().UnixNano()), Type: "gate", Status: "online", TenantID: supplier.ID, ScenicAreaID: area.ID, CheckPointID: &checkpointID, AuthKeyHash: hashDeviceKey("test-device-key")}
+		if err := tx.Create(&device).Error; err != nil {
+			return err
+		}
+		rule := model.TicketRule{Name: "Supplier Rule", TenantID: supplier.ID, ValidityType: "date"}
+		if err := tx.Create(&rule).Error; err != nil {
+			return err
+		}
+		group := model.RuleGroup{RuleID: rule.ID, GroupName: "Admission", MaxTotalCheckIn: 1}
+		if err := tx.Create(&group).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&model.RuleItem{GroupID: group.ID, CheckPointID: checkpoint.ID, MaxPerCheckIn: 1}).Error; err != nil {
+			return err
+		}
+		source := model.Product{
+			Name: "Supplier Ticket", Price: 100, SettlementPrice: 60,
+			TenantID: supplier.ID, ScenicAreaID: area.ID, RuleID: rule.ID, Type: "online", Status: "online",
+			IsDistributable: true, ValidityType: "date", StockType: "total", DailyStock: 1, CodeMode: "ticket",
+		}
+		if err := tx.Omit("Rule").Create(&source).Error; err != nil {
+			return err
+		}
+		relationship := model.DistributorRelationship{AgentTenantID: distributor.ID, SupplierTenantID: supplier.ID, Status: "active"}
+		if err := tx.Create(&relationship).Error; err != nil {
+			return err
+		}
+		account := model.CapitalAccount{OwnerTenantID: distributor.ID, ManagerTenantID: supplier.ID, Balance: 100, Status: "active"}
+		if err := tx.Create(&account).Error; err != nil {
+			return err
+		}
+		scenario.supplierID = supplier.ID
+		scenario.distributorID = distributor.ID
+		scenario.sourceProductID = source.ID
+		scenario.supplierCheckpointID = checkpoint.ID
+		scenario.supplierDeviceID = device.ID
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed distribution scenario: %v", err)
+	}
+	if _, err := (&DistributionService{}).CreateOffer(scenario.supplierID, scenario.distributorID, scenario.sourceProductID, 60, 0, "window,online,ota", nil, nil); err != nil {
+		t.Fatalf("create supplier offer: %v", err)
+	}
+	if err := (&DistributionService{}).ImportProduct(scenario.distributorID, scenario.sourceProductID, "Distributed Ticket", 80, "online"); err != nil {
+		t.Fatalf("import distributed product: %v", err)
+	}
+	var listing model.Product
+	if err := model.DB.Where("tenant_id = ? AND source_product_id = ?", scenario.distributorID, scenario.sourceProductID).First(&listing).Error; err != nil {
+		t.Fatalf("load imported listing: %v", err)
+	}
+	if listing.ProductOfferID == 0 {
+		t.Fatal("imported listing has no server-owned product offer")
+	}
+	scenario.listingID = listing.ID
+	return scenario
+}
+
+func TestDistributedOrderVerifiesAtSupplierOnly(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	var listingRule model.TicketRule
+	if err := model.DB.Preload("Groups.Items").Where("id = (SELECT rule_id FROM products WHERE id = ?)", scenario.listingID).First(&listingRule).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(listingRule.Groups) != 0 {
+		t.Fatalf("distributed listing copied %d supplier rule groups", len(listingRule.Groups))
+	}
+
+	order := model.Order{TenantID: scenario.distributorID, Channel: "window", ContactName: "Visitor", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatalf("create distributed order: %v", err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, scenario.distributorID); err != nil {
+		t.Fatal(err)
+	}
+	var item model.OrderItem
+	if err := model.DB.Where("order_id = ?", order.ID).First(&item).Error; err != nil {
+		t.Fatal(err)
+	}
+	if item.FulfillmentProductID != scenario.sourceProductID || item.FulfillmentTenantID != scenario.supplierID {
+		t.Fatalf("order fulfillment snapshot = %d/%d, want %d/%d", item.FulfillmentProductID, item.FulfillmentTenantID, scenario.sourceProductID, scenario.supplierID)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_item_id = ?", item.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ticket.TenantID != scenario.distributorID || ticket.FulfillmentTenantID != scenario.supplierID {
+		t.Fatalf("ticket ownership = sales %d/fulfillment %d", ticket.TenantID, ticket.FulfillmentTenantID)
+	}
+	var fulfillment model.FulfillmentOrder
+	if err := model.DB.Where("sales_order_id = ? AND supplier_tenant_id = ?", order.ID, scenario.supplierID).First(&fulfillment).Error; err != nil {
+		t.Fatal(err)
+	}
+	if fulfillment.Status != "paid" || fulfillment.SalesTenantID != scenario.distributorID {
+		t.Fatalf("fulfillment status=%s sales_tenant=%d", fulfillment.Status, fulfillment.SalesTenantID)
+	}
+	var entitlement model.TicketEntitlement
+	if err := model.DB.Where("ticket_id = ?", ticket.ID).First(&entitlement).Error; err != nil {
+		t.Fatal(err)
+	}
+	if entitlement.SupplierTenantID != scenario.supplierID || entitlement.SalesTenantID != scenario.distributorID {
+		t.Fatalf("entitlement ownership sales=%d supplier=%d", entitlement.SalesTenantID, entitlement.SupplierTenantID)
+	}
+
+	if err := (&TicketService{}).Verify(ticket.TicketCode, scenario.supplierCheckpointID, scenario.supplierDeviceID, scenario.supplierID); err != nil {
+		t.Fatalf("supplier checkpoint rejected distributed ticket: %v", err)
+	}
+	if err := (&TicketService{}).Verify(ticket.TicketCode, scenario.supplierCheckpointID, scenario.supplierDeviceID, scenario.distributorID); err == nil {
+		t.Fatal("distributor tenant verified supplier ticket")
+	}
+
+	var source model.Product
+	if err := model.DB.First(&source, scenario.sourceProductID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if source.DailyStock != 0 {
+		t.Fatalf("supplier stock = %d, want 0", source.DailyStock)
+	}
+}
+
+func TestSoldTicketUsesRuleSnapshotAfterProductRetirement(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	order := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, scenario.distributorID); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	var item model.OrderItem
+	if err := model.DB.Where("order_id = ?", order.ID).First(&item).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Where("order_item_id = ?", item.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ticket.RuleSnapshot == "" {
+		t.Fatal("sold ticket has no rule snapshot")
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Where("id = ?", scenario.sourceProductID).Delete(&model.Product{}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&TicketService{}).Verify(ticket.TicketCode, scenario.supplierCheckpointID, scenario.supplierDeviceID, scenario.supplierID); err != nil {
+		t.Fatalf("snapshot ticket failed after source product retirement: %v", err)
+	}
+}
+
+func TestDistributedListingCannotChangeSettlementPrice(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	var listing model.Product
+	if err := model.DB.First(&listing, scenario.listingID).Error; err != nil {
+		t.Fatal(err)
+	}
+	listing.SettlementPrice = 0
+	if err := (&ProductService{}).Update(listing.ID, scenario.distributorID, &listing, &model.TicketRule{}); err != nil {
+		t.Fatalf("update distributed listing: %v", err)
+	}
+	if err := model.DB.First(&listing, scenario.listingID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if listing.SettlementPrice != 60 {
+		t.Fatalf("listing settlement price = %v, want supplier price 60", listing.SettlementPrice)
+	}
+	order := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatalf("create order after settlement tamper: %v", err)
+	}
+	var account model.CapitalAccount
+	if err := model.DB.Where("owner_tenant_id = ? AND manager_tenant_id = ?", scenario.distributorID, scenario.supplierID).First(&account).Error; err != nil {
+		t.Fatal(err)
+	}
+	if account.Balance != 40 {
+		t.Fatalf("supplier-managed account balance = %v, want 40", account.Balance)
+	}
+	var item model.OrderItem
+	if err := model.DB.Where("order_id = ?", order.ID).First(&item).Error; err != nil {
+		t.Fatal(err)
+	}
+	if item.SettlementPrice != 60 {
+		t.Fatalf("order settlement price = %v, want 60", item.SettlementPrice)
+	}
+}
+
+func TestDistributedCancellationReleasesSupplierStockAndFunds(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	order := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatalf("create distributed order: %v", err)
+	}
+	if err := (&OrderService{}).Cancel(order.OrderNo, scenario.distributorID); err != nil {
+		t.Fatalf("cancel distributed order: %v", err)
+	}
+	var source model.Product
+	if err := model.DB.First(&source, scenario.sourceProductID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if source.DailyStock != 1 {
+		t.Fatalf("supplier stock after cancellation = %d, want 1", source.DailyStock)
+	}
+	var account model.CapitalAccount
+	if err := model.DB.Where("owner_tenant_id = ? AND manager_tenant_id = ?", scenario.distributorID, scenario.supplierID).First(&account).Error; err != nil {
+		t.Fatal(err)
+	}
+	if account.Balance != 100 || account.UsedCredit != 0 {
+		t.Fatalf("supplier-managed account after cancellation = balance %v credit %v, want 100/0", account.Balance, account.UsedCredit)
+	}
+	var storedOrder model.Order
+	if err := model.DB.Where("order_no = ?", order.OrderNo).First(&storedOrder).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedOrder.Status != "cancelled" {
+		t.Fatalf("order status after cancellation = %s, want cancelled", storedOrder.Status)
+	}
+}
+
+func TestExpiredUnpaidOrderReleasesReservationExactlyOnce(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	order := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		past := time.Now().Add(-time.Minute)
+		return tx.Model(&model.Order{}).Where("id = ?", order.ID).Update("expires_at", past).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := &OrderService{}
+	count, err := service.ExpireUnpaid(time.Now())
+	if err != nil || count != 1 {
+		t.Fatalf("expired order count=%d err=%v, want 1/nil", count, err)
+	}
+	count, err = service.ExpireUnpaid(time.Now().Add(time.Minute))
+	if err != nil || count != 0 {
+		t.Fatalf("second expiry count=%d err=%v, want 0/nil", count, err)
+	}
+	var source model.Product
+	if err := model.DB.First(&source, scenario.sourceProductID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if source.DailyStock != 1 {
+		t.Fatalf("supplier stock after expiry = %d, want 1", source.DailyStock)
+	}
+	var account model.CapitalAccount
+	if err := model.DB.Where("owner_tenant_id = ? AND manager_tenant_id = ?", scenario.distributorID, scenario.supplierID).First(&account).Error; err != nil {
+		t.Fatal(err)
+	}
+	if account.Balance != 100 {
+		t.Fatalf("account balance after expiry = %v, want 100", account.Balance)
+	}
+}
+
+func TestExpiredReservationReleasesAfterListingAndSourceRetirement(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	order := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Where("id = ?", scenario.listingID).Delete(&model.Product{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("id = ?", scenario.sourceProductID).Delete(&model.Product{}).Error; err != nil {
+			return err
+		}
+		past := time.Now().Add(-time.Minute)
+		return tx.Model(&model.Order{}).Where("id = ?", order.ID).Update("expires_at", past).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := (&OrderService{}).ExpireUnpaid(time.Now()); err != nil || count != 1 {
+		t.Fatalf("expired order count=%d err=%v, want 1/nil", count, err)
+	}
+	var account model.CapitalAccount
+	if err := model.DB.Where("owner_tenant_id = ? AND manager_tenant_id = ?", scenario.distributorID, scenario.supplierID).First(&account).Error; err != nil {
+		t.Fatal(err)
+	}
+	if account.Balance != 100 {
+		t.Fatalf("account balance after retired listing release=%v, want 100", account.Balance)
+	}
+}
+
+func TestDistributedOrderRechecksSupplierAuthorization(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&model.DistributorRelationship{}).
+			Where("agent_tenant_id = ? AND supplier_tenant_id = ?", scenario.distributorID, scenario.supplierID).
+			Update("status", "suspended").Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err == nil {
+		t.Fatal("order succeeded after supplier relationship was suspended")
+	}
+	var source model.Product
+	if err := model.DB.First(&source, scenario.sourceProductID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if source.DailyStock != 1 {
+		t.Fatalf("supplier stock after rejected order = %d, want 1", source.DailyStock)
+	}
+}
+
+func TestGenericProductCannotForgeFulfillmentSource(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	product := model.Product{
+		Name: "Forged", Price: 1, SettlementPrice: 1, TenantID: tenantID,
+		Type: "online", Status: "online", SourceProductID: 999, SourceTenantID: tenantID + 1,
+		ValidityType: "date", StockType: "unlimited", CodeMode: "ticket",
+	}
+	rule := model.TicketRule{Name: "Forged Rule", TenantID: tenantID}
+	if err := (&ProductService{}).Create(&product, &rule); err == nil {
+		t.Fatal("forged fulfillment source was accepted")
+	}
+}
+
+func TestReportsRetainCompletedOrders(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	first := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	second := model.Order{TenantID: tenantID, Channel: "ota", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&first); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).Create(&second); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(first.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(second.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&model.Order{}).Where("order_no = ?", first.OrderNo).Update("status", "completed").Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	end := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	stats, err := (&ReportService{}).GetSalesStats(tenantID, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var orders int
+	var amount float64
+	for _, stat := range stats {
+		orders += stat.OrderCount
+		amount += stat.TotalAmount
+	}
+	if orders != 2 || amount != 199 {
+		t.Fatalf("report orders=%d amount=%v, want 2/199", orders, amount)
+	}
+}
+
+func TestTenantCapabilityFailsClosedForSupplierOperations(t *testing.T) {
+	resetBusinessData(t)
+	tenant := model.Tenant{Name: "Capability Tenant", SystemCode: "CAP-T", SecretKey: "secret", Status: "active"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&tenant).Error }); err != nil {
+		t.Fatal(err)
+	}
+	service := &ScenicAreaService{}
+	createArea := func(code string) error {
+		return service.Create(tenant.ID, &model.ScenicArea{Code: code, Name: code})
+	}
+	if err := createArea("MISSING"); !errors.Is(err, ErrCapabilityInactive) {
+		t.Fatalf("missing capability error=%v", err)
+	}
+	capability := model.TenantCapability{TenantID: tenant.ID, Capability: "supplier", Status: "pending"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&capability).Error }); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []string{"pending", "suspended"} {
+		if err := model.DB.Model(&capability).Updates(map[string]interface{}{"status": status, "expires_at": nil}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := createArea(strings.ToUpper(status)); !errors.Is(err, ErrCapabilityInactive) {
+			t.Fatalf("%s capability error=%v", status, err)
+		}
+	}
+	expired := time.Now().Add(-time.Minute)
+	if err := model.DB.Model(&capability).Updates(map[string]interface{}{"status": "active", "expires_at": expired}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := createArea("EXPIRED"); !errors.Is(err, ErrCapabilityInactive) {
+		t.Fatalf("expired capability error=%v", err)
+	}
+	future := time.Now().Add(time.Hour)
+	if err := model.DB.Model(&capability).Update("expires_at", future).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := createArea("ACTIVE"); err != nil {
+		t.Fatalf("active capability rejected: %v", err)
+	}
+}
+
+func TestCheckpointRequiresUnambiguousScenicArea(t *testing.T) {
+	resetBusinessData(t)
+	tenant := model.Tenant{Name: "Scenic Boundary Tenant", SystemCode: "SCENIC-T", SecretKey: "secret", Status: "active"}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create(&tenant).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.TenantCapability{TenantID: tenant.ID, Capability: "supplier", Status: "active"}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	checkpointService := &CheckPointService{}
+	if err := checkpointService.Create(&model.CheckPoint{Name: "No Area", TenantID: tenant.ID}); err == nil {
+		t.Fatal("checkpoint without an active scenic area was created")
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create(&model.ScenicArea{TenantID: tenant.ID, Code: "A", Name: "A", Status: "active"}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.ScenicArea{TenantID: tenant.ID, Code: "B", Name: "B", Status: "active"}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkpointService.Create(&model.CheckPoint{Name: "Ambiguous", TenantID: tenant.ID}); err == nil {
+		t.Fatal("checkpoint with ambiguous scenic area was created")
+	}
+}
+
+func TestVerificationRequiresOwnedDeviceAndNonzeroScenicArea(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint model.CheckPoint
+	var ticket model.Ticket
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&checkpoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	deviceID := verificationDeviceID(t, tenantID, checkpoint.ID)
+	if err := (&TicketService{}).Verify(ticket.TicketCode, checkpoint.ID, 0, tenantID); !errors.Is(err, ErrAccessDenied) {
+		t.Fatalf("missing device error=%v", err)
+	}
+	if err := (&TicketService{}).Verify(ticket.TicketCode, checkpoint.ID, deviceID+999999, tenantID); !errors.Is(err, ErrAccessDenied) {
+		t.Fatalf("foreign device error=%v", err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.Ticket{}).Where("id = ?", ticket.ID).Updates(map[string]interface{}{"scenic_area_id": 0, "fulfillment_scenic_area_id": 0}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.OrderItem{}).Where("id = ?", ticket.OrderItemID).Update("fulfillment_scenic_area_id", 0).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&TicketService{}).Verify(ticket.TicketCode, checkpoint.ID, deviceID, tenantID); !errors.Is(err, ErrInvalidTicket) {
+		t.Fatalf("zero scenic ticket error=%v", err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.Ticket{}).Where("id = ?", ticket.ID).Updates(map[string]interface{}{"scenic_area_id": checkpoint.ScenicAreaID, "fulfillment_scenic_area_id": checkpoint.ScenicAreaID}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.OrderItem{}).Where("id = ?", ticket.OrderItemID).Update("fulfillment_scenic_area_id", checkpoint.ScenicAreaID).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&TicketService{}).Verify(ticket.TicketCode, checkpoint.ID, deviceID, tenantID); err != nil {
+		t.Fatalf("valid device verification failed: %v", err)
+	}
+	var record model.CheckInRecord
+	if err := model.DB.Where("ticket_id = ? AND result = ?", ticket.ID, "success").First(&record).Error; err != nil {
+		t.Fatal(err)
+	}
+	if record.ScenicAreaID != checkpoint.ScenicAreaID {
+		t.Fatalf("check-in scenic area=%d, want %d", record.ScenicAreaID, checkpoint.ScenicAreaID)
+	}
+}
+
+func TestPendingProviderPaymentSurvivesOrderExpiryAndLateSuccess(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "total", 1)
+	order := model.Order{TenantID: tenantID, Channel: "online", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{TenantID: tenantID, OrderNo: order.OrderNo, PaymentNo: "PAY-LATE-SUCCESS", Method: "wechat", PayType: "cscanb", Amount: order.TotalAmount, Status: "pending"}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create(&payment).Error; err != nil {
+			return err
+		}
+		return tx.Model(&order).Update("expires_at", time.Now().Add(-time.Minute)).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	count, err := (&OrderService{}).ExpireUnpaid(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expired pending-payment orders=%d, want 0", count)
+	}
+	if err := (&PaymentService{}).CompleteNotification(tenantID, payment.PaymentNo, payment.Method, "WX-LATE", payment.Amount); err != nil {
+		t.Fatalf("late payment callback failed: %v", err)
+	}
+	if err := model.DB.First(&order, order.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if order.Status != "paid" {
+		t.Fatalf("late-success order status=%s", order.Status)
+	}
+	var product model.Product
+	if err := model.DB.First(&product, productID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if product.DailyStock != 0 {
+		t.Fatalf("reserved stock was released: %d", product.DailyStock)
+	}
+}
+
+func TestMoneyCentsRoundsAtCentBoundary(t *testing.T) {
+	for value, want := range map[float64]int64{0.29: 29, 1.01: 101, 12.34: 1234, 99.99: 9999} {
+		if got := moneyCents(value); got != want {
+			t.Fatalf("moneyCents(%v)=%d, want %d", value, got, want)
+		}
 	}
 }

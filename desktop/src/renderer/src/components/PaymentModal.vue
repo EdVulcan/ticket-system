@@ -64,7 +64,7 @@ import { ElMessage } from 'element-plus'
 import QRCode from 'qrcode'
 import axios from 'axios'
 
-const props = defineProps<{ amount: number; orderNo: string }>()
+const props = defineProps<{ amount: number; orderNo: string; shiftId: number; deviceId: number }>()
 const emit = defineEmits<{ success: [] }>()
 
 const methods = [
@@ -121,7 +121,9 @@ const doPay = async () => {
       order_no: props.orderNo,
       method,
       pay_type: isScan ? 'bscanc' : selectedMethod.value === 'cash' ? 'cash' : 'cscanb',
-      auth_code: isScan ? authCode.value.trim() : ''
+      auth_code: isScan ? authCode.value.trim() : '',
+      shift_id: props.shiftId,
+      device_id: props.deviceId
     })
     const payment = response.data
     if (payment.status === 'paid') {

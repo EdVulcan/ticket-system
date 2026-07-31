@@ -11,6 +11,11 @@ type AuthController struct {
 	Service service.AuthService
 }
 
+type PlatformLoginRequest struct {
+	Username string `json:"username" binding:"required"`
+	Password string `json:"password" binding:"required"`
+}
+
 type LoginRequest struct {
 	SystemCode string `json:"system_code" binding:"required"`
 	Username   string `json:"username" binding:"required"`
@@ -33,11 +38,13 @@ func (c *AuthController) Login(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
-			"id":          user.ID,
-			"username":    user.Username,
-			"role":        user.Role,
-			"system_code": user.Tenant.SystemCode,
-			"tenant_name": user.Tenant.Name,
+			"id":           user.ID,
+			"username":     user.Username,
+			"role":         user.Role,
+			"system_code":  user.Tenant.SystemCode,
+			"tenant_name":  user.Tenant.Name,
+			"scope":        "tenant",
+			"capabilities": user.Tenant.Capabilities,
 		},
 	})
 }
@@ -70,4 +77,18 @@ func (c *AuthController) StaffLogin(ctx *gin.Context) {
 			"roles":      staff.Roles,
 		},
 	})
+}
+
+func (c *AuthController) PlatformLogin(ctx *gin.Context) {
+	var req PlatformLoginRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	token, user, err := c.Service.PlatformLogin(req.Username, req.Password)
+	if err != nil {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"token": token, "user": gin.H{"id": user.ID, "username": user.Username, "role": user.Role, "scope": "platform"}})
 }

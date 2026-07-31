@@ -44,8 +44,7 @@
         </el-form-item>
         <el-form-item label="角色">
           <el-select v-model="form.role" class="w-full">
-            <el-option label="普通管理员 (Sub-Admin)" value="sub_admin" />
-            <el-option label="财务 (Finance)" value="finance" />
+            <el-option label="租户管理员" value="admin" />
           </el-select>
         </el-form-item>
       </el-form>
@@ -70,14 +69,13 @@ const dialogVisible = ref(false)
 
 const roleMap: Record<string, string> = {
   admin: '超级管理员 (主)',
-  sub_admin: '普通管理员',
-  finance: '财务专员'
+  staff: '员工'
 }
 
 const form = reactive({
   username: '',
   password: '',
-  role: 'sub_admin'
+  role: 'admin'
 })
 
 const currentUser = ref<any>({})
@@ -111,7 +109,7 @@ const handleCreate = async () => {
     // Reset form
     form.username = ''
     form.password = ''
-    form.role = 'sub_admin'
+    form.role = 'admin'
   } catch (error: any) {
     ElMessage.error(error.response?.data?.error || '创建失败')
   }

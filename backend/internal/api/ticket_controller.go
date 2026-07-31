@@ -25,6 +25,14 @@ func (c *TicketController) Verify(ctx *gin.Context) {
 	}
 
 	tenantID, _ := ctx.Get("tenant_id")
+	if err := service.RequireStaffResource(tenantID.(uint), ctx.GetUint("user_id"), ctx.GetString("role"), "checkpoint", req.CheckPointID); err != nil {
+		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
+	if err := service.RequireStaffResource(tenantID.(uint), ctx.GetUint("user_id"), ctx.GetString("role"), "device", req.DeviceID); err != nil {
+		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
 	if err := c.Service.Verify(req.Code, req.CheckPointID, req.DeviceID, tenantID.(uint)); err != nil {
 		// Return 400 for business logic errors (invalid ticket, expired, etc.)
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

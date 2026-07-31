@@ -53,7 +53,7 @@ const handleLogin = async () => {
       loading.value = true
       try {
         // Use full URL for Electron dev or configure proxy
-        const res = await axios.post('http://127.0.0.1:8080/api/v1/auth/staff/login', form)
+        const res = await axios.post(`${import.meta.env.VITE_API_URL || 'http://127.0.0.1:8080/api/v1'}/auth/staff/login`, form)
         const { token, staff } = res.data
         sessionStorage.setItem('token', token)
         sessionStorage.setItem('staff', JSON.stringify(staff))

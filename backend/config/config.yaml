@@ -25,6 +25,9 @@ bootstrap:
   admin_username: "admin"
   # Only used when the database has no users. Set through the environment.
   admin_password: ""
+  platform_username: "platform_admin"
+  # Independent from the tenant administrator; set through the environment.
+  platform_password: ""
 
 backup:
   directory: "data/backups"

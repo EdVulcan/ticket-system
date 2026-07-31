@@ -67,8 +67,16 @@ func OTASignMiddleware() gin.HandlerFunc {
 
 		// 2. Find Tenant
 		var tenant model.Tenant
-		if err := model.DB.Where("system_code = ?", appKey).First(&tenant).Error; err != nil {
+		if err := model.DB.Where("system_code = ? AND status = ?", appKey, "active").First(&tenant).Error; err != nil {
 			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid app_key"})
+			return
+		}
+		var capabilityCount int64
+		if err := model.DB.Model(&model.TenantCapability{}).
+			Where("tenant_id = ? AND capability IN ? AND status = ?", tenant.ID, []string{"supplier", "distributor"}, "active").
+			Where("expires_at IS NULL OR expires_at > ?", time.Now()).
+			Count(&capabilityCount).Error; err != nil || capabilityCount == 0 {
+			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "tenant capability is unavailable"})
 			return
 		}
 

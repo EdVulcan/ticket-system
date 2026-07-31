@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 	"ticket-backend/internal/config"
+	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -41,13 +42,57 @@ func JWTAuth() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		// JWT signature validity is not enough: users can be deleted, staff can
+		// be frozen, and the platform can freeze a tenant while a token is still
+		// within its nominal lifetime. Re-check the current ownership state on
+		// every protected request. The nil guard only supports isolated middleware
+		// tests before the application database is initialized.
+		if model.DB != nil {
+			if !sessionIsActive(claims) {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "account or tenant is inactive"})
+				c.Abort()
+				return
+			}
+		}
 
 		// Set context variables
 		c.Set("user_id", claims.UserID)
 		c.Set("username", claims.Username)
 		c.Set("role", claims.Role)
 		c.Set("tenant_id", claims.TenantID)
+		c.Set("scope", claims.Scope)
+		c.Set("platform_user_id", claims.PlatformUserID)
 
+		c.Next()
+	}
+}
+
+func sessionIsActive(claims *service.Claims) bool {
+	if claims.Scope == "platform" {
+		var user model.PlatformUser
+		return model.DB.Select("id", "status", "role").Where("id = ?", claims.PlatformUserID).First(&user).Error == nil && user.Status == "active" && user.Role == claims.Role
+	}
+	var tenant model.Tenant
+	if err := model.DB.Select("id", "status").First(&tenant, claims.TenantID).Error; err != nil {
+		return false
+	}
+	if tenant.Status != "" && tenant.Status != "active" {
+		return false
+	}
+	if strings.HasPrefix(claims.Subject, "staff:") {
+		var staff model.Staff
+		return model.DB.Select("id", "tenant_id", "status", "roles").Where("id = ? AND tenant_id = ?", claims.UserID, claims.TenantID).First(&staff).Error == nil && staff.Status == "active" && strings.TrimSpace(staff.Roles) == strings.TrimSpace(claims.Role)
+	}
+	var user model.User
+	return model.DB.Select("id", "tenant_id", "role").Where("id = ? AND tenant_id = ?", claims.UserID, claims.TenantID).First(&user).Error == nil && user.Role == claims.Role
+}
+
+func RequirePlatformScope() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.GetString("scope") != "platform" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "platform scope required"})
+			return
+		}
 		c.Next()
 	}
 }

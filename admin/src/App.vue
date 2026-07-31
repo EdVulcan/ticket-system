@@ -39,11 +39,11 @@
           <!-- Tenant Only -->
           <template v-else>
              <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">销售中心 (Sales)</div>
-             <el-menu-item index="/product" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasCapability('supplier')" index="/product" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Ticket /></el-icon>
                 <span>线上门票</span>
              </el-menu-item>
-             <el-menu-item index="/product/offline" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasCapability('supplier')" index="/product/offline" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Monitor /></el-icon>
                 <span>窗口门票</span>
              </el-menu-item>
@@ -56,22 +56,26 @@
                 <span>线下/窗口订单</span>
              </el-menu-item>
 
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">分销中心 (B2B)</div>
-             <el-menu-item index="/distribution" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <div v-if="hasAnyCapability('supplier', 'distributor')" class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">分销中心 (B2B)</div>
+             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor')" index="/distribution" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Connection /></el-icon>
                 <span>分销商管理</span>
              </el-menu-item>
 
              <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">现场运营 (OPS)</div>
-             <el-menu-item index="/policy" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item index="/operations" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+                <el-icon><Operation /></el-icon>
+                <span>运营工作台</span>
+             </el-menu-item>
+             <el-menu-item v-if="hasCapability('supplier')" index="/policy" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Reading /></el-icon>
                 <span>政策知识库</span>
              </el-menu-item>
-             <el-menu-item index="/device" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasCapability('supplier')" index="/device" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Monitor /></el-icon>
                 <span>终端设备</span>
              </el-menu-item>
-             <el-menu-item index="/checkpoint" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasCapability('supplier')" index="/checkpoint" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Location /></el-icon>
                 <span>检票点位</span>
              </el-menu-item>
@@ -87,6 +91,7 @@
              </el-menu-item>
           </template>
           
+          <template v-if="!isSuperAdmin">
           <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">组织与设置</div>
            <el-menu-item index="/staff" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
             <el-icon><User /></el-icon>
@@ -100,10 +105,11 @@
             <el-icon><CreditCard /></el-icon>
             <span>支付参数配置</span>
           </el-menu-item>
-           <el-menu-item index="/settings" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+          <el-menu-item index="/settings" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
             <el-icon><Setting /></el-icon>
             <span>系统设置</span>
           </el-menu-item>
+          </template>
         </el-menu>
 
         <!-- User Profile (Bottom) -->
@@ -158,10 +164,6 @@
                             <p class="text-xs text-gray-400 mb-1">当前身份</p>
                             <p class="text-sm font-bold text-gray-900">{{ user.role === 'admin' ? '商户主管理员' : '普通系统员' }}</p>
                         </div>
-                        <el-dropdown-item command="switch_role" v-if="user.role === 'super_admin' || user.role === 'admin'">
-                            <el-icon><Switch /></el-icon>
-                            切换视角 (Dev)
-                        </el-dropdown-item>
                         <el-dropdown-item command="logout" class="text-red-500 focus:text-red-600">
                             <el-icon><SwitchButton /></el-icon>
                             退出登录
@@ -194,7 +196,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { 
   Odometer, Monitor, Location, Ticket, List, Setting, User, UserFilled,
   SwitchButton, OfficeBuilding, Connection, Money,
-  CaretBottom, Switch, Reading, TrendCharts, CreditCard, Tickets
+  CaretBottom, Reading, TrendCharts, CreditCard, Tickets, Operation
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
@@ -204,6 +206,9 @@ const isSuperAdmin = ref(false)
 const user = ref<any>({})
 
 const isLoginPage = computed(() => route.path === '/login' || route.name === 'login')
+const activeCapabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability)))
+const hasCapability = (value: string) => activeCapabilities.value.has(value)
+const hasAnyCapability = (...values: string[]) => values.some(value => activeCapabilities.value.has(value))
 
 const handleLogout = () => {
     localStorage.removeItem('token')
@@ -212,26 +217,9 @@ const handleLogout = () => {
     router.push('/login')
 }
 
-const toggleDevRole = () => {
-    const newUser = { ...user.value }
-    if (isSuperAdmin.value) {
-        newUser.role = 'admin'
-        ElMessage.info('已切换为：商户视角')
-    } else {
-        newUser.role = 'super_admin'
-        ElMessage.success('已切换为：平台上帝视角')
-    }
-    user.value = newUser
-    isSuperAdmin.value = newUser.role === 'super_admin'
-    localStorage.setItem('user', JSON.stringify(newUser))
-    setTimeout(() => location.reload(), 500)
-}
-
 const handleCommand = (command: string) => {
     if (command === 'logout') {
         handleLogout()
-    } else if (command === 'switch_role') {
-        toggleDevRole()
     }
 }
 
@@ -248,7 +236,7 @@ const loadUser = () => {
     if (userStr) {
         try {
             user.value = JSON.parse(userStr)
-            isSuperAdmin.value = user.value.role === 'super_admin'
+            isSuperAdmin.value = user.value.scope === 'platform'
         } catch (e) {
             console.error('Failed to parse user info')
         }

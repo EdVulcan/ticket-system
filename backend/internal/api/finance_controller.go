@@ -55,3 +55,15 @@ func (c *FinanceController) ListTransactions(ctx *gin.Context) {
 		"page":  page,
 	})
 }
+
+func (c *FinanceController) ListLedger(ctx *gin.Context) {
+	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
+	accountID, _ := strconv.ParseUint(ctx.Query("account_id"), 10, 32)
+	entries, total, err := c.Service.ListLedger(ctx.GetUint("tenant_id"), page, pageSize, uint(accountID))
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": entries, "total": total, "page": page, "page_size": pageSize})
+}

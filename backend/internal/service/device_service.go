@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/utils"
 	"time"
@@ -16,6 +17,46 @@ import (
 type DeviceService struct {
 	DB            *gorm.DB
 	TicketService *TicketService
+}
+
+// MarkOffline transitions stale devices and opens one alert per incident.
+// It is safe to run from more than one scheduler because the status predicate
+// and open-alert lookup make the operation idempotent.
+func (s *DeviceService) MarkOffline(now time.Time, timeout time.Duration) (int, error) {
+	changed := 0
+	err := model.Write(func(tx *gorm.DB) error {
+		cutoff := now.Add(-timeout)
+		var devices []model.Device
+		if err := tx.Where("status = ? AND last_heartbeat IS NOT NULL AND last_heartbeat < ?", "online", cutoff).Find(&devices).Error; err != nil {
+			return err
+		}
+		for i := range devices {
+			if err := tx.Model(&devices[i]).Update("status", "offline").Error; err != nil {
+				return err
+			}
+			if err := syncDeviceAlertTx(tx, &devices[i], "offline", now); err != nil {
+				return err
+			}
+			changed++
+		}
+		return nil
+	})
+	return changed, err
+}
+
+func syncDeviceAlertTx(tx *gorm.DB, device *model.Device, status string, now time.Time) error {
+	alertType := status
+	if status != "offline" && status != "fault" {
+		return tx.Model(&model.DeviceAlert{}).Where("device_id = ? AND status = ?", device.ID, "open").Updates(map[string]interface{}{"status": "resolved", "resolved_at": now}).Error
+	}
+	var open int64
+	if err := tx.Model(&model.DeviceAlert{}).Where("device_id = ? AND type = ? AND status = ?", device.ID, alertType, "open").Count(&open).Error; err != nil {
+		return err
+	}
+	if open > 0 {
+		return nil
+	}
+	return tx.Create(&model.DeviceAlert{TenantID: device.TenantID, ScenicAreaID: device.ScenicAreaID, DeviceID: device.ID, Type: alertType, Status: "open", Message: "device " + alertType, OpenedAt: now}).Error
 }
 
 func NewDeviceService(db *gorm.DB, ts *TicketService) *DeviceService {
@@ -54,8 +95,11 @@ type VerifyResponse struct {
 func (s *DeviceService) Heartbeat(req HeartbeatRequest) error {
 	return model.Write(func(tx *gorm.DB) error {
 		var tenant model.Tenant
-		if err := tx.Where("system_code = ?", req.SystemCode).First(&tenant).Error; err != nil {
+		if err := tx.Where("system_code = ? AND status = ?", req.SystemCode, "active").First(&tenant).Error; err != nil {
 			return errors.New("invalid system_code")
+		}
+		if err := requireActiveTenantCapability(tx, tenant.ID, "supplier"); err != nil {
+			return err
 		}
 
 		var device model.Device
@@ -69,19 +113,30 @@ func (s *DeviceService) Heartbeat(req HeartbeatRequest) error {
 			return errors.New("invalid device key")
 		}
 
-		updates := map[string]interface{}{"status": "online", "last_heartbeat": time.Now()}
+		status := strings.TrimSpace(req.Status)
+		if status != "fault" {
+			status = "online"
+		}
+		now := time.Now()
+		updates := map[string]interface{}{"status": status, "last_heartbeat": now}
 		if req.IP != "" {
 			updates["ip_address"] = req.IP
 		}
-		return tx.Model(&device).Updates(updates).Error
+		if err := tx.Model(&device).Updates(updates).Error; err != nil {
+			return err
+		}
+		return syncDeviceAlertTx(tx, &device, status, now)
 	})
 }
 
 func (s *DeviceService) Verify(req VerifyRequest) (*VerifyResponse, error) {
 	// 1. Validate Tenant
 	var tenant model.Tenant
-	if err := s.DB.Where("system_code = ?", req.SystemCode).First(&tenant).Error; err != nil {
+	if err := s.DB.Where("system_code = ? AND status = ?", req.SystemCode, "active").First(&tenant).Error; err != nil {
 		return &VerifyResponse{Code: 400, Result: "deny", DisplayText: "Invalid System Code"}, nil
+	}
+	if err := requireActiveTenantCapability(s.DB, tenant.ID, "supplier"); err != nil {
+		return &VerifyResponse{Code: 403, Result: "deny", DisplayText: "Tenant Unavailable"}, nil
 	}
 
 	// 2. Validate Device
@@ -161,22 +216,41 @@ func (s *DeviceService) Create(device *model.Device, tenantID uint) error {
 	device.AuthKey = utils.GenerateRandomString(40)
 	device.AuthKeyHash = hashDeviceKey(device.AuthKey)
 	return model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "supplier"); err != nil {
+			return err
+		}
 		if err := s.validateCheckPoint(tx, tenantID, device.CheckPointID); err != nil {
+			return err
+		}
+		areaID, err := scenicAreaForCheckpoint(tx, tenantID, device.CheckPointID, device.ScenicAreaID)
+		if err != nil {
 			return err
 		}
 		device.Base = model.Base{}
 		device.TenantID = tenantID
+		device.ScenicAreaID = areaID
 		return tx.Omit("CheckPoint").Create(device).Error
 	})
 }
 
 func (s *DeviceService) Update(id, tenantID uint, device *model.Device) error {
 	return model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "supplier"); err != nil {
+			return err
+		}
 		if err := s.validateCheckPoint(tx, tenantID, device.CheckPointID); err != nil {
 			return err
 		}
+		areaID, err := scenicAreaForCheckpoint(tx, tenantID, device.CheckPointID, device.ScenicAreaID)
+		if err != nil {
+			return err
+		}
+		device.ScenicAreaID = areaID
 		result := tx.Model(&model.Device{}).Where("id = ? AND tenant_id = ?", id, tenantID).
-			Omit("tenant_id", "serial_number", "auth_key_hash").Updates(device)
+			Omit("tenant_id", "serial_number", "auth_key_hash", "ScenicAreaID").Updates(device)
+		if result.Error == nil {
+			result = tx.Model(&model.Device{}).Where("id = ? AND tenant_id = ?", id, tenantID).Update("scenic_area_id", areaID)
+		}
 		if result.Error != nil {
 			return result.Error
 		}
@@ -185,6 +259,26 @@ func (s *DeviceService) Update(id, tenantID uint, device *model.Device) error {
 		}
 		return nil
 	})
+}
+
+func scenicAreaForCheckpoint(db *gorm.DB, tenantID uint, checkpointID *uint, requestedAreaID uint) (uint, error) {
+	if checkpointID == nil {
+		return normalizeScenicArea(db, tenantID, requestedAreaID)
+	}
+	var checkpoint model.CheckPoint
+	if err := db.Select("id", "tenant_id", "scenic_area_id").Where("id = ? AND tenant_id = ?", *checkpointID, tenantID).First(&checkpoint).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, errors.New("checkpoint not found")
+		}
+		return 0, err
+	}
+	if checkpoint.ScenicAreaID == 0 {
+		return 0, errors.New("checkpoint has no scenic area")
+	}
+	if requestedAreaID != 0 && requestedAreaID != checkpoint.ScenicAreaID {
+		return 0, errors.New("device scenic area does not match checkpoint")
+	}
+	return checkpoint.ScenicAreaID, nil
 }
 
 func (s *DeviceService) RotateKey(id, tenantID uint) (string, error) {

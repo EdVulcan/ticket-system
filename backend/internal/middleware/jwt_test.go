@@ -69,3 +69,26 @@ func TestRequireAnyRoleSupportsStaffRoleLists(t *testing.T) {
 		t.Fatalf("denied role status = %d", denied.Code)
 	}
 }
+
+func TestRequirePlatformScopeRejectsTenantTokens(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/platform", func(ctx *gin.Context) { ctx.Set("scope", "tenant") }, RequirePlatformScope(), func(ctx *gin.Context) {
+		ctx.Status(http.StatusNoContent)
+	})
+	denied := httptest.NewRecorder()
+	engine.ServeHTTP(denied, httptest.NewRequest(http.MethodGet, "/platform", nil))
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("tenant scope status = %d, want 403", denied.Code)
+	}
+
+	engine = gin.New()
+	engine.GET("/platform", func(ctx *gin.Context) { ctx.Set("scope", "platform") }, RequirePlatformScope(), func(ctx *gin.Context) {
+		ctx.Status(http.StatusNoContent)
+	})
+	allowed := httptest.NewRecorder()
+	engine.ServeHTTP(allowed, httptest.NewRequest(http.MethodGet, "/platform", nil))
+	if allowed.Code != http.StatusNoContent {
+		t.Fatalf("platform scope status = %d, want 204", allowed.Code)
+	}
+}

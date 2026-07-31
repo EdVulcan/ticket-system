@@ -37,6 +37,9 @@ func (c *PaymentConfigController) GetConfigs(ctx *gin.Context) {
 		if configs[i].PublicKey != "" {
 			configs[i].PublicKey = "******"
 		}
+		if configs[i].PlatformPublicKey != "" {
+			configs[i].PlatformPublicKey = "******"
+		}
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"data": configs})
@@ -81,6 +84,14 @@ func (c *PaymentConfigController) SaveConfig(ctx *gin.Context) {
 		}
 		req.PublicKey = enc
 	}
+	if req.PlatformPublicKey != "" && req.PlatformPublicKey != "******" {
+		enc, err := utils.EncryptAES(req.PlatformPublicKey)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("encrypt payment platform public key: %v", err)})
+			return
+		}
+		req.PlatformPublicKey = enc
+	}
 
 	if err := model.Write(func(tx *gorm.DB) error {
 		var existing model.PaymentConfig
@@ -101,11 +112,15 @@ func (c *PaymentConfigController) SaveConfig(ctx *gin.Context) {
 		if req.PublicKey == "******" || req.PublicKey == "" {
 			req.PublicKey = existing.PublicKey
 		}
+		if req.PlatformPublicKey == "******" || req.PlatformPublicKey == "" {
+			req.PlatformPublicKey = existing.PlatformPublicKey
+		}
 		req.ID = existing.ID
 		return tx.Model(&existing).Updates(map[string]interface{}{
 			"app_id": req.AppID, "mch_id": req.MchID, "key": req.Key,
 			"private_key": req.PrivateKey, "public_key": req.PublicKey,
 			"serial_no": req.SerialNo, "notify_url": req.NotifyURL, "status": req.Status,
+			"platform_public_key": req.PlatformPublicKey, "platform_public_key_id": req.PlatformPublicKeyID,
 		}).Error
 	}); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -115,5 +130,6 @@ func (c *PaymentConfigController) SaveConfig(ctx *gin.Context) {
 	req.Key = "******"
 	req.PrivateKey = "******"
 	req.PublicKey = "******"
+	req.PlatformPublicKey = "******"
 	ctx.JSON(http.StatusOK, req)
 }

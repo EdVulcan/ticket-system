@@ -13,13 +13,13 @@ const router = createRouter({
             path: '/tenant',
             name: 'tenant',
             component: () => import('../views/TenantView.vue'),
-            meta: { role: 'super_admin', title: '商户管理 (平台)' }
+            meta: { scope: 'platform', roles: ['platform_admin'], title: '商户管理 (平台)' }
         },
         {
             path: '/distribution',
             name: 'distribution',
             component: () => import('../views/DistributionView.vue'),
-            meta: { role: 'admin', title: '分销中心' }
+            meta: { scope: 'tenant', roles: ['admin', 'super_admin'], title: '分销中心' }
         },
         {
             path: '/finance',
@@ -31,25 +31,25 @@ const router = createRouter({
             path: '/device',
             name: 'device',
             component: () => import('../views/DeviceView.vue'),
-            meta: { title: '设备管理' }
+            meta: { scope: 'tenant', capability: 'supplier', title: '设备管理' }
         },
         {
             path: '/checkpoint',
             name: 'checkpoint',
             component: () => import('../views/CheckPointView.vue'),
-            meta: { title: '检票点管理' }
+            meta: { scope: 'tenant', capability: 'supplier', title: '检票点管理' }
         },
         {
             path: '/product',
             name: 'product',
             component: () => import('../views/ProductView.vue'),
-            meta: { title: '产品管理' }
+            meta: { scope: 'tenant', capability: 'supplier', title: '产品管理' }
         },
         {
             path: '/product/offline',
             name: 'offline-product',
             component: () => import('../views/OfflineProductView.vue'),
-            meta: { title: '窗口产品' }
+            meta: { scope: 'tenant', capability: 'supplier', title: '窗口产品' }
         },
         {
             path: '/online-order',
@@ -62,6 +62,12 @@ const router = createRouter({
             name: 'offline-order',
             component: () => import('../views/OfflineOrderView.vue'),
             meta: { title: '线下/窗口订单' }
+        },
+        {
+            path: '/operations',
+            name: 'operations',
+            component: () => import('../views/OperationsView.vue'),
+            meta: { scope: 'tenant', roles: ['admin', 'super_admin'], title: '运营工作台' }
         },
         {
             path: '/login',
@@ -91,7 +97,7 @@ const router = createRouter({
             path: '/policy',
             name: 'policy',
             component: () => import('../views/PolicyView.vue'),
-            meta: { title: '政策知识库' }
+            meta: { scope: 'tenant', capability: 'supplier', title: '政策知识库' }
         },
         {
             path: '/report',
@@ -118,7 +124,20 @@ router.beforeEach((to, _from, next) => {
     const token = localStorage.getItem('token')
     if (to.name !== 'login' && !token) {
         next({ name: 'login' })
+    } else if (to.name === 'login') {
+        next()
     } else {
+        let user: any = {}
+        try { user = JSON.parse(localStorage.getItem('user') || '{}') } catch { /* invalid session */ }
+        const requiredScope = to.meta.scope as string | undefined
+        const roles = to.meta.roles as string[] | undefined
+        const capability = to.meta.capability as string | undefined
+        const activeCapabilities = new Set((user.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability))
+        const platformOnTenantRoute = user.scope === 'platform' && !requiredScope && to.name !== 'home'
+        if (platformOnTenantRoute || (requiredScope && user.scope !== requiredScope) || (roles && !roles.includes(user.role)) || (capability && !activeCapabilities.has(capability))) {
+            next({ name: 'home' })
+            return
+        }
         next()
     }
 })

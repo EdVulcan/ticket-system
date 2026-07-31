@@ -45,10 +45,12 @@ type SecurityConfig struct {
 }
 
 type BootstrapConfig struct {
-	TenantName    string `mapstructure:"tenant_name"`
-	SystemCode    string `mapstructure:"system_code"`
-	AdminUsername string `mapstructure:"admin_username"`
-	AdminPassword string `mapstructure:"admin_password"`
+	TenantName       string `mapstructure:"tenant_name"`
+	SystemCode       string `mapstructure:"system_code"`
+	AdminUsername    string `mapstructure:"admin_username"`
+	AdminPassword    string `mapstructure:"admin_password"`
+	PlatformUsername string `mapstructure:"platform_username"`
+	PlatformPassword string `mapstructure:"platform_password"`
 }
 
 type BackupConfig struct {
@@ -87,6 +89,7 @@ func InitConfig() error {
 	viper.SetDefault("bootstrap.tenant_name", "Default Tenant")
 	viper.SetDefault("bootstrap.system_code", "SYS001")
 	viper.SetDefault("bootstrap.admin_username", "admin")
+	viper.SetDefault("bootstrap.platform_username", "platform-admin")
 	viper.SetDefault("backup.directory", "data/backups")
 	viper.SetDefault("backup.interval_hours", 24)
 	viper.SetDefault("backup.retention", 14)
@@ -178,6 +181,9 @@ func (c Config) Validate() error {
 	}
 	if c.Backup.IntervalHours <= 0 || c.Backup.Retention <= 0 {
 		return fmt.Errorf("backup interval and retention must be greater than zero")
+	}
+	if c.Bootstrap.AdminPassword != "" && c.Bootstrap.PlatformPassword != "" && c.Bootstrap.AdminPassword == c.Bootstrap.PlatformPassword {
+		return fmt.Errorf("platform bootstrap password must differ from tenant administrator password")
 	}
 	return nil
 }

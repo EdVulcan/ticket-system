@@ -7,7 +7,7 @@
         <p class="text-xs text-gray-500 mt-1">连接产业上下游，拓展业务边界</p>
       </div>
       <div>
-         <el-button v-if="activeTab === 'suppliers'" type="primary" size="large" @click="dialogVisible = true">
+         <el-button v-if="canDistribute && activeTab === 'suppliers'" type="primary" size="large" @click="dialogVisible = true">
             <el-icon class="mr-2"><Connection /></el-icon> 寻找供应商
          </el-button>
       </div>
@@ -18,7 +18,7 @@
       <el-tabs v-model="activeTab" @tab-change="handleTabChange">
         
         <!-- Tab 1: My Suppliers -->
-        <el-tab-pane label="我的供应商 (我是分销商)" name="suppliers">
+        <el-tab-pane v-if="canDistribute" label="我的供应商 (我是分销商)" name="suppliers">
             <div class="flex items-center justify-between mb-4 mt-2">
                 <h3 class="font-bold text-gray-700">已合作的供应商</h3>
                 <el-button link type="primary" @click="fetchSuppliers"><el-icon><Refresh /></el-icon></el-button>
@@ -55,7 +55,7 @@
         </el-tab-pane>
 
         <!-- Tab 2: My Agents -->
-        <el-tab-pane label="我的分销商 (我是供应商)" name="agents">
+        <el-tab-pane v-if="canSupply" label="我的分销商 (我是供应商)" name="agents">
             <div class="flex items-center justify-between mb-4 mt-2">
                 <h3 class="font-bold text-gray-700">代理申请列表</h3>
                 <el-button link type="primary" @click="fetchAgents"><el-icon><Refresh /></el-icon></el-button>
@@ -198,12 +198,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { Connection, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 
-const activeTab = ref('suppliers')
+const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
+const activeCapabilities = new Set((currentUser.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability))
+const canSupply = computed(() => activeCapabilities.has('supplier'))
+const canDistribute = computed(() => activeCapabilities.has('distributor'))
+const activeTab = ref(canDistribute.value ? 'suppliers' : 'agents')
 
 // Suppliers State
 const loadingSuppliers = ref(false)
@@ -420,6 +424,7 @@ const getLevelText = (level: string) => {
 }
 
 onMounted(() => {
-    fetchSuppliers()
+    if (canDistribute.value) fetchSuppliers()
+    if (canSupply.value) fetchAgents()
 })
 </script>

@@ -1,8 +1,11 @@
 package service
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"ticket-backend/internal/model"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -12,7 +15,17 @@ type ProductService struct{}
 // CreateRuleAndProduct 创建规则和产品 (事务处理)
 func (s *ProductService) Create(product *model.Product, rule *model.TicketRule) error {
 	return model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, product.TenantID, "supplier"); err != nil {
+			return err
+		}
+		if product.SourceProductID != 0 || product.SourceTenantID != 0 ||
+			product.FulfillmentProductID != 0 || product.FulfillmentTenantID != 0 || product.ProductOfferID != 0 {
+			return fmt.Errorf("distributed products must be created through an active product offer")
+		}
 		if err := validateProduct(tx, product.TenantID, product, rule); err != nil {
+			return err
+		}
+		if err := assignProductScenicArea(tx, product.TenantID, product, rule); err != nil {
 			return err
 		}
 		// Force clear IDs to ensure creation
@@ -37,8 +50,9 @@ func (s *ProductService) Create(product *model.Product, rule *model.TicketRule) 
 		if err := tx.Create(product).Error; err != nil {
 			return err
 		}
-
-		return nil
+		product.Rule = *rule
+		_, err := createProductRevisionTx(tx, product)
+		return err
 	})
 }
 
@@ -50,7 +64,43 @@ func (s *ProductService) Update(id, tenantID uint, product *model.Product, rule 
 		if err := tx.Where("id = ? AND tenant_id = ?", id, tenantID).First(&existingProduct).Error; err != nil {
 			return err
 		}
+		capability := "supplier"
+		if isDistributedListing(&existingProduct) {
+			capability = "distributor"
+		}
+		if err := requireActiveTenantCapability(tx, tenantID, capability); err != nil {
+			return err
+		}
+
+		// A distributor listing does not own the supplier's fulfillment rule.
+		// It may change its sell-side presentation, but its source and settlement
+		// ownership stay immutable and its local rule is never rewritten.
+		if isDistributedListing(&existingProduct) {
+			if err := validateSellerListingFields(product); err != nil {
+				return err
+			}
+			product.ID = id
+			product.RuleID = existingProduct.RuleID
+			product.TenantID = existingProduct.TenantID
+			product.SourceProductID = existingProduct.SourceProductID
+			product.SourceTenantID = existingProduct.SourceTenantID
+			product.FulfillmentProductID = existingProduct.FulfillmentProductID
+			product.FulfillmentTenantID = existingProduct.FulfillmentTenantID
+			product.FulfillmentScenicAreaID = existingProduct.FulfillmentScenicAreaID
+			product.ProductOfferID = existingProduct.ProductOfferID
+			product.ScenicAreaID = existingProduct.ScenicAreaID
+			product.SettlementPrice = existingProduct.SettlementPrice
+			return tx.Model(&existingProduct).
+				Select("*").
+				Omit("id", "created_at", "updated_at", "deleted_at", "tenant_id", "rule_id",
+					"source_product_id", "source_tenant_id", "fulfillment_product_id", "fulfillment_tenant_id", "fulfillment_scenic_area_id", "product_offer_id", "settlement_price", "scenic_area_id").
+				Updates(product).Error
+		}
+
 		if err := validateProduct(tx, tenantID, product, rule); err != nil {
+			return err
+		}
+		if err := assignProductScenicArea(tx, tenantID, product, rule); err != nil {
 			return err
 		}
 
@@ -58,18 +108,29 @@ func (s *ProductService) Update(id, tenantID uint, product *model.Product, rule 
 		product.ID = id
 		product.RuleID = existingProduct.RuleID // Keep the same Rule ID
 		product.TenantID = existingProduct.TenantID
+		product.SourceProductID = existingProduct.SourceProductID
+		product.SourceTenantID = existingProduct.SourceTenantID
+		product.FulfillmentProductID = existingProduct.FulfillmentProductID
+		product.FulfillmentTenantID = existingProduct.FulfillmentTenantID
+		product.FulfillmentScenicAreaID = existingProduct.FulfillmentScenicAreaID
+		product.ProductOfferID = existingProduct.ProductOfferID
+		if product.ScenicAreaID == 0 {
+			product.ScenicAreaID = existingProduct.ScenicAreaID
+		}
 
 		// Use Select("*") to update all fields including zero values (e.g. 0, "", false)
 		// Omit protected fields
 		if err := tx.Model(&existingProduct).
 			Select("*").
-			Omit("id", "created_at", "updated_at", "deleted_at", "tenant_id", "rule_id").
+			Omit("id", "created_at", "updated_at", "deleted_at", "tenant_id", "rule_id",
+				"source_product_id", "source_tenant_id", "fulfillment_product_id", "fulfillment_tenant_id", "fulfillment_scenic_area_id", "product_offer_id").
 			Updates(product).Error; err != nil {
 			return err
 		}
 
 		// 3. Update Rule Basic Info
 		rule.ID = existingProduct.RuleID
+		rule.TenantID = tenantID
 		if err := tx.Model(&model.TicketRule{Base: model.Base{ID: rule.ID}}).Updates(rule).Error; err != nil {
 			return err
 		}
@@ -108,9 +169,51 @@ func (s *ProductService) Update(id, tenantID uint, product *model.Product, rule 
 				return err
 			}
 		}
-
-		return nil
+		var revised model.Product
+		if err := tx.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Where("id = ? AND tenant_id = ?", id, tenantID).First(&revised).Error; err != nil {
+			return err
+		}
+		if _, err := createProductRevisionTx(tx, &revised); err != nil {
+			return err
+		}
+		return tx.Model(&model.ProductOffer{}).
+			Where("source_product_id = ? AND supplier_tenant_id = ? AND status = ? AND product_revision_id != ?", revised.ID, tenantID, "active", revised.CurrentRevisionID).
+			Update("status", "suspended").Error
 	})
+}
+
+func createProductRevisionTx(tx *gorm.DB, product *model.Product) (*model.ProductRevision, error) {
+	if product == nil || product.ID == 0 || product.TenantID == 0 || product.ScenicAreaID == 0 {
+		return nil, errors.New("versioned product requires tenant and scenic area")
+	}
+	var latest model.ProductRevision
+	version := 1
+	if err := tx.Where("product_id = ? AND tenant_id = ?", product.ID, product.TenantID).Order("version DESC").First(&latest).Error; err == nil {
+		version = latest.Version + 1
+		now := time.Now()
+		if err := tx.Model(&latest).Updates(map[string]interface{}{"status": "expired", "effective_to": now}).Error; err != nil {
+			return nil, err
+		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	snapshot, err := json.Marshal(product.Rule)
+	if err != nil {
+		return nil, err
+	}
+	revision := model.ProductRevision{
+		ProductID: product.ID, TenantID: product.TenantID, ScenicAreaID: product.ScenicAreaID,
+		Version: version, Status: "active", PriceCents: moneyCents(product.Price),
+		SettlementCents: moneyCents(product.SettlementPrice), SnapshotJSON: string(snapshot), EffectiveFrom: time.Now(),
+	}
+	if err := tx.Create(&revision).Error; err != nil {
+		return nil, err
+	}
+	if err := tx.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", product.ID, product.TenantID).Update("current_revision_id", revision.ID).Error; err != nil {
+		return nil, err
+	}
+	product.CurrentRevisionID = revision.ID
+	return &revision, nil
 }
 
 func (s *ProductService) List(page, pageSize int, tenantID uint, productType string) ([]model.Product, int64, error) {
@@ -143,33 +246,18 @@ func (s *ProductService) List(page, pageSize int, tenantID uint, productType str
 	}
 
 	err = query.Offset(offset).Limit(pageSize).Find(&products).Error
+	if err == nil {
+		hydrateFulfillmentRules(products)
+	}
 	return products, total, err
 }
 
 func validateProduct(tx *gorm.DB, tenantID uint, product *model.Product, rule *model.TicketRule) error {
-	if tenantID == 0 || product.Name == "" || rule.Name == "" {
+	if err := validateProductFields(product); err != nil {
+		return err
+	}
+	if tenantID == 0 || rule.Name == "" {
 		return fmt.Errorf("product name, rule name, and tenant are required")
-	}
-	if product.Price < 0 || product.SettlementPrice < 0 {
-		return fmt.Errorf("product prices cannot be negative")
-	}
-	if product.Type != "online" && product.Type != "offline" {
-		return fmt.Errorf("invalid product type")
-	}
-	if product.Status != "online" && product.Status != "offline" {
-		return fmt.Errorf("invalid product status")
-	}
-	if product.CodeMode != "order" && product.CodeMode != "ticket" {
-		return fmt.Errorf("invalid ticket code mode")
-	}
-	if product.ValidityType != "date" && product.ValidityType != "days" {
-		return fmt.Errorf("invalid validity type")
-	}
-	if product.StockType != "unlimited" && product.StockType != "daily" && product.StockType != "total" {
-		return fmt.Errorf("invalid stock type")
-	}
-	if product.StockType != "unlimited" && product.DailyStock < 0 {
-		return fmt.Errorf("stock cannot be negative")
 	}
 	seenCheckpoints := make(map[uint]struct{})
 	for _, group := range rule.Groups {
@@ -199,6 +287,103 @@ func validateProduct(tx *gorm.DB, tenantID uint, product *model.Product, rule *m
 	return nil
 }
 
+func assignProductScenicArea(tx *gorm.DB, tenantID uint, product *model.Product, rule *model.TicketRule) error {
+	var scenicAreaID uint
+	for _, group := range rule.Groups {
+		for _, item := range group.Items {
+			var checkpoint model.CheckPoint
+			if err := tx.Select("id", "tenant_id", "scenic_area_id").Where("id = ? AND tenant_id = ?", item.CheckPointID, tenantID).First(&checkpoint).Error; err != nil {
+				return err
+			}
+			if checkpoint.ScenicAreaID == 0 {
+				return fmt.Errorf("checkpoint %d has no scenic area", checkpoint.ID)
+			}
+			if scenicAreaID == 0 {
+				scenicAreaID = checkpoint.ScenicAreaID
+				continue
+			}
+			if scenicAreaID != checkpoint.ScenicAreaID {
+				return fmt.Errorf("a product cannot combine checkpoints from different scenic areas")
+			}
+		}
+	}
+	if scenicAreaID == 0 {
+		return fmt.Errorf("product must belong to a scenic area")
+	}
+	product.ScenicAreaID = scenicAreaID
+	return nil
+}
+
+func validateProductFields(product *model.Product) error {
+	if product.Name == "" {
+		return fmt.Errorf("product name is required")
+	}
+	if product.Price < 0 || product.SettlementPrice < 0 {
+		return fmt.Errorf("product prices cannot be negative")
+	}
+	if product.Type != "online" && product.Type != "offline" {
+		return fmt.Errorf("invalid product type")
+	}
+	if product.Status != "online" && product.Status != "offline" {
+		return fmt.Errorf("invalid product status")
+	}
+	if product.CodeMode != "order" && product.CodeMode != "ticket" {
+		return fmt.Errorf("invalid ticket code mode")
+	}
+	if product.ValidityType != "date" && product.ValidityType != "days" {
+		return fmt.Errorf("invalid validity type")
+	}
+	if product.StockType != "unlimited" && product.StockType != "daily" && product.StockType != "total" {
+		return fmt.Errorf("invalid stock type")
+	}
+	if product.StockType != "unlimited" && product.DailyStock < 0 {
+		return fmt.Errorf("stock cannot be negative")
+	}
+	return nil
+}
+
+func validateSellerListingFields(product *model.Product) error {
+	if product.Name == "" {
+		return fmt.Errorf("product name is required")
+	}
+	if product.Price < 0 {
+		return fmt.Errorf("product price cannot be negative")
+	}
+	if product.Type != "online" && product.Type != "offline" {
+		return fmt.Errorf("invalid product type")
+	}
+	if product.Status != "online" && product.Status != "offline" {
+		return fmt.Errorf("invalid product status")
+	}
+	return nil
+}
+
+func isDistributedListing(product *model.Product) bool {
+	return product.SourceProductID > 0 || product.SourceTenantID > 0 ||
+		(product.FulfillmentProductID > 0 && product.FulfillmentTenantID != 0 && product.FulfillmentTenantID != product.TenantID)
+}
+
+func hydrateFulfillmentRules(products []model.Product) {
+	for i := range products {
+		productID := products[i].FulfillmentProductID
+		tenantID := products[i].FulfillmentTenantID
+		if productID == 0 && products[i].SourceProductID > 0 {
+			productID = products[i].SourceProductID
+			tenantID = products[i].SourceTenantID
+		}
+		if productID == 0 || tenantID == 0 {
+			continue
+		}
+		var source model.Product
+		if err := model.DB.
+			Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Preload("Rule.Groups.Items.CheckPoint").
+			Where("id = ? AND tenant_id = ?", productID, tenantID).
+			First(&source).Error; err == nil {
+			products[i].Rule = source.Rule
+		}
+	}
+}
+
 func (s *ProductService) Delete(id, tenantID uint) error {
 	return model.Write(func(tx *gorm.DB) error {
 		result := tx.Where("id = ? AND tenant_id = ?", id, tenantID).Delete(&model.Product{})
@@ -216,6 +401,18 @@ func (s *ProductService) Get(id, tenantID uint) (*model.Product, error) {
 	var product model.Product
 	if err := model.DB.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Preload("Rule.Groups.Items.CheckPoint").Where("id = ? AND tenant_id = ?", id, tenantID).First(&product).Error; err != nil {
 		return nil, err
+	}
+	if isDistributedListing(&product) {
+		var source model.Product
+		productID := product.FulfillmentProductID
+		sourceTenantID := product.FulfillmentTenantID
+		if productID == 0 {
+			productID = product.SourceProductID
+			sourceTenantID = product.SourceTenantID
+		}
+		if err := model.DB.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Preload("Rule.Groups.Items.CheckPoint").Where("id = ? AND tenant_id = ?", productID, sourceTenantID).First(&source).Error; err == nil {
+			product.Rule = source.Rule
+		}
 	}
 	return &product, nil
 }

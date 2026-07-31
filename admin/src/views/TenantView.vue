@@ -15,21 +15,28 @@
           <el-tag effect="dark" type="warning" class="font-mono text-base font-bold">{{ row.system_code }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="API 密钥 (Secret Key)" width="200">
+      <el-table-column label="状态" width="140">
         <template #default="{ row }">
-           <div class="flex items-center gap-2">
-             <span class="font-mono text-xs text-gray-500 truncate w-[100px]">{{ row.secret_key }}</span>
-             <el-button link type="primary" size="small" @click="copyKey(row.secret_key)">复制</el-button>
-           </div>
+          <el-select :model-value="row.status" size="small" @change="(value: string) => updateStatus(row, value)">
+            <el-option label="启用" value="active" />
+            <el-option label="冻结" value="frozen" />
+            <el-option label="关闭" value="closed" />
+          </el-select>
+        </template>
+      </el-table-column>
+      <el-table-column label="业务能力" min-width="260">
+        <template #default="{ row }">
+          <el-button v-for="capability in capabilityOptions" :key="capability" size="small" :type="capabilityStatus(row, capability) === 'active' ? 'success' : 'info'" @click="toggleCapability(row, capability)">
+            {{ capability }} · {{ capabilityStatus(row, capability) }}
+          </el-button>
         </template>
       </el-table-column>
       <el-table-column prop="contact" label="联系人" width="120" />
       <el-table-column prop="phone" label="联系电话" width="150" />
       <el-table-column prop="address" label="地址" min-width="200" show-overflow-tooltip />
-      <el-table-column label="操作" width="150" fixed="right" align="center">
+      <el-table-column label="操作" width="100" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
-          <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -92,7 +99,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
 
 const loading = ref(false)
@@ -159,22 +166,6 @@ const handleEdit = (row: any) => {
   dialogVisible.value = true
 }
 
-const handleDelete = (row: any) => {
-  ElMessageBox.confirm('确定要删除该商户主体吗？删除后其下所有数据将不可恢复！', '高风险操作警告', {
-    confirmButtonText: '确定删除',
-    cancelButtonText: '取消',
-    type: 'warning',
-  }).then(async () => {
-    try {
-      await request.delete(`/tenants/${row.id}`)
-      ElMessage.success('已删除')
-      fetchData()
-    } catch (error) {
-      ElMessage.error('删除失败')
-    }
-  })
-}
-
 const handleSubmit = async () => {
   if (!formRef.value) return
   await formRef.value.validate(async (valid: boolean) => {
@@ -195,10 +186,16 @@ const handleSubmit = async () => {
   })
 }
 
-const copyKey = (key: string) => {
-  navigator.clipboard.writeText(key).then(() => {
-    ElMessage.success('密钥已复制')
-  })
+const capabilityOptions = ['supplier', 'distributor', 'travel_agency']
+const capabilityStatus = (row: any, capability: string) => row.capabilities?.find((item: any) => item.capability === capability)?.status || 'disabled'
+const updateStatus = async (row: any, status: string) => {
+  await request.patch(`/tenants/${row.id}/status`, { status })
+  await fetchData()
+}
+const toggleCapability = async (row: any, capability: string) => {
+  const status = capabilityStatus(row, capability) === 'active' ? 'suspended' : 'active'
+  await request.put(`/tenants/${row.id}/capabilities/${capability}`, { status, reason: '平台管理端调整' })
+  await fetchData()
 }
 
 onMounted(() => {

@@ -8,7 +8,10 @@
         </div>
       </template>
       <el-form :model="form" :rules="rules" ref="formRef" label-width="0">
-        <el-form-item prop="system_code">
+        <el-form-item>
+          <el-segmented v-model="mode" :options="[{ label: 'Tenant', value: 'tenant' }, { label: 'Platform', value: 'platform' }]" class="w-full" />
+        </el-form-item>
+        <el-form-item v-if="mode === 'tenant'" prop="system_code">
            <el-input v-model="form.system_code" placeholder="系统编号 (System Code)" prefix-icon="OfficeBuilding" />
         </el-form-item>
         <el-form-item prop="username">
@@ -37,6 +40,7 @@ import request from '@/utils/request'
 const router = useRouter()
 const formRef = ref()
 const loading = ref(false)
+const mode = ref<'tenant' | 'platform'>('tenant')
 
 const form = reactive({
   system_code: '',
@@ -56,7 +60,9 @@ const handleLogin = async () => {
     if (valid) {
       loading.value = true
       try {
-        const res = await request.post('/auth/login', form)
+        const endpoint = mode.value === 'platform' ? '/auth/platform/login' : '/auth/login'
+        const payload = mode.value === 'platform' ? { username: form.username, password: form.password } : form
+        const res = await request.post(endpoint, payload)
         const { token, user } = res.data
         localStorage.setItem('token', token)
         localStorage.setItem('user', JSON.stringify(user))

@@ -14,6 +14,7 @@ import (
 	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/router"
+	"ticket-backend/internal/service"
 	"ticket-backend/internal/utils"
 	"ticket-backend/pkg/logger"
 	"time"
@@ -58,6 +59,20 @@ func main() {
 	backup.Start(backupContext, model.DB, backupConfig.Directory, config.GlobalConfig.Security.KeyFile, time.Duration(backupConfig.IntervalHours)*time.Hour, backupConfig.Retention, func(err error) {
 		logger.Log.Error(fmt.Sprintf("Database backup failed: %v", err))
 	})
+
+	orderExpiryContext, stopOrderExpiry := context.WithCancel(context.Background())
+	defer stopOrderExpiry()
+	go runOrderExpiryWorker(orderExpiryContext)
+
+	paymentReconciliationContext, stopPaymentReconciliation := context.WithCancel(context.Background())
+	defer stopPaymentReconciliation()
+	go runPaymentReconciliationWorker(paymentReconciliationContext)
+	refundContext, stopRefundWorker := context.WithCancel(context.Background())
+	defer stopRefundWorker()
+	go runDigitalRefundWorker(refundContext)
+	deviceContext, stopDeviceWorker := context.WithCancel(context.Background())
+	defer stopDeviceWorker()
+	go runDeviceHealthWorker(deviceContext)
 
 	// 4. Init Router
 	gin.SetMode(config.GlobalConfig.Server.Mode)
@@ -108,6 +123,84 @@ func main() {
 	}
 }
 
+func runOrderExpiryWorker(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	orderService := &service.OrderService{}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			if _, err := orderService.ExpireUnpaid(now); err != nil {
+				logger.Log.Error(fmt.Sprintf("unpaid order expiry failed: %v", err))
+			}
+		}
+	}
+}
+
+func runPaymentReconciliationWorker(ctx context.Context) {
+	paymentService := &service.PaymentService{OrderService: &service.OrderService{}}
+	process := func(now time.Time) {
+		if err := paymentService.EnsurePaymentReconciliationTasks(now); err != nil {
+			logger.Log.Error(fmt.Sprintf("payment task recovery failed: %v", err))
+			return
+		}
+		if _, err := paymentService.ProcessPaymentReconciliationTasks(ctx, now, 20); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Log.Error(fmt.Sprintf("payment reconciliation failed: %v", err))
+		}
+	}
+	// Recover pending provider payments immediately after startup, then poll
+	// with a short interval so callbacks and active queries converge quickly.
+	process(time.Now())
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			process(now)
+		}
+	}
+}
+
+func runDigitalRefundWorker(ctx context.Context) {
+	refundService := &service.RefundService{PaymentService: &service.PaymentService{OrderService: &service.OrderService{}}}
+	process := func(now time.Time) {
+		if _, err := refundService.ProcessDigitalRefundTasks(ctx, now, 20); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Log.Error(fmt.Sprintf("digital refund processing failed: %v", err))
+		}
+	}
+	process(time.Now())
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			process(now)
+		}
+	}
+}
+
+func runDeviceHealthWorker(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	deviceService := service.NewDeviceService(model.DB, &service.TicketService{})
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			if _, err := deviceService.MarkOffline(now, 2*time.Minute); err != nil {
+				logger.Log.Error(fmt.Sprintf("device health check failed: %v", err))
+			}
+		}
+	}
+}
+
 func serveAdminUI(engine *gin.Engine, directory string) {
 	if strings.TrimSpace(directory) == "" {
 		return
@@ -139,39 +232,52 @@ func seedAdminUser() error {
 		if err := tx.Model(&model.User{}).Count(&count).Error; err != nil {
 			return err
 		}
-		if count > 0 {
-			return nil
-		}
 		bootstrap := config.GlobalConfig.Bootstrap
-		if bootstrap.AdminPassword == "" {
+		if count == 0 && bootstrap.AdminPassword == "" {
 			return errors.New("database has no users; set TICKET_BOOTSTRAP_ADMIN_PASSWORD for the first startup")
 		}
-		// Create default tenant
-		tenant := model.Tenant{
-			Name:       bootstrap.TenantName,
-			SystemCode: bootstrap.SystemCode,
-			SecretKey:  utils.GenerateRandomString(32),
+		if count == 0 {
+			// Create default tenant and its tenant-scoped administrator.
+			tenant := model.Tenant{
+				Name: bootstrap.TenantName, SystemCode: bootstrap.SystemCode,
+				SecretKey: utils.GenerateRandomString(32), Status: "active",
+			}
+			if err := tx.Create(&tenant).Error; err != nil {
+				return err
+			}
+			if err := tx.Create(&model.TenantCapability{TenantID: tenant.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
+				return err
+			}
+			hashedPwd, err := bcrypt.GenerateFromPassword([]byte(bootstrap.AdminPassword), 14)
+			if err != nil {
+				return err
+			}
+			if err := tx.Create(&model.User{Username: bootstrap.AdminUsername, Password: string(hashedPwd), Role: "super_admin", TenantID: tenant.ID}).Error; err != nil {
+				return err
+			}
+			fmt.Printf("Seeded bootstrap administrator %q for tenant %q\n", bootstrap.AdminUsername, bootstrap.SystemCode)
 		}
-		if err := tx.Create(&tenant).Error; err != nil {
+		// Platform identity uses independent bootstrap credentials. Reusing the
+		// tenant administrator secret would collapse the highest privilege boundary.
+		var platformCount int64
+		if err := tx.Model(&model.PlatformUser{}).Count(&platformCount).Error; err != nil {
 			return err
 		}
-
-		// Create admin user
-		hashedPwd, err := bcrypt.GenerateFromPassword([]byte(bootstrap.AdminPassword), 14)
-		if err != nil {
-			return err
+		if platformCount == 0 && bootstrap.PlatformPassword == "" {
+			return errors.New("database has no platform users; set TICKET_BOOTSTRAP_PLATFORM_PASSWORD for the first startup")
 		}
-
-		admin := model.User{
-			Username: bootstrap.AdminUsername,
-			Password: string(hashedPwd),
-			Role:     "super_admin",
-			TenantID: tenant.ID,
+		if platformCount == 0 {
+			if bootstrap.PlatformPassword == bootstrap.AdminPassword {
+				return errors.New("platform bootstrap password must differ from tenant administrator password")
+			}
+			hashedPwd, err := bcrypt.GenerateFromPassword([]byte(bootstrap.PlatformPassword), 14)
+			if err != nil {
+				return err
+			}
+			if err := tx.Create(&model.PlatformUser{Username: bootstrap.PlatformUsername, Password: string(hashedPwd), Role: "platform_admin", Status: "active"}).Error; err != nil {
+				return err
+			}
 		}
-		if err := tx.Create(&admin).Error; err != nil {
-			return err
-		}
-		fmt.Printf("Seeded bootstrap administrator %q for tenant %q\n", bootstrap.AdminUsername, bootstrap.SystemCode)
 		return nil
 	})
 }

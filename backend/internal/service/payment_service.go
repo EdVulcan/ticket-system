@@ -3,9 +3,14 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/http"
+	"strconv"
 	"strings"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/utils"
@@ -46,6 +51,12 @@ func (s *PaymentService) GetConfig(tenantID uint, provider string) (*model.Payme
 			return nil, fmt.Errorf("decrypt public key: %w", err)
 		}
 	}
+	if paymentConfig.PlatformPublicKey != "" {
+		paymentConfig.PlatformPublicKey, err = utils.DecryptAES(paymentConfig.PlatformPublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt payment platform public key: %w", err)
+		}
+	}
 	return &paymentConfig, nil
 }
 
@@ -81,6 +92,15 @@ func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error 
 		}
 		if order.Status != "unpaid" {
 			return fmt.Errorf("order cannot be paid from status %s", order.Status)
+		}
+		if order.Channel == "window" {
+			if req.ShiftID == 0 || req.DeviceID == 0 || req.OperatorID == 0 {
+				return fmt.Errorf("an open POS shift, device and operator are required for window payment")
+			}
+			var shift model.POSShift
+			if err := tx.Where("id = ? AND tenant_id = ? AND device_id = ? AND operator_id = ? AND status = ?", req.ShiftID, tenantID, req.DeviceID, req.OperatorID, "open").First(&shift).Error; err != nil {
+				return fmt.Errorf("open POS shift not found")
+			}
 		}
 		var activeAttempts int64
 		if err := tx.Model(&model.Payment{}).
@@ -120,16 +140,24 @@ func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error 
 		_ = model.Write(func(tx *gorm.DB) error {
 			return tx.Model(req).Updates(map[string]interface{}{"status": req.Status, "error_message": req.ErrorMessage}).Error
 		})
+		if s.OrderService != nil {
+			_ = s.OrderService.Cancel(req.OrderNo, tenantID)
+		}
 		return err
 	}
 	if req.Status == "paid" {
 		return s.completePayment(req)
 	}
-	return model.Write(func(tx *gorm.DB) error {
+	if err := model.Write(func(tx *gorm.DB) error {
 		return tx.Model(req).Updates(map[string]interface{}{
 			"status": req.Status, "transaction_id": req.TransactionID, "code_url": req.CodeURL,
 		}).Error
-	})
+	}); err != nil {
+		return err
+	}
+	// The callback is the primary completion path, but a persisted task keeps
+	// provider-side success recoverable when the process or client disappears.
+	return s.enqueuePaymentTask(req)
 }
 
 func generatePaymentNo() string {
@@ -169,7 +197,7 @@ func (s *PaymentService) payWeChat(req *model.Payment) error {
 		Set("out_trade_no", req.PaymentNo).
 		Set("notify_url", cfg.NotifyURL).
 		SetBodyMap("amount", func(amount gopay.BodyMap) {
-			amount.Set("total", int64(req.Amount*100)).Set("currency", "CNY")
+			amount.Set("total", moneyCents(req.Amount)).Set("currency", "CNY")
 		})
 	res, err := client.V3TransactionNative(context.Background(), bm)
 	if err != nil {
@@ -266,7 +294,10 @@ func (s *PaymentService) completePayment(payment *model.Payment) error {
 		}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&order).Update("status", "paid").Error
+		if err := tx.Model(&order).Update("status", "paid").Error; err != nil {
+			return err
+		}
+		return updateFulfillmentOrdersTx(tx, order.ID, "paid")
 	})
 }
 
@@ -286,7 +317,171 @@ func (s *PaymentService) GetStatus(paymentID, tenantID uint) (*model.Payment, er
 			return nil, err
 		}
 	}
+	if payment.Status == "failed" && s.OrderService != nil {
+		_ = s.OrderService.Cancel(payment.OrderNo, tenantID)
+	}
 	return &payment, nil
+}
+
+// CompleteNotification is the single idempotent state transition used by
+// provider callbacks and tests. It validates the stored amount and tenant
+// scope before changing both payment and order in one write transaction.
+func (s *PaymentService) CompleteNotification(tenantID uint, paymentNo, method, transactionID string, amount float64) error {
+	return model.Write(func(tx *gorm.DB) error {
+		var payment model.Payment
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("payment_no = ? AND tenant_id = ? AND method = ?", paymentNo, tenantID, method).First(&payment).Error; err != nil {
+			return err
+		}
+		if roundMoney(payment.Amount) != roundMoney(amount) {
+			return fmt.Errorf("payment amount mismatch")
+		}
+		if payment.Status == "paid" {
+			if transactionID != "" && payment.TransactionID != "" && payment.TransactionID != transactionID {
+				return fmt.Errorf("payment transaction mismatch")
+			}
+			return nil
+		}
+		if payment.Status != "pending" {
+			return fmt.Errorf("payment cannot be completed from status %s", payment.Status)
+		}
+		var order model.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("order_no = ? AND tenant_id = ?", payment.OrderNo, tenantID).First(&order).Error; err != nil {
+			return err
+		}
+		if order.Status != "unpaid" {
+			return fmt.Errorf("order cannot be paid from status %s", order.Status)
+		}
+		if err := tx.Model(&payment).Updates(map[string]interface{}{
+			"status": "paid", "transaction_id": transactionID, "error_message": "",
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&order).Update("status", "paid").Error; err != nil {
+			return err
+		}
+		return updateFulfillmentOrdersTx(tx, order.ID, "paid")
+	})
+}
+
+// FailNotification records a provider-side failure and releases the unpaid
+// order reservation. Repeated failure notifications are harmless.
+func (s *PaymentService) FailNotification(tenantID uint, paymentNo, method, reason string) error {
+	return model.Write(func(tx *gorm.DB) error {
+		var payment model.Payment
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("payment_no = ? AND tenant_id = ? AND method = ?", paymentNo, tenantID, method).First(&payment).Error; err != nil {
+			return err
+		}
+		if payment.Status == "failed" {
+			return nil
+		}
+		if payment.Status == "paid" {
+			return fmt.Errorf("paid payment cannot be failed")
+		}
+		if err := tx.Model(&payment).Updates(map[string]interface{}{"status": "failed", "error_message": reason}).Error; err != nil {
+			return err
+		}
+		var order model.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Preload("Items.Tickets").Where("order_no = ? AND tenant_id = ?", payment.OrderNo, tenantID).First(&order).Error; err != nil {
+			return err
+		}
+		if order.Status == "unpaid" {
+			return cancelOrderTx(tx, &order)
+		}
+		return nil
+	})
+}
+
+func parseRSAPublicKey(value string) (*rsa.PublicKey, error) {
+	block, _ := pem.Decode([]byte(value))
+	if block == nil {
+		return nil, fmt.Errorf("payment public key is not PEM encoded")
+	}
+	if key, err := x509.ParsePKIXPublicKey(block.Bytes); err == nil {
+		if rsaKey, ok := key.(*rsa.PublicKey); ok {
+			return rsaKey, nil
+		}
+	}
+	if key, err := x509.ParsePKCS1PublicKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	return nil, fmt.Errorf("unsupported RSA public key")
+}
+
+// HandleWeChatNotify verifies and decrypts a WeChat Pay V3 callback. The
+// tenant is taken from the configured callback URL path, never from JSON.
+func (s *PaymentService) HandleWeChatNotify(tenantID uint, req *http.Request) error {
+	notify, err := wechat.V3ParseNotify(req)
+	if err != nil {
+		return err
+	}
+	cfg, err := s.GetConfig(tenantID, "wechat")
+	if err != nil {
+		return err
+	}
+	if cfg.PlatformPublicKeyID == "" || notify.SignInfo.HeaderSerial != cfg.PlatformPublicKeyID {
+		return fmt.Errorf("unknown WeChat platform key serial")
+	}
+	publicKey, err := parseRSAPublicKey(cfg.PlatformPublicKey)
+	if err != nil {
+		return err
+	}
+	if err := notify.VerifySignByPK(publicKey); err != nil {
+		return err
+	}
+	result, err := notify.DecryptPayCipherText(cfg.Key)
+	if err != nil {
+		return err
+	}
+	if result.TradeState == wechat.TradeStateSuccess {
+		if result.Amount == nil {
+			return fmt.Errorf("WeChat callback has no amount")
+		}
+		return s.CompleteNotification(tenantID, result.OutTradeNo, "wechat", result.TransactionId, float64(result.Amount.Total)/100)
+	}
+	if result.TradeState == wechat.TradeStateClosed || result.TradeState == wechat.TradeStatePayError || result.TradeState == wechat.TradeStateRevoked {
+		return s.FailNotification(tenantID, result.OutTradeNo, "wechat", result.TradeStateDesc)
+	}
+	return nil
+}
+
+// HandleAlipayNotify verifies the signed form callback and applies the same
+// idempotent payment transition as WeChat.
+func (s *PaymentService) HandleAlipayNotify(tenantID uint, req *http.Request) error {
+	values, err := alipay.ParseNotifyToBodyMap(req)
+	if err != nil {
+		return err
+	}
+	cfg, err := s.GetConfig(tenantID, "alipay")
+	if err != nil {
+		return err
+	}
+	if values.GetString("app_id") != "" && values.GetString("app_id") != cfg.AppID {
+		return fmt.Errorf("Alipay app id mismatch")
+	}
+	ok, err := alipay.VerifySign(cfg.PublicKey, values)
+	if err != nil || !ok {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("Alipay callback signature verification failed")
+	}
+	status := values.GetString("trade_status")
+	paymentNo := values.GetString("out_trade_no")
+	if status == "TRADE_SUCCESS" || status == "TRADE_FINISHED" {
+		amount, err := strconv.ParseFloat(values.GetString("total_amount"), 64)
+		if err != nil {
+			return err
+		}
+		return s.CompleteNotification(tenantID, paymentNo, "alipay", values.GetString("trade_no"), amount)
+	}
+	if status == "TRADE_CLOSED" {
+		return s.FailNotification(tenantID, paymentNo, "alipay", status)
+	}
+	return nil
 }
 
 func (s *PaymentService) refreshProviderStatus(payment *model.Payment) error {

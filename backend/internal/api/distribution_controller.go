@@ -5,12 +5,35 @@ import (
 	"strconv"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 type DistributionController struct {
 	Service service.DistributionService
+}
+
+func (c *DistributionController) CreateOffer(ctx *gin.Context) {
+	var req struct {
+		DistributorTenantID uint       `json:"distributor_tenant_id" binding:"required"`
+		SourceProductID     uint       `json:"source_product_id" binding:"required"`
+		SettlementPrice     float64    `json:"settlement_price" binding:"required"`
+		CommissionBPS       int64      `json:"commission_bps"`
+		AllowedChannels     string     `json:"allowed_channels" binding:"required"`
+		SalesStartAt        *time.Time `json:"sales_start_at"`
+		SalesEndAt          *time.Time `json:"sales_end_at"`
+	}
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	offer, err := c.Service.CreateOffer(ctx.GetUint("tenant_id"), req.DistributorTenantID, req.SourceProductID, req.SettlementPrice, req.CommissionBPS, req.AllowedChannels, req.SalesStartAt, req.SalesEndAt)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusCreated, gin.H{"data": offer})
 }
 
 func (c *DistributionController) Search(ctx *gin.Context) {

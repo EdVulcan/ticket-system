@@ -28,11 +28,14 @@ func TestOTASignatureTimestampAndReplayProtection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Tenant{}, &model.OTANonce{}); err != nil {
+	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.OTANonce{}); err != nil {
 		t.Fatal(err)
 	}
 	tenant := model.Tenant{Name: "OTA Tenant", SystemCode: "OTA-KEY", SecretKey: "OTA-SECRET"}
 	if err := db.Create(&tenant).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.TenantCapability{TenantID: tenant.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	model.DB = db
@@ -79,5 +82,11 @@ func TestOTASignatureTimestampAndReplayProtection(t *testing.T) {
 	}
 	if status := request(now-600, fmt.Sprintf("old-%d", now)); status != http.StatusUnauthorized {
 		t.Fatalf("expired request status = %d, want 401", status)
+	}
+	if err := db.Model(&tenant).Update("status", "frozen").Error; err != nil {
+		t.Fatal(err)
+	}
+	if status := request(now, fmt.Sprintf("frozen-%d", now)); status != http.StatusUnauthorized {
+		t.Fatalf("frozen tenant request status = %d, want 401", status)
 	}
 }

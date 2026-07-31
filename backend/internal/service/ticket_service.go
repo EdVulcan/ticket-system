@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"ticket-backend/internal/model"
@@ -26,16 +27,31 @@ type TicketService struct{}
 
 func (s *TicketService) Verify(code string, checkPointID, deviceID, tenantID uint) error {
 	var ticketID uint
+	var recordScenicAreaID uint
 	err := model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "supplier"); err != nil {
+			return err
+		}
+		if checkPointID == 0 || deviceID == 0 {
+			return ErrAccessDenied
+		}
 		var checkpoint model.CheckPoint
 		if err := tx.Where("id = ? AND tenant_id = ?", checkPointID, tenantID).First(&checkpoint).Error; err != nil {
 			return ErrCheckpointNotFound
 		}
+		if checkpoint.ScenicAreaID == 0 {
+			return ErrAccessDenied
+		}
+		recordScenicAreaID = checkpoint.ScenicAreaID
+		var device model.Device
+		if err := tx.Where("id = ? AND tenant_id = ? AND scenic_area_id = ? AND check_point_id = ?", deviceID, tenantID, checkpoint.ScenicAreaID, checkpoint.ID).First(&device).Error; err != nil {
+			return ErrAccessDenied
+		}
 
 		var ticket model.Ticket
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Preload("OrderItem.Product.Rule.Groups.Items").
-			Where("ticket_code = ? AND tenant_id = ?", code, tenantID).
+			Preload("OrderItem.Product").
+			Where("ticket_code = ? AND (fulfillment_tenant_id = ? OR (fulfillment_tenant_id = 0 AND tenant_id = ?))", code, tenantID, tenantID).
 			First(&ticket).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrInvalidTicket
@@ -45,7 +61,11 @@ func (s *TicketService) Verify(code string, checkPointID, deviceID, tenantID uin
 		ticketID = ticket.ID
 
 		var order model.Order
-		if err := tx.Where("id = ? AND tenant_id = ?", ticket.OrderItem.OrderID, tenantID).First(&order).Error; err != nil {
+		salesTenantID := ticket.TenantID
+		if salesTenantID == 0 {
+			salesTenantID = ticket.OrderItem.Product.TenantID
+		}
+		if err := tx.Where("id = ? AND tenant_id = ?", ticket.OrderItem.OrderID, salesTenantID).First(&order).Error; err != nil {
 			return ErrInvalidTicket
 		}
 		if order.Status != "paid" && order.Status != "completed" {
@@ -63,7 +83,52 @@ func (s *TicketService) Verify(code string, checkPointID, deviceID, tenantID uin
 			return ErrTicketExpired
 		}
 
-		product := ticket.OrderItem.Product
+		fulfillmentProductID := ticket.FulfillmentProductID
+		fulfillmentTenantID := ticket.FulfillmentTenantID
+		if fulfillmentProductID == 0 {
+			fulfillmentProductID = ticket.OrderItem.FulfillmentProductID
+		}
+		if fulfillmentTenantID == 0 {
+			fulfillmentTenantID = ticket.OrderItem.FulfillmentTenantID
+		}
+		if fulfillmentProductID == 0 {
+			fulfillmentProductID = ticket.OrderItem.ProductID
+		}
+		if fulfillmentTenantID == 0 {
+			fulfillmentTenantID = salesTenantID
+		}
+		if fulfillmentTenantID != tenantID {
+			return ErrInvalidTicket
+		}
+		fulfillmentScenicAreaID := ticket.FulfillmentScenicAreaID
+		if fulfillmentScenicAreaID == 0 {
+			fulfillmentScenicAreaID = ticket.OrderItem.FulfillmentScenicAreaID
+		}
+		if fulfillmentScenicAreaID == 0 || fulfillmentScenicAreaID != checkpoint.ScenicAreaID {
+			return ErrInvalidTicket
+		}
+		var product model.Product
+		if ticket.RuleSnapshot != "" {
+			var rule model.TicketRule
+			if err := json.Unmarshal([]byte(ticket.RuleSnapshot), &rule); err != nil {
+				return ErrInvalidTicket
+			}
+			if rule.TenantID != 0 && rule.TenantID != fulfillmentTenantID {
+				return ErrInvalidTicket
+			}
+			product.CodeMode = ticket.CodeMode
+			if product.CodeMode == "" {
+				product.CodeMode = ticket.OrderItem.Product.CodeMode
+			}
+			product.Rule = rule
+		} else {
+			// Legacy tickets predate rule snapshots. Keep the compatibility path
+			// until those rows are migrated or naturally retired.
+			if err := tx.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Preload("Rule.Groups.Items.CheckPoint").
+				Where("id = ? AND tenant_id = ?", fulfillmentProductID, fulfillmentTenantID).First(&product).Error; err != nil {
+				return ErrInvalidTicket
+			}
+		}
 		matchedGroup, matchedItem := matchRule(product.Rule, checkPointID)
 		if matchedGroup == nil || matchedItem == nil {
 			return ErrAccessDenied
@@ -82,7 +147,7 @@ func (s *TicketService) Verify(code string, checkPointID, deviceID, tenantID uin
 		}
 
 		record := model.CheckInRecord{
-			TicketID: ticket.ID, TicketCode: code, TenantID: tenantID,
+			TicketID: ticket.ID, TicketCode: code, TenantID: tenantID, ScenicAreaID: checkpoint.ScenicAreaID,
 			CheckPointID: checkPointID, DeviceID: deviceID, CheckInTime: now,
 			Result: "success", Message: "verified",
 		}
@@ -99,6 +164,13 @@ func (s *TicketService) Verify(code string, checkPointID, deviceID, tenantID uin
 		if err := tx.Save(&ticket).Error; err != nil {
 			return err
 		}
+		entitlementStatus := "active"
+		if ticket.Status == "used" {
+			entitlementStatus = "used"
+		}
+		if err := tx.Model(&model.TicketEntitlement{}).Where("ticket_id = ?", ticket.ID).Update("status", entitlementStatus).Error; err != nil {
+			return err
+		}
 
 		if ticket.Status == "used" {
 			var remaining int64
@@ -112,6 +184,9 @@ func (s *TicketService) Verify(code string, checkPointID, deviceID, tenantID uin
 				if err := tx.Model(&order).Update("status", "completed").Error; err != nil {
 					return err
 				}
+				if err := updateFulfillmentOrdersTx(tx, order.ID, "fulfilled"); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -120,7 +195,7 @@ func (s *TicketService) Verify(code string, checkPointID, deviceID, tenantID uin
 	if err != nil {
 		_ = model.Write(func(tx *gorm.DB) error {
 			return tx.Create(&model.CheckInRecord{
-				TicketID: ticketID, TicketCode: code, TenantID: tenantID,
+				TicketID: ticketID, TicketCode: code, TenantID: tenantID, ScenicAreaID: recordScenicAreaID,
 				CheckPointID: checkPointID, DeviceID: deviceID, CheckInTime: time.Now(),
 				Result: "deny", Message: err.Error(),
 			}).Error

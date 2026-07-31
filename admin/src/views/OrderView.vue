@@ -232,14 +232,24 @@ const handleDetail = (row: any) => {
   detailVisible.value = true
 }
 
-const handleRefund = (_row: any) => {
+const handleRefund = async (row: any) => {
   ElMessageBox.confirm('确认全额退款吗？此操作不可逆。', '退款确认', {
     confirmButtonText: '确定退款',
     cancelButtonText: '取消',
     type: 'warning'
-  }).then(() => {
-    ElMessage.info('退款功能开发中...')
-  })
+  }).then(async () => {
+    const idempotencyKey = `admin-${row.order_no}-${Date.now()}`
+    const ticketCodes = (row.items || []).flatMap((item: any) => (item.tickets || []).map((ticket: any) => ticket.ticket_code)).filter(Boolean)
+    if (!ticketCodes.length) { ElMessage.warning('订单没有可退款的未使用票'); return }
+    if (row.channel === 'online' || row.channel === 'ota') {
+      await request.post('/payments/refunds/digital', { order_no: row.order_no, idempotency_key: idempotencyKey, amount: row.total_amount, ticket_codes: ticketCodes, reason: '管理端全额退款' })
+      ElMessage.info('退款申请已记录，等待支付渠道确认')
+    } else {
+      await request.post('/payments/refunds/cash', { order_no: row.order_no, idempotency_key: idempotencyKey, amount: row.total_amount, ticket_codes: ticketCodes, reason: '管理端全额退款' })
+      ElMessage.success('退款已完成')
+    }
+    fetchData()
+  }).catch(() => undefined)
 }
 
 const getStatusType = (status: string) => {

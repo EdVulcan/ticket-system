@@ -72,11 +72,31 @@ func (c *StaffController) Create(ctx *gin.Context) {
 func (c *StaffController) List(ctx *gin.Context) {
 	tenantID := ctx.GetUint("tenant_id")
 	var staffs []model.Staff
-	if err := model.DB.Where("tenant_id = ?", tenantID).Find(&staffs).Error; err != nil {
+	if err := model.DB.Preload("ResourceScopes").Where("tenant_id = ?", tenantID).Find(&staffs).Error; err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	ctx.JSON(http.StatusOK, staffs)
+}
+
+func (c *StaffController) SetResourceScopes(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid staff id"})
+		return
+	}
+	var body struct {
+		Scopes []model.StaffResourceScope `json:"scopes"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := service.ReplaceStaffResourceScopes(ctx.GetUint("tenant_id"), uint(id), body.Scopes); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"message": "resource scopes updated"})
 }
 
 // Delete Staff

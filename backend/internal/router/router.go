@@ -19,20 +19,27 @@ func InitRouter(r *gin.Engine) {
 	authController := &api.AuthController{Service: service.AuthService{}}
 	apiGroup.POST("/auth/login", authController.Login)
 	apiGroup.POST("/auth/staff/login", authController.StaffLogin)
+	apiGroup.POST("/auth/platform/login", authController.PlatformLogin)
 
 	// Protected Routes
 	protected := apiGroup.Group("")
 	protected.Use(middleware.JWTAuth())
+	platformController := &api.PlatformController{Service: service.PlatformService{}}
+	platformGroup := protected.Group("/platform")
+	platformGroup.Use(middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"))
+	platformGroup.GET("/overview", platformController.Overview)
 
 	// Tenant Routes
 	tenantController := &api.TenantController{}
 	tenantGroup := protected.Group("/tenants")
 	{
 		tenantGroup.GET("/me", tenantController.GetSelf)
-		tenantGroup.POST("", middleware.RequireAnyRole("super_admin"), tenantController.Create)
-		tenantGroup.GET("", middleware.RequireAnyRole("super_admin"), tenantController.List)
-		tenantGroup.PUT("/:id", middleware.RequireAnyRole("super_admin"), tenantController.Update)
-		tenantGroup.DELETE("/:id", middleware.RequireAnyRole("super_admin"), tenantController.Delete)
+		tenantGroup.POST("", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.Create)
+		tenantGroup.GET("", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.List)
+		tenantGroup.PUT("/:id", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.Update)
+		tenantGroup.PATCH("/:id/status", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.UpdateStatus)
+		tenantGroup.PUT("/:id/capabilities/:capability", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.SetCapability)
+		tenantGroup.DELETE("/:id", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.Delete)
 	}
 
 	// User Routes (Staff Management)
@@ -55,6 +62,7 @@ func InitRouter(r *gin.Engine) {
 		staffGroup.GET("", staffController.List)
 		staffGroup.DELETE("/:id", staffController.Delete)
 		staffGroup.PUT("/:id/password", staffController.ResetPassword)
+		staffGroup.PUT("/:id/resource-scopes", staffController.SetResourceScopes)
 	}
 
 	// Device Routes
@@ -96,6 +104,7 @@ func InitRouter(r *gin.Engine) {
 	{
 		orderGroup.POST("", orderController.Create)
 		orderGroup.GET("", orderController.List)
+		orderGroup.POST("/:orderNo/cancel", orderController.Cancel)
 	}
 
 	// Ticket Routes
@@ -104,6 +113,16 @@ func InitRouter(r *gin.Engine) {
 	ticketGroup.Use(middleware.RequireAnyRole("checker", "admin", "super_admin"))
 	{
 		ticketGroup.POST("/verify", ticketController.Verify)
+	}
+
+	// CheckPoint Routes
+	scenicAreaController := &api.ScenicAreaController{}
+	scenicAreaGroup := protected.Group("/scenic-areas")
+	{
+		scenicAreaGroup.GET("", middleware.RequireAnyRole("seller", "checker", "admin", "super_admin"), scenicAreaController.List)
+		scenicAreaGroup.POST("", middleware.RequireAnyRole("admin", "super_admin"), scenicAreaController.Create)
+		scenicAreaGroup.PUT("/:id", middleware.RequireAnyRole("admin", "super_admin"), scenicAreaController.Update)
+		scenicAreaGroup.DELETE("/:id", middleware.RequireAnyRole("admin", "super_admin"), scenicAreaController.Delete)
 	}
 
 	// CheckPoint Routes
@@ -141,6 +160,7 @@ func InitRouter(r *gin.Engine) {
 		distGroup.POST("/agents/:id/recharge", distController.RechargeAgent) // New Recharge Route
 
 		// Product Distribution
+		distGroup.POST("/offers", distController.CreateOffer)
 		distGroup.GET("/products", distController.ListDistributableProducts)
 		distGroup.POST("/products/import", distController.ImportProduct)
 	}
@@ -149,6 +169,63 @@ func InitRouter(r *gin.Engine) {
 	otaController := &api.OTAController{
 		OrderService:   service.OrderService{},
 		ProductService: service.ProductService{},
+	}
+
+	// Independently credentialed channel routes. The legacy /ota routes remain
+	// available for migration and continue using the tenant OTA secret.
+	channelGroup := apiGroup.Group("/channels/:code")
+	channelGroup.Use(middleware.ChannelAuthMiddleware())
+	{
+		channelGroup.POST("/products", otaController.ListProducts)
+		channelGroup.POST("/orders/create", otaController.CreateOrder)
+		channelGroup.POST("/orders/cancel", otaController.CancelOrder)
+		channelGroup.POST("/orders/query", otaController.QueryOrder)
+	}
+
+	channelController := &api.ChannelController{Service: service.ChannelService{}}
+	channelAdminGroup := protected.Group("/channel-accounts")
+	channelAdminGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
+	{
+		channelAdminGroup.GET("", channelController.List)
+		channelAdminGroup.POST("", channelController.Create)
+		channelAdminGroup.PATCH("/:id/status", channelController.SetStatus)
+		channelAdminGroup.POST("/:id/rotate-secret", channelController.RotateSecret)
+		channelAdminGroup.GET("/mappings", channelController.ListMappings)
+		channelAdminGroup.POST("/mappings", channelController.AddMapping)
+	}
+
+	teamController := &api.TeamController{Service: service.TeamService{}}
+	teamGroup := protected.Group("/teams")
+	teamGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"))
+	{
+		teamGroup.GET("/contracts", teamController.ListContracts)
+		teamGroup.POST("/contracts", teamController.CreateContract)
+		teamGroup.GET("/agents", teamController.ListAgents)
+		teamGroup.POST("/agents", teamController.CreateAgent)
+		teamGroup.GET("/guides", teamController.ListGuides)
+		teamGroup.POST("/guides", teamController.CreateGuide)
+		teamGroup.GET("/vehicles", teamController.ListVehicles)
+		teamGroup.POST("/vehicles", teamController.CreateVehicle)
+		teamGroup.GET("", teamController.ListGroups)
+		teamGroup.POST("", teamController.CreateGroup)
+		teamGroup.GET("/:id/members", teamController.ListMembers)
+		teamGroup.POST("/:id/members", teamController.AddMembers)
+		teamGroup.POST("/:id/enter-batch", teamController.EnterBatch)
+		teamGroup.POST("/:id/attach-order", teamController.AttachOrder)
+	}
+
+	operationsController := &api.OperationsController{Service: service.OperationsService{}}
+	operationsGroup := protected.Group("/operations")
+	operationsGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"))
+	{
+		operationsGroup.GET("/shifts", operationsController.ListShifts)
+		operationsGroup.GET("/shifts/open", operationsController.GetOpenShift)
+		operationsGroup.POST("/shifts", operationsController.OpenShift)
+		operationsGroup.POST("/shifts/:id/close", operationsController.CloseShift)
+		operationsGroup.POST("/print-jobs", operationsController.QueuePrint)
+		operationsGroup.GET("/print-jobs", operationsController.ListPrintJobs)
+		operationsGroup.POST("/print-jobs/:id/status", operationsController.UpdatePrintStatus)
+		operationsGroup.GET("/alerts", operationsController.ListAlerts)
 	}
 	otaGroup := apiGroup.Group("/ota")
 	otaGroup.Use(middleware.OTASignMiddleware())
@@ -166,6 +243,16 @@ func InitRouter(r *gin.Engine) {
 	{
 		financeGroup.GET("/accounts", financeController.ListAccounts)
 		financeGroup.GET("/transactions", financeController.ListTransactions)
+		financeGroup.GET("/ledger", financeController.ListLedger)
+	}
+
+	settlementController := &api.SettlementController{Service: service.SettlementService{}}
+	settlementGroup := protected.Group("/settlements")
+	settlementGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
+	{
+		settlementGroup.GET("", settlementController.List)
+		settlementGroup.POST("/generate", settlementController.Generate)
+		settlementGroup.PATCH("/:id/status", settlementController.SetStatus)
 	}
 
 	// Report Routes
@@ -183,11 +270,19 @@ func InitRouter(r *gin.Engine) {
 	paymentSvc := service.PaymentService{OrderService: &orderSvc}
 
 	paymentController := &api.PaymentController{Service: paymentSvc}
+	refundController := &api.RefundController{}
 	configController := &api.PaymentConfigController{Service: paymentSvc}
+	// Provider callbacks are authenticated by the provider signature inside the
+	// payment service. They must remain outside the tenant JWT middleware because
+	// the provider cannot present an operator token.
+	apiGroup.POST("/payments/notify/wechat/:tenantID", paymentController.WeChatNotify)
+	apiGroup.POST("/payments/notify/alipay/:tenantID", paymentController.AlipayNotify)
 
 	paymentGroup := protected.Group("/payments")
 	{
 		paymentGroup.POST("/pay", middleware.RequireAnyRole("seller", "admin", "super_admin"), paymentController.Pay)
+		paymentGroup.POST("/refunds/cash", middleware.RequireAnyRole("seller", "admin", "super_admin"), refundController.CreateCash)
+		paymentGroup.POST("/refunds/digital", middleware.RequireAnyRole("seller", "admin", "super_admin"), refundController.CreateDigital)
 		paymentGroup.GET("/configs", middleware.RequireAnyRole("admin", "super_admin"), configController.GetConfigs)
 		paymentGroup.POST("/configs", middleware.RequireAnyRole("admin", "super_admin"), configController.SaveConfig)
 		paymentGroup.GET("/:id", middleware.RequireAnyRole("seller", "admin", "super_admin"), paymentController.Query)

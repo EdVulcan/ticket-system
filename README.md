@@ -2,6 +2,13 @@
 
 这是一个可独立运行的景区票务服务。管理端静态页面、Go API、SQLite 数据库和定时备份由同一个服务承载，运行时不需要 MySQL、Redis 或单独的 Web 服务器。
 
+## 开发基线文档
+
+涉及租户、商品、订单、库存、核销、分销、渠道、支付或资金的开发前，请先阅读：
+
+- [多租户景区票务平台开发基线与演进指南](docs/platform-multitenancy-development-guide.md)
+- [景区票务经营系统产品研究与当前项目差距](docs/scenic-ticketing-product-research.md)
+
 ## 快速启动
 
 从发布目录启动时，只需运行一个进程：
@@ -9,6 +16,8 @@
 ```powershell
 cd release/backend
 $env:TICKET_BOOTSTRAP_ADMIN_PASSWORD = '请设置一个强密码'
+$env:TICKET_BOOTSTRAP_PLATFORM_USERNAME = 'platform_admin'
+$env:TICKET_BOOTSTRAP_PLATFORM_PASSWORD = '请设置另一个不同的强密码'
 .\ticket-system.exe
 ```
 
@@ -17,6 +26,13 @@ $env:TICKET_BOOTSTRAP_ADMIN_PASSWORD = '请设置一个强密码'
 - 商户系统编号：`SYS001`
 - 用户名：`admin`
 - 密码：环境变量 `TICKET_BOOTSTRAP_ADMIN_PASSWORD` 的值
+
+平台治理账号与租户管理员完全独立：
+
+- 用户名：环境变量 `TICKET_BOOTSTRAP_PLATFORM_USERNAME` 的值
+- 密码：环境变量 `TICKET_BOOTSTRAP_PLATFORM_PASSWORD` 的值，且不能与租户管理员密码相同
+
+平台账号只用于平台登录模式和租户治理；租户业务能力默认按实际历史数据迁移，新租户的供应商、分销商和旅行社能力必须由平台明确开通。
 
 随后访问 `http://127.0.0.1:8080/`。管理员创建成功后，后续启动不再需要保留该环境变量。
 

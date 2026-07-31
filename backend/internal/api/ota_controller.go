@@ -45,7 +45,24 @@ func (c *OTAController) ListProducts(ctx *gin.Context) {
 
 	// Reuse ProductService List
 	// We only show "online" products (Ticket Type)
-	products, total, err := c.ProductService.List(page, pageSize, tenantID, "online")
+	var products []model.Product
+	var total int64
+	channelAccountID := ctx.GetUint("channel_account_id")
+	var err error
+	if channelAccountID > 0 {
+		var productIDs []uint
+		if err = model.DB.Table("channel_product_mappings").Where("channel_account_id = ? AND status = ?", channelAccountID, "active").Pluck("product_id", &productIDs).Error; err == nil && len(productIDs) > 0 {
+			query := model.DB.Where("tenant_id = ? AND status = ? AND id IN ?", tenantID, "online", productIDs)
+			err = query.Count(&total).Error
+			if err == nil {
+				err = query.Order("id ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&products).Error
+			}
+		} else if err == nil {
+			products = []model.Product{}
+		}
+	} else {
+		products, total, err = c.ProductService.List(page, pageSize, tenantID, "online")
+	}
 
 	if err != nil {
 		OTAResponse(ctx, err, nil)
@@ -73,12 +90,13 @@ func (c *OTAController) ListProducts(ctx *gin.Context) {
 
 // 2. Create Order
 type OTACreateOrderRequest struct {
-	ProductID    uint   `json:"product_id" binding:"required"`
-	Quantity     int    `json:"quantity" binding:"required"`
-	Date         string `json:"date"` // Visit Date YYYY-MM-DD
-	ContactName  string `json:"contact_name"`
-	ContactPhone string `json:"contact_phone"`
-	ExternalNo   string `json:"external_no" binding:"required"` // OTA's Order No
+	ProductID           uint   `json:"product_id"`
+	ExternalProductCode string `json:"external_product_code"`
+	Quantity            int    `json:"quantity" binding:"required"`
+	Date                string `json:"date"` // Visit Date YYYY-MM-DD
+	ContactName         string `json:"contact_name"`
+	ContactPhone        string `json:"contact_phone"`
+	ExternalNo          string `json:"external_no" binding:"required"` // OTA's Order No
 }
 
 func (c *OTAController) CreateOrder(ctx *gin.Context) {
@@ -88,8 +106,31 @@ func (c *OTAController) CreateOrder(ctx *gin.Context) {
 		return
 	}
 
-	tenant := ctx.MustGet("tenant").(model.Tenant)
-	tenantID := tenant.ID
+	tenantID := ctx.GetUint("tenant_id")
+	if tenantID == 0 {
+		tenant := ctx.MustGet("tenant").(model.Tenant)
+		tenantID = tenant.ID
+	}
+	if ctx.GetUint("channel_account_id") > 0 {
+		if req.ExternalProductCode == "" {
+			OTAResponse(ctx, fmt.Errorf("external_product_code is required for channel orders"), nil)
+			return
+		}
+		var mapping model.ChannelProductMapping
+		if err := model.DB.Where("channel_account_id = ? AND external_code = ? AND status = ?", ctx.GetUint("channel_account_id"), req.ExternalProductCode, "active").First(&mapping).Error; err != nil {
+			OTAResponse(ctx, fmt.Errorf("external product is not mapped"), nil)
+			return
+		}
+		req.ProductID = mapping.ProductID
+	}
+	if req.ProductID == 0 {
+		OTAResponse(ctx, fmt.Errorf("product_id or external_product_code is required"), nil)
+		return
+	}
+	channel := "ota"
+	if value := ctx.GetString("channel_code"); value != "" {
+		channel = value
+	}
 
 	var useDate *time.Time
 	if req.Date != "" {
@@ -102,11 +143,12 @@ func (c *OTAController) CreateOrder(ctx *gin.Context) {
 	}
 	externalNo := req.ExternalNo
 	order := model.Order{
-		TenantID:     tenantID,
-		ContactName:  req.ContactName,
-		ContactPhone: req.ContactPhone,
-		Channel:      "ota", // Mark as OTA
-		ExternalNo:   &externalNo,
+		TenantID:         tenantID,
+		ContactName:      req.ContactName,
+		ContactPhone:     req.ContactPhone,
+		Channel:          channel,
+		ChannelAccountID: ctx.GetUint("channel_account_id"),
+		ExternalNo:       &externalNo,
 		Items: []model.OrderItem{
 			{
 				ProductID: req.ProductID,
@@ -118,9 +160,13 @@ func (c *OTAController) CreateOrder(ctx *gin.Context) {
 
 	if err := c.OrderService.Create(&order); err != nil {
 		if errors.Is(err, service.ErrDuplicateExternalOrder) {
-			existing, findErr := c.OrderService.GetByExternalNo(req.ExternalNo, "ota", tenantID)
+			existing, findErr := c.OrderService.GetByExternalNo(req.ExternalNo, channel, tenantID)
 			if findErr != nil {
 				OTAResponse(ctx, findErr, nil)
+				return
+			}
+			if !sameExternalOrder(existing, &order) {
+				OTAResponse(ctx, fmt.Errorf("external order number was already used with different order data"), nil)
 				return
 			}
 			order = *existing
@@ -145,6 +191,29 @@ func (c *OTAController) CreateOrder(ctx *gin.Context) {
 	})
 }
 
+func sameExternalOrder(existing, requested *model.Order) bool {
+	if existing == nil || requested == nil || existing.ContactName != requested.ContactName || existing.ContactPhone != requested.ContactPhone || len(existing.Items) != len(requested.Items) {
+		return false
+	}
+	for i := range existing.Items {
+		a, b := existing.Items[i], requested.Items[i]
+		if a.ProductID != b.ProductID || a.Quantity != b.Quantity {
+			return false
+		}
+		if (a.UseDate == nil) != (b.UseDate == nil) {
+			return false
+		}
+		if a.UseDate != nil && !startOfDayAPI(*a.UseDate).Equal(startOfDayAPI(*b.UseDate)) {
+			return false
+		}
+	}
+	return true
+}
+
+func startOfDayAPI(value time.Time) time.Time {
+	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, value.Location())
+}
+
 // 3. Cancel Order
 type OTACancelRequest struct {
 	OrderNo string `json:"order_no" binding:"required"`
@@ -159,8 +228,16 @@ func (c *OTAController) CancelOrder(ctx *gin.Context) {
 
 	// Verify Tenant matches Order?
 	tenantID := ctx.GetUint("tenant_id")
-	_, err := c.OrderService.GetByOrderNo(req.OrderNo, tenantID)
+	channel := ctx.GetString("channel_code")
+	if channel == "" {
+		channel = "ota"
+	}
+	order, err := c.OrderService.GetByOrderNo(req.OrderNo, tenantID)
 	if err != nil {
+		OTAResponse(ctx, fmt.Errorf("order not found"), nil)
+		return
+	}
+	if order.Channel != channel {
 		OTAResponse(ctx, fmt.Errorf("order not found"), nil)
 		return
 	}
@@ -183,8 +260,16 @@ func (c *OTAController) QueryOrder(ctx *gin.Context) {
 	}
 
 	tenantID := ctx.GetUint("tenant_id")
+	channel := ctx.GetString("channel_code")
+	if channel == "" {
+		channel = "ota"
+	}
 	order, err := c.OrderService.GetByOrderNo(req.OrderNo, tenantID)
 	if err != nil {
+		OTAResponse(ctx, fmt.Errorf("order not found"), nil)
+		return
+	}
+	if order.Channel != channel {
 		OTAResponse(ctx, fmt.Errorf("order not found"), nil)
 		return
 	}

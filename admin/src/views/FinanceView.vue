@@ -165,13 +165,9 @@ const getTypeText = (type: string) => {
 import { ElMessageBox } from 'element-plus'
 const handleRecharge = (acc: any) => {
     ElMessageBox.alert(
-        `请联系供应商进行线下充值。<br/><br/>
-         <strong>供应商</strong>：${acc.supplier_name}<br/>
-         <strong>联系人</strong>：${acc.supplier_contact || '未知'}<br/>
-         <strong>电话</strong>：${acc.supplier_phone || '未知'}`,
+        `请联系供应商进行线下充值。\n\n供应商：${acc.supplier_name}\n联系人：${acc.supplier_contact || '未知'}\n电话：${acc.supplier_phone || '未知'}`,
         '充值指引',
         {
-            dangerouslyUseHTMLString: true,
             confirmButtonText: '知道了'
         }
     )
