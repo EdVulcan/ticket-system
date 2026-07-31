@@ -57,6 +57,20 @@ func (s *OrderService) Create(req *model.Order) error {
 		if err := requireActiveTenant(tx, req.TenantID); err != nil {
 			return err
 		}
+		var channelReservation *model.ChannelReservation
+		if req.ChannelReservationID > 0 {
+			if req.ChannelAccountID == 0 || req.Channel == "online" || req.Channel == "window" || req.ExternalNo == nil {
+				return errors.New("invalid channel reservation context")
+			}
+			var held model.ChannelReservation
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+				"id = ? AND tenant_id = ? AND channel_account_id = ? AND external_no = ? AND status = ? AND expires_at > ?",
+				req.ChannelReservationID, req.TenantID, req.ChannelAccountID, *req.ExternalNo, "held", time.Now(),
+			).First(&held).Error; err != nil {
+				return errors.New("channel reservation is unavailable")
+			}
+			channelReservation = &held
+		}
 		if req.ExternalNo != nil {
 			var count int64
 			if err := tx.Model(&model.Order{}).Where(
@@ -124,14 +138,23 @@ func (s *OrderService) Create(req *model.Order) error {
 			if err := applyValidity(item, fulfillment); err != nil {
 				return fmt.Errorf("%s: %w", listing.Name, err)
 			}
+			if err := validateSalePolicyTx(tx, fulfillment, req, item); err != nil {
+				return err
+			}
 
 			if distributed {
 				if err := chargeDistributionAccount(tx, req, item, req.TenantID, fulfillment.TenantID, listing.Name); err != nil {
 					return err
 				}
 			}
-			if err := reserveStock(tx, fulfillment, item.UseDate, item.Quantity); err != nil {
-				return err
+			if channelReservation == nil {
+				if err := reserveStock(tx, fulfillment, item.UseDate, item.StockSlot, item.Quantity); err != nil {
+					return err
+				}
+			} else {
+				if len(req.Items) != 1 || channelReservation.ProductID != item.ProductID || channelReservation.Quantity != item.Quantity || !sameOptionalDate(channelReservation.UseDate, item.UseDate) || channelReservation.StockSlot != item.StockSlot {
+					return errors.New("channel reservation does not match order")
+				}
 			}
 
 			req.TotalAmount = roundMoney(req.TotalAmount + item.Price*float64(item.Quantity))
@@ -139,10 +162,20 @@ func (s *OrderService) Create(req *model.Order) error {
 			if err != nil {
 				return fmt.Errorf("%s: %w", listing.Name, err)
 			}
+			for ticketIndex := range item.Tickets {
+				item.Tickets[ticketIndex].VisitorName = item.VisitorName
+				item.Tickets[ticketIndex].VisitorPhone = item.VisitorPhone
+				item.Tickets[ticketIndex].VisitorID = item.VisitorID
+			}
 		}
 
 		if err := tx.Create(req).Error; err != nil {
 			return err
+		}
+		if channelReservation != nil {
+			if err := tx.Model(channelReservation).Updates(map[string]interface{}{"status": "converted", "order_no": req.OrderNo}).Error; err != nil {
+				return err
+			}
 		}
 		// GORM fills OrderItemID for nested ticket associations, but Ticket also
 		// carries a denormalized OrderID used by operational queries. Backfill it
@@ -152,6 +185,13 @@ func (s *OrderService) Create(req *model.Order) error {
 		}
 		return createFulfillmentProjections(tx, s, req)
 	})
+}
+
+func sameOptionalDate(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return startOfDay(*left).Equal(startOfDay(*right))
 }
 
 func createFulfillmentProjections(tx *gorm.DB, service *OrderService, order *model.Order) error {
@@ -391,7 +431,7 @@ func startOfDay(value time.Time) time.Time {
 	return time.Date(value.Year(), value.Month(), value.Day(), 0, 0, 0, 0, value.Location())
 }
 
-func reserveStock(tx *gorm.DB, product *model.Product, useDate *time.Time, quantity int) error {
+func reserveStock(tx *gorm.DB, product *model.Product, useDate *time.Time, stockSlot string, quantity int) error {
 	switch product.StockType {
 	case "", "unlimited":
 		return nil
@@ -411,14 +451,18 @@ func reserveStock(tx *gorm.DB, product *model.Product, useDate *time.Time, quant
 			return fmt.Errorf("visit date is required for daily stock")
 		}
 		stockDate := startOfDay(*useDate)
+		capacity, err := slotCapacity(product, stockSlot)
+		if err != nil {
+			return err
+		}
 		inventory := model.ProductInventory{
-			TenantID: product.TenantID, ProductID: product.ID, StockDate: stockDate, Capacity: product.DailyStock,
+			TenantID: product.TenantID, ProductID: product.ID, StockDate: stockDate, StockSlot: stockSlot, Capacity: capacity,
 		}
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&inventory).Error; err != nil {
 			return err
 		}
 		result := tx.Model(&model.ProductInventory{}).
-			Where("tenant_id = ? AND product_id = ? AND stock_date = ? AND sold + ? <= capacity", product.TenantID, product.ID, stockDate, quantity).
+			Where("tenant_id = ? AND product_id = ? AND stock_date = ? AND stock_slot = ? AND sold + ? <= capacity", product.TenantID, product.ID, stockDate, stockSlot, quantity).
 			UpdateColumn("sold", gorm.Expr("sold + ?", quantity))
 		if result.Error != nil {
 			return result.Error
@@ -432,7 +476,7 @@ func reserveStock(tx *gorm.DB, product *model.Product, useDate *time.Time, quant
 	}
 }
 
-func releaseStock(tx *gorm.DB, product *model.Product, useDate *time.Time, quantity int) error {
+func releaseStock(tx *gorm.DB, product *model.Product, useDate *time.Time, stockSlot string, quantity int) error {
 	switch product.StockType {
 	case "", "unlimited":
 		return nil
@@ -444,7 +488,7 @@ func releaseStock(tx *gorm.DB, product *model.Product, useDate *time.Time, quant
 			return fmt.Errorf("daily stock reservation has no visit date")
 		}
 		result := tx.Model(&model.ProductInventory{}).
-			Where("tenant_id = ? AND product_id = ? AND stock_date = ? AND sold >= ?", product.TenantID, product.ID, startOfDay(*useDate), quantity).
+			Where("tenant_id = ? AND product_id = ? AND stock_date = ? AND stock_slot = ? AND sold >= ?", product.TenantID, product.ID, startOfDay(*useDate), stockSlot, quantity).
 			UpdateColumn("sold", gorm.Expr("sold - ?", quantity))
 		if result.Error != nil {
 			return result.Error
@@ -604,7 +648,7 @@ func buildTickets(service *OrderService, product *model.Product, quantity int, o
 			ScenicAreaID: product.ScenicAreaID, FulfillmentScenicAreaID: product.ScenicAreaID,
 			RuleSnapshot: string(ruleSnapshot), CodeMode: product.CodeMode,
 			ProductRevisionID: product.CurrentRevisionID,
-			VisitorName:       order.ContactName, VisitorPhone: order.ContactPhone,
+			VisitorName:       order.ContactName, VisitorPhone: order.ContactPhone, VisitorID: order.VisitorID,
 		}
 	}
 	return tickets, nil
@@ -737,7 +781,7 @@ func cancelOrderTx(tx *gorm.DB, order *model.Order) error {
 				return err
 			}
 		}
-		if err := releaseStock(tx, stockProduct, item.UseDate, item.Quantity); err != nil {
+		if err := releaseStock(tx, stockProduct, item.UseDate, item.StockSlot, item.Quantity); err != nil {
 			return err
 		}
 	}

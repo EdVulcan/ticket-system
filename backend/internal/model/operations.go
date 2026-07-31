@@ -21,16 +21,17 @@ type POSShift struct {
 
 type PrintJob struct {
 	Base
-	TenantID     uint       `gorm:"index;not null" json:"tenant_id"`
-	DeviceID     uint       `gorm:"index;not null" json:"device_id"`
-	OrderNo      string     `gorm:"size:80;index;not null" json:"order_no"`
-	TicketCode   string     `gorm:"size:80;index" json:"ticket_code"`
-	Status       string     `gorm:"size:20;not null;default:'queued';index" json:"status"` // queued, printing, printed, failed
-	AttemptCount int        `gorm:"not null;default:0" json:"attempt_count"`
-	LastError    string     `gorm:"size:255" json:"last_error"`
-	PrintedAt    *time.Time `json:"printed_at,omitempty"`
-	OperatorID   uint       `gorm:"index;not null" json:"operator_id"`
-	ShiftID      uint       `gorm:"index;not null" json:"shift_id"`
+	TenantID           uint       `gorm:"index;not null" json:"tenant_id"`
+	DeviceID           uint       `gorm:"index;not null" json:"device_id"`
+	OrderNo            string     `gorm:"size:80;index;not null" json:"order_no"`
+	TicketCode         string     `gorm:"size:80;index" json:"ticket_code"`
+	AfterSaleRequestNo string     `gorm:"size:50;index" json:"after_sale_request_no,omitempty"`
+	Status             string     `gorm:"size:20;not null;default:'queued';index" json:"status"` // queued, printing, printed, failed
+	AttemptCount       int        `gorm:"not null;default:0" json:"attempt_count"`
+	LastError          string     `gorm:"size:255" json:"last_error"`
+	PrintedAt          *time.Time `json:"printed_at,omitempty"`
+	OperatorID         uint       `gorm:"index;not null" json:"operator_id"`
+	ShiftID            uint       `gorm:"index;not null" json:"shift_id"`
 }
 
 type DeviceAlert struct {

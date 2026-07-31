@@ -186,7 +186,24 @@ func (s *OperationsService) CompletePrint(tenantID, jobID, deviceID, operatorID 
 		now := time.Now()
 		job.Status = "printed"
 		job.PrintedAt = &now
-		return tx.Model(job).Updates(map[string]interface{}{"status": job.Status, "printed_at": now, "last_error": ""}).Error
+		if err := tx.Model(job).Updates(map[string]interface{}{"status": job.Status, "printed_at": now, "last_error": ""}).Error; err != nil {
+			return err
+		}
+		if job.AfterSaleRequestNo != "" {
+			var pending int64
+			if err := tx.Model(&model.PrintJob{}).Where("after_sale_request_no = ? AND status != ?", job.AfterSaleRequestNo, "printed").Count(&pending).Error; err != nil {
+				return err
+			}
+			if pending == 0 {
+				var req model.AfterSaleRequest
+				if err := tx.Where("request_no = ? AND tenant_id = ? AND status = ?", job.AfterSaleRequestNo, tenantID, "processing").First(&req).Error; err == nil {
+					if err := completeAfterSaleTx(tx, &req, operatorID); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return nil
 	})
 }
 

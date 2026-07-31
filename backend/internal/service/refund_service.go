@@ -175,7 +175,7 @@ func (s *RefundService) CreateCashRefund(tenantID uint, orderNo, idempotencyKey 
 					return err
 				}
 			}
-			if err := releaseStock(tx, stockProduct, item.UseDate, stockQuantity); err != nil {
+			if err := releaseStock(tx, stockProduct, item.UseDate, item.StockSlot, stockQuantity); err != nil {
 				return err
 			}
 		}
@@ -490,7 +490,7 @@ func applySuccessfulRefundTx(tx *gorm.DB, order *model.Order, payment *model.Pay
 				return err
 			}
 		}
-		if err := releaseStock(tx, stockProduct, item.UseDate, stockQuantity); err != nil {
+		if err := releaseStock(tx, stockProduct, item.UseDate, item.StockSlot, stockQuantity); err != nil {
 			return err
 		}
 	}

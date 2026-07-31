@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -52,6 +53,60 @@ func (c *DeviceController) Verify(ctx *gin.Context) {
 
 	// Returns the response structure directly (VerifyResponse)
 	ctx.JSON(http.StatusOK, resp)
+}
+
+func (c *DeviceController) PollCommand(ctx *gin.Context) {
+	var req struct {
+		SystemCode   string `json:"system_code" binding:"required"`
+		SerialNumber string `json:"serial_number" binding:"required"`
+		DeviceKey    string `json:"device_key" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	command, err := c.Service.PollHardwareCommand(req.SystemCode, req.SerialNumber, req.DeviceKey)
+	if err != nil {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+	if command == nil {
+		ctx.JSON(http.StatusOK, gin.H{"command": nil})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"command": command, "ack_token": command.AckToken})
+}
+
+func (c *DeviceController) AckCommand(ctx *gin.Context) {
+	var req service.HardwareAckRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.AckHardwareCommand(req); err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"status": req.Status})
+}
+
+func (c *DeviceController) QueueCommand(ctx *gin.Context) {
+	var body struct {
+		DeviceID    uint   `json:"device_id" binding:"required"`
+		Kind        string `json:"kind" binding:"required"`
+		PayloadJSON string `json:"payload_json"`
+		TTLSeconds  int    `json:"ttl_seconds"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	command, err := c.Service.QueueHardwareCommand(service.HardwareCommandRequest{TenantID: ctx.GetUint("tenant_id"), DeviceID: body.DeviceID, Kind: body.Kind, PayloadJSON: body.PayloadJSON, TTL: time.Duration(body.TTLSeconds) * time.Second})
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusAccepted, command)
 }
 
 // --- CRUD Methods ---

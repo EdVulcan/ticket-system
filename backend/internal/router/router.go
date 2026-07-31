@@ -74,6 +74,8 @@ func InitRouter(r *gin.Engine) {
 
 	apiGroup.POST("/hardware/heartbeat", deviceController.Heartbeat)
 	apiGroup.POST("/hardware/verify", deviceController.Verify)
+	apiGroup.POST("/hardware/commands/poll", deviceController.PollCommand)
+	apiGroup.POST("/hardware/commands/ack", deviceController.AckCommand)
 
 	// Admin APIs (Protected)
 	deviceGroup := protected.Group("/devices")
@@ -84,6 +86,11 @@ func InitRouter(r *gin.Engine) {
 		deviceGroup.PUT("/:id", deviceController.Update)
 		deviceGroup.POST("/:id/rotate-key", deviceController.RotateKey)
 		deviceGroup.DELETE("/:id", deviceController.Delete)
+	}
+	hardwareCommandGroup := protected.Group("/hardware-commands")
+	hardwareCommandGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"))
+	{
+		hardwareCommandGroup.POST("", deviceController.QueueCommand)
 	}
 
 	// Product Routes
@@ -105,6 +112,17 @@ func InitRouter(r *gin.Engine) {
 		orderGroup.POST("", orderController.Create)
 		orderGroup.GET("", orderController.List)
 		orderGroup.POST("/:orderNo/cancel", orderController.Cancel)
+	}
+
+	afterSaleController := &api.AfterSaleController{Service: service.AfterSaleService{}}
+	afterSaleGroup := protected.Group("/after-sales")
+	{
+		afterSaleGroup.POST("", middleware.RequireAnyRole("seller", "admin", "super_admin"), afterSaleController.Create)
+		afterSaleGroup.GET("", middleware.RequireAnyRole("seller", "admin", "super_admin"), afterSaleController.List)
+		afterSaleGroup.GET("/:id", middleware.RequireAnyRole("seller", "admin", "super_admin"), afterSaleController.Get)
+		afterSaleGroup.POST("/:id/approve", middleware.RequireAnyRole("admin", "super_admin"), afterSaleController.Approve)
+		afterSaleGroup.POST("/:id/reject", middleware.RequireAnyRole("admin", "super_admin"), afterSaleController.Reject)
+		afterSaleGroup.POST("/:id/execute", middleware.RequireAnyRole("seller", "admin", "super_admin"), afterSaleController.Execute)
 	}
 
 	// Ticket Routes
@@ -170,6 +188,7 @@ func InitRouter(r *gin.Engine) {
 		OrderService:   service.OrderService{},
 		ProductService: service.ProductService{},
 	}
+	channelController := &api.ChannelController{Service: service.ChannelService{}, Workflow: service.ChannelWorkflowService{OrderService: &service.OrderService{}}}
 
 	// Independently credentialed channel routes. The legacy /ota routes remain
 	// available for migration and continue using the tenant OTA secret.
@@ -180,9 +199,11 @@ func InitRouter(r *gin.Engine) {
 		channelGroup.POST("/orders/create", otaController.CreateOrder)
 		channelGroup.POST("/orders/cancel", otaController.CancelOrder)
 		channelGroup.POST("/orders/query", otaController.QueryOrder)
+		channelGroup.POST("/reservations/create", channelController.Reserve)
+		channelGroup.POST("/reservations/confirm", channelController.Confirm)
+		channelGroup.POST("/reservations/release", channelController.Release)
 	}
 
-	channelController := &api.ChannelController{Service: service.ChannelService{}}
 	channelAdminGroup := protected.Group("/channel-accounts")
 	channelAdminGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
 	{

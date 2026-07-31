@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type DeviceService struct {
@@ -88,6 +89,126 @@ type VerifyResponse struct {
 	DisplayText  string `json:"display_text"`  // Message for screen
 	VoiceFile    string `json:"voice_file"`    // e.g., welcome.mp3
 	OpenDuration int    `json:"open_duration"` // ms
+}
+
+type HardwareCommandRequest struct {
+	TenantID    uint
+	DeviceID    uint
+	Kind        string
+	PayloadJSON string
+	TTL         time.Duration
+}
+
+type HardwareAckRequest struct {
+	SystemCode   string `json:"system_code"`
+	SerialNumber string `json:"serial_number"`
+	DeviceKey    string `json:"device_key"`
+	CommandNo    string `json:"command_no"`
+	AckToken     string `json:"ack_token"`
+	Status       string `json:"status"` // acknowledged, failed
+	Payload      string `json:"payload"`
+	Error        string `json:"error"`
+}
+
+func (s *DeviceService) QueueHardwareCommand(req HardwareCommandRequest) (*model.HardwareCommand, error) {
+	if req.TenantID == 0 || req.DeviceID == 0 || strings.TrimSpace(req.Kind) == "" {
+		return nil, errors.New("tenant, device and command kind are required")
+	}
+	if req.TTL <= 0 || req.TTL > 24*time.Hour {
+		req.TTL = 10 * time.Minute
+	}
+	var command model.HardwareCommand
+	err := model.Write(func(tx *gorm.DB) error {
+		var device model.Device
+		if err := tx.Where("id = ? AND tenant_id = ? AND status != ?", req.DeviceID, req.TenantID, "offline").First(&device).Error; err != nil {
+			return errors.New("device is unavailable")
+		}
+		if device.ScenicAreaID == 0 {
+			return errors.New("device has no scenic area")
+		}
+		command = model.HardwareCommand{
+			TenantID: req.TenantID, ScenicAreaID: device.ScenicAreaID, DeviceID: req.DeviceID,
+			CommandNo: fmt.Sprintf("CMD%d", time.Now().UnixNano()), Kind: strings.TrimSpace(req.Kind),
+			PayloadJSON: req.PayloadJSON, Status: "queued", AckToken: utils.GenerateRandomString(32),
+			QueuedAt: time.Now(), ExpiresAt: time.Now().Add(req.TTL),
+		}
+		return tx.Create(&command).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &command, nil
+}
+
+func (s *DeviceService) PollHardwareCommand(systemCode, serialNumber, deviceKey string) (*model.HardwareCommand, error) {
+	var command model.HardwareCommand
+	err := model.Write(func(tx *gorm.DB) error {
+		var tenant model.Tenant
+		if err := tx.Where("system_code = ? AND status = ?", strings.TrimSpace(systemCode), "active").First(&tenant).Error; err != nil {
+			return errors.New("invalid system_code")
+		}
+		if err := requireActiveTenantCapability(tx, tenant.ID, "supplier"); err != nil {
+			return err
+		}
+		var device model.Device
+		if err := tx.Where("serial_number = ? AND tenant_id = ?", serialNumber, tenant.ID).First(&device).Error; err != nil || !validDeviceKey(&device, deviceKey) {
+			return errors.New("unauthorized device")
+		}
+		now := time.Now()
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND device_id = ? AND status IN ? AND expires_at > ?", tenant.ID, device.ID, []string{"queued", "delivered"}, now).Order("id").First(&command)
+		if result.Error != nil {
+			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return result.Error
+		}
+		command.Status = "delivered"
+		command.AttemptCount++
+		command.DeliveredAt = &now
+		return tx.Model(&command).Updates(map[string]interface{}{"status": command.Status, "attempt_count": command.AttemptCount, "delivered_at": now}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	if command.ID == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &command, nil
+}
+
+func (s *DeviceService) AckHardwareCommand(req HardwareAckRequest) error {
+	if strings.TrimSpace(req.CommandNo) == "" || strings.TrimSpace(req.AckToken) == "" {
+		return errors.New("command and ack token are required")
+	}
+	if req.Status != "acknowledged" && req.Status != "failed" {
+		return errors.New("invalid hardware acknowledgement status")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var tenant model.Tenant
+		if err := tx.Where("system_code = ? AND status = ?", strings.TrimSpace(req.SystemCode), "active").First(&tenant).Error; err != nil {
+			return errors.New("invalid system_code")
+		}
+		var device model.Device
+		if err := tx.Where("serial_number = ? AND tenant_id = ?", req.SerialNumber, tenant.ID).First(&device).Error; err != nil || !validDeviceKey(&device, req.DeviceKey) {
+			return errors.New("unauthorized device")
+		}
+		var command model.HardwareCommand
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("command_no = ? AND tenant_id = ? AND device_id = ?", req.CommandNo, tenant.ID, device.ID).First(&command).Error; err != nil {
+			return err
+		}
+		if command.AckToken != req.AckToken {
+			return errors.New("invalid acknowledgement token")
+		}
+		if command.Status == "acknowledged" || command.Status == "failed" {
+			return nil
+		}
+		now := time.Now()
+		updates := map[string]interface{}{"status": req.Status, "acked_at": now, "last_error": strings.TrimSpace(req.Error)}
+		if err := tx.Model(&command).Updates(updates).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.HardwareEvent{TenantID: tenant.ID, DeviceID: device.ID, CommandNo: command.CommandNo, EventType: req.Status, Payload: req.Payload}).Error
+	})
 }
 
 // --- Hardware API Methods ---

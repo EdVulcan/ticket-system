@@ -73,6 +73,9 @@ func main() {
 	deviceContext, stopDeviceWorker := context.WithCancel(context.Background())
 	defer stopDeviceWorker()
 	go runDeviceHealthWorker(deviceContext)
+	reservationContext, stopReservationWorker := context.WithCancel(context.Background())
+	defer stopReservationWorker()
+	go runChannelReservationWorker(reservationContext)
 
 	// 4. Init Router
 	gin.SetMode(config.GlobalConfig.Server.Mode)
@@ -171,6 +174,9 @@ func runDigitalRefundWorker(ctx context.Context) {
 		if _, err := refundService.ProcessDigitalRefundTasks(ctx, now, 20); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Log.Error(fmt.Sprintf("digital refund processing failed: %v", err))
 		}
+		if err := (&service.AfterSaleService{}).ReconcileRefunds(); err != nil {
+			logger.Log.Error(fmt.Sprintf("after-sale refund reconciliation failed: %v", err))
+		}
 	}
 	process(time.Now())
 	ticker := time.NewTicker(30 * time.Second)
@@ -196,6 +202,22 @@ func runDeviceHealthWorker(ctx context.Context) {
 		case now := <-ticker.C:
 			if _, err := deviceService.MarkOffline(now, 2*time.Minute); err != nil {
 				logger.Log.Error(fmt.Sprintf("device health check failed: %v", err))
+			}
+		}
+	}
+}
+
+func runChannelReservationWorker(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	workflow := &service.ChannelWorkflowService{OrderService: &service.OrderService{}}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			if _, err := workflow.Expire(now, 100); err != nil {
+				logger.Log.Error(fmt.Sprintf("channel reservation expiry failed: %v", err))
 			}
 		}
 	}

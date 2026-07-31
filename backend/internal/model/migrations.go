@@ -51,6 +51,8 @@ func runMigrations(db *gorm.DB) error {
 		{version: 21, name: "composite ownership and POS operation facts", apply: migrateCompositeOwnershipAndPOSFacts},
 		{version: 22, name: "staff resource scopes", apply: migrateStaffResourceScopes},
 		{version: 23, name: "check-in ownership constraints", apply: migrateCheckInOwnership},
+		{version: 24, name: "after-sales policy slots and durable external workflows", apply: migrateAfterSalesAndWorkflows},
+		{version: 25, name: "channel reservation conversion and uniqueness", apply: migrateChannelReservationHardening},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -70,6 +72,66 @@ func runMigrations(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func migrateAfterSalesAndWorkflows(db *gorm.DB) error {
+	if err := db.AutoMigrate(
+		&AfterSaleRequest{}, &AfterSaleEvent{}, &HardwareCommand{}, &HardwareEvent{},
+		&ChannelReservation{}, &FinancialDocument{},
+	); err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		table string
+		name  string
+		ddl   string
+	}{
+		{"orders", "visitor_id", `ALTER TABLE orders ADD COLUMN visitor_id TEXT`},
+		{"orders", "visitor_region", `ALTER TABLE orders ADD COLUMN visitor_region TEXT`},
+		{"orders", "channel_reservation_id", `ALTER TABLE orders ADD COLUMN channel_reservation_id INTEGER`},
+		{"order_items", "stock_slot", `ALTER TABLE order_items ADD COLUMN stock_slot TEXT`},
+		{"order_items", "visitor_name", `ALTER TABLE order_items ADD COLUMN visitor_name TEXT`},
+		{"order_items", "visitor_phone", `ALTER TABLE order_items ADD COLUMN visitor_phone TEXT`},
+		{"order_items", "visitor_id", `ALTER TABLE order_items ADD COLUMN visitor_id TEXT`},
+		{"order_items", "visitor_region", `ALTER TABLE order_items ADD COLUMN visitor_region TEXT`},
+		{"product_inventories", "stock_slot", `ALTER TABLE product_inventories ADD COLUMN stock_slot TEXT`},
+		{"print_jobs", "after_sale_request_no", `ALTER TABLE print_jobs ADD COLUMN after_sale_request_no TEXT`},
+	} {
+		if err := addColumnIfMissing(db, column.table, column.name, column.ddl); err != nil {
+			return err
+		}
+	}
+	// The pre-v24 index did not include a slot, so it would reject two valid
+	// reservations for different sessions on the same date. Rebuild it using
+	// the normalized empty-string slot for legacy rows.
+	if err := db.Exec("DROP INDEX IF EXISTS idx_product_stock_date").Error; err != nil {
+		return err
+	}
+	if err := db.Exec("UPDATE product_inventories SET stock_slot = '' WHERE stock_slot IS NULL").Error; err != nil {
+		return err
+	}
+	return db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_product_stock_slot ON product_inventories(tenant_id, product_id, stock_date, stock_slot)").Error
+}
+
+func addColumnIfMissing(db *gorm.DB, table, column, ddl string) error {
+	var count int64
+	if err := db.Raw("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?", table, column).Scan(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	return db.Exec(ddl).Error
+}
+
+func migrateChannelReservationHardening(db *gorm.DB) error {
+	if err := addColumnIfMissing(db, "orders", "channel_reservation_id", `ALTER TABLE orders ADD COLUMN channel_reservation_id INTEGER`); err != nil {
+		return err
+	}
+	if err := db.Exec("DROP INDEX IF EXISTS idx_channel_reservation_external").Error; err != nil {
+		return err
+	}
+	return db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_reservation_external ON channel_reservations(channel_account_id, external_no)").Error
 }
 
 func migrateCheckInOwnership(db *gorm.DB) error {
