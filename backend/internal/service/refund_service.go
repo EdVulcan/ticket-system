@@ -17,6 +17,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const staleDigitalRefundTaskAfter = 5 * time.Minute
+
 var ErrDigitalRefundNotConfigured = errors.New("digital provider refund integration is not configured")
 
 const defaultDigitalRefundMaxAttempts = 8
@@ -362,21 +364,65 @@ func (s *RefundService) ProcessDigitalRefundTasks(ctx context.Context, now time.
 	if limit <= 0 {
 		limit = 20
 	}
-	var tasks []model.DigitalRefundTask
-	if err := model.DB.Where("status IN ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)", []string{"pending", "submitted"}, now).Order("id").Limit(limit).Find(&tasks).Error; err != nil {
-		return 0, err
-	}
 	processed := 0
-	for i := range tasks {
+	for processed < limit {
 		if err := ctx.Err(); err != nil {
 			return processed, err
 		}
-		if err := s.processDigitalRefundTask(ctx, tasks[i].ID, now); err != nil {
+		task, err := claimDigitalRefundTask(now)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return processed, nil
+		}
+		if err != nil {
 			return processed, err
 		}
 		processed++
+		if err := s.processDigitalRefundTask(ctx, task.ID, now); err != nil {
+			return processed, err
+		}
 	}
 	return processed, nil
+}
+
+// claimDigitalRefundTask changes a due task to processing in the serialized
+// SQLite writer before any provider call is made. A stale processing lease is
+// reclaimable after a crash, while a second worker cannot claim the same task
+// during a normal provider request.
+func claimDigitalRefundTask(now time.Time) (*model.DigitalRefundTask, error) {
+	var task model.DigitalRefundTask
+	err := model.Write(func(tx *gorm.DB) error {
+		staleBefore := now.Add(-staleDigitalRefundTaskAfter)
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("((status IN ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)) OR (status = ? AND locked_at IS NOT NULL AND locked_at <= ?))",
+				[]string{"pending", "submitted"}, now, "processing", staleBefore).
+			Order("COALESCE(next_attempt_at, created_at) asc, id asc").First(&task).Error; err != nil {
+			return err
+		}
+		lockedAt := now
+		return tx.Model(&task).Updates(map[string]interface{}{
+			"status": "processing", "locked_at": lockedAt,
+		}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	task.Status = "processing"
+	return &task, nil
+}
+
+func updateClaimedDigitalRefundTask(tx *gorm.DB, taskID uint, lockedAt *time.Time, updates map[string]interface{}) error {
+	query := tx.Model(&model.DigitalRefundTask{}).Where("id = ?", taskID)
+	if lockedAt != nil {
+		query = query.Where("status = ? AND locked_at = ?", "processing", *lockedAt)
+	}
+	result := query.Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if lockedAt != nil && result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (s *RefundService) processDigitalRefundTask(ctx context.Context, taskID uint, now time.Time) error {
@@ -404,20 +450,20 @@ func (s *RefundService) processDigitalRefundTask(ctx context.Context, taskID uin
 	}
 	result, err := provider.Process(ctx, &refund, &payment)
 	if err != nil {
-		return s.deferDigitalRefundTask(task.ID, now, err)
+		return s.deferClaimedDigitalRefundTask(task.ID, task.LockedAt, now, err)
 	}
 	switch result.Status {
 	case "succeeded":
-		return s.completeDigitalRefund(task.ID, &refund, &payment, result.ProviderRefundID)
+		return s.completeDigitalRefund(task.ID, task.LockedAt, &refund, &payment, result.ProviderRefundID)
 	case "failed":
 		return model.Write(func(tx *gorm.DB) error {
 			if err := tx.Model(&model.Refund{}).Where("id = ? AND status = ?", refund.ID, "pending").Updates(map[string]interface{}{"status": "failed", "provider_refund_id": result.ProviderRefundID}).Error; err != nil {
 				return err
 			}
-			return tx.Model(&model.DigitalRefundTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
-				"status": "failed", "provider_refund": result.ProviderRefundID,
+			return updateClaimedDigitalRefundTask(tx, task.ID, task.LockedAt, map[string]interface{}{
+				"status": "failed", "locked_at": nil, "provider_refund": result.ProviderRefundID,
 				"provider_status": result.Status, "failure_code": "provider_rejected", "next_attempt_at": nil,
-			}).Error
+			})
 		})
 	default:
 		next := now.Add(30 * time.Second)
@@ -431,21 +477,26 @@ func (s *RefundService) processDigitalRefundTask(ctx context.Context, taskID uin
 				return err
 			}
 			if attempt >= maxAttempts {
-				return tx.Model(&model.DigitalRefundTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+				return updateClaimedDigitalRefundTask(tx, task.ID, task.LockedAt, map[string]interface{}{
 					"status": "manual_review", "provider_refund": result.ProviderRefundID,
 					"attempt_count": attempt, "max_attempts": maxAttempts, "next_attempt_at": nil,
+					"locked_at":  nil,
 					"last_error": "provider did not reach a terminal refund state", "failure_code": "provider_pending_timeout", "manual_review_at": now,
-				}).Error
+				})
 			}
-			return tx.Model(&model.DigitalRefundTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+			return updateClaimedDigitalRefundTask(tx, task.ID, task.LockedAt, map[string]interface{}{
 				"status": "submitted", "provider_refund": result.ProviderRefundID,
-				"attempt_count": attempt, "max_attempts": maxAttempts, "next_attempt_at": next, "last_error": "",
-			}).Error
+				"attempt_count": attempt, "max_attempts": maxAttempts, "next_attempt_at": next, "locked_at": nil, "last_error": "",
+			})
 		})
 	}
 }
 
 func (s *RefundService) deferDigitalRefundTask(taskID uint, now time.Time, cause error) error {
+	return s.deferClaimedDigitalRefundTask(taskID, nil, now, cause)
+}
+
+func (s *RefundService) deferClaimedDigitalRefundTask(taskID uint, lockedAt *time.Time, now time.Time, cause error) error {
 	return model.Write(func(tx *gorm.DB) error {
 		var task model.DigitalRefundTask
 		if err := tx.First(&task, taskID).Error; err != nil {
@@ -458,19 +509,29 @@ func (s *RefundService) deferDigitalRefundTask(taskID uint, now time.Time, cause
 		}
 		failureCode := refundFailureCode(cause)
 		message := truncateError(cause.Error())
+		updates := map[string]interface{}{}
+		if lockedAt != nil {
+			updates["locked_at"] = nil
+		}
 		if failureCode == "provider_not_configured" || failureCode == "provider_configuration" || attempt >= maxAttempts {
-			return tx.Model(&task).Updates(map[string]interface{}{
-				"status": "manual_review", "attempt_count": attempt, "max_attempts": maxAttempts,
-				"next_attempt_at": nil, "last_error": message, "failure_code": failureCode,
-				"manual_review_at": now,
-			}).Error
+			updates["status"] = "manual_review"
+			updates["attempt_count"] = attempt
+			updates["max_attempts"] = maxAttempts
+			updates["next_attempt_at"] = nil
+			updates["last_error"] = message
+			updates["failure_code"] = failureCode
+			updates["manual_review_at"] = now
+			return updateClaimedDigitalRefundTask(tx, task.ID, lockedAt, updates)
 		}
 		delay := time.Duration(1<<minInt(attempt, 6)) * 30 * time.Second
 		next := now.Add(delay)
-		return tx.Model(&task).Updates(map[string]interface{}{
-			"status": "pending", "attempt_count": attempt, "max_attempts": maxAttempts,
-			"next_attempt_at": next, "last_error": message, "failure_code": failureCode,
-		}).Error
+		updates["status"] = "pending"
+		updates["attempt_count"] = attempt
+		updates["max_attempts"] = maxAttempts
+		updates["next_attempt_at"] = next
+		updates["last_error"] = message
+		updates["failure_code"] = failureCode
+		return updateClaimedDigitalRefundTask(tx, task.ID, lockedAt, updates)
 	})
 }
 
@@ -538,7 +599,7 @@ func (s *RefundService) RetryDigitalRefundTask(tenantID, taskID, operatorID uint
 		previousStatus := task.Status
 		if err := tx.Model(&task).Updates(map[string]interface{}{
 			"status": "pending", "next_attempt_at": time.Now(), "last_error": "",
-			"failure_code": "", "attempt_count": 0,
+			"failure_code": "", "attempt_count": 0, "locked_at": nil,
 		}).Error; err != nil {
 			return err
 		}
@@ -554,7 +615,7 @@ func (s *RefundService) RetryDigitalRefundTask(tenantID, taskID, operatorID uint
 	})
 }
 
-func (s *RefundService) completeDigitalRefund(taskID uint, refund *model.Refund, payment *model.Payment, providerRefundID string) error {
+func (s *RefundService) completeDigitalRefund(taskID uint, lockedAt *time.Time, refund *model.Refund, payment *model.Payment, providerRefundID string) error {
 	var codes []string
 	if err := json.Unmarshal([]byte(refund.TicketCodesJSON), &codes); err != nil {
 		return err
@@ -565,7 +626,7 @@ func (s *RefundService) completeDigitalRefund(taskID uint, refund *model.Refund,
 			return err
 		}
 		if storedRefund.Status == "succeeded" {
-			return tx.Model(&model.DigitalRefundTask{}).Where("id = ?", taskID).Updates(map[string]interface{}{"status": "succeeded", "next_attempt_at": nil}).Error
+			return updateClaimedDigitalRefundTask(tx, taskID, lockedAt, map[string]interface{}{"status": "succeeded", "next_attempt_at": nil, "locked_at": nil})
 		}
 		if storedRefund.Status != "pending" {
 			return fmt.Errorf("refund cannot complete from status %s", storedRefund.Status)
@@ -595,7 +656,7 @@ func (s *RefundService) completeDigitalRefund(taskID uint, refund *model.Refund,
 		if err := tx.Model(&storedRefund).Updates(map[string]interface{}{"status": "succeeded", "provider_refund_id": providerRefundID}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&model.DigitalRefundTask{}).Where("id = ?", taskID).Updates(map[string]interface{}{"status": "succeeded", "provider_refund": providerRefundID, "next_attempt_at": nil, "last_error": ""}).Error
+		return updateClaimedDigitalRefundTask(tx, taskID, lockedAt, map[string]interface{}{"status": "succeeded", "provider_refund": providerRefundID, "next_attempt_at": nil, "locked_at": nil, "last_error": ""})
 	})
 }
 

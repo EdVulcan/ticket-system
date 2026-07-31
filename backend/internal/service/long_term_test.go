@@ -5,6 +5,8 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"ticket-backend/internal/model"
 	"time"
@@ -217,6 +219,57 @@ func TestDigitalRefundWorkerCompletesTicketScopedFacts(t *testing.T) {
 	}
 	if err := model.DB.First(&refund, refund.ID).Error; err != nil || refund.Status != "succeeded" || refund.ProviderRefundID != "WX-REFUND-1" {
 		t.Fatalf("refund=%+v err=%v", refund, err)
+	}
+}
+
+func TestDigitalRefundWorkerClaimsTaskBeforeProviderCall(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{TenantID: tenantID, Channel: "online", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{TenantID: tenantID, OrderNo: order.OrderNo, PaymentNo: "PAY-DIGITAL-CLAIM", Amount: order.TotalAmount, Method: "wechat", Status: "paid"}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create(&payment).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.Order{}).Where("id = ?", order.ID).Update("status", "paid").Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&RefundService{}).CreateDigitalRefund(tenantID, order.OrderNo, "digital-claim", order.TotalAmount, []string{ticket.TicketCode}, "claim test"); err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	worker := &RefundService{Provider: refundProviderFunc(func(context.Context, *model.Refund, *model.Payment) (RefundProviderResult, error) {
+		calls.Add(1)
+		time.Sleep(25 * time.Millisecond)
+		return RefundProviderResult{Status: "succeeded", ProviderRefundID: "WX-CLAIM"}, nil
+	})}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := worker.ProcessDigitalRefundTasks(context.Background(), time.Now(), 1)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("provider calls=%d, want 1", got)
 	}
 }
 

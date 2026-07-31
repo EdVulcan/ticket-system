@@ -34,10 +34,11 @@ type DigitalRefundTask struct {
 	Provider       string     `gorm:"size:20;not null" json:"provider"`
 	PaymentNo      string     `gorm:"size:80;index;not null" json:"payment_no"`
 	ProviderRefund string     `gorm:"size:120" json:"provider_refund_id"`
-	Status         string     `gorm:"size:20;not null;index;default:'pending'" json:"status"` // pending, submitted, succeeded, failed, manual_review
+	Status         string     `gorm:"size:20;not null;index;default:'pending'" json:"status"` // pending, processing, submitted, succeeded, failed, manual_review
 	AttemptCount   int        `gorm:"not null;default:0" json:"attempt_count"`
 	MaxAttempts    int        `gorm:"not null;default:8" json:"max_attempts"`
 	NextAttemptAt  *time.Time `gorm:"index" json:"next_attempt_at,omitempty"`
+	LockedAt       *time.Time `gorm:"index" json:"-"`
 	LastError      string     `gorm:"size:255" json:"last_error,omitempty"`
 	FailureCode    string     `gorm:"size:40;index" json:"failure_code,omitempty"`
 	ProviderStatus string     `gorm:"size:40" json:"provider_status,omitempty"`
