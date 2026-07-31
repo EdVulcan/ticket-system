@@ -325,6 +325,38 @@ func TestDigitalPartialRefundUpdatesPaymentAndOrderState(t *testing.T) {
 	}
 }
 
+func TestDailyVisitReportExcludesRefundedTickets(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	visit := startOfDay(time.Now())
+	order := model.Order{TenantID: tenantID, Channel: "online", Items: []model.OrderItem{{ProductID: productID, Quantity: 2, UseDate: &visit}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{OrderNo: order.OrderNo, Method: "cash"}
+	if err := (&PaymentService{}).CreatePayment(tenantID, &payment); err != nil {
+		t.Fatal(err)
+	}
+	var tickets []model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).Order("id").Find(&tickets).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(tickets) != 2 {
+		t.Fatalf("tickets=%d, want 2", len(tickets))
+	}
+	if _, err := (&RefundService{}).CreateCashRefund(tenantID, order.OrderNo, "daily-report-refund", 99.50, []string{tickets[0].TicketCode}, "report test"); err != nil {
+		t.Fatal(err)
+	}
+	today := visit.Format("2006-01-02")
+	report, err := (&ReportService{}).GetDailyReport(tenantID, today, today)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Visits) != 1 || report.Visits[0].TicketCount != 1 || report.Visits[0].GrossCents != 9950 {
+		t.Fatalf("visit facts=%+v, want one active ticket and 9950 cents", report.Visits)
+	}
+}
+
 func TestPOSShiftsAndPrintJobsStayTerminalScoped(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)

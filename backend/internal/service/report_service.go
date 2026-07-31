@@ -126,8 +126,14 @@ func (s *ReportService) GetDailyReport(tenantID uint, startDate, endDate string)
 		Group("DATE(COALESCE(payments.paid_at, payments.created_at))").Order("date ASC").Scan(&report.Payments).Error; err != nil {
 		return nil, err
 	}
-	if err := model.DB.Table("order_items").Joins("JOIN orders ON orders.id = order_items.order_id").Select(`DATE(order_items.use_date) AS date, COALESCE(SUM(order_items.quantity), 0) AS ticket_count, COALESCE(SUM(CAST(ROUND(order_items.price * order_items.quantity * 100.0) AS INTEGER)), 0) AS gross_cents`).
-		Where("orders.tenant_id = ? AND orders.status IN ? AND order_items.use_date IS NOT NULL AND order_items.use_date BETWEEN ? AND ?", tenantID, completedSalesStatuses(), start, end).
+	if err := model.DB.Table("tickets").
+		Joins("JOIN order_items ON order_items.id = tickets.order_item_id").
+		Joins("JOIN orders ON orders.id = order_items.order_id").
+		Joins("LEFT JOIN products ON products.id = order_items.product_id").
+		Select(`DATE(order_items.use_date) AS date,
+			COALESCE(SUM(CASE WHEN COALESCE(NULLIF(tickets.code_mode, ''), products.code_mode) = 'order' THEN order_items.quantity ELSE 1 END), 0) AS ticket_count,
+			COALESCE(SUM(CAST(ROUND(order_items.price * 100.0) AS INTEGER) * CASE WHEN COALESCE(NULLIF(tickets.code_mode, ''), products.code_mode) = 'order' THEN order_items.quantity ELSE 1 END), 0) AS gross_cents`).
+		Where("orders.tenant_id = ? AND orders.status IN ? AND tickets.status != ? AND order_items.use_date IS NOT NULL AND order_items.use_date BETWEEN ? AND ?", tenantID, completedSalesStatuses(), "refunded", start, end).
 		Group("DATE(order_items.use_date)").Order("date ASC").Scan(&report.Visits).Error; err != nil {
 		return nil, err
 	}
@@ -162,7 +168,7 @@ func (s *ReportService) GetOperationsReport(tenantID uint, startDate, endDate st
 	if err := model.DB.Table("channel_bill_records").Where("tenant_id = ? AND created_at BETWEEN ? AND ?", tenantID, start, end).Select("COALESCE(SUM(ABS(difference_cents)), 0)").Scan(&report.ChannelDifferenceCents).Error; err != nil {
 		return nil, err
 	}
-	if err := model.DB.Table("digital_refund_tasks").Where("tenant_id = ? AND status IN ?", tenantID, []string{"pending", "submitted"}).Count(&report.PendingRefundCount).Error; err != nil {
+	if err := model.DB.Table("digital_refund_tasks").Where("tenant_id = ? AND status IN ?", tenantID, []string{"pending", "processing", "submitted"}).Count(&report.PendingRefundCount).Error; err != nil {
 		return nil, err
 	}
 	if err := model.DB.Table("digital_refund_tasks").Where("tenant_id = ? AND status = ?", tenantID, "manual_review").Count(&report.ManualReviewRefundCount).Error; err != nil {
