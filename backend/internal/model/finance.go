@@ -11,6 +11,13 @@ type CapitalAccount struct {
 	CreditLine   float64 `json:"credit_line" gorm:"type:decimal(15,2);default:0"`   // 授信额度 (Credit Limit)
 	UsedCredit   float64 `json:"used_credit" gorm:"type:decimal(15,2);default:0"`   // 已用授信
 	FrozenAmount float64 `json:"frozen_amount" gorm:"type:decimal(15,2);default:0"` // 冻结金额 (下单后未核销/结算前冻结)
+	// Cent projections are authoritative for new writes. The legacy float
+	// columns remain for API compatibility and are updated in the same
+	// transaction until old clients are migrated.
+	BalanceCents    int64 `json:"balance_cents" gorm:"not null;default:0"`
+	CreditLineCents int64 `json:"credit_line_cents" gorm:"not null;default:0"`
+	UsedCreditCents int64 `json:"used_credit_cents" gorm:"not null;default:0"`
+	FrozenCents     int64 `json:"frozen_cents" gorm:"not null;default:0"`
 
 	Status string `json:"status" gorm:"size:20;default:'active'"` // active(正常), frozen(冻结)
 

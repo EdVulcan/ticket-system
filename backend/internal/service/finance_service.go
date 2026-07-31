@@ -40,8 +40,16 @@ func (s *FinanceService) RechargeAccount(managerTenantID, ownerTenantID uint, am
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("owner_tenant_id = ? AND manager_tenant_id = ? AND status = ?", ownerTenantID, managerTenantID, "active").First(&account).Error; err != nil {
 			return errors.New("distribution capital account not found")
 		}
-		account.Balance += centsMoney(amountCents)
+		syncCapitalAccountCents(&account)
+		account.BalanceCents += amountCents
+		syncCapitalAccountProjection(&account)
 		if err := tx.Model(&account).Update("balance", account.Balance).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&account).Updates(map[string]interface{}{
+			"balance_cents": account.BalanceCents, "credit_line_cents": account.CreditLineCents,
+			"used_credit_cents": account.UsedCreditCents, "frozen_cents": account.FrozenCents,
+		}).Error; err != nil {
 			return err
 		}
 		memo = strings.TrimSpace(memo)

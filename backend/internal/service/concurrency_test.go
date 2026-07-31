@@ -1403,7 +1403,7 @@ func TestPendingProviderPaymentSurvivesOrderExpiryAndLateSuccess(t *testing.T) {
 }
 
 func TestMoneyCentsRoundsAtCentBoundary(t *testing.T) {
-	for value, want := range map[float64]int64{0.29: 29, 1.01: 101, 12.34: 1234, 99.99: 9999} {
+	for value, want := range map[float64]int64{0.29: 29, 1.01: 101, 1.005: 101, 0.1 + 0.2: 30, 12.34: 1234, 99.99: 9999, -1.005: -101} {
 		if got := moneyCents(value); got != want {
 			t.Fatalf("moneyCents(%v)=%d, want %d", value, got, want)
 		}

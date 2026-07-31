@@ -29,8 +29,8 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if err := db.Order("version DESC").First(&latest).Error; err != nil {
 		t.Fatal(err)
 	}
-	if latest.Version != 30 {
-		t.Fatalf("latest migration=%d, want 30", latest.Version)
+	if latest.Version != 31 {
+		t.Fatalf("latest migration=%d, want 31", latest.Version)
 	}
 	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "pos_shifts", "settlement_statements", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements"} {
 		var count int64
@@ -68,6 +68,10 @@ func TestLegacyMigrationQuarantinesOffersAndRebuildsFulfillmentTotals(t *testing
 		t.Fatal(err)
 	}
 	if err := db.Create(&distributor).Error; err != nil {
+		t.Fatal(err)
+	}
+	legacyAccount := CapitalAccount{OwnerTenantID: distributor.ID, ManagerTenantID: supplier.ID, Balance: 12.34, CreditLine: 5.67, UsedCredit: 1.23, FrozenAmount: 0.45, Status: "active"}
+	if err := db.Create(&legacyAccount).Error; err != nil {
 		t.Fatal(err)
 	}
 	area := ScenicArea{TenantID: supplier.ID, Code: "MAIN", Name: "Main", Status: "active"}
@@ -148,6 +152,12 @@ func TestLegacyMigrationQuarantinesOffersAndRebuildsFulfillmentTotals(t *testing
 	}
 	if fulfillment.SettlementAmount != 90 {
 		t.Fatalf("fulfillment settlement=%v, want 90", fulfillment.SettlementAmount)
+	}
+	if err := db.First(&legacyAccount, legacyAccount.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if legacyAccount.BalanceCents != 1234 || legacyAccount.CreditLineCents != 567 || legacyAccount.UsedCreditCents != 123 || legacyAccount.FrozenCents != 45 {
+		t.Fatalf("legacy account cent projection=%+v", legacyAccount)
 	}
 	var capabilities []TenantCapability
 	if err := db.Find(&capabilities).Error; err != nil {

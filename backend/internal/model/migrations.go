@@ -58,6 +58,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 28, name: "settlement period idempotency", apply: migrateSettlementPeriodIdempotency},
 		{version: 29, name: "channel request policy facts", apply: migrateChannelRequestPolicyFacts},
 		{version: 30, name: "team contract settlement facts", apply: migrateTeamSettlementFacts},
+		{version: 31, name: "integer capital account projections", apply: migrateIntegerCapitalAccountProjections},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -81,6 +82,21 @@ func runMigrations(db *gorm.DB) error {
 
 func migrateTeamSettlementFacts(db *gorm.DB) error {
 	return db.AutoMigrate(&TourGroup{}, &TeamSettlementStatement{})
+}
+
+func migrateIntegerCapitalAccountProjections(db *gorm.DB) error {
+	if err := db.AutoMigrate(&CapitalAccount{}); err != nil {
+		return err
+	}
+	// Legacy balances are decimal columns. Backfill the cent projections once;
+	// all subsequent service writes update both representations atomically.
+	return db.Exec(`
+		UPDATE capital_accounts
+		SET balance_cents = CAST(ROUND(balance * 100.0) AS INTEGER),
+		    credit_line_cents = CAST(ROUND(credit_line * 100.0) AS INTEGER),
+		    used_credit_cents = CAST(ROUND(used_credit * 100.0) AS INTEGER),
+		    frozen_cents = CAST(ROUND(frozen_amount * 100.0) AS INTEGER)
+	`).Error
 }
 
 func migrateAfterSalesAndWorkflows(db *gorm.DB) error {

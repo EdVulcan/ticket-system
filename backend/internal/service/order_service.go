@@ -503,28 +503,39 @@ func releaseStock(tx *gorm.DB, product *model.Product, useDate *time.Time, stock
 }
 
 func chargeDistributionAccount(tx *gorm.DB, order *model.Order, item *model.OrderItem, sellerTenantID, supplierTenantID uint, productName string) error {
-	cost := roundMoney(item.SettlementPrice * float64(item.Quantity))
+	costCents := moneyCents(item.SettlementPrice) * int64(item.Quantity)
+	if costCents <= 0 {
+		return errors.New("distribution settlement cost must be positive")
+	}
 	var account model.CapitalAccount
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("owner_tenant_id = ? AND manager_tenant_id = ? AND status = ?", sellerTenantID, supplierTenantID, "active").
 		First(&account).Error; err != nil {
 		return fmt.Errorf("distribution capital account is unavailable")
 	}
-	availableCredit := account.CreditLine - account.UsedCredit
-	if account.Balance+availableCredit < cost {
+	syncCapitalAccountCents(&account)
+	availableCreditCents := account.CreditLineCents - account.UsedCreditCents
+	if availableCreditCents < 0 {
+		return errors.New("distribution credit projection is invalid")
+	}
+	if account.BalanceCents+availableCreditCents < costCents {
 		return fmt.Errorf("insufficient distribution balance")
 	}
-	cashUsed := math.Min(account.Balance, cost)
-	creditUsed := cost - cashUsed
-	item.CashCostCents = moneyCents(cashUsed)
-	item.CreditCostCents = moneyCents(creditUsed)
-	account.Balance = roundMoney(account.Balance - cashUsed)
-	account.UsedCredit = roundMoney(account.UsedCredit + creditUsed)
+	cashUsedCents := account.BalanceCents
+	if cashUsedCents > costCents {
+		cashUsedCents = costCents
+	}
+	creditUsedCents := costCents - cashUsedCents
+	item.CashCostCents = cashUsedCents
+	item.CreditCostCents = creditUsedCents
+	account.BalanceCents -= cashUsedCents
+	account.UsedCreditCents += creditUsedCents
+	syncCapitalAccountProjection(&account)
 	if err := tx.Save(&account).Error; err != nil {
 		return err
 	}
 	if err := tx.Create(&model.TransactionRecord{
-		AccountID: account.ID, Type: "payment", Amount: -cost, BalanceAfter: account.Balance,
+		AccountID: account.ID, Type: "payment", Amount: -centsMoney(costCents), BalanceAfter: account.Balance,
 		RelatedOrderNo: order.OrderNo, Memo: fmt.Sprintf("distribution purchase: %s x%d", productName, item.Quantity),
 	}).Error; err != nil {
 		return err
@@ -544,29 +555,37 @@ func chargeDistributionAccount(tx *gorm.DB, order *model.Order, item *model.Orde
 }
 
 func refundDistributionAccount(tx *gorm.DB, order *model.Order, item *model.OrderItem, sellerTenantID, supplierTenantID uint, productName string) error {
-	amount := roundMoney(item.SettlementPrice * float64(item.Quantity))
+	amountCents := moneyCents(item.SettlementPrice) * int64(item.Quantity)
+	if amountCents <= 0 {
+		return errors.New("distribution refund amount must be positive")
+	}
 	var account model.CapitalAccount
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("owner_tenant_id = ? AND manager_tenant_id = ?", sellerTenantID, supplierTenantID).
 		First(&account).Error; err != nil {
 		return err
 	}
-	creditRepaid := centsMoney(item.CreditCostCents)
+	syncCapitalAccountCents(&account)
+	creditRepaidCents := item.CreditCostCents
 	if item.CreditCostCents == 0 {
 		// Compatibility fallback for orders created before the original-cost
 		// snapshot was migrated.
-		creditRepaid = math.Min(account.UsedCredit, amount)
+		creditRepaidCents = account.UsedCreditCents
+		if creditRepaidCents > amountCents {
+			creditRepaidCents = amountCents
+		}
 	}
-	if creditRepaid > amount {
-		creditRepaid = amount
+	if creditRepaidCents > amountCents {
+		creditRepaidCents = amountCents
 	}
-	account.UsedCredit = roundMoney(account.UsedCredit - creditRepaid)
-	account.Balance = roundMoney(account.Balance + amount - creditRepaid)
+	account.UsedCreditCents -= creditRepaidCents
+	account.BalanceCents += amountCents - creditRepaidCents
+	syncCapitalAccountProjection(&account)
 	if err := tx.Save(&account).Error; err != nil {
 		return err
 	}
 	if err := tx.Create(&model.TransactionRecord{
-		AccountID: account.ID, Type: "refund", Amount: amount, BalanceAfter: account.Balance,
+		AccountID: account.ID, Type: "refund", Amount: centsMoney(amountCents), BalanceAfter: account.Balance,
 		RelatedOrderNo: order.OrderNo, Memo: fmt.Sprintf("cancelled distribution purchase: %s x%d", productName, item.Quantity),
 	}).Error; err != nil {
 		return err
@@ -595,12 +614,13 @@ func refundDistributionAllocation(tx *gorm.DB, order *model.Order, item *model.O
 		First(&account).Error; err != nil {
 		return err
 	}
-	credit := centsMoney(creditCents)
-	if moneyCents(account.UsedCredit) < creditCents {
+	syncCapitalAccountCents(&account)
+	if account.UsedCreditCents < creditCents {
 		return errors.New("distribution credit refund exceeds used credit")
 	}
-	account.UsedCredit = roundMoney(account.UsedCredit - credit)
-	account.Balance = roundMoney(account.Balance + centsMoney(cashCents))
+	account.UsedCreditCents -= creditCents
+	account.BalanceCents += cashCents
+	syncCapitalAccountProjection(&account)
 	if err := tx.Save(&account).Error; err != nil {
 		return err
 	}
