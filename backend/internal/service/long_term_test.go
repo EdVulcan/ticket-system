@@ -289,6 +289,27 @@ func TestPOSShiftsAndPrintJobsStayTerminalScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	ops := &OperationsService{}
+	gate := model.Device{TenantID: tenantID, ScenicAreaID: area.ID, CheckPointID: &checkpointID, Name: "Gate", SerialNumber: "GATE-POS-1", Type: "gate", Status: "online"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&gate).Error }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ops.OpenShift(tenantID, gate.ID, 101, 0); err == nil {
+		t.Fatal("non-POS device was opened as a shift")
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create([]model.Staff{
+			{Base: model.Base{ID: 101}, TenantID: tenantID, Name: "POS 1 operator", JobNumber: "POS-OP-1", Password: "hash", Roles: "seller", Status: "active"},
+			{Base: model.Base{ID: 202}, TenantID: tenantID, Name: "POS 2 operator", JobNumber: "POS-OP-2", Password: "hash", Roles: "seller", Status: "active"},
+		}).Error; err != nil {
+			return err
+		}
+		return tx.Create([]model.StaffResourceScope{
+			{TenantID: tenantID, StaffID: 101, ResourceType: "device", ResourceID: devices[0].ID},
+			{TenantID: tenantID, StaffID: 202, ResourceType: "device", ResourceID: devices[1].ID},
+		}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
 	shift1, err := ops.OpenShift(tenantID, devices[0].ID, 101, 1000)
 	if err != nil {
 		t.Fatal(err)
@@ -317,11 +338,14 @@ func TestPOSShiftsAndPrintJobsStayTerminalScoped(t *testing.T) {
 	if _, err := (&RefundService{}).CreateCashRefund(tenantID, order1.OrderNo, "pos-refund", order1.TotalAmount, []string{ticket1.TicketCode}, "same shift refund"); err != nil {
 		t.Fatal(err)
 	}
-	closed1, err := ops.CloseShift(tenantID, shift1.ID, 1000, "")
+	if _, err := ops.CloseShiftForOperator(tenantID, shift1.ID, 202, "seller", 1000, ""); err == nil {
+		t.Fatal("another operator closed the shift")
+	}
+	closed1, err := ops.CloseShiftForOperator(tenantID, shift1.ID, 101, "seller", 1000, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	closed2, err := ops.CloseShift(tenantID, shift2.ID, 2000+moneyCents(order2.TotalAmount), "")
+	closed2, err := ops.CloseShiftForOperator(tenantID, shift2.ID, 202, "seller", 2000+moneyCents(order2.TotalAmount), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,6 +382,23 @@ func TestPOSShiftsAndPrintJobsStayTerminalScoped(t *testing.T) {
 	printed, err := restarted.CompletePrint(tenantID, job.ID, devices[0].ID, 101)
 	if err != nil || printed.Status != "printed" || printed.AttemptCount != 2 {
 		t.Fatalf("printed=%+v err=%v", printed, err)
+	}
+	stale, err := restarted.QueuePrint(tenantID, devices[0].ID, 101, shift3.ID, order2.OrderNo, ticket2.TicketCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.StartPrint(tenantID, stale.ID, devices[0].ID, 101); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&model.PrintJob{}).Where("id = ?", stale.ID).Update("updated_at", time.Now().Add(-10*time.Minute)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if recovered, err := restarted.RecoverStalePrintJobs(time.Now(), time.Minute, 10); err != nil || recovered != 1 {
+		t.Fatalf("recovered stale jobs=%d err=%v", recovered, err)
+	}
+	var recoveredJob model.PrintJob
+	if err := model.DB.First(&recoveredJob, stale.ID).Error; err != nil || recoveredJob.Status != "failed" || recoveredJob.LastError == "" {
+		t.Fatalf("recovered job=%+v err=%v", recoveredJob, err)
 	}
 }
 

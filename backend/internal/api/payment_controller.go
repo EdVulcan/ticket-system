@@ -32,6 +32,13 @@ func (c *PaymentController) Pay(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	var order model.Order
+	if err := model.DB.Where("order_no = ? AND tenant_id = ?", body.OrderNo, ctx.GetUint("tenant_id")).First(&order).Error; err == nil && order.Channel == "window" {
+		if err := service.RequireStaffResource(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), ctx.GetString("role"), "device", body.DeviceID); err != nil {
+			ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			return
+		}
+	}
 	req := model.Payment{OrderNo: body.OrderNo, Method: body.Method, PayType: body.PayType, AuthCode: body.AuthCode, ShiftID: body.ShiftID, DeviceID: body.DeviceID, OperatorID: ctx.GetUint("user_id")}
 
 	tenantID := ctx.GetUint("tenant_id")

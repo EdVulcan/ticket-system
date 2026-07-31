@@ -71,7 +71,7 @@ func (c *OperationsController) CloseShift(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	shift, err := c.Service.CloseShift(ctx.GetUint("tenant_id"), uint(id), body.ClosingCents, body.Notes)
+	shift, err := c.Service.CloseShiftForOperator(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), ctx.GetString("role"), body.ClosingCents, body.Notes)
 	if err != nil {
 		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
@@ -88,6 +88,10 @@ func (c *OperationsController) QueuePrint(ctx *gin.Context) {
 	}
 	if err := ctx.ShouldBindJSON(&body); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := service.RequireStaffResource(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), ctx.GetString("role"), "device", body.DeviceID); err != nil {
+		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
 	job, err := c.Service.QueuePrint(ctx.GetUint("tenant_id"), body.DeviceID, ctx.GetUint("user_id"), body.ShiftID, body.OrderNo, body.TicketCode)

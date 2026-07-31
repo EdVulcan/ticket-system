@@ -73,6 +73,9 @@ func main() {
 	deviceContext, stopDeviceWorker := context.WithCancel(context.Background())
 	defer stopDeviceWorker()
 	go runDeviceHealthWorker(deviceContext)
+	printContext, stopPrintWorker := context.WithCancel(context.Background())
+	defer stopPrintWorker()
+	go runPrintJobRecoveryWorker(printContext)
 	reservationContext, stopReservationWorker := context.WithCancel(context.Background())
 	defer stopReservationWorker()
 	go runChannelReservationWorker(reservationContext)
@@ -203,6 +206,26 @@ func runDeviceHealthWorker(ctx context.Context) {
 			if _, err := deviceService.MarkOffline(now, 2*time.Minute); err != nil {
 				logger.Log.Error(fmt.Sprintf("device health check failed: %v", err))
 			}
+		}
+	}
+}
+
+func runPrintJobRecoveryWorker(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	ops := &service.OperationsService{}
+	process := func(now time.Time) {
+		if _, err := ops.RecoverStalePrintJobs(now, 2*time.Minute, 100); err != nil {
+			logger.Log.Error(fmt.Sprintf("stale print job recovery failed: %v", err))
+		}
+	}
+	process(time.Now())
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			process(now)
 		}
 	}
 }

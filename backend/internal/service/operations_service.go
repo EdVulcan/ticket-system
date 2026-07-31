@@ -23,6 +23,9 @@ func (s *OperationsService) OpenShift(tenantID, deviceID, operatorID uint, openi
 		if err := tx.Where("id = ? AND tenant_id = ?", deviceID, tenantID).First(&device).Error; err != nil {
 			return errors.New("device not found")
 		}
+		if device.Type != "pos" {
+			return errors.New("device is not a POS terminal")
+		}
 		var count int64
 		if err := tx.Model(&model.POSShift{}).Where("tenant_id = ? AND device_id = ? AND status = ?", tenantID, deviceID, "open").Count(&count).Error; err != nil {
 			return err
@@ -41,6 +44,21 @@ func (s *OperationsService) OpenShift(tenantID, deviceID, operatorID uint, openi
 }
 
 func (s *OperationsService) CloseShift(tenantID, shiftID uint, closingCents int64, notes string) (*model.POSShift, error) {
+	return s.closeShift(tenantID, shiftID, 0, "admin", closingCents, notes)
+}
+
+// CloseShiftForOperator applies the operator boundary before calculating and
+// closing the shift. Supervisors may close any tenant shift, while ordinary
+// operators may only close their own shift and must have access to its POS
+// device. Keeping this check in the service prevents a controller-only bypass.
+func (s *OperationsService) CloseShiftForOperator(tenantID, shiftID, operatorID uint, role string, closingCents int64, notes string) (*model.POSShift, error) {
+	if operatorID == 0 {
+		return nil, errors.New("operator is required")
+	}
+	return s.closeShift(tenantID, shiftID, operatorID, role, closingCents, notes)
+}
+
+func (s *OperationsService) closeShift(tenantID, shiftID, operatorID uint, role string, closingCents int64, notes string) (*model.POSShift, error) {
 	if closingCents < 0 {
 		return nil, errors.New("closing amount cannot be negative")
 	}
@@ -48,6 +66,18 @@ func (s *OperationsService) CloseShift(tenantID, shiftID uint, closingCents int6
 	err := model.Write(func(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", shiftID, tenantID).First(&shift).Error; err != nil {
 			return err
+		}
+		if role != "admin" && role != "super_admin" {
+			if shift.OperatorID != operatorID {
+				return errors.New("only the shift operator can close this shift")
+			}
+			var scopeCount int64
+			if err := tx.Model(&model.StaffResourceScope{}).Where("tenant_id = ? AND staff_id = ? AND resource_type = ? AND resource_id = ?", tenantID, operatorID, "device", shift.DeviceID).Count(&scopeCount).Error; err != nil {
+				return err
+			}
+			if scopeCount == 0 {
+				return ErrResourceScopeDenied
+			}
 		}
 		if shift.Status != "open" {
 			return fmt.Errorf("shift cannot close from status %s", shift.Status)
@@ -72,6 +102,41 @@ func (s *OperationsService) CloseShift(tenantID, shiftID uint, closingCents int6
 		return nil, err
 	}
 	return &shift, nil
+}
+
+// RecoverStalePrintJobs turns jobs left in "printing" by a crashed process
+// into explicit failed jobs. The physical output may have succeeded before
+// the crash, so they are never silently reprinted; an operator must review
+// and retry them through the normal audited path.
+func (s *OperationsService) RecoverStalePrintJobs(now time.Time, age time.Duration, limit int) (int, error) {
+	if age <= 0 {
+		age = 2 * time.Minute
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	cutoff := now.Add(-age)
+	count := 0
+	err := model.Write(func(tx *gorm.DB) error {
+		var jobs []model.PrintJob
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("status = ? AND updated_at <= ?", "printing", cutoff).Order("id").Limit(limit).Find(&jobs).Error; err != nil {
+			return err
+		}
+		for i := range jobs {
+			message := strings.TrimSpace(jobs[i].LastError)
+			if message == "" {
+				message = "print attempt became stale after process restart; verify physical output before retry"
+			} else {
+				message = "stale after process restart: " + message
+			}
+			if err := tx.Model(&jobs[i]).Updates(map[string]interface{}{"status": "failed", "last_error": message}).Error; err != nil {
+				return err
+			}
+			count++
+		}
+		return nil
+	})
+	return count, err
 }
 
 func (s *OperationsService) ListShifts(tenantID uint, page, pageSize int) ([]model.POSShift, int64, error) {
