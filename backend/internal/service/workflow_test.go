@@ -59,6 +59,66 @@ func TestCoreChannelAdapterUsesMappingAndAccountScope(t *testing.T) {
 	}
 }
 
+func TestPOSHoldIsDurableOperatorScopedAndRevalidatesOnResume(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	var areaID uint
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.Product{}).Where("id = ?", productID).Updates(map[string]interface{}{"type": "offline"}).Error; err != nil {
+			return err
+		}
+		var area model.ScenicArea
+		if err := tx.Where("tenant_id = ?", tenantID).First(&area).Error; err != nil {
+			return err
+		}
+		areaID = area.ID
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	operatorID := uint(7001)
+	device := model.Device{Name: "POS", SerialNumber: fmt.Sprintf("POS-%d", time.Now().UnixNano()), Type: "pos", Status: "online", TenantID: tenantID, ScenicAreaID: areaID}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&device).Error }); err != nil {
+		t.Fatal(err)
+	}
+	shift := model.POSShift{TenantID: tenantID, ScenicAreaID: areaID, DeviceID: device.ID, OperatorID: operatorID, ShiftNo: fmt.Sprintf("SHIFT-%d", time.Now().UnixNano()), Status: "open", OpenedAt: time.Now()}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&shift).Error }); err != nil {
+		t.Fatal(err)
+	}
+	service := &OperationsService{}
+	hold, err := service.CreatePOSHold(tenantID, device.ID, operatorID, shift.ID, []model.POSHoldLine{{ProductID: productID, Quantity: 2}}, "游客", "13800000000", "", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hold.Status != "held" || hold.TotalCents != 19900 || len(hold.Items) != 1 {
+		t.Fatalf("hold=%+v", hold)
+	}
+	if _, err := service.ResumePOSHold(tenantID, hold.ID, operatorID+1); err == nil {
+		t.Fatal("another operator resumed the hold")
+	}
+	resumed, err := service.ResumePOSHold(tenantID, hold.ID, operatorID)
+	if err != nil || resumed.Status != "resumed" || resumed.Items[0].Quantity != 2 {
+		t.Fatalf("resumed=%+v err=%v", resumed, err)
+	}
+	if _, err := service.ResumePOSHold(tenantID, hold.ID, operatorID); err == nil {
+		t.Fatal("hold was resumed twice")
+	}
+	short, err := service.CreatePOSHold(tenantID, device.ID, operatorID, shift.ID, []model.POSHoldLine{{ProductID: productID, Quantity: 1}}, "", "", "", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ExpirePOSHolds(time.Now().Add(2*time.Hour), 10); err != nil {
+		t.Fatal(err)
+	}
+	var expired model.POSHold
+	if err := model.DB.First(&expired, short.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if expired.Status != "expired" {
+		t.Fatalf("expired hold status=%s", expired.Status)
+	}
+}
+
 func TestProductSalePolicyRejectsIdentityAndLimitViolations(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)

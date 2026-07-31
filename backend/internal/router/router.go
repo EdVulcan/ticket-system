@@ -258,6 +258,10 @@ func InitRouter(r *gin.Engine) {
 		operationsGroup.POST("/print-jobs", operationsController.QueuePrint)
 		operationsGroup.GET("/print-jobs", operationsController.ListPrintJobs)
 		operationsGroup.POST("/print-jobs/:id/status", operationsController.UpdatePrintStatus)
+		operationsGroup.POST("/holds", operationsController.CreateHold)
+		operationsGroup.GET("/holds", operationsController.ListHolds)
+		operationsGroup.POST("/holds/:id/resume", operationsController.ResumeHold)
+		operationsGroup.POST("/holds/:id/cancel", operationsController.CancelHold)
 		operationsGroup.GET("/alerts", operationsController.ListAlerts)
 	}
 	otaGroup := apiGroup.Group("/ota")

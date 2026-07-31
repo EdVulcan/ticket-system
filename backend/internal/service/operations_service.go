@@ -1,6 +1,9 @@
 package service
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,6 +15,217 @@ import (
 )
 
 type OperationsService struct{}
+
+type POSHoldView struct {
+	model.POSHold
+	Items []model.POSHoldLine `json:"items"`
+}
+
+func generatePOSHoldNo() string {
+	raw := make([]byte, 5)
+	if _, err := rand.Read(raw); err != nil {
+		panic("secure random source unavailable: " + err.Error())
+	}
+	return fmt.Sprintf("HOLD%d%s", time.Now().UnixMilli(), strings.ToUpper(hex.EncodeToString(raw)))
+}
+
+// CreatePOSHold persists a cashier draft without reserving inventory. The
+// server calculates the current total and verifies the operator's open shift;
+// ResumePOSHold performs the same product checks before it can be sold.
+func (s *OperationsService) CreatePOSHold(tenantID, deviceID, operatorID, shiftID uint, lines []model.POSHoldLine, contactName, contactPhone, notes string, ttl time.Duration) (*POSHoldView, error) {
+	if tenantID == 0 || deviceID == 0 || operatorID == 0 || shiftID == 0 {
+		return nil, errors.New("tenant, device, operator and shift are required")
+	}
+	if len(lines) == 0 {
+		return nil, errors.New("at least one product is required")
+	}
+	if ttl <= 0 || ttl > 24*time.Hour {
+		ttl = 2 * time.Hour
+	}
+	clean := make([]model.POSHoldLine, 0, len(lines))
+	seen := make(map[uint]int)
+	for _, line := range lines {
+		if line.ProductID == 0 || line.Quantity <= 0 {
+			return nil, errors.New("product and positive quantity are required")
+		}
+		seen[line.ProductID] += line.Quantity
+	}
+	for productID, quantity := range seen {
+		clean = append(clean, model.POSHoldLine{ProductID: productID, Quantity: quantity})
+	}
+	// Stable ordering makes the persisted draft and idempotent client retries
+	// deterministic without trusting any client-provided amount.
+	for i := 1; i < len(clean); i++ {
+		for j := i; j > 0 && clean[j].ProductID < clean[j-1].ProductID; j-- {
+			clean[j], clean[j-1] = clean[j-1], clean[j]
+		}
+	}
+	encoded, err := json.Marshal(clean)
+	if err != nil {
+		return nil, err
+	}
+	var hold model.POSHold
+	err = model.Write(func(tx *gorm.DB) error {
+		var device model.Device
+		if err := tx.Where("id = ? AND tenant_id = ? AND type = ?", deviceID, tenantID, "pos").First(&device).Error; err != nil {
+			return errors.New("POS device not found")
+		}
+		var shift model.POSShift
+		if err := tx.Where("id = ? AND tenant_id = ? AND device_id = ? AND operator_id = ? AND status = ?", shiftID, tenantID, deviceID, operatorID, "open").First(&shift).Error; err != nil {
+			return errors.New("open POS shift not found")
+		}
+		var totalCents int64
+		for _, line := range clean {
+			var product model.Product
+			if err := tx.Where("id = ? AND tenant_id = ? AND status = ? AND type = ?", line.ProductID, tenantID, "online", "offline").First(&product).Error; err != nil {
+				return fmt.Errorf("product %d is unavailable", line.ProductID)
+			}
+			totalCents += moneyCents(product.Price) * int64(line.Quantity)
+		}
+		now := time.Now()
+		hold = model.POSHold{
+			TenantID: tenantID, DeviceID: deviceID, OperatorID: operatorID,
+			HoldNo: generatePOSHoldNo(), Status: "held", ItemsJSON: string(encoded),
+			ContactName: strings.TrimSpace(contactName), ContactPhone: strings.TrimSpace(contactPhone),
+			TotalCents: totalCents, ExpiresAt: now.Add(ttl), Notes: strings.TrimSpace(notes),
+		}
+		return tx.Create(&hold).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &POSHoldView{POSHold: hold, Items: clean}, nil
+}
+
+func decodePOSHold(hold *model.POSHold) (*POSHoldView, error) {
+	var lines []model.POSHoldLine
+	if err := json.Unmarshal([]byte(hold.ItemsJSON), &lines); err != nil {
+		return nil, err
+	}
+	return &POSHoldView{POSHold: *hold, Items: lines}, nil
+}
+
+func (s *OperationsService) ListPOSHolds(tenantID, operatorID uint, status string, page, pageSize int) ([]POSHoldView, int64, error) {
+	if tenantID == 0 {
+		return nil, 0, errors.New("tenant is required")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	query := model.DB.Model(&model.POSHold{}).Where("tenant_id = ?", tenantID)
+	if operatorID > 0 {
+		query = query.Where("operator_id = ?", operatorID)
+	}
+	if strings.TrimSpace(status) != "" {
+		query = query.Where("status = ?", strings.TrimSpace(status))
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []model.POSHold
+	if err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	views := make([]POSHoldView, 0, len(rows))
+	for i := range rows {
+		view, err := decodePOSHold(&rows[i])
+		if err != nil {
+			return nil, 0, err
+		}
+		views = append(views, *view)
+	}
+	return views, total, nil
+}
+
+// ResumePOSHold consumes a held draft. The caller can use the returned lines
+// to create an order; the order service rechecks availability and price, so a
+// stale hold can never authorize an old price or product.
+func (s *OperationsService) ResumePOSHold(tenantID, holdID, operatorID uint) (*POSHoldView, error) {
+	var view *POSHoldView
+	err := model.Write(func(tx *gorm.DB) error {
+		var hold model.POSHold
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", holdID, tenantID).First(&hold).Error; err != nil {
+			return err
+		}
+		if hold.OperatorID != operatorID {
+			return errors.New("hold belongs to another operator")
+		}
+		if hold.Status != "held" {
+			return fmt.Errorf("hold cannot resume from status %s", hold.Status)
+		}
+		if !hold.ExpiresAt.After(time.Now()) {
+			if err := tx.Model(&hold).Update("status", "expired").Error; err != nil {
+				return err
+			}
+			return errors.New("hold has expired")
+		}
+		decoded, err := decodePOSHold(&hold)
+		if err != nil {
+			return err
+		}
+		lines := decoded.Items
+		for _, line := range lines {
+			var product model.Product
+			if err := tx.Where("id = ? AND tenant_id = ? AND status = ? AND type = ?", line.ProductID, tenantID, "online", "offline").First(&product).Error; err != nil {
+				return fmt.Errorf("product %d is no longer available", line.ProductID)
+			}
+		}
+		if err := tx.Model(&hold).Updates(map[string]interface{}{"status": "resumed"}).Error; err != nil {
+			return err
+		}
+		hold.Status = "resumed"
+		view = &POSHoldView{POSHold: hold, Items: lines}
+		return nil
+	})
+	return view, err
+}
+
+func (s *OperationsService) CancelPOSHold(tenantID, holdID, operatorID uint, role, reason string) (*model.POSHold, error) {
+	if strings.TrimSpace(reason) == "" {
+		return nil, errors.New("cancellation reason is required")
+	}
+	var hold model.POSHold
+	err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", holdID, tenantID).First(&hold).Error; err != nil {
+			return err
+		}
+		if role != "admin" && role != "super_admin" && hold.OperatorID != operatorID {
+			return errors.New("hold belongs to another operator")
+		}
+		if hold.Status != "held" {
+			return fmt.Errorf("hold cannot cancel from status %s", hold.Status)
+		}
+		now := time.Now()
+		hold.Status, hold.CancelledAt, hold.Notes = "cancelled", &now, strings.TrimSpace(reason)
+		return tx.Model(&hold).Updates(map[string]interface{}{"status": hold.Status, "cancelled_at": now, "notes": hold.Notes}).Error
+	})
+	return &hold, err
+}
+
+func (s *OperationsService) ExpirePOSHolds(now time.Time, limit int) (int, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	count := 0
+	err := model.Write(func(tx *gorm.DB) error {
+		var rows []model.POSHold
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("status = ? AND expires_at <= ?", "held", now).Order("id").Limit(limit).Find(&rows).Error; err != nil {
+			return err
+		}
+		for i := range rows {
+			if err := tx.Model(&rows[i]).Update("status", "expired").Error; err != nil {
+				return err
+			}
+			count++
+		}
+		return nil
+	})
+	return count, err
+}
 
 func (s *OperationsService) OpenShift(tenantID, deviceID, operatorID uint, openingCents int64) (*model.POSShift, error) {
 	if tenantID == 0 || deviceID == 0 || operatorID == 0 || openingCents < 0 {

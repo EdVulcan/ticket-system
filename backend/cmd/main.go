@@ -79,6 +79,9 @@ func main() {
 	reservationContext, stopReservationWorker := context.WithCancel(context.Background())
 	defer stopReservationWorker()
 	go runChannelReservationWorker(reservationContext)
+	holdContext, stopHoldWorker := context.WithCancel(context.Background())
+	defer stopHoldWorker()
+	go runPOSHoldExpiryWorker(holdContext)
 
 	// 4. Init Router
 	gin.SetMode(config.GlobalConfig.Server.Mode)
@@ -242,6 +245,26 @@ func runChannelReservationWorker(ctx context.Context) {
 			if _, err := workflow.Expire(now, 100); err != nil {
 				logger.Log.Error(fmt.Sprintf("channel reservation expiry failed: %v", err))
 			}
+		}
+	}
+}
+
+func runPOSHoldExpiryWorker(ctx context.Context) {
+	worker := &service.OperationsService{}
+	process := func(now time.Time) {
+		if _, err := worker.ExpirePOSHolds(now, 100); err != nil {
+			logger.Log.Error(fmt.Sprintf("POS hold expiry failed: %v", err))
+		}
+	}
+	process(time.Now())
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			process(now)
 		}
 	}
 }

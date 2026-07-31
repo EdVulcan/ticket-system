@@ -156,7 +156,7 @@
               <span>¥{{ totalAmount.toFixed(2) }}</span>
             </div>
             <div class="flex gap-2">
-              <el-button class="w-1/3" color="#333" size="large">挂单 (F4)</el-button>
+              <el-button class="w-1/3" color="#333" size="large" @click="handleHold">挂单 (F4)</el-button>
               <el-button type="primary" class="flex-1 !font-bold" size="large" @click="handleCheckout" :disabled="cart.length===0">结账 (Space)</el-button>
             </div>
           </div>
@@ -309,6 +309,30 @@
         <PaymentModal v-if="showPayment" :amount="currentOrder?.total_amount || 0" :order-no="currentOrder?.order_no || ''" :shift-id="shiftState.shiftId || 0" :device-id="posDeviceId || 0" @success="handlePaymentSuccess" />
       </el-dialog>
 
+      <el-dialog v-model="showHolds" title="挂单" width="760px" align-center class="dark-dialog">
+        <div class="flex justify-between items-center mb-3">
+          <span class="text-sm text-gray-400">挂单只保存商品选择，恢复时会重新校验价格、上下架和库存。</span>
+          <el-button :icon="Refresh" circle title="刷新挂单" @click="loadHolds" />
+        </div>
+        <el-table :data="holds" stripe max-height="360" v-loading="holdsLoading">
+          <el-table-column prop="hold_no" label="挂单号" width="220" />
+          <el-table-column label="商品" min-width="220">
+            <template #default="{ row }">{{ formatHoldItems(row) }}</template>
+          </el-table-column>
+          <el-table-column label="金额" width="110">
+            <template #default="{ row }">¥{{ (row.total_cents / 100).toFixed(2) }}</template>
+          </el-table-column>
+          <el-table-column prop="expires_at" label="有效期" width="180" />
+          <el-table-column label="操作" width="160" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" @click="resumeHold(row)">恢复</el-button>
+              <el-button link type="danger" @click="cancelHold(row)">取消</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <template #footer><el-button @click="showHolds = false">关闭</el-button></template>
+      </el-dialog>
+
       <el-dialog v-model="showPolicy" title="百事通 (F3)" width="600px" align-center class="dark-dialog">
         <PolicyModal />
       </el-dialog>
@@ -378,6 +402,9 @@ const showNote = ref(false)
 const noteContent = ref('')
 const showPayment = ref(false)
 const currentOrder = ref<any>(null)
+const showHolds = ref(false)
+const holds = ref<any[]>([])
+const holdsLoading = ref(false)
 
 // --- Orders State ---
 const orders = ref<any[]>([])
@@ -539,6 +566,78 @@ const handleReprint = async () => {
     ElMessage.success('Reprint completed')
   } catch (error: any) {
     ElMessage.error(error.response?.data?.error || error.message || 'Reprint failed')
+  }
+}
+
+const handleHold = async () => {
+  if (cart.value.length === 0) {
+    await loadHolds()
+    showHolds.value = true
+    return
+  }
+  if (!shiftState.value.isOpen || !shiftState.value.shiftId || !posDeviceId.value) {
+    ElMessage.warning('请先开班并配置 POS 设备')
+    return
+  }
+  try {
+    await axios.post('/operations/holds', {
+      device_id: posDeviceId.value,
+      shift_id: shiftState.value.shiftId,
+      items: cart.value.map(item => ({ product_id: item.id, quantity: item.quantity })),
+      contact_name: '窗口散客'
+    })
+    cart.value = []
+    ElMessage.success('挂单已保存')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '挂单失败')
+  }
+}
+
+const loadHolds = async () => {
+  holdsLoading.value = true
+  try {
+    const { data } = await axios.get('/operations/holds', { params: { status: 'held', page_size: 50 } })
+    holds.value = data.data || []
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '获取挂单失败')
+  } finally {
+    holdsLoading.value = false
+  }
+}
+
+const formatHoldItems = (hold: any) => {
+  try {
+    return (hold.items || []).map((item: any) => `商品 #${item.product_id} x${item.quantity}`).join('，')
+  } catch (_) {
+    return '商品明细不可读'
+  }
+}
+
+const resumeHold = async (hold: any) => {
+  try {
+    const { data } = await axios.post(`/operations/holds/${hold.id}/resume`)
+    const restored = (data.items || []).map((line: any) => {
+      const product = products.value.find(item => item.id === line.product_id)
+      if (!product) throw new Error(`商品 #${line.product_id} 已不再可售`)
+      return { ...product, quantity: line.quantity }
+    })
+    cart.value = restored
+    showHolds.value = false
+    ElMessage.success('挂单已恢复，请核对后结账')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || error.message || '恢复挂单失败')
+    await loadHolds()
+  }
+}
+
+const cancelHold = async (hold: any) => {
+  try {
+    await ElMessageBox.confirm(`确认取消挂单 ${hold.hold_no}？`, '取消挂单', { type: 'warning' })
+    await axios.post(`/operations/holds/${hold.id}/cancel`, { reason: '收银员取消挂单' })
+    ElMessage.success('挂单已取消')
+    await loadHolds()
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error.response?.data?.error || '取消挂单失败')
   }
 }
 
@@ -752,6 +851,7 @@ onMounted(async () => {
     if (e.key === 'F2') { e.preventDefault(); searchInput.value?.focus() }
     if (e.key === 'F3' || (e.ctrlKey && e.key === 'f')) { e.preventDefault(); showPolicy.value = true } // Policy
     if (e.key === 'F5') { e.preventDefault(); fetchProducts() }
+    if (e.key === 'F4') { e.preventDefault(); handleHold() }
     if (e.key === 'Delete') { clearCart() } // Clear
     if (e.code === 'Space' && currentView.value === 'pos') { e.preventDefault(); handleCheckout() }
   })

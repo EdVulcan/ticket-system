@@ -65,6 +65,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 35, name: "offer pricing floors and quotas", apply: migrateOfferPricingAndQuota},
 		{version: 36, name: "legacy migration audit quarantine", apply: migrateMigrationAudit},
 		{version: 37, name: "payment success timestamps", apply: migratePaymentSuccessTimestamps},
+		{version: 38, name: "durable POS holds", apply: migratePOSHolds},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -156,6 +157,10 @@ func migratePaymentSuccessTimestamps(db *gorm.DB) error {
 		return err
 	}
 	return db.Exec("UPDATE payments SET paid_at = created_at WHERE status IN ('paid', 'refunded') AND paid_at IS NULL").Error
+}
+
+func migratePOSHolds(db *gorm.DB) error {
+	return db.AutoMigrate(&POSHold{})
 }
 
 func migrateAfterSalesAndWorkflows(db *gorm.DB) error {
@@ -820,7 +825,7 @@ func migrateInitialSchema(db *gorm.DB) error {
 		&Policy{}, &PaymentConfig{}, &Payment{}, &Refund{}, &PaymentReconciliationTask{}, &AuditLog{}, &OTANonce{},
 		&DigitalRefundTask{}, &ChannelAccount{}, &ChannelProductMapping{}, &ChannelRequest{},
 		&TravelContract{}, &TravelAgent{}, &TourGuide{}, &TravelVehicle{}, &TourGroup{}, &TourGroupMember{}, &TourEntryBatch{},
-		&POSShift{}, &PrintJob{}, &DeviceAlert{}, &SettlementStatement{}, &SettlementLine{}, &StaffResourceScope{},
+		&POSShift{}, &PrintJob{}, &DeviceAlert{}, &POSHold{}, &SettlementStatement{}, &SettlementLine{}, &StaffResourceScope{},
 		&MigrationAuditIssue{},
 	)
 }

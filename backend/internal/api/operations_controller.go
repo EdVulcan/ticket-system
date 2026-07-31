@@ -4,7 +4,9 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -152,4 +154,85 @@ func (c *OperationsController) UpdatePrintStatus(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, job)
+}
+
+func (c *OperationsController) CreateHold(ctx *gin.Context) {
+	var body struct {
+		DeviceID     uint                `json:"device_id" binding:"required"`
+		ShiftID      uint                `json:"shift_id" binding:"required"`
+		Items        []model.POSHoldLine `json:"items" binding:"required,min=1"`
+		ContactName  string              `json:"contact_name"`
+		ContactPhone string              `json:"contact_phone"`
+		Notes        string              `json:"notes"`
+		TTLSeconds   int                 `json:"ttl_seconds"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := service.RequireStaffResource(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), ctx.GetString("role"), "device", body.DeviceID); err != nil {
+		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
+	ttl := time.Duration(body.TTLSeconds) * time.Second
+	hold, err := c.Service.CreatePOSHold(ctx.GetUint("tenant_id"), body.DeviceID, ctx.GetUint("user_id"), body.ShiftID, body.Items, body.ContactName, body.ContactPhone, body.Notes, ttl)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusCreated, hold)
+}
+
+func (c *OperationsController) ListHolds(ctx *gin.Context) {
+	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
+	operatorID := ctx.GetUint("user_id")
+	if ctx.GetString("role") == "admin" || ctx.GetString("role") == "super_admin" {
+		operatorID = 0
+		if raw := ctx.Query("operator_id"); raw != "" {
+			parsed, _ := strconv.ParseUint(raw, 10, 32)
+			operatorID = uint(parsed)
+		}
+	}
+	rows, total, err := c.Service.ListPOSHolds(ctx.GetUint("tenant_id"), uint(operatorID), ctx.Query("status"), page, pageSize)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": rows, "total": total, "page": page, "page_size": pageSize})
+}
+
+func (c *OperationsController) ResumeHold(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid hold id"})
+		return
+	}
+	hold, err := c.Service.ResumePOSHold(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"))
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, hold)
+}
+
+func (c *OperationsController) CancelHold(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid hold id"})
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	hold, err := c.Service.CancelPOSHold(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), ctx.GetString("role"), body.Reason)
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, hold)
 }
