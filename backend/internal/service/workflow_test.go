@@ -629,6 +629,15 @@ func TestRechargeIsIdempotentAndLeavesCentLedgerEvidence(t *testing.T) {
 		if err := tx.Create(&distributor).Error; err != nil {
 			return err
 		}
+		if err := tx.Create(&model.TenantCapability{TenantID: supplier.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&model.TenantCapability{TenantID: distributor.ID, Capability: "distributor", Status: "active"}).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&model.DistributorRelationship{AgentTenantID: distributor.ID, SupplierTenantID: supplier.ID, Status: "active"}).Error; err != nil {
+			return err
+		}
 		return tx.Create(&model.CapitalAccount{OwnerTenantID: distributor.ID, ManagerTenantID: supplier.ID, Status: "active", Balance: 10}).Error
 	}); err != nil {
 		t.Fatal(err)

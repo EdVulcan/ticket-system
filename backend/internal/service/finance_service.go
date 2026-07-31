@@ -26,6 +26,16 @@ func (s *FinanceService) RechargeAccount(managerTenantID, ownerTenantID uint, am
 	}
 	var document model.FinancialDocument
 	err := model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, managerTenantID, "supplier"); err != nil {
+			return err
+		}
+		if err := requireActiveTenantCapability(tx, ownerTenantID, "distributor"); err != nil {
+			return err
+		}
+		var relationship model.DistributorRelationship
+		if err := tx.Where("supplier_tenant_id = ? AND agent_tenant_id = ? AND status = ?", managerTenantID, ownerTenantID, "active").First(&relationship).Error; err != nil {
+			return errors.New("active distribution relationship not found")
+		}
 		var existing model.FinancialDocument
 		if err := tx.Where("tenant_id = ? AND idempotency_key = ?", managerTenantID, idempotencyKey).First(&existing).Error; err == nil {
 			if existing.Type != "recharge" || existing.CounterpartyTenantID != ownerTenantID || existing.AmountCents != amountCents {

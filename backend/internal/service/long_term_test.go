@@ -817,6 +817,21 @@ func TestSupplierFulfillmentWorklistIsScopedAndCountsEntitlements(t *testing.T) 
 	}
 }
 
+func TestRechargeRejectsSuspendedDistributionRelationship(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&model.DistributorRelationship{}).
+			Where("supplier_tenant_id = ? AND agent_tenant_id = ?", scenario.supplierID, scenario.distributorID).
+			Update("status", "suspended").Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&DistributionService{}).RechargeAgent(scenario.supplierID, scenario.distributorID, 10, "suspended-recharge", 1); err == nil {
+		t.Fatal("recharge succeeded for suspended distribution relationship")
+	}
+}
+
 func TestProductUpdateCreatesNewRevisionForNewOrders(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
