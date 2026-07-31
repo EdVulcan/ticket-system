@@ -310,6 +310,57 @@ func (s *DistributionService) SetOfferStatus(supplierTenantID, offerID, operator
 	})
 }
 
+// FulfillmentOrderView is the supplier-facing read model for fulfilment
+// operations. The sales order remains owned by the distributor, while the
+// supplier can see only the fulfilment facts and ticket counts it owns.
+type FulfillmentOrderView struct {
+	model.FulfillmentOrder
+	TicketCount int64 `json:"ticket_count"`
+	UsedCount   int64 `json:"used_count"`
+}
+
+func (s *DistributionService) ListFulfillmentOrders(supplierTenantID, distributorTenantID uint, status string, page, pageSize int) ([]FulfillmentOrderView, int64, error) {
+	if supplierTenantID == 0 {
+		return nil, 0, errors.New("supplier tenant is required")
+	}
+	if err := requireActiveTenantCapability(model.DB, supplierTenantID, "supplier"); err != nil {
+		return nil, 0, err
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	query := model.DB.Model(&model.FulfillmentOrder{}).Where("supplier_tenant_id = ?", supplierTenantID)
+	if distributorTenantID > 0 {
+		query = query.Where("sales_tenant_id = ?", distributorTenantID)
+	}
+	if status = strings.TrimSpace(status); status != "" {
+		query = query.Where("status = ?", status)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var orders []model.FulfillmentOrder
+	if err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&orders).Error; err != nil {
+		return nil, 0, err
+	}
+	views := make([]FulfillmentOrderView, 0, len(orders))
+	for i := range orders {
+		var ticketCount, usedCount int64
+		if err := model.DB.Model(&model.TicketEntitlement{}).Where("fulfillment_order_id = ? AND supplier_tenant_id = ?", orders[i].ID, supplierTenantID).Count(&ticketCount).Error; err != nil {
+			return nil, 0, err
+		}
+		if err := model.DB.Model(&model.TicketEntitlement{}).Where("fulfillment_order_id = ? AND supplier_tenant_id = ? AND status = ?", orders[i].ID, supplierTenantID, "used").Count(&usedCount).Error; err != nil {
+			return nil, 0, err
+		}
+		views = append(views, FulfillmentOrderView{FulfillmentOrder: orders[i], TicketCount: ticketCount, UsedCount: usedCount})
+	}
+	return views, total, nil
+}
+
 func (s *DistributionService) ImportProduct(agentTenantID, sourceProductID uint, name string, price float64, productType string) error {
 	name = strings.TrimSpace(name)
 	if name == "" || price < 0 || (productType != "online" && productType != "offline") {

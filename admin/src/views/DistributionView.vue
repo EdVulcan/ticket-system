@@ -85,9 +85,36 @@
                         <el-button type="danger" size="small" @click="handleAudit(row, 'rejected')">拒绝</el-button>
                     </div>
                     <div v-else>
+                         <el-button type="primary" size="small" @click="handleOffers(row)">Offers</el-button>
                          <el-button type="warning" size="small" @click="handleRecharge(row)">充值</el-button>
                     </div>
                 </template>
+                </el-table-column>
+            </el-table>
+        </el-tab-pane>
+
+        <el-tab-pane v-if="canSupply" label="Fulfillment worklist" name="fulfillments">
+            <div class="flex items-center justify-between mb-4 mt-2">
+                <div class="flex gap-2 items-center">
+                    <el-select v-model="fulfillmentStatus" clearable placeholder="All statuses" style="width: 160px" @change="fetchFulfillments">
+                        <el-option label="Reserved" value="reserved" />
+                        <el-option label="Paid" value="paid" />
+                        <el-option label="Fulfilled" value="fulfilled" />
+                        <el-option label="Cancelled" value="cancelled" />
+                    </el-select>
+                    <el-input v-model="fulfillmentDistributorId" placeholder="Distributor tenant ID" style="width: 180px" @keyup.enter="fetchFulfillments" />
+                </div>
+                <el-button link type="primary" @click="fetchFulfillments"><el-icon><Refresh /></el-icon></el-button>
+            </div>
+            <el-table :data="fulfillments" style="width: 100%" v-loading="loadingFulfillments" stripe>
+                <el-table-column prop="fulfillment_no" label="Fulfillment" min-width="180" />
+                <el-table-column prop="sales_order_no" label="Sales order" min-width="180" />
+                <el-table-column prop="sales_tenant_id" label="Distributor" width="100" />
+                <el-table-column prop="scenic_area_id" label="Scenic area" width="100" />
+                <el-table-column prop="settlement_amount" label="Settlement" width="110" />
+                <el-table-column prop="status" label="Status" width="110" />
+                <el-table-column label="Tickets" width="100">
+                    <template #default="{ row }">{{ row.used_count }}/{{ row.ticket_count }} used</template>
                 </el-table-column>
             </el-table>
         </el-tab-pane>
@@ -194,6 +221,63 @@
             </span>
         </template>
     </el-dialog>
+
+    <el-dialog v-model="offersDialogVisible" title="Supplier offers" width="980px">
+        <div class="flex justify-between items-center mb-3">
+            <span class="text-sm text-gray-500">Manage the supplier-authorized revision, price floor, quota and channels.</span>
+            <div class="flex gap-2">
+                <el-button size="small" @click="loadOffers">Refresh</el-button>
+                <el-button type="primary" size="small" @click="openOfferForm">Create offer</el-button>
+            </div>
+        </div>
+        <el-table :data="offers" v-loading="loadingOffers" height="360" stripe>
+            <el-table-column prop="source_product_id" label="Product" width="90" />
+            <el-table-column prop="product_revision_id" label="Revision" width="90" />
+            <el-table-column prop="settlement_price" label="Settlement" width="110" />
+            <el-table-column prop="minimum_retail_price_cents" label="Retail floor (cents)" width="140" />
+            <el-table-column prop="quota" label="Quota" width="80" />
+            <el-table-column prop="allowed_channels" label="Channels" min-width="150" />
+            <el-table-column prop="status" label="Status" width="100" />
+            <el-table-column label="Actions" width="180" fixed="right">
+                <template #default="{ row }">
+                    <el-button v-if="row.status === 'active'" link type="warning" @click="handleOfferStatus(row, 'suspended')">Suspend</el-button>
+                    <el-button v-else-if="row.status === 'suspended'" link type="success" @click="handleOfferStatus(row, 'active')">Resume</el-button>
+                    <el-button v-if="row.status !== 'expired'" link type="danger" @click="handleOfferStatus(row, 'expired')">Expire</el-button>
+                </template>
+            </el-table-column>
+        </el-table>
+    </el-dialog>
+
+    <el-dialog v-model="offerFormVisible" title="Create supplier offer" width="560px">
+        <el-form :model="offerForm" label-position="top">
+            <el-form-item label="Source product">
+                <el-select v-model="offerForm.source_product_id" filterable class="w-full" placeholder="Select an online distributable product">
+                    <el-option v-for="product in sourceProducts" :key="product.id" :label="`${product.name} (#${product.id})`" :value="product.id" />
+                </el-select>
+            </el-form-item>
+            <div class="grid grid-cols-2 gap-3">
+                <el-form-item label="Settlement price">
+                    <el-input-number v-model="offerForm.settlement_price" :min="0.01" :precision="2" class="w-full" />
+                </el-form-item>
+                <el-form-item label="Minimum retail price">
+                    <el-input-number v-model="offerForm.minimum_retail_price" :min="0" :precision="2" class="w-full" />
+                </el-form-item>
+                <el-form-item label="Quota (0 = unlimited)">
+                    <el-input-number v-model="offerForm.quota" :min="0" :precision="0" class="w-full" />
+                </el-form-item>
+                <el-form-item label="Commission (BPS)">
+                    <el-input-number v-model="offerForm.commission_bps" :min="0" :max="10000" :precision="0" class="w-full" />
+                </el-form-item>
+            </div>
+            <el-form-item label="Allowed channels (comma-separated)">
+                <el-input v-model="offerForm.allowed_channels" placeholder="window,online,ota" />
+            </el-form-item>
+        </el-form>
+        <template #footer>
+            <el-button @click="offerFormVisible = false">Cancel</el-button>
+            <el-button type="primary" :loading="savingOffer" @click="createOffer">Create</el-button>
+        </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -216,6 +300,10 @@ const suppliers = ref<any[]>([])
 // Agents State
 const loadingAgents = ref(false)
 const agents = ref<any[]>([])
+const loadingFulfillments = ref(false)
+const fulfillments = ref<any[]>([])
+const fulfillmentStatus = ref('')
+const fulfillmentDistributorId = ref('')
 
 // Apply Dialog State
 const dialogVisible = ref(false)
@@ -239,6 +327,22 @@ const importForm = reactive({
     price: 0,
     settlement_price: 0,
     channels: ['online']
+})
+
+const offersDialogVisible = ref(false)
+const offerFormVisible = ref(false)
+const loadingOffers = ref(false)
+const savingOffer = ref(false)
+const offers = ref<any[]>([])
+const sourceProducts = ref<any[]>([])
+const selectedDistributorId = ref(0)
+const offerForm = reactive({
+    source_product_id: 0,
+    settlement_price: 0,
+    minimum_retail_price: 0,
+    quota: 0,
+    commission_bps: 0,
+    allowed_channels: 'window,online,ota'
 })
 
 // Methods
@@ -269,8 +373,25 @@ const fetchAgents = async () => {
 const handleTabChange = (tabName: string) => {
     if (tabName === 'suppliers') {
         fetchSuppliers()
-    } else {
+    } else if (tabName === 'agents') {
         fetchAgents()
+    } else if (tabName === 'fulfillments') {
+        fetchFulfillments()
+    }
+}
+
+const fetchFulfillments = async () => {
+    loadingFulfillments.value = true
+    try {
+        const params: Record<string, string | number> = { page: 1, page_size: 100 }
+        if (fulfillmentStatus.value) params.status = fulfillmentStatus.value
+        if (fulfillmentDistributorId.value.trim()) params.distributor_tenant_id = Number(fulfillmentDistributorId.value)
+        const res = await request.get('/distribution/fulfillments', { params })
+        fulfillments.value = res.data.data || []
+    } catch (e: any) {
+        ElMessage.error(e.response?.data?.error || 'Failed to load fulfillment worklist')
+    } finally {
+        loadingFulfillments.value = false
     }
 }
 
@@ -330,7 +451,8 @@ const confirmRecharge = async () => {
     recharging.value = true
     try {
         await request.post(`/distribution/agents/${rechargeForm.agent_id}/recharge`, {
-            amount: rechargeForm.amount
+            amount: rechargeForm.amount,
+            idempotency_key: `admin-recharge-${rechargeForm.agent_id}-${Date.now()}-${Math.random().toString(36).slice(2)}`
         })
         ElMessage.success('充值成功')
         rechargeDialogVisible.value = false
@@ -341,6 +463,72 @@ const confirmRecharge = async () => {
         ElMessage.error(e.response?.data?.error || '充值失败')
     } finally {
         recharging.value = false
+    }
+}
+
+const handleOffers = async (row: any) => {
+    selectedDistributorId.value = row.agent_tenant_id
+    offersDialogVisible.value = true
+    await Promise.all([loadOffers(), loadSourceProducts()])
+}
+
+const loadOffers = async () => {
+    if (!selectedDistributorId.value) return
+    loadingOffers.value = true
+    try {
+        const res = await request.get('/distribution/offers', { params: { distributor_tenant_id: selectedDistributorId.value, page: 1, page_size: 100 } })
+        offers.value = res.data.data || []
+    } catch (e: any) {
+        ElMessage.error(e.response?.data?.error || 'Failed to load offers')
+    } finally {
+        loadingOffers.value = false
+    }
+}
+
+const loadSourceProducts = async () => {
+    try {
+        const res = await request.get('/products', { params: { page: 1, page_size: 100 } })
+        sourceProducts.value = (res.data.data || []).filter((product: any) => product.status === 'online' && product.is_distributable)
+    } catch (e: any) {
+        ElMessage.error(e.response?.data?.error || 'Failed to load source products')
+    }
+}
+
+const openOfferForm = () => {
+    offerForm.source_product_id = sourceProducts.value[0]?.id || 0
+    offerForm.settlement_price = 0
+    offerForm.minimum_retail_price = 0
+    offerForm.quota = 0
+    offerForm.commission_bps = 0
+    offerForm.allowed_channels = 'window,online,ota'
+    offerFormVisible.value = true
+}
+
+const createOffer = async () => {
+    if (!selectedDistributorId.value || !offerForm.source_product_id || offerForm.settlement_price <= 0 || !offerForm.allowed_channels.trim()) {
+        ElMessage.warning('Product, settlement price and channels are required')
+        return
+    }
+    savingOffer.value = true
+    try {
+        await request.post('/distribution/offers', { distributor_tenant_id: selectedDistributorId.value, ...offerForm })
+        ElMessage.success('Offer created')
+        offerFormVisible.value = false
+        await loadOffers()
+    } catch (e: any) {
+        ElMessage.error(e.response?.data?.error || 'Failed to create offer')
+    } finally {
+        savingOffer.value = false
+    }
+}
+
+const handleOfferStatus = async (row: any, status: string) => {
+    try {
+        await request.patch(`/distribution/offers/${row.id}/status`, { status, reason: `Changed from supplier console to ${status}` })
+        ElMessage.success('Offer status updated')
+        await loadOffers()
+    } catch (e: any) {
+        ElMessage.error(e.response?.data?.error || 'Failed to update offer')
     }
 }
 

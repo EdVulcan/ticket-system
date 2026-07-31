@@ -792,6 +792,31 @@ func TestSupplierCanSuspendAndReactivateOnlyCurrentOffer(t *testing.T) {
 	}
 }
 
+func TestSupplierFulfillmentWorklistIsScopedAndCountsEntitlements(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	order := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, scenario.distributorID); err != nil {
+		t.Fatal(err)
+	}
+	views, total, err := (&DistributionService{}).ListFulfillmentOrders(scenario.supplierID, scenario.distributorID, "paid", 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(views) != 1 {
+		t.Fatalf("fulfillment views=%+v total=%d", views, total)
+	}
+	if views[0].SupplierTenantID != scenario.supplierID || views[0].SalesTenantID != scenario.distributorID || views[0].TicketCount != 1 || views[0].UsedCount != 0 {
+		t.Fatalf("unexpected fulfillment view=%+v", views[0])
+	}
+	if _, _, err := (&DistributionService{}).ListFulfillmentOrders(scenario.distributorID, 0, "", 1, 20); err == nil {
+		t.Fatal("distributor accessed supplier fulfillment worklist")
+	}
+}
+
 func TestProductUpdateCreatesNewRevisionForNewOrders(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
