@@ -28,6 +28,8 @@ func InitRouter(r *gin.Engine) {
 	platformGroup := protected.Group("/platform")
 	platformGroup.Use(middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"))
 	platformGroup.GET("/overview", platformController.Overview)
+	platformGroup.GET("/orders", platformController.ListOrders)
+	platformGroup.GET("/issues", platformController.ListIssues)
 
 	// Tenant Routes
 	tenantController := &api.TenantController{}

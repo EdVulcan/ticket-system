@@ -34,6 +34,10 @@
                 <el-icon><OfficeBuilding /></el-icon>
                 <span>商户开户管理</span>
              </el-menu-item>
+             <el-menu-item index="/platform-operations" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+                <el-icon><Monitor /></el-icon>
+                <span>平台运营工作台</span>
+             </el-menu-item>
           </template>
 
           <!-- Tenant Only -->

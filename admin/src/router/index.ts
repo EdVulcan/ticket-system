@@ -16,6 +16,12 @@ const router = createRouter({
             meta: { scope: 'platform', roles: ['platform_admin'], title: '商户管理 (平台)' }
         },
         {
+            path: '/platform-operations',
+            name: 'platform-operations',
+            component: () => import('../views/PlatformOperationsView.vue'),
+            meta: { scope: 'platform', roles: ['platform_admin'], title: '平台运营工作台' }
+        },
+        {
             path: '/distribution',
             name: 'distribution',
             component: () => import('../views/DistributionView.vue'),

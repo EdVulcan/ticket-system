@@ -60,6 +60,38 @@ func TestCoreChannelAdapterUsesMappingAndAccountScope(t *testing.T) {
 	}
 }
 
+func TestPlatformWorklistsRespectTargetTenantFilter(t *testing.T) {
+	resetBusinessData(t)
+	firstTenant, firstProduct := seedSellableProduct(t, "unlimited", 1)
+	secondTenant, secondProduct := seedSellableProduct(t, "unlimited", 1)
+	firstOrder := model.Order{TenantID: firstTenant, Channel: "window", Items: []model.OrderItem{{ProductID: firstProduct, Quantity: 1}}}
+	secondOrder := model.Order{TenantID: secondTenant, Channel: "window", Items: []model.OrderItem{{ProductID: secondProduct, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&firstOrder); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).Create(&secondOrder); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Create(&model.DeviceAlert{TenantID: firstTenant, DeviceID: 1, Type: "offline", Status: "open", Message: "test alert", OpenedAt: time.Now()}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	service := &PlatformService{}
+	orders, total, err := service.ListOrders(firstTenant, "", 1, 20)
+	if err != nil || total != 1 || len(orders) != 1 || orders[0].TenantID != firstTenant {
+		t.Fatalf("targeted orders=%+v total=%d err=%v", orders, total, err)
+	}
+	issues, issueTotal, err := service.ListIssues(firstTenant, 1, 20)
+	if err != nil || issueTotal != 1 || len(issues) != 1 || issues[0].Kind != "device_alert" || issues[0].TenantID != firstTenant {
+		t.Fatalf("targeted issues=%+v total=%d err=%v", issues, issueTotal, err)
+	}
+	allOrders, allTotal, err := service.ListOrders(0, "", 1, 20)
+	if err != nil || allTotal != 2 || len(allOrders) != 2 {
+		t.Fatalf("global orders=%+v total=%d err=%v", allOrders, allTotal, err)
+	}
+}
+
 func TestPOSHoldIsDurableOperatorScopedAndRevalidatesOnResume(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)

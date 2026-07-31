@@ -17,6 +17,7 @@
       </div>
       <div class="mt-6 flex gap-3">
         <el-button type="primary" @click="$router.push('/tenant')">租户治理</el-button>
+        <el-button @click="$router.push('/platform-operations')">平台运营工作台</el-button>
       </div>
     </template>
 
