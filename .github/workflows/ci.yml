@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+      - name: Install SQLite build dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc libc6-dev
+      - name: Require CGO for core tests
+        shell: bash
+        run: |
+          test "${CGO_ENABLED:-}" = "1"
+          command -v gcc
+        env:
+          CGO_ENABLED: "1"
+      - name: Test
+        run: go test ./... -count=1
+        env:
+          CGO_ENABLED: "1"
+      - name: Race test
+        run: go test -race ./... -count=1 -timeout 10m
+        env:
+          CGO_ENABLED: "1"
+      - name: Vet
+        run: go vet ./...
+        env:
+          CGO_ENABLED: "1"
+
+  frontend:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        app: [admin, desktop]
+    defaults:
+      run:
+        working-directory: ${{ matrix.app }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.app }}/package-lock.json
+      - run: npm ci
+      - run: npm run build
