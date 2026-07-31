@@ -104,6 +104,29 @@ func TestChannelSignatureCoversBodyAndRejectsConflict(t *testing.T) {
 	if err := db.Model(&account).Update("allowed_ips_json", "").Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Model(&account).Update("rate_limit_per_min", 100).Error; err != nil {
+		t.Fatal(err)
+	}
+	staleLock := time.Now().Add(-10 * time.Minute)
+	bodyHash := sha256.Sum256(body)
+	if err := db.Create(&model.ChannelRequest{
+		ChannelAccountID: account.ID, RequestID: "request-stale", Endpoint: "/channels/travel-test/orders/create",
+		BodyHash: hex.EncodeToString(bodyHash[:]), Status: "processing", LockedAt: &staleLock,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	requestID = "request-stale"
+	nonce = "nonce-stale"
+	if resp := request(body); resp.Code != http.StatusOK || handlerCalls != 2 {
+		t.Fatalf("stale channel request status=%d calls=%d body=%s", resp.Code, handlerCalls, resp.Body.String())
+	}
+	var completed model.ChannelRequest
+	if err := db.Where("channel_account_id = ? AND request_id = ?", account.ID, requestID).First(&completed).Error; err != nil {
+		t.Fatal(err)
+	}
+	if completed.Status != "completed" || completed.LockedAt != nil {
+		t.Fatalf("stale request state=%+v", completed)
+	}
 	if err := db.Model(&tenant).Update("status", "frozen").Error; err != nil {
 		t.Fatal(err)
 	}

@@ -22,6 +22,8 @@ import (
 	"gorm.io/gorm"
 )
 
+const staleChannelRequestAfter = 5 * time.Minute
+
 type channelCaptureWriter struct {
 	gin.ResponseWriter
 	body bytes.Buffer
@@ -95,6 +97,7 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 		}
 		var replayResponse string
 		replayStatus := http.StatusOK
+		var requestLeaseAt *time.Time
 		if err := model.Write(func(tx *gorm.DB) error {
 			now := time.Now()
 			var existing model.ChannelRequest
@@ -110,7 +113,15 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 					}
 					return nil
 				}
-				return errors.New("channel request is already processing")
+				leaseAt := existing.CreatedAt
+				if existing.LockedAt != nil {
+					leaseAt = *existing.LockedAt
+				}
+				if !leaseAt.IsZero() && now.Sub(leaseAt) < staleChannelRequestAfter {
+					return errors.New("channel request is already processing")
+				}
+				requestLeaseAt = &now
+				return tx.Model(&existing).Updates(map[string]interface{}{"locked_at": now}).Error
 			}
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
@@ -124,7 +135,8 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 					return errors.New("channel rate limit exceeded")
 				}
 			}
-			return tx.Create(&model.ChannelRequest{ChannelAccountID: account.ID, RequestID: requestID, Endpoint: ctx.Request.URL.Path, BodyHash: hex.EncodeToString(bodyHash[:]), Status: "processing", ResponseStatus: http.StatusOK, RemoteIP: remoteIP}).Error
+			requestLeaseAt = &now
+			return tx.Create(&model.ChannelRequest{ChannelAccountID: account.ID, RequestID: requestID, Endpoint: ctx.Request.URL.Path, BodyHash: hex.EncodeToString(bodyHash[:]), Status: "processing", ResponseStatus: http.StatusOK, RemoteIP: remoteIP, LockedAt: requestLeaseAt}).Error
 		}); err != nil {
 			ctx.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
@@ -152,9 +164,12 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 		}
 		responseStatus := ctx.Writer.Status()
 		_ = model.Write(func(tx *gorm.DB) error {
-			return tx.Model(&model.ChannelRequest{}).
-				Where("channel_account_id = ? AND request_id = ? AND status = ?", account.ID, requestID, "processing").
-				Updates(map[string]interface{}{"status": status, "response_json": capture.body.String(), "response_status": responseStatus}).Error
+			query := tx.Model(&model.ChannelRequest{}).
+				Where("channel_account_id = ? AND request_id = ? AND status = ?", account.ID, requestID, "processing")
+			if requestLeaseAt != nil {
+				query = query.Where("locked_at = ?", *requestLeaseAt)
+			}
+			return query.Updates(map[string]interface{}{"status": status, "response_json": capture.body.String(), "response_status": responseStatus, "locked_at": nil}).Error
 		})
 	}
 }

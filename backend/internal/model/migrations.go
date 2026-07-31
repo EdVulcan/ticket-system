@@ -69,6 +69,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 39, name: "strict ownership database guards", apply: migrateStrictOwnershipGuards},
 		{version: 40, name: "payment and refund cent facts", apply: migratePaymentCentFacts},
 		{version: 41, name: "digital refund task leases", apply: migrateDigitalRefundTaskLeases},
+		{version: 42, name: "channel request leases", apply: migrateChannelRequestLeases},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -92,6 +93,10 @@ func runMigrations(db *gorm.DB) error {
 
 func migrateDigitalRefundTaskLeases(db *gorm.DB) error {
 	return db.AutoMigrate(&DigitalRefundTask{})
+}
+
+func migrateChannelRequestLeases(db *gorm.DB) error {
+	return db.AutoMigrate(&ChannelRequest{})
 }
 
 func migrateTeamSettlementFacts(db *gorm.DB) error {

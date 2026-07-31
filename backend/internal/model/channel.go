@@ -38,12 +38,13 @@ type ChannelProductMapping struct {
 // retry with the same id but different content is rejected explicitly.
 type ChannelRequest struct {
 	Base
-	ChannelAccountID uint   `gorm:"uniqueIndex:idx_channel_request,priority:1;not null" json:"channel_account_id"`
-	RequestID        string `gorm:"size:120;uniqueIndex:idx_channel_request,priority:2;not null" json:"request_id"`
-	Endpoint         string `gorm:"size:120;not null" json:"endpoint"`
-	BodyHash         string `gorm:"size:64;not null" json:"body_hash"`
-	ResponseJSON     string `gorm:"type:text" json:"response_json,omitempty"`
-	Status           string `gorm:"size:20;not null;default:'processing'" json:"status"` // processing, completed, rejected
-	ResponseStatus   int    `gorm:"not null;default:200" json:"response_status"`
-	RemoteIP         string `gorm:"size:64" json:"remote_ip,omitempty"`
+	ChannelAccountID uint       `gorm:"uniqueIndex:idx_channel_request,priority:1;not null" json:"channel_account_id"`
+	RequestID        string     `gorm:"size:120;uniqueIndex:idx_channel_request,priority:2;not null" json:"request_id"`
+	Endpoint         string     `gorm:"size:120;not null" json:"endpoint"`
+	BodyHash         string     `gorm:"size:64;not null" json:"body_hash"`
+	ResponseJSON     string     `gorm:"type:text" json:"response_json,omitempty"`
+	Status           string     `gorm:"size:20;not null;default:'processing'" json:"status"` // processing, completed, rejected
+	ResponseStatus   int        `gorm:"not null;default:200" json:"response_status"`
+	RemoteIP         string     `gorm:"size:64" json:"remote_ip,omitempty"`
+	LockedAt         *time.Time `gorm:"index" json:"-"`
 }
