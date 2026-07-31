@@ -42,7 +42,7 @@ func TestMain(m *testing.M) {
 		&model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.TourGroup{}, &model.TourGroupMember{}, &model.TourEntryBatch{},
 		&model.POSShift{}, &model.PrintJob{}, &model.DeviceAlert{},
 		&model.ProductRevision{}, &model.SettlementStatement{}, &model.SettlementLine{}, &model.StaffResourceScope{},
-		&model.AfterSaleRequest{}, &model.AfterSaleEvent{}, &model.HardwareCommand{}, &model.HardwareEvent{}, &model.ChannelReservation{}, &model.FinancialDocument{},
+		&model.AfterSaleRequest{}, &model.AfterSaleEvent{}, &model.HardwareCommand{}, &model.HardwareEvent{}, &model.ChannelReservation{}, &model.FinancialDocument{}, &model.TeamSettlementStatement{},
 	); err != nil {
 		panic(err)
 	}
@@ -67,7 +67,7 @@ func resetBusinessData(t *testing.T) {
 			&model.StaffResourceScope{}, &model.User{}, &model.Staff{},
 			&model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{}, &model.LedgerEntry{}, &model.DigitalRefundTask{},
 			&model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{}, &model.ChannelReservation{}, &model.TourGroupMember{}, &model.TourGroup{}, &model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.TourEntryBatch{}, &model.POSShift{}, &model.PrintJob{}, &model.DeviceAlert{},
-			&model.AfterSaleEvent{}, &model.AfterSaleRequest{}, &model.HardwareEvent{}, &model.HardwareCommand{}, &model.FinancialDocument{},
+			&model.AfterSaleEvent{}, &model.AfterSaleRequest{}, &model.HardwareEvent{}, &model.HardwareCommand{}, &model.FinancialDocument{}, &model.TeamSettlementStatement{},
 			&model.ProductRevision{}, &model.SettlementLine{}, &model.SettlementStatement{},
 			&model.CheckInRecord{}, &model.Ticket{}, &model.OrderItem{}, &model.Order{}, &model.ProductInventory{},
 			&model.Product{}, &model.RuleItem{}, &model.RuleGroup{}, &model.TicketRule{}, &model.Device{}, &model.CheckPoint{},

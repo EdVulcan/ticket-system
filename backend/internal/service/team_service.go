@@ -139,6 +139,10 @@ func (s *TeamService) CreateGroup(tenantID uint, group *model.TourGroup) error {
 		group.Base = model.Base{}
 		group.TenantID = tenantID
 		group.SalesOrderID = 0
+		group.ContractAmountCents = 0
+		group.DepositCents = 0
+		group.CreditUsedCents = 0
+		group.SettlementStatus = "open"
 		group.Status = "draft"
 		group.GroupNo = teamNo("TEAM", tenantID)
 		return tx.Create(group).Error
@@ -321,6 +325,15 @@ func (s *TeamService) AttachOrder(tenantID, groupID, orderID uint) error {
 		if err := validateTeamContractTx(tx, tenantID, &group); err != nil {
 			return err
 		}
+		if group.ContractID != 0 {
+			var contract model.TravelContract
+			if err := tx.Where("id = ? AND travel_tenant_id = ? AND supplier_tenant_id = ? AND status = ?", group.ContractID, tenantID, group.SupplierTenantID, "active").First(&contract).Error; err != nil {
+				return errors.New("active travel contract not found")
+			}
+			if err := validateTeamOrderAgainstContract(&contract, &order); err != nil {
+				return err
+			}
+		}
 		for _, item := range order.Items {
 			if item.UseDate == nil || !sameTeamDate(*item.UseDate, group.VisitDate) {
 				return errors.New("sales order visit date does not match team visit date")
@@ -349,7 +362,21 @@ func (s *TeamService) AttachOrder(tenantID, groupID, orderID uint) error {
 				return err
 			}
 		}
-		return tx.Model(&group).Updates(map[string]interface{}{"sales_order_id": order.ID, "status": "confirmed"}).Error
+		amountCents := moneyCents(order.TotalAmount)
+		creditUsed := amountCents - group.DepositCents
+		if creditUsed < 0 {
+			creditUsed = 0
+		}
+		if group.ContractID != 0 {
+			var contract model.TravelContract
+			if err := tx.First(&contract, group.ContractID).Error; err != nil {
+				return err
+			}
+			if contract.CreditLimitCents > 0 && creditUsed > contract.CreditLimitCents {
+				return errors.New("team order exceeds contract credit limit")
+			}
+		}
+		return tx.Model(&group).Updates(map[string]interface{}{"sales_order_id": order.ID, "status": "confirmed", "contract_amount_cents": amountCents, "credit_used_cents": creditUsed, "settlement_status": "open"}).Error
 	})
 }
 
@@ -377,6 +404,46 @@ func validateTeamContractTx(tx *gorm.DB, tenantID uint, group *model.TourGroup) 
 	}
 	if contract.EndsAt != nil && visit.After(startOfDay(*contract.EndsAt)) {
 		return errors.New("travel contract is not active on team visit date")
+	}
+	return nil
+}
+
+type teamPriceRule struct {
+	ProductID   uint  `json:"product_id"`
+	PriceCents  int64 `json:"price_cents"`
+	MaxQuantity int   `json:"max_quantity"`
+}
+
+func validateTeamOrderAgainstContract(contract *model.TravelContract, order *model.Order) error {
+	if contract == nil || order == nil {
+		return errors.New("team contract and order are required")
+	}
+	raw := strings.TrimSpace(contract.PriceRulesJSON)
+	if raw == "" {
+		return nil
+	}
+	var rules []teamPriceRule
+	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+		return fmt.Errorf("invalid team contract price rules: %w", err)
+	}
+	byProduct := make(map[uint]teamPriceRule, len(rules))
+	for _, rule := range rules {
+		if rule.ProductID == 0 || rule.PriceCents <= 0 || rule.MaxQuantity < 0 {
+			return errors.New("invalid team contract price rule")
+		}
+		byProduct[rule.ProductID] = rule
+	}
+	for _, item := range order.Items {
+		rule, ok := byProduct[item.ProductID]
+		if !ok {
+			return fmt.Errorf("product %d is not authorized by team contract", item.ProductID)
+		}
+		if moneyCents(item.Price) != rule.PriceCents {
+			return fmt.Errorf("product %d price does not match team contract", item.ProductID)
+		}
+		if rule.MaxQuantity > 0 && item.Quantity > rule.MaxQuantity {
+			return fmt.Errorf("product %d exceeds team contract quantity", item.ProductID)
+		}
 	}
 	return nil
 }

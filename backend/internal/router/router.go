@@ -234,6 +234,9 @@ func InitRouter(r *gin.Engine) {
 		teamGroup.POST("/:id/members", teamController.AddMembers)
 		teamGroup.POST("/:id/enter-batch", teamController.EnterBatch)
 		teamGroup.POST("/:id/attach-order", teamController.AttachOrder)
+		teamGroup.GET("/settlements", teamController.ListSettlements)
+		teamGroup.POST("/:id/settlement", teamController.GenerateSettlement)
+		teamGroup.PATCH("/settlements/:id/status", teamController.SetSettlementStatus)
 	}
 
 	operationsController := &api.OperationsController{Service: service.OperationsService{}}

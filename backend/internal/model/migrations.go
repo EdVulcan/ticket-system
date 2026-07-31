@@ -57,6 +57,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 27, name: "session token revocation versions", apply: migrateSessionTokenVersions},
 		{version: 28, name: "settlement period idempotency", apply: migrateSettlementPeriodIdempotency},
 		{version: 29, name: "channel request policy facts", apply: migrateChannelRequestPolicyFacts},
+		{version: 30, name: "team contract settlement facts", apply: migrateTeamSettlementFacts},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -76,6 +77,10 @@ func runMigrations(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func migrateTeamSettlementFacts(db *gorm.DB) error {
+	return db.AutoMigrate(&TourGroup{}, &TeamSettlementStatement{})
 }
 
 func migrateAfterSalesAndWorkflows(db *gorm.DB) error {

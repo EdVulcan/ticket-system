@@ -323,3 +323,66 @@ func TestRechargeIsIdempotentAndLeavesCentLedgerEvidence(t *testing.T) {
 		t.Fatalf("recharge ledger=%+v", entries)
 	}
 }
+
+func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
+	resetBusinessData(t)
+	var travel, supplier model.Tenant
+	if err := model.Write(func(tx *gorm.DB) error {
+		travel = model.Tenant{Name: "Travel", SystemCode: "TEAM-FIN-T", SecretKey: "t"}
+		supplier = model.Tenant{Name: "Supplier", SystemCode: "TEAM-FIN-S", SecretKey: "s"}
+		if err := tx.Create(&travel).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&supplier).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.TravelContract{TravelTenantID: travel.ID, SupplierTenantID: supplier.ID, ContractNo: "TEAM-CONTRACT-1", Status: "active", PriceRulesJSON: `[{"product_id":42,"price_cents":9900,"max_quantity":2}]`, CreditLimitCents: 20000}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var contract model.TravelContract
+	if err := model.DB.First(&contract).Error; err != nil {
+		t.Fatal(err)
+	}
+	validOrder := model.Order{Items: []model.OrderItem{{ProductID: 42, Price: 99, Quantity: 1}}}
+	if err := validateTeamOrderAgainstContract(&contract, &validOrder); err != nil {
+		t.Fatal(err)
+	}
+	invalidOrder := validOrder
+	invalidOrder.Items = []model.OrderItem{{ProductID: 42, Price: 100, Quantity: 1}}
+	if err := validateTeamOrderAgainstContract(&contract, &invalidOrder); err == nil {
+		t.Fatal("contract accepted a non-contract price")
+	}
+	var group model.TourGroup
+	if err := model.Write(func(tx *gorm.DB) error {
+		order := model.Order{OrderNo: "TEAM-ORDER-1", TenantID: travel.ID, TotalAmount: 99, Status: "paid", Channel: "online"}
+		if err := tx.Create(&order).Error; err != nil {
+			return err
+		}
+		group = model.TourGroup{TenantID: travel.ID, SupplierTenantID: supplier.ID, ContractID: contract.ID, GroupNo: "TEAM-1", Name: "Team", VisitDate: time.Now(), ExpectedCount: 1, Status: "confirmed", SalesOrderID: order.ID, ContractAmountCents: 9900, SettlementStatus: "open"}
+		return tx.Create(&group).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	team := &TeamService{}
+	statement, err := team.GenerateTeamSettlement(travel.ID, group.ID)
+	if err != nil || statement.NetCents != 9900 {
+		t.Fatalf("statement=%+v err=%v", statement, err)
+	}
+	retry, err := team.GenerateTeamSettlement(travel.ID, group.ID)
+	if err != nil || retry.ID != statement.ID {
+		t.Fatalf("retry=%+v err=%v", retry, err)
+	}
+	if err := team.SetTeamSettlementStatus(travel.ID, statement.ID, "supplier_confirmed", ""); err == nil {
+		t.Fatal("travel agency confirmed supplier step")
+	}
+	if err := team.SetTeamSettlementStatus(supplier.ID, statement.ID, "supplier_confirmed", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := team.SetTeamSettlementStatus(travel.ID, statement.ID, "confirmed", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := team.SetTeamSettlementStatus(travel.ID, statement.ID, "paid", "bank-slip-1"); err != nil {
+		t.Fatal(err)
+	}
+}

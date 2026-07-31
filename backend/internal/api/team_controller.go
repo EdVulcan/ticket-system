@@ -192,3 +192,49 @@ func (c *TeamController) AttachOrder(ctx *gin.Context) {
 	}
 	ctx.JSON(http.StatusOK, gin.H{"status": "confirmed"})
 }
+
+func (c *TeamController) ListSettlements(ctx *gin.Context) {
+	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
+	rows, total, err := c.Service.ListTeamSettlements(ctx.GetUint("tenant_id"), page, pageSize)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": rows, "total": total, "page": page, "page_size": pageSize})
+}
+
+func (c *TeamController) GenerateSettlement(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid group id"})
+		return
+	}
+	statement, err := c.Service.GenerateTeamSettlement(ctx.GetUint("tenant_id"), uint(id))
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusCreated, statement)
+}
+
+func (c *TeamController) SetSettlementStatus(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid settlement id"})
+		return
+	}
+	var body struct {
+		Status string `json:"status" binding:"required"`
+		Detail string `json:"detail"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.SetTeamSettlementStatus(ctx.GetUint("tenant_id"), uint(id), body.Status, body.Detail); err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"status": body.Status})
+}
