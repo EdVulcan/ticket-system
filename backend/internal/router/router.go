@@ -192,6 +192,7 @@ func InitRouter(r *gin.Engine) {
 		distGroup.GET("/fulfillments", distController.ListFulfillmentOrders)
 		distGroup.GET("/products", distController.ListDistributableProducts)
 		distGroup.POST("/products/import", distController.ImportProduct)
+		distGroup.POST("/listings/:id/sync", distController.SyncListing)
 	}
 
 	// OTA Routes (External Integration)

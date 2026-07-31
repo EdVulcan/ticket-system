@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"io"
 	"math"
 	"net/http"
 	"strconv"
@@ -204,6 +206,27 @@ func (c *DistributionController) ImportProduct(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusOK, gin.H{"message": "商品对接成功"})
+}
+
+func (c *DistributionController) SyncListing(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid listing id"})
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil && !errors.Is(err, io.EOF) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := c.Service.SyncListing(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), body.Reason)
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": result})
 }
 
 // RechargeAgent 充值接口

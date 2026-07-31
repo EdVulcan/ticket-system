@@ -877,6 +877,37 @@ func TestSupplierCanSuspendAndReactivateOnlyCurrentOffer(t *testing.T) {
 	}
 }
 
+func TestDistributorListingSyncFollowsSupplierOfferState(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	var offer model.ProductOffer
+	if err := model.DB.Where("supplier_tenant_id = ? AND distributor_tenant_id = ?", scenario.supplierID, scenario.distributorID).First(&offer).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := (&DistributionService{}).SetOfferStatus(scenario.supplierID, offer.ID, 1, "suspended", "supplier maintenance"); err != nil {
+		t.Fatal(err)
+	}
+	var sellerListing model.SellerListing
+	if err := model.DB.Where("product_id = ? AND seller_tenant_id = ?", scenario.listingID, scenario.distributorID).First(&sellerListing).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := (&DistributionService{}).SyncListing(scenario.distributorID, sellerListing.ID, 2, "scheduled supplier sync")
+	if err != nil || result.Eligible || result.ListingStatus != "offline" {
+		t.Fatalf("suspended sync result=%+v err=%v", result, err)
+	}
+	var listing model.Product
+	if err := model.DB.First(&listing, scenario.listingID).Error; err != nil || listing.Status != "offline" {
+		t.Fatalf("listing status=%s err=%v", listing.Status, err)
+	}
+	if err := (&DistributionService{}).SetOfferStatus(scenario.supplierID, offer.ID, 1, "active", "maintenance complete"); err != nil {
+		t.Fatal(err)
+	}
+	result, err = (&DistributionService{}).SyncListing(scenario.distributorID, sellerListing.ID, 2, "scheduled supplier sync")
+	if err != nil || !result.Eligible || result.ListingStatus != "online" {
+		t.Fatalf("reactivated sync result=%+v err=%v", result, err)
+	}
+}
+
 func TestSupplierFulfillmentWorklistIsScopedAndCountsEntitlements(t *testing.T) {
 	resetBusinessData(t)
 	scenario := seedDistributionScenario(t)

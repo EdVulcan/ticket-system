@@ -440,6 +440,74 @@ func (s *DistributionService) ImportProduct(agentTenantID, sourceProductID uint,
 	})
 }
 
+type ListingSyncResult struct {
+	ListingID       uint   `json:"listing_id"`
+	ProductID       uint   `json:"product_id"`
+	OfferID         uint   `json:"offer_id"`
+	OfferStatus     string `json:"offer_status"`
+	SourceStatus    string `json:"source_status"`
+	SourceRevision  uint   `json:"source_revision"`
+	ListingStatus   string `json:"listing_status"`
+	Eligible        bool   `json:"eligible"`
+	Reason          string `json:"reason,omitempty"`
+}
+
+// SyncListing re-evaluates a distributor listing against the supplier-owned
+// offer and current product revision. It never copies supplier rules or
+// settlement prices into the seller tenant; it only changes the sell-side
+// availability projection.
+func (s *DistributionService) SyncListing(distributorTenantID, listingID, operatorID uint, reason string) (*ListingSyncResult, error) {
+	if distributorTenantID == 0 || listingID == 0 {
+		return nil, errors.New("distributor and listing are required")
+	}
+	var result ListingSyncResult
+	err := model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, distributorTenantID, "distributor"); err != nil {
+			return err
+		}
+		var listing model.SellerListing
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND seller_tenant_id = ?", listingID, distributorTenantID).First(&listing).Error; err != nil {
+			return err
+		}
+		var offer model.ProductOffer
+		if err := tx.Where("id = ? AND distributor_tenant_id = ?", listing.ProductOfferID, distributorTenantID).First(&offer).Error; err != nil {
+			return errors.New("listing offer is unavailable")
+		}
+		var source model.Product
+		if err := tx.Unscoped().Select("id, tenant_id, status, current_revision_id, is_distributable, scenic_area_id").Where("id = ? AND tenant_id = ?", offer.SourceProductID, offer.SupplierTenantID).First(&source).Error; err != nil {
+			return errors.New("source product is unavailable")
+		}
+		now := time.Now()
+		retailPriceCents := listing.RetailPriceCents
+		if retailPriceCents == 0 && listing.RetailPrice != 0 {
+			retailPriceCents = moneyCents(listing.RetailPrice)
+		}
+		eligible := offer.Status == "active" && source.Status == "online" && source.IsDistributable && offer.ProductRevisionID > 0 && source.CurrentRevisionID == offer.ProductRevisionID && (offer.SalesStartAt == nil || !now.Before(*offer.SalesStartAt)) && (offer.SalesEndAt == nil || !now.After(*offer.SalesEndAt)) && (offer.MinimumRetailPriceCents == 0 || retailPriceCents >= offer.MinimumRetailPriceCents)
+		status := "offline"
+		reasonText := "supplier offer or source product is unavailable"
+		if eligible {
+			status = "online"
+			reasonText = "supplier offer and product revision are valid"
+		} else if offer.MinimumRetailPriceCents > 0 && retailPriceCents < offer.MinimumRetailPriceCents {
+			reasonText = "listing price is below supplier minimum retail price"
+		} else if source.CurrentRevisionID != offer.ProductRevisionID {
+			reasonText = "supplier product revision changed"
+		}
+		if err := tx.Model(&listing).Update("status", status).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", listing.ProductID, distributorTenantID).Update("status", status).Error; err != nil {
+			return err
+		}
+		result = ListingSyncResult{ListingID: listing.ID, ProductID: listing.ProductID, OfferID: offer.ID, OfferStatus: offer.Status, SourceStatus: source.Status, SourceRevision: source.CurrentRevisionID, ListingStatus: status, Eligible: eligible, Reason: reasonText}
+		return recordAuditTx(tx, operatorID, distributorTenantID, "admin", "tenant", "distribution.listing.sync", "seller_listing", listing.ID, strings.TrimSpace(reason)+": "+reasonText, `{"status":"`+listing.Status+`"}`, `{"status":"`+status+`"}`)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 func (s *DistributionService) RechargeAgent(supplierTenantID, agentTenantID uint, amount float64, idempotencyKey string, operatorID uint) (*model.FinancialDocument, error) {
 	amountCents := moneyCents(amount)
 	if amountCents <= 0 {
