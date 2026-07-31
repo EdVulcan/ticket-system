@@ -24,6 +24,11 @@
           </el-select>
         </template>
       </el-table-column>
+      <el-table-column label="资质" width="130">
+        <template #default="{ row }">
+          <el-tag :type="row.qualification_status === 'approved' ? 'success' : 'warning'">{{ row.qualification_status || 'legacy' }}</el-tag>
+        </template>
+      </el-table-column>
       <el-table-column label="业务能力" min-width="260">
         <template #default="{ row }">
           <el-button v-for="capability in capabilityOptions" :key="capability" size="small" :type="capabilityStatus(row, capability) === 'active' ? 'success' : 'info'" @click="toggleCapability(row, capability)">
@@ -34,9 +39,10 @@
       <el-table-column prop="contact" label="联系人" width="120" />
       <el-table-column prop="phone" label="联系电话" width="150" />
       <el-table-column prop="address" label="地址" min-width="200" show-overflow-tooltip />
-      <el-table-column label="操作" width="100" fixed="right" align="center">
+      <el-table-column label="操作" width="170" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
+          <el-button link type="warning" size="small" @click="revokeSessions(row)">撤销会话</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -76,6 +82,27 @@
         <el-form-item label="联系地址" prop="address">
           <el-input v-model="form.address" type="textarea" />
         </el-form-item>
+
+        <template v-if="isEdit">
+          <div class="grid grid-cols-2 gap-4 border-t border-gray-100 pt-4 mt-2">
+            <el-form-item label="资质状态">
+              <el-select v-model="form.qualification_status" class="w-full">
+                <el-option label="待审核" value="pending" /><el-option label="已通过" value="approved" />
+                <el-option label="已驳回" value="rejected" /><el-option label="已过期" value="expired" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="资质编号"><el-input v-model="form.qualification_no" /></el-form-item>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <el-form-item label="资质到期">
+              <el-date-picker v-model="form.qualification_expires_at" type="date" value-format="YYYY-MM-DDT00:00:00Z" class="w-full" />
+            </el-form-item>
+            <el-form-item label="合同到期">
+              <el-date-picker v-model="form.contract_expires_at" type="date" value-format="YYYY-MM-DDT00:00:00Z" class="w-full" />
+            </el-form-item>
+          </div>
+          <el-form-item label="关闭/变更原因"><el-input v-model="form.lifecycle_reason" type="textarea" /></el-form-item>
+        </template>
 
         <div v-if="!isEdit" class="grid grid-cols-2 gap-4 border-t border-gray-100 pt-4 mt-2">
             <el-form-item label="管理员账号" prop="admin_username">
@@ -118,6 +145,11 @@ const form = reactive({
   contact: '',
   phone: '',
   address: '',
+  qualification_status: 'pending',
+  qualification_no: '',
+  qualification_expires_at: '',
+  contract_expires_at: '',
+  lifecycle_reason: '',
   admin_username: '',
   admin_password: ''
 })
@@ -155,6 +187,7 @@ const handleAdd = () => {
   isEdit.value = false
   Object.assign(form, { 
     id: 0, name: '', system_code: '', contact: '', phone: '', address: '',
+    qualification_status: 'pending', qualification_no: '', qualification_expires_at: '', contract_expires_at: '', lifecycle_reason: '',
     admin_username: '', admin_password: '' 
   })
   dialogVisible.value = true
@@ -173,6 +206,13 @@ const handleSubmit = async () => {
       try {
         if (isEdit.value) {
           await request.put(`/tenants/${form.id}`, form)
+          await request.patch(`/tenants/${form.id}/lifecycle`, {
+            qualification_status: form.qualification_status,
+            qualification_no: form.qualification_no,
+            qualification_expires_at: form.qualification_expires_at || undefined,
+            contract_expires_at: form.contract_expires_at || undefined,
+            reason: form.lifecycle_reason || '平台管理端更新租户生命周期'
+          })
         } else {
           await request.post('/tenants', form)
         }
@@ -189,13 +229,18 @@ const handleSubmit = async () => {
 const capabilityOptions = ['supplier', 'distributor', 'travel_agency']
 const capabilityStatus = (row: any, capability: string) => row.capabilities?.find((item: any) => item.capability === capability)?.status || 'disabled'
 const updateStatus = async (row: any, status: string) => {
-  await request.patch(`/tenants/${row.id}/status`, { status })
-  await fetchData()
+  try { await request.patch(`/tenants/${row.id}/status`, { status }); await fetchData() }
+  catch (error: any) { ElMessage.error(error.response?.data?.error || '状态更新失败') }
 }
 const toggleCapability = async (row: any, capability: string) => {
   const status = capabilityStatus(row, capability) === 'active' ? 'suspended' : 'active'
-  await request.put(`/tenants/${row.id}/capabilities/${capability}`, { status, reason: '平台管理端调整' })
-  await fetchData()
+  try { await request.put(`/tenants/${row.id}/capabilities/${capability}`, { status, reason: '平台管理端调整' }); await fetchData() }
+  catch (error: any) { ElMessage.error(error.response?.data?.error || '能力更新失败') }
+}
+
+const revokeSessions = async (row: any) => {
+  try { await request.post(`/tenants/${row.id}/revoke-sessions`); ElMessage.success('已撤销该租户全部会话') }
+  catch (error: any) { ElMessage.error(error.response?.data?.error || '会话撤销失败') }
 }
 
 onMounted(() => {
