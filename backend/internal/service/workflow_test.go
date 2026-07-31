@@ -52,6 +52,57 @@ func TestAmbiguousProviderFailureIsReconciled(t *testing.T) {
 	}
 }
 
+func TestDigitalRefundTaskIsBoundedAndCanBeAuditedForRetry(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	refund := model.Refund{TenantID: tenantID, RefundNo: "REF-RETRY", IdempotencyKey: "idem-ref-retry", OrderNo: "ORDER-RETRY", PaymentID: 1, Amount: 1, Method: "wechat", Status: "pending"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&refund).Error }); err != nil {
+		t.Fatal(err)
+	}
+	task := model.DigitalRefundTask{
+		TenantID: tenantID, RefundID: refund.ID, Provider: "wechat", PaymentNo: "PAY-REFUND",
+		Status: "pending", MaxAttempts: 2, NextAttemptAt: ptrTime(time.Now()),
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&task).Error }); err != nil {
+		t.Fatal(err)
+	}
+	refundService := &RefundService{}
+	if err := refundService.deferDigitalRefundTask(task.ID, time.Now(), errors.New("provider timeout")); err != nil {
+		t.Fatal(err)
+	}
+	var firstState model.DigitalRefundTask
+	if err := model.DB.First(&firstState, task.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if firstState.Status != "pending" || firstState.AttemptCount != 1 || firstState.FailureCode != "provider_unavailable" {
+		t.Fatalf("first retry state=%+v", firstState)
+	}
+	if err := refundService.deferDigitalRefundTask(task.ID, time.Now(), errors.New("provider timeout")); err != nil {
+		t.Fatal(err)
+	}
+	var parkedState model.DigitalRefundTask
+	if err := model.DB.First(&parkedState, task.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if parkedState.Status != "manual_review" || parkedState.AttemptCount != 2 || parkedState.ManualReviewAt == nil {
+		t.Fatalf("bounded retry state=%+v", parkedState)
+	}
+	if err := refundService.RetryDigitalRefundTask(tenantID, task.ID, 1, "admin", "provider credentials fixed"); err != nil {
+		t.Fatal(err)
+	}
+	var retriedState model.DigitalRefundTask
+	if err := model.DB.First(&retriedState, task.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if retriedState.Status != "pending" || retriedState.FailureCode != "" || retriedState.ManualReviewAt != nil {
+		t.Fatalf("manual retry state=%+v", retriedState)
+	}
+	var audit model.AuditLog
+	if err := model.DB.Where("action = ? AND target_id = ?", "payment.refund.retry", task.ID).First(&audit).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTimeSlotInventoryIsolatedByDateAndSlot(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "daily", 2)

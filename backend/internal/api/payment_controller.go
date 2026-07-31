@@ -133,3 +133,34 @@ func (c *RefundController) CreateDigital(ctx *gin.Context) {
 	}
 	ctx.JSON(http.StatusAccepted, gin.H{"refund": refund, "message": "refund request recorded; provider confirmation pending"})
 }
+
+func (c *RefundController) ListDigitalTasks(ctx *gin.Context) {
+	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
+	tasks, total, err := c.Service.ListDigitalRefundTasks(ctx.GetUint("tenant_id"), ctx.Query("status"), page, pageSize)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": tasks, "total": total, "page": page, "page_size": pageSize})
+}
+
+func (c *RefundController) RetryDigitalTask(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid refund task id"})
+		return
+	}
+	var body struct {
+		Reason string `json:"reason" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.RetryDigitalRefundTask(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), ctx.GetString("role"), body.Reason); err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusAccepted, gin.H{"status": "pending"})
+}

@@ -19,6 +19,8 @@ import (
 
 var ErrDigitalRefundNotConfigured = errors.New("digital provider refund integration is not configured")
 
+const defaultDigitalRefundMaxAttempts = 8
+
 type RefundProviderResult struct {
 	Status           string
 	ProviderRefundID string
@@ -292,7 +294,8 @@ func (s *RefundService) CreateDigitalRefund(tenantID uint, orderNo, idempotencyK
 		}
 		return tx.Create(&model.DigitalRefundTask{
 			RefundID: result.ID, TenantID: tenantID, Provider: payment.Method,
-			PaymentNo: payment.PaymentNo, Status: "pending", NextAttemptAt: ptrTime(time.Now()),
+			PaymentNo: payment.PaymentNo, Status: "pending", MaxAttempts: defaultDigitalRefundMaxAttempts,
+			NextAttemptAt: ptrTime(time.Now()),
 		}).Error
 	})
 	if err != nil {
@@ -357,7 +360,7 @@ func (s *RefundService) processDigitalRefundTask(ctx context.Context, taskID uin
 	if err := model.DB.First(&task, taskID).Error; err != nil {
 		return err
 	}
-	if task.Status == "succeeded" || task.Status == "failed" {
+	if task.Status == "succeeded" || task.Status == "failed" || task.Status == "manual_review" {
 		return nil
 	}
 	if err := model.DB.Where("id = ? AND tenant_id = ?", task.RefundID, task.TenantID).First(&refund).Error; err != nil {
@@ -385,15 +388,33 @@ func (s *RefundService) processDigitalRefundTask(ctx context.Context, taskID uin
 			if err := tx.Model(&model.Refund{}).Where("id = ? AND status = ?", refund.ID, "pending").Updates(map[string]interface{}{"status": "failed", "provider_refund_id": result.ProviderRefundID}).Error; err != nil {
 				return err
 			}
-			return tx.Model(&model.DigitalRefundTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{"status": "failed", "provider_refund": result.ProviderRefundID, "next_attempt_at": nil}).Error
+			return tx.Model(&model.DigitalRefundTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+				"status": "failed", "provider_refund": result.ProviderRefundID,
+				"provider_status": result.Status, "failure_code": "provider_rejected", "next_attempt_at": nil,
+			}).Error
 		})
 	default:
 		next := now.Add(30 * time.Second)
 		return model.Write(func(tx *gorm.DB) error {
+			attempt := task.AttemptCount + 1
+			maxAttempts := task.MaxAttempts
+			if maxAttempts <= 0 {
+				maxAttempts = defaultDigitalRefundMaxAttempts
+			}
 			if err := tx.Model(&model.Refund{}).Where("id = ?", refund.ID).Update("provider_refund_id", result.ProviderRefundID).Error; err != nil {
 				return err
 			}
-			return tx.Model(&model.DigitalRefundTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{"status": "submitted", "provider_refund": result.ProviderRefundID, "attempt_count": gorm.Expr("attempt_count + 1"), "next_attempt_at": next, "last_error": ""}).Error
+			if attempt >= maxAttempts {
+				return tx.Model(&model.DigitalRefundTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+					"status": "manual_review", "provider_refund": result.ProviderRefundID,
+					"attempt_count": attempt, "max_attempts": maxAttempts, "next_attempt_at": nil,
+					"last_error": "provider did not reach a terminal refund state", "failure_code": "provider_pending_timeout", "manual_review_at": now,
+				}).Error
+			}
+			return tx.Model(&model.DigitalRefundTask{}).Where("id = ?", task.ID).Updates(map[string]interface{}{
+				"status": "submitted", "provider_refund": result.ProviderRefundID,
+				"attempt_count": attempt, "max_attempts": maxAttempts, "next_attempt_at": next, "last_error": "",
+			}).Error
 		})
 	}
 }
@@ -404,9 +425,106 @@ func (s *RefundService) deferDigitalRefundTask(taskID uint, now time.Time, cause
 		if err := tx.First(&task, taskID).Error; err != nil {
 			return err
 		}
-		delay := time.Duration(1<<minInt(task.AttemptCount, 6)) * 30 * time.Second
+		attempt := task.AttemptCount + 1
+		maxAttempts := task.MaxAttempts
+		if maxAttempts <= 0 {
+			maxAttempts = defaultDigitalRefundMaxAttempts
+		}
+		failureCode := refundFailureCode(cause)
+		message := truncateError(cause.Error())
+		if failureCode == "provider_not_configured" || failureCode == "provider_configuration" || attempt >= maxAttempts {
+			return tx.Model(&task).Updates(map[string]interface{}{
+				"status": "manual_review", "attempt_count": attempt, "max_attempts": maxAttempts,
+				"next_attempt_at": nil, "last_error": message, "failure_code": failureCode,
+				"manual_review_at": now,
+			}).Error
+		}
+		delay := time.Duration(1<<minInt(attempt, 6)) * 30 * time.Second
 		next := now.Add(delay)
-		return tx.Model(&task).Updates(map[string]interface{}{"attempt_count": task.AttemptCount + 1, "next_attempt_at": next, "last_error": truncateError(cause.Error())}).Error
+		return tx.Model(&task).Updates(map[string]interface{}{
+			"status": "pending", "attempt_count": attempt, "max_attempts": maxAttempts,
+			"next_attempt_at": next, "last_error": message, "failure_code": failureCode,
+		}).Error
+	})
+}
+
+func refundFailureCode(cause error) string {
+	if errors.Is(cause, ErrDigitalRefundNotConfigured) {
+		return "provider_not_configured"
+	}
+	message := strings.ToLower(cause.Error())
+	for _, marker := range []string{"certificate", "credential", "private key", "not configured", "invalid app", "invalid mch"} {
+		if strings.Contains(message, marker) {
+			return "provider_configuration"
+		}
+	}
+	return "provider_unavailable"
+}
+
+// ListDigitalRefundTasks returns only tasks owned by the authenticated tenant.
+func (s *RefundService) ListDigitalRefundTasks(tenantID uint, status string, page, pageSize int) ([]model.DigitalRefundTask, int64, error) {
+	if tenantID == 0 {
+		return nil, 0, errors.New("tenant is required")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	query := model.DB.Model(&model.DigitalRefundTask{}).Where("tenant_id = ?", tenantID)
+	if strings.TrimSpace(status) != "" {
+		query = query.Where("status = ?", strings.TrimSpace(status))
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var tasks []model.DigitalRefundTask
+	if err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&tasks).Error; err != nil {
+		return nil, 0, err
+	}
+	return tasks, total, nil
+}
+
+// RetryDigitalRefundTask is an audited operator action for failed or parked
+// refunds. It never marks a refund successful; the worker still requires
+// provider confirmation before applying business facts.
+func (s *RefundService) RetryDigitalRefundTask(tenantID, taskID, operatorID uint, operatorRole, reason string) error {
+	if tenantID == 0 || taskID == 0 || operatorID == 0 || strings.TrimSpace(reason) == "" {
+		return errors.New("tenant, task, operator and reason are required")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var task model.DigitalRefundTask
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", taskID, tenantID).First(&task).Error; err != nil {
+			return err
+		}
+		if task.Status != "failed" && task.Status != "manual_review" {
+			return fmt.Errorf("refund task cannot be retried from %s", task.Status)
+		}
+		var refund model.Refund
+		if err := tx.Where("id = ? AND tenant_id = ?", task.RefundID, tenantID).First(&refund).Error; err != nil {
+			return err
+		}
+		if refund.Status == "succeeded" {
+			return errors.New("refund has already succeeded")
+		}
+		previousStatus := task.Status
+		if err := tx.Model(&task).Updates(map[string]interface{}{
+			"status": "pending", "next_attempt_at": time.Now(), "last_error": "",
+			"failure_code": "", "attempt_count": 0,
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("UPDATE digital_refund_tasks SET manual_review_at = NULL WHERE id = ?", task.ID).Error; err != nil {
+			return err
+		}
+		if refund.Status == "failed" {
+			if err := tx.Model(&refund).Update("status", "pending").Error; err != nil {
+				return err
+			}
+		}
+		return recordAuditTx(tx, operatorID, tenantID, operatorRole, "tenant", "payment.refund.retry", "digital_refund_task", task.ID, strings.TrimSpace(reason), `{"status":"`+previousStatus+`"}`, `{"status":"pending"}`)
 	})
 }
 
