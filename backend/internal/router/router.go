@@ -180,6 +180,8 @@ func InitRouter(r *gin.Engine) {
 
 		// Product Distribution
 		distGroup.POST("/offers", distController.CreateOffer)
+		distGroup.GET("/offers", distController.ListOffers)
+		distGroup.PATCH("/offers/:id/status", distController.SetOfferStatus)
 		distGroup.GET("/products", distController.ListDistributableProducts)
 		distGroup.POST("/products/import", distController.ImportProduct)
 	}

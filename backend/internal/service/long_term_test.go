@@ -666,6 +666,29 @@ func TestSupplierOfferFloorAndQuotaAreEnforcedAndReleased(t *testing.T) {
 	}
 }
 
+func TestSupplierCanSuspendAndReactivateOnlyCurrentOffer(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	var offer model.ProductOffer
+	if err := model.DB.Where("supplier_tenant_id = ? AND distributor_tenant_id = ?", scenario.supplierID, scenario.distributorID).First(&offer).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := (&DistributionService{}).SetOfferStatus(scenario.supplierID, offer.ID, 1, "suspended", "supplier maintenance"); err != nil {
+		t.Fatal(err)
+	}
+	blocked := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&blocked); err == nil {
+		t.Fatal("suspended offer accepted a new order")
+	}
+	if err := (&DistributionService{}).SetOfferStatus(scenario.supplierID, offer.ID, 1, "active", "maintenance complete"); err != nil {
+		t.Fatal(err)
+	}
+	allowed := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&allowed); err != nil {
+		t.Fatalf("reactivated offer rejected order: %v", err)
+	}
+}
+
 func TestProductUpdateCreatesNewRevisionForNewOrders(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)

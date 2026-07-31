@@ -39,6 +39,39 @@ func (c *DistributionController) CreateOffer(ctx *gin.Context) {
 	ctx.JSON(http.StatusCreated, gin.H{"data": offer})
 }
 
+func (c *DistributionController) ListOffers(ctx *gin.Context) {
+	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
+	distributorID, _ := strconv.ParseUint(ctx.Query("distributor_tenant_id"), 10, 32)
+	offers, total, err := c.Service.ListOffers(ctx.GetUint("tenant_id"), uint(distributorID), ctx.Query("status"), page, pageSize)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": offers, "total": total, "page": page, "page_size": pageSize})
+}
+
+func (c *DistributionController) SetOfferStatus(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid offer id"})
+		return
+	}
+	var body struct {
+		Status string `json:"status" binding:"required"`
+		Reason string `json:"reason"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.SetOfferStatus(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), body.Status, body.Reason); err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"status": body.Status})
+}
+
 func (c *DistributionController) Search(ctx *gin.Context) {
 	code := ctx.Query("code")
 	if code == "" {

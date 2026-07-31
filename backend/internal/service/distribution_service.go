@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type DistributionService struct{}
@@ -231,6 +232,82 @@ func (s *DistributionService) CreateOfferWithPolicy(supplierTenantID, distributo
 		return tx.Create(&offer).Error
 	})
 	return &offer, err
+}
+
+func (s *DistributionService) ListOffers(supplierTenantID, distributorTenantID uint, status string, page, pageSize int) ([]model.ProductOffer, int64, error) {
+	if supplierTenantID == 0 {
+		return nil, 0, errors.New("supplier tenant is required")
+	}
+	if err := requireActiveTenantCapability(model.DB, supplierTenantID, "supplier"); err != nil {
+		return nil, 0, err
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	query := model.DB.Model(&model.ProductOffer{}).Where("supplier_tenant_id = ?", supplierTenantID)
+	if distributorTenantID > 0 {
+		query = query.Where("distributor_tenant_id = ?", distributorTenantID)
+	}
+	if strings.TrimSpace(status) != "" {
+		query = query.Where("status = ?", strings.TrimSpace(status))
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var offers []model.ProductOffer
+	if err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&offers).Error; err != nil {
+		return nil, 0, err
+	}
+	return offers, total, nil
+}
+
+// SetOfferStatus is the supplier-side lifecycle control. A distributor can
+// only consume an active offer; it cannot reactivate or broaden authorization.
+func (s *DistributionService) SetOfferStatus(supplierTenantID, offerID, operatorID uint, status, reason string) error {
+	status = strings.ToLower(strings.TrimSpace(status))
+	if supplierTenantID == 0 || offerID == 0 || operatorID == 0 {
+		return errors.New("supplier, offer and operator are required")
+	}
+	if status != "active" && status != "suspended" && status != "expired" {
+		return errors.New("invalid offer status")
+	}
+	if status != "active" && strings.TrimSpace(reason) == "" {
+		return errors.New("reason is required when suspending or expiring an offer")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, supplierTenantID, "supplier"); err != nil {
+			return err
+		}
+		var offer model.ProductOffer
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND supplier_tenant_id = ?", offerID, supplierTenantID).First(&offer).Error; err != nil {
+			return err
+		}
+		if offer.Status == "expired" && status == "active" {
+			return errors.New("expired offer cannot be reactivated")
+		}
+		if status == "active" {
+			var source model.Product
+			if err := tx.Where("id = ? AND tenant_id = ? AND status = ? AND is_distributable = ?", offer.SourceProductID, supplierTenantID, "online", true).First(&source).Error; err != nil {
+				return errors.New("source product is unavailable")
+			}
+			if source.ScenicAreaID == 0 || offer.ProductRevisionID == 0 || source.CurrentRevisionID != offer.ProductRevisionID {
+				return errors.New("offer revision or scenic area is no longer valid")
+			}
+			var relationship model.DistributorRelationship
+			if err := tx.Where("supplier_tenant_id = ? AND agent_tenant_id = ? AND status = ?", supplierTenantID, offer.DistributorTenantID, "active").First(&relationship).Error; err != nil {
+				return errors.New("distribution relationship is not active")
+			}
+		}
+		before := offer.Status
+		if err := tx.Model(&offer).Update("status", status).Error; err != nil {
+			return err
+		}
+		return recordAuditTx(tx, operatorID, supplierTenantID, "admin", "tenant", "distribution.offer.status", "product_offer", offer.ID, strings.TrimSpace(reason), `{"status":"`+before+`"}`, `{"status":"`+status+`"}`)
+	})
 }
 
 func (s *DistributionService) ImportProduct(agentTenantID, sourceProductID uint, name string, price float64, productType string) error {
