@@ -29,10 +29,10 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if err := db.Order("version DESC").First(&latest).Error; err != nil {
 		t.Fatal(err)
 	}
-	if latest.Version != 35 {
-		t.Fatalf("latest migration=%d, want 35", latest.Version)
+	if latest.Version != 36 {
+		t.Fatalf("latest migration=%d, want 36", latest.Version)
 	}
-	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "pos_shifts", "settlement_statements", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements", "channel_bill_records", "channel_reconciliations"} {
+	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "pos_shifts", "settlement_statements", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements", "channel_bill_records", "channel_reconciliations", "migration_audit_issues"} {
 		var count int64
 		if err := db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count).Error; err != nil {
 			t.Fatal(err)
@@ -175,5 +175,47 @@ func TestLegacyMigrationQuarantinesOffersAndRebuildsFulfillmentTotals(t *testing
 	}
 	if len(capabilities) != 2 {
 		t.Fatalf("inferred capabilities=%+v", capabilities)
+	}
+}
+
+func TestLegacyMigrationAuditReportsAndQuarantinesUnsafeRows(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "audit.db")+"?_foreign_keys=on"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sqlDB, dbErr := db.DB(); dbErr == nil {
+		defer sqlDB.Close()
+	}
+	if err := migrateInitialSchema(db); err != nil {
+		t.Fatal(err)
+	}
+	tenant := Tenant{Name: "Audit Tenant", SystemCode: "AUDIT", SecretKey: "secret", Status: "active"}
+	if err := db.Create(&tenant).Error; err != nil {
+		t.Fatal(err)
+	}
+	rule := TicketRule{Name: "Audit rule", TenantID: tenant.ID, ValidityType: "date"}
+	if err := db.Create(&rule).Error; err != nil {
+		t.Fatal(err)
+	}
+	unsafe := Product{Name: "Unassigned", TenantID: tenant.ID, RuleID: rule.ID, Status: "online", Type: "online", StockType: "unlimited", CodeMode: "ticket"}
+	if err := db.Create(&unsafe).Error; err != nil {
+		t.Fatal(err)
+	}
+	report, err := AuditLegacyMigration(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SafeToMigrate || len(report.Issues) != 1 || report.Issues[0].Code != "zero_scenic_area" {
+		t.Fatalf("unexpected migration report=%+v", report)
+	}
+	if err := PersistMigrationAudit(db, report); err != nil {
+		t.Fatal(err)
+	}
+	var stored []MigrationAuditIssue
+	if err := db.Where("run_id = ?", report.RunID).Find(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0].Status != "open" || stored[0].EntityID != unsafe.ID {
+		t.Fatalf("stored migration issues=%+v", stored)
 	}
 }

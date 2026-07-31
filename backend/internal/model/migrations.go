@@ -63,6 +63,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 33, name: "digital refund operations state", apply: migrateDigitalRefundOperations},
 		{version: 34, name: "transaction record cent projections", apply: migrateTransactionRecordCentProjections},
 		{version: 35, name: "offer pricing floors and quotas", apply: migrateOfferPricingAndQuota},
+		{version: 36, name: "legacy migration audit quarantine", apply: migrateMigrationAudit},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -143,6 +144,10 @@ func migrateOfferPricingAndQuota(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func migrateMigrationAudit(db *gorm.DB) error {
+	return db.AutoMigrate(&MigrationAuditIssue{})
 }
 
 func migrateAfterSalesAndWorkflows(db *gorm.DB) error {
@@ -808,5 +813,6 @@ func migrateInitialSchema(db *gorm.DB) error {
 		&DigitalRefundTask{}, &ChannelAccount{}, &ChannelProductMapping{}, &ChannelRequest{},
 		&TravelContract{}, &TravelAgent{}, &TourGuide{}, &TravelVehicle{}, &TourGroup{}, &TourGroupMember{}, &TourEntryBatch{},
 		&POSShift{}, &PrintJob{}, &DeviceAlert{}, &SettlementStatement{}, &SettlementLine{}, &StaffResourceScope{},
+		&MigrationAuditIssue{},
 	)
 }
