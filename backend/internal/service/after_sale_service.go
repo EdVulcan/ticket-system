@@ -84,8 +84,10 @@ func validateAfterSaleTickets(order *model.Order, codes []string, kind string) e
 	}
 	wanted := codeSet(codes)
 	seen := 0
+	total := 0
 	for _, item := range order.Items {
 		for _, ticket := range item.Tickets {
+			total++
 			if _, ok := wanted[ticket.TicketCode]; !ok {
 				continue
 			}
@@ -97,6 +99,9 @@ func validateAfterSaleTickets(order *model.Order, codes []string, kind string) e
 	}
 	if seen != len(wanted) {
 		return errors.New("one or more ticket codes do not belong to the order")
+	}
+	if kind == "void" && seen != total {
+		return errors.New("partial order void is not supported; use a ticket-scoped refund")
 	}
 	return nil
 }
@@ -404,14 +409,21 @@ func executeRescheduleTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 	wanted := codeSet(codes)
 	for itemIndex := range order.Items {
 		item := &order.Items[itemIndex]
-		selected := false
+		selected := 0
 		for _, ticket := range item.Tickets {
 			if _, ok := wanted[ticket.TicketCode]; ok {
-				selected = true
+				selected++
 			}
 		}
-		if !selected {
+		if selected == 0 {
 			continue
+		}
+		// Inventory is reserved at order-item granularity. Moving an item when
+		// only some of its ticket entitlements were selected would release and
+		// re-reserve the wrong quantity. Until item splitting is implemented,
+		// reject the request before mutating any stock.
+		if selected != len(item.Tickets) || selected != item.Quantity {
+			return errors.New("partial item reschedule is not supported; reschedule all tickets in the item")
 		}
 		var product model.Product
 		if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", item.FulfillmentProductID, item.FulfillmentTenantID).First(&product).Error; err != nil {
@@ -441,6 +453,14 @@ func executeRescheduleTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 func executeReissueTx(tx *gorm.DB, req *model.AfterSaleRequest, actor uint) error {
 	if req.DeviceID == 0 || req.ShiftID == 0 {
 		return errors.New("reissue requires an active POS device and shift")
+	}
+	var device model.Device
+	if err := tx.Where("id = ? AND tenant_id = ? AND type = ? AND status = ?", req.DeviceID, req.TenantID, "pos", "online").First(&device).Error; err != nil {
+		return errors.New("reissue device is unavailable")
+	}
+	var shift model.POSShift
+	if err := tx.Where("id = ? AND tenant_id = ? AND device_id = ? AND operator_id = ? AND status = ?", req.ShiftID, req.TenantID, req.DeviceID, actor, "open").First(&shift).Error; err != nil {
+		return errors.New("reissue shift is not open for this operator and device")
 	}
 	var order model.Order
 	if err := tx.Where("order_no = ? AND tenant_id = ?", req.OrderNo, req.TenantID).First(&order).Error; err != nil {

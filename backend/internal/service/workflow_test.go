@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"ticket-backend/internal/model"
 	"time"
@@ -315,6 +316,112 @@ func TestAfterSaleRescheduleMovesInventoryAndVoidReleasesOnce(t *testing.T) {
 	}
 	if count, err := (&OrderService{}).ExpireUnpaid(time.Now()); err != nil || count != 0 {
 		t.Fatalf("void order was left expirable count=%d err=%v", count, err)
+	}
+}
+
+func TestAfterSaleRejectsPartialRescheduleAndVoid(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "daily", 5)
+	firstDate := startOfDay(time.Now().AddDate(0, 0, 1))
+	secondDate := startOfDay(time.Now().AddDate(0, 0, 2))
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 2, UseDate: &firstDate}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	var tickets []model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).Order("id").Find(&tickets).Error; err != nil || len(tickets) != 2 {
+		t.Fatalf("tickets=%d err=%v", len(tickets), err)
+	}
+	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "reschedule", IdempotencyKey: "partial-reschedule", TargetDate: &secondDate, OperatorID: 1}
+	if err := (&AfterSaleService{}).Create(&request, []string{tickets[0].TicketCode}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 2, "reviewed"); err != nil {
+		t.Fatal(err)
+	}
+	var before model.Order
+	if err := model.DB.Preload("Items.Tickets").First(&before, order.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(before.Items) != 1 || len(before.Items[0].Tickets) != 2 {
+		t.Fatalf("unexpected order ticket shape: items=%d tickets=%d", len(before.Items), len(before.Items[0].Tickets))
+	}
+	completed, executeErr := (&AfterSaleService{}).Execute(tenantID, request.ID, 2)
+	if executeErr != nil || completed == nil || completed.Status != "failed" {
+		t.Fatal("partial reschedule unexpectedly succeeded")
+	}
+	var stored model.AfterSaleRequest
+	if err := model.DB.First(&stored, request.ID).Error; err != nil || stored.Status != "failed" {
+		t.Fatalf("partial reschedule status=%q err=%v", stored.Status, err)
+	}
+	var firstInventory model.ProductInventory
+	if err := model.DB.Where("tenant_id = ? AND product_id = ? AND stock_date = ?", tenantID, productID, firstDate).First(&firstInventory).Error; err != nil {
+		t.Fatal(err)
+	}
+	if firstInventory.Sold != 2 {
+		t.Fatalf("partial reschedule changed source inventory: %d", firstInventory.Sold)
+	}
+	void := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "void", IdempotencyKey: "partial-void", OperatorID: 1}
+	if err := (&AfterSaleService{}).Create(&void, []string{tickets[0].TicketCode}); err == nil {
+		t.Fatal("partial void unexpectedly accepted")
+	}
+}
+
+func TestAfterSaleReissuePrintFailureFailsRequest(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	var posID uint
+	if err := model.Write(func(tx *gorm.DB) error {
+		pos := model.Device{Name: "POS", SerialNumber: fmt.Sprintf("POS-%d", time.Now().UnixNano()), Type: "pos", Status: "online", TenantID: tenantID, ScenicAreaID: 1}
+		if err := tx.Create(&pos).Error; err != nil {
+			return err
+		}
+		posID = pos.ID
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	shift, err := (&OperationsService{}).OpenShift(tenantID, posID, 7, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "reissue", IdempotencyKey: "reissue-print-failure", DeviceID: posID, ShiftID: shift.ID, OperatorID: 7}
+	if err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 8, "reviewed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&AfterSaleService{}).Execute(tenantID, request.ID, 7); err != nil {
+		t.Fatal(err)
+	}
+	var job model.PrintJob
+	if err := model.DB.Where("after_sale_request_no = ?", request.RequestNo).First(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&OperationsService{}).StartPrint(tenantID, job.ID, posID, 7); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&OperationsService{}).FailPrint(tenantID, job.ID, posID, 7, "paper jam"); err != nil {
+		t.Fatal(err)
+	}
+	var failed model.AfterSaleRequest
+	if err := model.DB.First(&failed, request.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != "failed" || !strings.Contains(failed.ErrorMessage, "paper jam") {
+		t.Fatalf("reissue failure was not propagated: %+v", failed)
 	}
 }
 

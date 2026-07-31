@@ -496,7 +496,25 @@ func (s *OperationsService) FailPrint(tenantID, jobID, deviceID, operatorID uint
 		if job.LastError == "" {
 			job.LastError = "printer returned an unknown error"
 		}
-		return tx.Model(job).Updates(map[string]interface{}{"status": job.Status, "last_error": job.LastError}).Error
+		if err := tx.Model(job).Updates(map[string]interface{}{"status": job.Status, "last_error": job.LastError}).Error; err != nil {
+			return err
+		}
+		// A reissue is a durable after-sale workflow. Leaving it in
+		// processing after a terminal printer failure makes the request look
+		// successful in the workbench and prevents a controlled retry/review.
+		if job.AfterSaleRequestNo != "" {
+			var req model.AfterSaleRequest
+			if err := tx.Where("request_no = ? AND tenant_id = ?", job.AfterSaleRequestNo, tenantID).First(&req).Error; err == nil && req.Status == "processing" {
+				message := job.LastError
+				if err := tx.Model(&req).Updates(map[string]interface{}{"status": "failed", "error_message": message}).Error; err != nil {
+					return err
+				}
+				if err := appendAfterSaleEvent(tx, &req, "processing", "failed", "print_failed", operatorID, message); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	})
 }
 
