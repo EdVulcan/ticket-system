@@ -115,6 +115,7 @@ func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error 
 		req.TenantID = tenantID
 		req.PaymentNo = generatePaymentNo()
 		req.Amount = order.TotalAmount
+		req.AmountCents = moneyCents(order.TotalAmount)
 		req.Status = "pending"
 		req.TransactionID = ""
 		req.CodeURL = ""
@@ -362,7 +363,11 @@ func (s *PaymentService) CompleteNotification(tenantID uint, paymentNo, method, 
 			Where("payment_no = ? AND tenant_id = ? AND method = ?", paymentNo, tenantID, method).First(&payment).Error; err != nil {
 			return err
 		}
-		if roundMoney(payment.Amount) != roundMoney(amount) {
+		storedAmountCents := payment.AmountCents
+		if storedAmountCents == 0 {
+			storedAmountCents = moneyCents(payment.Amount)
+		}
+		if storedAmountCents != moneyCents(amount) {
 			return fmt.Errorf("payment amount mismatch")
 		}
 		if payment.Status == "paid" {
@@ -383,7 +388,7 @@ func (s *PaymentService) CompleteNotification(tenantID uint, paymentNo, method, 
 			return fmt.Errorf("order cannot be paid from status %s", order.Status)
 		}
 		if err := tx.Model(&payment).Updates(map[string]interface{}{
-			"status": "paid", "transaction_id": transactionID, "error_message": "", "paid_at": time.Now(),
+			"status": "paid", "transaction_id": transactionID, "error_message": "", "paid_at": time.Now(), "amount_cents": storedAmountCents,
 		}).Error; err != nil {
 			return err
 		}

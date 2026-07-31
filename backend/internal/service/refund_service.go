@@ -53,6 +53,7 @@ func (s *RefundService) CreateCashRefund(tenantID uint, orderNo, idempotencyKey 
 	if amount <= 0 {
 		return nil, errors.New("refund amount must be greater than zero")
 	}
+	amountCents := moneyCents(amount)
 	cleanCodes := normalizeTicketCodes(ticketCodes)
 	if len(cleanCodes) == 0 {
 		return nil, errors.New("at least one ticket code is required")
@@ -65,7 +66,11 @@ func (s *RefundService) CreateCashRefund(tenantID uint, orderNo, idempotencyKey 
 	err = model.Write(func(tx *gorm.DB) error {
 		var existing model.Refund
 		if err := tx.Where("tenant_id = ? AND idempotency_key = ?", tenantID, idempotencyKey).First(&existing).Error; err == nil {
-			if existing.OrderNo != orderNo || roundMoney(existing.Amount) != roundMoney(amount) || existing.TicketCodesJSON != string(codesJSON) {
+			existingAmountCents := existing.AmountCents
+			if existingAmountCents == 0 {
+				existingAmountCents = moneyCents(existing.Amount)
+			}
+			if existing.OrderNo != orderNo || existingAmountCents != amountCents || existing.TicketCodesJSON != string(codesJSON) {
 				return errors.New("idempotency key was already used with different refund data")
 			}
 			result = existing
@@ -124,13 +129,21 @@ func (s *RefundService) CreateCashRefund(tenantID uint, orderNo, idempotencyKey 
 		if roundMoney(amount) != refundableAmount {
 			return fmt.Errorf("refund amount must equal selected ticket value %.2f", refundableAmount)
 		}
-		if roundMoney(payment.RefundedAmount+amount) > roundMoney(payment.Amount) {
+		paymentAmountCents := payment.AmountCents
+		if paymentAmountCents == 0 {
+			paymentAmountCents = moneyCents(payment.Amount)
+		}
+		paymentRefundedCents := payment.RefundedAmountCents
+		if paymentRefundedCents == 0 {
+			paymentRefundedCents = moneyCents(payment.RefundedAmount)
+		}
+		if paymentRefundedCents+amountCents > paymentAmountCents {
 			return errors.New("refund amount exceeds paid amount")
 		}
 
 		result = model.Refund{
 			TenantID: tenantID, RefundNo: generateRefundNo(), IdempotencyKey: idempotencyKey,
-			OrderNo: orderNo, PaymentID: payment.ID, Amount: roundMoney(amount), Method: "cash",
+			OrderNo: orderNo, PaymentID: payment.ID, Amount: roundMoney(amount), AmountCents: moneyCents(amount), Method: "cash",
 			Status: "succeeded", Reason: strings.TrimSpace(reason), TicketCodesJSON: string(codesJSON),
 		}
 		if err := tx.Create(&result).Error; err != nil {
@@ -193,11 +206,12 @@ func (s *RefundService) CreateCashRefund(tenantID uint, orderNo, idempotencyKey 
 			}
 		}
 		payment.RefundedAmount = roundMoney(payment.RefundedAmount + amount)
-		if err := tx.Model(&payment).Update("refunded_amount", payment.RefundedAmount).Error; err != nil {
+		payment.RefundedAmountCents = paymentRefundedCents + amountCents
+		if err := tx.Model(&payment).Updates(map[string]interface{}{"refunded_amount": payment.RefundedAmount, "refunded_amount_cents": payment.RefundedAmountCents, "amount_cents": paymentAmountCents}).Error; err != nil {
 			return err
 		}
 		newStatus := "partial_refunded"
-		if roundMoney(payment.RefundedAmount) >= roundMoney(payment.Amount) {
+		if payment.RefundedAmountCents >= paymentAmountCents {
 			newStatus = "refunded"
 		}
 		if err := tx.Model(&order).Update("status", newStatus).Error; err != nil {
@@ -237,6 +251,7 @@ func (s *RefundService) CreateDigitalRefund(tenantID uint, orderNo, idempotencyK
 	if amount <= 0 {
 		return nil, errors.New("refund amount must be greater than zero")
 	}
+	amountCents := moneyCents(amount)
 	cleanCodes := normalizeTicketCodes(ticketCodes)
 	if len(cleanCodes) == 0 {
 		return nil, errors.New("at least one ticket code is required")
@@ -249,7 +264,11 @@ func (s *RefundService) CreateDigitalRefund(tenantID uint, orderNo, idempotencyK
 	err = model.Write(func(tx *gorm.DB) error {
 		var existing model.Refund
 		if err := tx.Where("tenant_id = ? AND idempotency_key = ?", tenantID, idempotencyKey).First(&existing).Error; err == nil {
-			if existing.OrderNo != orderNo || roundMoney(existing.Amount) != roundMoney(amount) || existing.TicketCodesJSON != string(codesJSON) {
+			existingAmountCents := existing.AmountCents
+			if existingAmountCents == 0 {
+				existingAmountCents = moneyCents(existing.Amount)
+			}
+			if existing.OrderNo != orderNo || existingAmountCents != amountCents || existing.TicketCodesJSON != string(codesJSON) {
 				return errors.New("idempotency key was already used with different refund data")
 			}
 			result = existing
@@ -266,11 +285,15 @@ func (s *RefundService) CreateDigitalRefund(tenantID uint, orderNo, idempotencyK
 			}
 			return err
 		}
-		var reservedRefunds float64
-		if err := tx.Model(&model.Refund{}).Where("payment_id = ? AND status IN ?", payment.ID, []string{"pending", "succeeded"}).Select("COALESCE(SUM(amount), 0)").Scan(&reservedRefunds).Error; err != nil {
+		var reservedRefundsCents int64
+		if err := tx.Model(&model.Refund{}).Where("payment_id = ? AND status IN ?", payment.ID, []string{"pending", "succeeded"}).Select("COALESCE(SUM(CASE WHEN amount_cents != 0 THEN amount_cents ELSE CAST(ROUND(amount * 100.0) AS INTEGER) END), 0)").Scan(&reservedRefundsCents).Error; err != nil {
 			return err
 		}
-		if roundMoney(reservedRefunds+amount) > roundMoney(payment.Amount) {
+		paymentAmountCents := payment.AmountCents
+		if paymentAmountCents == 0 {
+			paymentAmountCents = moneyCents(payment.Amount)
+		}
+		if reservedRefundsCents+amountCents > paymentAmountCents {
 			return errors.New("refund amount exceeds paid amount")
 		}
 		var order model.Order
@@ -284,12 +307,12 @@ func (s *RefundService) CreateDigitalRefund(tenantID uint, orderNo, idempotencyK
 		if err != nil {
 			return err
 		}
-		if len(selected) != len(cleanCodes) || roundMoney(amount) != refundableAmount {
+		if len(selected) != len(cleanCodes) || amountCents != moneyCents(refundableAmount) {
 			return fmt.Errorf("refund amount must equal selected ticket value %.2f", refundableAmount)
 		}
 		result = model.Refund{
 			TenantID: tenantID, RefundNo: generateRefundNo(), IdempotencyKey: idempotencyKey,
-			OrderNo: orderNo, PaymentID: payment.ID, Amount: roundMoney(amount), Method: payment.Method,
+			OrderNo: orderNo, PaymentID: payment.ID, Amount: roundMoney(amount), AmountCents: moneyCents(amount), Method: payment.Method,
 			Status: "pending", Reason: strings.TrimSpace(reason), TicketCodesJSON: string(codesJSON),
 		}
 		if err := tx.Create(&result).Error; err != nil {
@@ -559,7 +582,11 @@ func (s *RefundService) completeDigitalRefund(taskID uint, refund *model.Refund,
 		if err != nil {
 			return err
 		}
-		if roundMoney(amount) != roundMoney(storedRefund.Amount) {
+		refundAmountCents := storedRefund.AmountCents
+		if refundAmountCents == 0 {
+			refundAmountCents = moneyCents(storedRefund.Amount)
+		}
+		if moneyCents(amount) != refundAmountCents {
 			return errors.New("selected ticket value changed before refund completion")
 		}
 		if err := applySuccessfulRefundTx(tx, &order, &storedPayment, &storedRefund, selected); err != nil {
@@ -627,11 +654,24 @@ func applySuccessfulRefundTx(tx *gorm.DB, order *model.Order, payment *model.Pay
 		}
 	}
 	payment.RefundedAmount = roundMoney(payment.RefundedAmount + refund.Amount)
+	refundAmountCents := refund.AmountCents
+	if refundAmountCents == 0 {
+		refundAmountCents = moneyCents(refund.Amount)
+	}
+	paymentRefundedCents := payment.RefundedAmountCents
+	if paymentRefundedCents == 0 {
+		paymentRefundedCents = moneyCents(payment.RefundedAmount - refund.Amount)
+	}
+	payment.RefundedAmountCents = paymentRefundedCents + refundAmountCents
 	newStatus := "partial_refunded"
-	if roundMoney(payment.RefundedAmount) >= roundMoney(payment.Amount) {
+	paymentAmountCents := payment.AmountCents
+	if paymentAmountCents == 0 {
+		paymentAmountCents = moneyCents(payment.Amount)
+	}
+	if payment.RefundedAmountCents >= paymentAmountCents {
 		newStatus = "refunded"
 	}
-	if err := tx.Model(payment).Updates(map[string]interface{}{"refunded_amount": payment.RefundedAmount, "status": newStatus}).Error; err != nil {
+	if err := tx.Model(payment).Updates(map[string]interface{}{"refunded_amount": payment.RefundedAmount, "refunded_amount_cents": payment.RefundedAmountCents, "amount_cents": paymentAmountCents, "status": newStatus}).Error; err != nil {
 		return err
 	}
 	if err := tx.Model(order).Update("status", newStatus).Error; err != nil {

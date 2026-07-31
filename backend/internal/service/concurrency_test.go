@@ -288,7 +288,7 @@ func TestCashRefundIsTicketScopedAndIdempotent(t *testing.T) {
 	if err := model.DB.First(&storedPayment, payment.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if storedPayment.RefundedAmount != storedPayment.Amount {
+	if storedPayment.RefundedAmount != storedPayment.Amount || storedPayment.RefundedAmountCents != storedPayment.AmountCents {
 		t.Fatalf("refunded amount=%v paid=%v", storedPayment.RefundedAmount, storedPayment.Amount)
 	}
 	stats, err := (&ReportService{}).GetSalesStats(tenantID, time.Now().AddDate(0, 0, -1).Format("2006-01-02"), time.Now().Format("2006-01-02"))

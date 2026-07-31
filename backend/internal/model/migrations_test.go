@@ -29,8 +29,8 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if err := db.Order("version DESC").First(&latest).Error; err != nil {
 		t.Fatal(err)
 	}
-	if latest.Version != 39 {
-		t.Fatalf("latest migration=%d, want 39", latest.Version)
+	if latest.Version != 40 {
+		t.Fatalf("latest migration=%d, want 40", latest.Version)
 	}
 	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "pos_shifts", "pos_holds", "settlement_statements", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements", "channel_bill_records", "channel_reconciliations", "migration_audit_issues"} {
 		var count int64
@@ -68,6 +68,43 @@ func TestStrictOwnershipGuardsRejectCrossTenantRows(t *testing.T) {
 	}
 	if err := db.Create(&CheckPoint{TenantID: first.ID, ScenicAreaID: area.ID, Name: "forbidden"}).Error; err == nil {
 		t.Fatal("cross-tenant checkpoint was accepted by database guard")
+	}
+}
+
+func TestPaymentCentMigrationBackfillsLegacyAmounts(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "payment-cents.db")+"?_foreign_keys=on"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sqlDB, dbErr := db.DB(); dbErr == nil {
+		defer sqlDB.Close()
+	}
+	if err := db.AutoMigrate(&Payment{}, &Refund{}); err != nil {
+		t.Fatal(err)
+	}
+	payment := Payment{TenantID: 1, PaymentNo: "PAY-CENTS", OrderNo: "ORD-CENTS", Amount: 12.34, RefundedAmount: 1.23, Method: "cash", Status: "paid"}
+	refund := Refund{TenantID: 1, RefundNo: "REF-CENTS", IdempotencyKey: "REF-CENTS", OrderNo: payment.OrderNo, PaymentID: 1, Amount: 1.23, Method: "cash", Status: "succeeded"}
+	if err := db.Create(&payment).Error; err != nil {
+		t.Fatal(err)
+	}
+	refund.PaymentID = payment.ID
+	if err := db.Create(&refund).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := migratePaymentCentFacts(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&payment, payment.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if payment.AmountCents != 1234 || payment.RefundedAmountCents != 123 {
+		t.Fatalf("payment cent backfill=%+v", payment)
+	}
+	if err := db.First(&refund, refund.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if refund.AmountCents != 123 {
+		t.Fatalf("refund cent backfill=%+v", refund)
 	}
 }
 

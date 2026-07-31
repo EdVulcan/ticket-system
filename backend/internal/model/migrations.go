@@ -67,6 +67,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 37, name: "payment success timestamps", apply: migratePaymentSuccessTimestamps},
 		{version: 38, name: "durable POS holds", apply: migratePOSHolds},
 		{version: 39, name: "strict ownership database guards", apply: migrateStrictOwnershipGuards},
+		{version: 40, name: "payment and refund cent facts", apply: migratePaymentCentFacts},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -217,6 +218,25 @@ func migrateStrictOwnershipGuards(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func migratePaymentCentFacts(db *gorm.DB) error {
+	if err := db.AutoMigrate(&Payment{}, &Refund{}); err != nil {
+		return err
+	}
+	if err := db.Exec(`
+		UPDATE payments
+		SET amount_cents = CAST(ROUND(amount * 100.0) AS INTEGER),
+		    refunded_amount_cents = CAST(ROUND(refunded_amount * 100.0) AS INTEGER)
+		WHERE amount_cents = 0 AND (amount != 0 OR refunded_amount != 0)
+	`).Error; err != nil {
+		return err
+	}
+	return db.Exec(`
+		UPDATE refunds
+		SET amount_cents = CAST(ROUND(amount * 100.0) AS INTEGER)
+		WHERE amount_cents = 0 AND amount != 0
+	`).Error
 }
 
 func migrateAfterSalesAndWorkflows(db *gorm.DB) error {

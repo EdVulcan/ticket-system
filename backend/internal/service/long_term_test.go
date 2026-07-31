@@ -149,6 +149,9 @@ func TestDigitalRefundIsPendingAndIdempotent(t *testing.T) {
 	if refund.Status != "pending" {
 		t.Fatalf("refund status=%s, want pending", refund.Status)
 	}
+	if refund.AmountCents != moneyCents(order.TotalAmount) {
+		t.Fatalf("refund cents=%d, want %d", refund.AmountCents, moneyCents(order.TotalAmount))
+	}
 	again, err := (&RefundService{}).CreateDigitalRefund(tenantID, order.OrderNo, "refund-key-1", order.TotalAmount, []string{ticket.TicketCode}, "customer request")
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +212,7 @@ func TestDigitalRefundWorkerCompletesTicketScopedFacts(t *testing.T) {
 	if err := model.DB.First(&ticket, ticket.ID).Error; err != nil || ticket.Status != "refunded" {
 		t.Fatalf("ticket=%+v err=%v", ticket, err)
 	}
-	if err := model.DB.First(&payment, payment.ID).Error; err != nil || payment.Status != "refunded" || payment.RefundedAmount != order.TotalAmount {
+	if err := model.DB.First(&payment, payment.ID).Error; err != nil || payment.Status != "refunded" || payment.RefundedAmount != order.TotalAmount || payment.RefundedAmountCents != moneyCents(order.TotalAmount) {
 		t.Fatalf("payment=%+v err=%v", payment, err)
 	}
 	if err := model.DB.First(&refund, refund.ID).Error; err != nil || refund.Status != "succeeded" || refund.ProviderRefundID != "WX-REFUND-1" {
@@ -254,7 +257,7 @@ func TestDigitalPartialRefundUpdatesPaymentAndOrderState(t *testing.T) {
 	if err := model.DB.First(&storedPayment, payment.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if storedPayment.Status != "partial_refunded" || storedPayment.RefundedAmount != 99.50 {
+	if storedPayment.Status != "partial_refunded" || storedPayment.RefundedAmount != 99.50 || storedPayment.RefundedAmountCents != 9950 {
 		t.Fatalf("payment=%+v", storedPayment)
 	}
 	var storedOrder model.Order
