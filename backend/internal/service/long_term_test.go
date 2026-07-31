@@ -76,7 +76,8 @@ func TestSettlementUsesFulfillmentSnapshot(t *testing.T) {
 	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, scenario.distributorID); err != nil {
 		t.Fatal(err)
 	}
-	statement, err := (&SettlementService{}).GenerateStatement(scenario.supplierID, scenario.supplierID, scenario.distributorID, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	periodStart, periodEnd := time.Now().Add(-time.Hour).Truncate(time.Second), time.Now().Add(time.Hour).Truncate(time.Second)
+	statement, err := (&SettlementService{}).GenerateStatement(scenario.supplierID, scenario.supplierID, scenario.distributorID, periodStart, periodEnd)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,8 +92,12 @@ func TestSettlementUsesFulfillmentSnapshot(t *testing.T) {
 		t.Fatalf("settlement line=%+v", line)
 	}
 	settlements := &SettlementService{}
-	if _, err := settlements.GenerateStatement(scenario.supplierID, scenario.supplierID, scenario.distributorID, time.Now().Add(-time.Hour), time.Now().Add(time.Hour)); err == nil {
-		t.Fatal("fulfillment fact entered a second settlement statement")
+	repeated, err := settlements.GenerateStatement(scenario.supplierID, scenario.supplierID, scenario.distributorID, periodStart, periodEnd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repeated.ID != statement.ID {
+		t.Fatalf("period retry created statement %d instead of returning %d", repeated.ID, statement.ID)
 	}
 	if err := settlements.SetStatus(scenario.distributorID, statement.ID, "supplier_confirmed", ""); err == nil {
 		t.Fatal("distributor performed supplier confirmation")
@@ -208,6 +213,58 @@ func TestDigitalRefundWorkerCompletesTicketScopedFacts(t *testing.T) {
 		t.Fatalf("payment=%+v err=%v", payment, err)
 	}
 	if err := model.DB.First(&refund, refund.ID).Error; err != nil || refund.Status != "succeeded" || refund.ProviderRefundID != "WX-REFUND-1" {
+		t.Fatalf("refund=%+v err=%v", refund, err)
+	}
+}
+
+func TestDigitalPartialRefundUpdatesPaymentAndOrderState(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{TenantID: tenantID, Channel: "online", Items: []model.OrderItem{{ProductID: productID, Quantity: 2}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{TenantID: tenantID, OrderNo: order.OrderNo, PaymentNo: "PAY-DIGITAL-PARTIAL", Amount: order.TotalAmount, Method: "wechat", Status: "paid"}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create(&payment).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.Order{}).Where("id = ?", order.ID).Update("status", "paid").Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var tickets []model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).Find(&tickets).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(tickets) != 2 {
+		t.Fatalf("tickets=%d, want 2", len(tickets))
+	}
+	refund, err := (&RefundService{}).CreateDigitalRefund(tenantID, order.OrderNo, "digital-partial", 99.50, []string{tickets[0].TicketCode}, "partial request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := &RefundService{Provider: refundProviderFunc(func(context.Context, *model.Refund, *model.Payment) (RefundProviderResult, error) {
+		return RefundProviderResult{Status: "succeeded", ProviderRefundID: "WX-PARTIAL"}, nil
+	})}
+	if _, err := worker.ProcessDigitalRefundTasks(context.Background(), time.Now().Add(time.Second), 10); err != nil {
+		t.Fatal(err)
+	}
+	var storedPayment model.Payment
+	if err := model.DB.First(&storedPayment, payment.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedPayment.Status != "partial_refunded" || storedPayment.RefundedAmount != 99.50 {
+		t.Fatalf("payment=%+v", storedPayment)
+	}
+	var storedOrder model.Order
+	if err := model.DB.First(&storedOrder, order.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedOrder.Status != "partial_refunded" {
+		t.Fatalf("order status=%s", storedOrder.Status)
+	}
+	if err := model.DB.First(&refund, refund.ID).Error; err != nil || refund.Status != "succeeded" {
 		t.Fatalf("refund=%+v err=%v", refund, err)
 	}
 }

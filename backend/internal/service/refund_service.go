@@ -507,7 +507,7 @@ func applySuccessfulRefundTx(tx *gorm.DB, order *model.Order, payment *model.Pay
 	if roundMoney(payment.RefundedAmount) >= roundMoney(payment.Amount) {
 		newStatus = "refunded"
 	}
-	if err := tx.Model(payment).Updates(map[string]interface{}{"refunded_amount": payment.RefundedAmount, "status": map[bool]string{true: "refunded", false: payment.Status}[newStatus == "refunded"]}).Error; err != nil {
+	if err := tx.Model(payment).Updates(map[string]interface{}{"refunded_amount": payment.RefundedAmount, "status": newStatus}).Error; err != nil {
 		return err
 	}
 	if err := tx.Model(order).Update("status", newStatus).Error; err != nil {

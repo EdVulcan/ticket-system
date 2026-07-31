@@ -20,7 +20,15 @@ func (s *SettlementService) GenerateStatement(actorTenantID, supplierTenantID, d
 		return nil, errors.New("invalid settlement scope or period")
 	}
 	var statement model.SettlementStatement
+	periodKey := fmt.Sprintf("settlement:%d:%d:%s:%s", supplierTenantID, distributorTenantID, start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano))
 	err := model.Write(func(tx *gorm.DB) error {
+		var existing model.SettlementStatement
+		if err := tx.Where("idempotency_key = ?", periodKey).First(&existing).Error; err == nil {
+			statement = existing
+			return nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
 		if err := requireActiveTenantCapability(tx, supplierTenantID, "supplier"); err != nil {
 			return err
 		}
@@ -39,7 +47,7 @@ func (s *SettlementService) GenerateStatement(actorTenantID, supplierTenantID, d
 		if len(fulfillments) == 0 {
 			return errors.New("no fulfillment facts in settlement period")
 		}
-		statement = model.SettlementStatement{SupplierTenantID: supplierTenantID, DistributorTenantID: distributorTenantID, StatementNo: fmt.Sprintf("STL-%d-%d", time.Now().UnixNano(), supplierTenantID), PeriodStart: start, PeriodEnd: end, Status: "draft"}
+		statement = model.SettlementStatement{SupplierTenantID: supplierTenantID, DistributorTenantID: distributorTenantID, IdempotencyKey: periodKey, StatementNo: fmt.Sprintf("STL-%d-%d", time.Now().UnixNano(), supplierTenantID), PeriodStart: start, PeriodEnd: end, Status: "draft"}
 		if err := tx.Create(&statement).Error; err != nil {
 			return err
 		}

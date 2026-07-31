@@ -7,6 +7,7 @@ type SettlementStatement struct {
 	SupplierTenantID       uint      `gorm:"index;not null"`
 	DistributorTenantID    uint      `gorm:"index;not null"`
 	StatementNo            string    `gorm:"size:80;uniqueIndex;not null"`
+	IdempotencyKey         string    `gorm:"size:160;index"`
 	PeriodStart            time.Time `gorm:"index;not null"`
 	PeriodEnd              time.Time `gorm:"index;not null"`
 	GrossCents             int64     `gorm:"not null"`

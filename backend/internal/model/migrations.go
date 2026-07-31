@@ -55,6 +55,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 25, name: "channel reservation conversion and uniqueness", apply: migrateChannelReservationHardening},
 		{version: 26, name: "financial document idempotency", apply: migrateFinancialDocumentIdempotency},
 		{version: 27, name: "session token revocation versions", apply: migrateSessionTokenVersions},
+		{version: 28, name: "settlement period idempotency", apply: migrateSettlementPeriodIdempotency},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -158,6 +159,13 @@ func migrateSessionTokenVersions(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func migrateSettlementPeriodIdempotency(db *gorm.DB) error {
+	if err := addColumnIfMissing(db, "settlement_statements", "idempotency_key", `ALTER TABLE settlement_statements ADD COLUMN idempotency_key TEXT`); err != nil {
+		return err
+	}
+	return db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_settlement_statement_idempotency ON settlement_statements(idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != ''").Error
 }
 
 func migrateCheckInOwnership(db *gorm.DB) error {
