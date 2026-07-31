@@ -149,7 +149,21 @@ type channelBillMatch struct {
 func matchChannelBill(tx *gorm.DB, tenantID, accountID uint, input ChannelBillInput) (channelBillMatch, error) {
 	match := channelBillMatch{Status: "unmatched"}
 	var order model.Order
+	matchedByProviderID := false
 	err := tx.Where("tenant_id = ? AND channel_account_id = ? AND external_no = ?", tenantID, accountID, input.ExternalNo).First(&order).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) && input.Operation == "refund" {
+		var refund model.Refund
+		if lookupErr := tx.Where("tenant_id = ? AND provider_refund_id = ? AND status = ?", tenantID, input.ExternalNo, "succeeded").Order("created_at DESC").First(&refund).Error; lookupErr == nil {
+			err = tx.Where("tenant_id = ? AND channel_account_id = ? AND order_no = ?", tenantID, accountID, refund.OrderNo).First(&order).Error
+			matchedByProviderID = err == nil
+		}
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) && (input.Operation == "payment" || input.Operation == "sale") {
+		var payment model.Payment
+		if lookupErr := tx.Where("tenant_id = ? AND transaction_id = ? AND status IN ?", tenantID, input.ExternalNo, []string{"paid", "refunded", "partial_refunded"}).Order("created_at DESC").First(&payment).Error; lookupErr == nil {
+			err = tx.Where("tenant_id = ? AND channel_account_id = ? AND order_no = ?", tenantID, accountID, payment.OrderNo).First(&order).Error
+		}
+	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return match, nil
 	}
@@ -167,7 +181,11 @@ func matchChannelBill(tx *gorm.DB, tenantID, accountID uint, input ChannelBillIn
 		}
 	case "refund":
 		var refund model.Refund
-		if err := tx.Where("tenant_id = ? AND order_no = ? AND status = ?", tenantID, order.OrderNo, "succeeded").Order("created_at DESC").First(&refund).Error; err == nil {
+		refundQuery := tx.Where("tenant_id = ? AND order_no = ? AND status = ?", tenantID, order.OrderNo, "succeeded")
+		if matchedByProviderID {
+			refundQuery = refundQuery.Where("provider_refund_id = ?", input.ExternalNo)
+		}
+		if err := refundQuery.Order("created_at DESC").First(&refund).Error; err == nil {
 			match.MatchedRefundNo = refund.RefundNo
 			expected = moneyCents(refund.Amount)
 		} else {

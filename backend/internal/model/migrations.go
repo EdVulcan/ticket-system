@@ -61,6 +61,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 31, name: "integer capital account projections", apply: migrateIntegerCapitalAccountProjections},
 		{version: 32, name: "channel bill reconciliation facts", apply: migrateChannelBillReconciliation},
 		{version: 33, name: "digital refund operations state", apply: migrateDigitalRefundOperations},
+		{version: 34, name: "transaction record cent projections", apply: migrateTransactionRecordCentProjections},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -110,6 +111,18 @@ func migrateDigitalRefundOperations(db *gorm.DB) error {
 		return err
 	}
 	return db.Exec("UPDATE digital_refund_tasks SET max_attempts = 8 WHERE max_attempts IS NULL OR max_attempts <= 0").Error
+}
+
+func migrateTransactionRecordCentProjections(db *gorm.DB) error {
+	if err := db.AutoMigrate(&TransactionRecord{}); err != nil {
+		return err
+	}
+	return db.Exec(`
+		UPDATE transaction_records
+		SET amount_cents = CAST(ROUND(amount * 100.0) AS INTEGER),
+		    balance_after_cents = CAST(ROUND(balance_after * 100.0) AS INTEGER)
+		WHERE amount_cents = 0 AND (amount <> 0 OR balance_after <> 0)
+	`).Error
 }
 
 func migrateAfterSalesAndWorkflows(db *gorm.DB) error {

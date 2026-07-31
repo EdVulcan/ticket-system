@@ -29,11 +29,13 @@ type CapitalAccount struct {
 // 记录所有的充值、消费、退款、授信调整记录
 type TransactionRecord struct {
 	Base
-	AccountID      uint    `json:"account_id" gorm:"index"`
-	Type           string  `json:"type" gorm:"size:20"`              // recharge(充值), payment(支付), refund(退款), credit_adjust(授信调整)
-	Amount         float64 `json:"amount" gorm:"type:decimal(15,2)"` // 变动金额 (+/-)
-	BalanceAfter   float64 `json:"balance_after" gorm:"type:decimal(15,2)"`
-	RelatedOrderNo string  `json:"related_order_no" gorm:"size:50;index"` // 关联单号
-	Memo           string  `json:"memo" gorm:"size:255"`
-	OperatorID     uint    `json:"operator_id"` // 操作人(User ID)
+	AccountID         uint    `json:"account_id" gorm:"index"`
+	Type              string  `json:"type" gorm:"size:20"`              // recharge(充值), payment(支付), refund(退款), credit_adjust(授信调整)
+	Amount            float64 `json:"amount" gorm:"type:decimal(15,2)"` // 变动金额 (+/-)
+	BalanceAfter      float64 `json:"balance_after" gorm:"type:decimal(15,2)"`
+	AmountCents       int64   `json:"amount_cents" gorm:"not null;default:0"`
+	BalanceAfterCents int64   `json:"balance_after_cents" gorm:"not null;default:0"`
+	RelatedOrderNo    string  `json:"related_order_no" gorm:"size:50;index"` // 关联单号
+	Memo              string  `json:"memo" gorm:"size:255"`
+	OperatorID        uint    `json:"operator_id"` // 操作人(User ID)
 }

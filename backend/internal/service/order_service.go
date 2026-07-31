@@ -536,6 +536,7 @@ func chargeDistributionAccount(tx *gorm.DB, order *model.Order, item *model.Orde
 	}
 	if err := tx.Create(&model.TransactionRecord{
 		AccountID: account.ID, Type: "payment", Amount: -centsMoney(costCents), BalanceAfter: account.Balance,
+		AmountCents: -costCents, BalanceAfterCents: account.BalanceCents,
 		RelatedOrderNo: order.OrderNo, Memo: fmt.Sprintf("distribution purchase: %s x%d", productName, item.Quantity),
 	}).Error; err != nil {
 		return err
@@ -586,6 +587,7 @@ func refundDistributionAccount(tx *gorm.DB, order *model.Order, item *model.Orde
 	}
 	if err := tx.Create(&model.TransactionRecord{
 		AccountID: account.ID, Type: "refund", Amount: centsMoney(amountCents), BalanceAfter: account.Balance,
+		AmountCents: amountCents, BalanceAfterCents: account.BalanceCents,
 		RelatedOrderNo: order.OrderNo, Memo: fmt.Sprintf("cancelled distribution purchase: %s x%d", productName, item.Quantity),
 	}).Error; err != nil {
 		return err
@@ -627,6 +629,7 @@ func refundDistributionAllocation(tx *gorm.DB, order *model.Order, item *model.O
 	totalCents := cashCents + creditCents
 	if err := tx.Create(&model.TransactionRecord{
 		AccountID: account.ID, Type: "refund", Amount: centsMoney(totalCents), BalanceAfter: account.Balance,
+		AmountCents: totalCents, BalanceAfterCents: account.BalanceCents,
 		RelatedOrderNo: order.OrderNo, Memo: fmt.Sprintf("refunded distribution purchase: %s", productName),
 	}).Error; err != nil {
 		return err

@@ -29,8 +29,8 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if err := db.Order("version DESC").First(&latest).Error; err != nil {
 		t.Fatal(err)
 	}
-	if latest.Version != 33 {
-		t.Fatalf("latest migration=%d, want 33", latest.Version)
+	if latest.Version != 34 {
+		t.Fatalf("latest migration=%d, want 34", latest.Version)
 	}
 	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "pos_shifts", "settlement_statements", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements", "channel_bill_records", "channel_reconciliations"} {
 		var count int64
@@ -72,6 +72,10 @@ func TestLegacyMigrationQuarantinesOffersAndRebuildsFulfillmentTotals(t *testing
 	}
 	legacyAccount := CapitalAccount{OwnerTenantID: distributor.ID, ManagerTenantID: supplier.ID, Balance: 12.34, CreditLine: 5.67, UsedCredit: 1.23, FrozenAmount: 0.45, Status: "active"}
 	if err := db.Create(&legacyAccount).Error; err != nil {
+		t.Fatal(err)
+	}
+	legacyTransaction := TransactionRecord{AccountID: legacyAccount.ID, Type: "payment", Amount: 0.29, BalanceAfter: 12.34, Memo: "legacy cents"}
+	if err := db.Create(&legacyTransaction).Error; err != nil {
 		t.Fatal(err)
 	}
 	area := ScenicArea{TenantID: supplier.ID, Code: "MAIN", Name: "Main", Status: "active"}
@@ -158,6 +162,12 @@ func TestLegacyMigrationQuarantinesOffersAndRebuildsFulfillmentTotals(t *testing
 	}
 	if legacyAccount.BalanceCents != 1234 || legacyAccount.CreditLineCents != 567 || legacyAccount.UsedCreditCents != 123 || legacyAccount.FrozenCents != 45 {
 		t.Fatalf("legacy account cent projection=%+v", legacyAccount)
+	}
+	if err := db.First(&legacyTransaction, legacyTransaction.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if legacyTransaction.AmountCents != 29 || legacyTransaction.BalanceAfterCents != 1234 {
+		t.Fatalf("legacy transaction cent projection=%+v", legacyTransaction)
 	}
 	var capabilities []TenantCapability
 	if err := db.Find(&capabilities).Error; err != nil {

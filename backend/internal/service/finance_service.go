@@ -56,7 +56,7 @@ func (s *FinanceService) RechargeAccount(managerTenantID, ownerTenantID uint, am
 		if memo == "" {
 			memo = "supplier recharge"
 		}
-		if err := tx.Create(&model.TransactionRecord{AccountID: account.ID, Type: "deposit", Amount: centsMoney(amountCents), BalanceAfter: account.Balance, Memo: memo, OperatorID: operatorID}).Error; err != nil {
+		if err := tx.Create(&model.TransactionRecord{AccountID: account.ID, Type: "deposit", Amount: centsMoney(amountCents), BalanceAfter: account.Balance, AmountCents: amountCents, BalanceAfterCents: account.BalanceCents, Memo: memo, OperatorID: operatorID}).Error; err != nil {
 			return err
 		}
 		if err := appendLedgerEntryTx(tx, &account, "recharge", amountCents, "recharge:"+idempotencyKey, "", "", memo, operatorID); err != nil {

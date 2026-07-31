@@ -364,6 +364,21 @@ func TestChannelBillImportMatchesOrdersAndReplaysIdempotently(t *testing.T) {
 	if _, err := (&ChannelService{}).ImportBill(tenantID, account.ID, "bill-batch-3", []ChannelBillInput{{ExternalNo: externalNo, Operation: "payment", AmountCents: moneyCents(order.TotalAmount) + 2}}); err == nil {
 		t.Fatal("duplicate bill fact with conflicting batch was accepted")
 	}
+	payment := model.Payment{TenantID: tenantID, PaymentNo: "PAY-BILL-1", OrderNo: order.OrderNo, Amount: order.TotalAmount, Method: "wechat", Status: "refunded", TransactionID: "WX-TRADE-1"}
+	refund := model.Refund{TenantID: tenantID, RefundNo: "REF-BILL-1", IdempotencyKey: "REF-BILL-IDEM", OrderNo: order.OrderNo, PaymentID: payment.ID, Amount: order.TotalAmount, Method: "wechat", Status: "succeeded", ProviderRefundID: "WX-REFUND-1"}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create(&payment).Error; err != nil {
+			return err
+		}
+		refund.PaymentID = payment.ID
+		return tx.Create(&refund).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	refundReport, err := (&ChannelService{}).ImportBill(tenantID, account.ID, "bill-batch-refund", []ChannelBillInput{{ExternalNo: "WX-REFUND-1", Operation: "refund", AmountCents: moneyCents(order.TotalAmount)}})
+	if err != nil || refundReport.Status != "completed" || refundReport.MatchedCount != 1 {
+		t.Fatalf("provider refund report=%+v err=%v", refundReport, err)
+	}
 }
 
 func TestRechargeIsIdempotentAndLeavesCentLedgerEvidence(t *testing.T) {
