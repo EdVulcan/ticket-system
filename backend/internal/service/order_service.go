@@ -143,6 +143,10 @@ func (s *OrderService) Create(req *model.Order) error {
 			}
 
 			if distributed {
+				if err := reserveOfferQuotaTx(tx, listing.ProductOfferID, item.Quantity); err != nil {
+					return err
+				}
+				item.OfferReservedQuantity = item.Quantity
 				if err := chargeDistributionAccount(tx, req, item, req.TenantID, fulfillment.TenantID, listing.Name); err != nil {
 					return err
 				}
@@ -305,6 +309,9 @@ func resolveFulfillmentProduct(tx *gorm.DB, listing *model.Product, sellerTenant
 		if !offerAllowsChannel(offer.AllowedChannels, channel) {
 			return nil, false, fmt.Errorf("product offer does not allow channel %s", channel)
 		}
+		if offer.MinimumRetailPriceCents > 0 && moneyCents(listing.Price) < offer.MinimumRetailPriceCents {
+			return nil, false, fmt.Errorf("listing price is below the supplier minimum retail price")
+		}
 		var relationship model.DistributorRelationship
 		if err := tx.Where("agent_tenant_id = ? AND supplier_tenant_id = ? AND status = ?", sellerTenantID, offer.SupplierTenantID, "active").First(&relationship).Error; err != nil {
 			return nil, false, fmt.Errorf("active distribution relationship not found")
@@ -350,6 +357,38 @@ func offerAllowsChannel(allowed, channel string) bool {
 		}
 	}
 	return false
+}
+
+func reserveOfferQuotaTx(tx *gorm.DB, offerID uint, quantity int) error {
+	if offerID == 0 || quantity <= 0 {
+		return nil
+	}
+	result := tx.Model(&model.ProductOffer{}).
+		Where("id = ? AND status = ? AND (quota = 0 OR reserved_quantity + ? <= quota)", offerID, "active", quantity).
+		UpdateColumn("reserved_quantity", gorm.Expr("reserved_quantity + ?", quantity))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("product offer quota is exhausted")
+	}
+	return nil
+}
+
+func releaseOfferQuotaTx(tx *gorm.DB, offerID uint, quantity int) error {
+	if offerID == 0 || quantity <= 0 {
+		return nil
+	}
+	result := tx.Model(&model.ProductOffer{}).
+		Where("id = ? AND reserved_quantity >= ?", offerID, quantity).
+		UpdateColumn("reserved_quantity", gorm.Expr("reserved_quantity - ?", quantity))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("product offer quota reservation is inconsistent")
+	}
+	return nil
 }
 
 func validateOrder(req *model.Order) error {
@@ -801,6 +840,13 @@ func cancelOrderTx(tx *gorm.DB, order *model.Order) error {
 		}
 		if distributed {
 			if err := refundDistributionAccount(tx, order, item, order.TenantID, stockProduct.TenantID, listing.Name); err != nil {
+				return err
+			}
+			quotaQuantity := item.OfferReservedQuantity
+			if quotaQuantity == 0 {
+				quotaQuantity = item.Quantity
+			}
+			if err := releaseOfferQuotaTx(tx, item.ProductOfferID, quotaQuantity); err != nil {
 				return err
 			}
 		}

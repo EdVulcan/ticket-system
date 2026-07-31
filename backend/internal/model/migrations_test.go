@@ -29,8 +29,8 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if err := db.Order("version DESC").First(&latest).Error; err != nil {
 		t.Fatal(err)
 	}
-	if latest.Version != 34 {
-		t.Fatalf("latest migration=%d, want 34", latest.Version)
+	if latest.Version != 35 {
+		t.Fatalf("latest migration=%d, want 35", latest.Version)
 	}
 	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "pos_shifts", "settlement_statements", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements", "channel_bill_records", "channel_reconciliations"} {
 		var count int64

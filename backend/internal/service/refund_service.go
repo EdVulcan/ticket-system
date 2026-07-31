@@ -176,6 +176,9 @@ func (s *RefundService) CreateCashRefund(tenantID uint, orderNo, idempotencyKey 
 				if err := refundDistributionAllocation(tx, &order, item, order.TenantID, stockProduct.TenantID, cashCents, creditCents, key, listing.Name); err != nil {
 					return err
 				}
+				if err := releaseOfferQuotaTx(tx, item.ProductOfferID, stockQuantity); err != nil {
+					return err
+				}
 			}
 			if err := releaseStock(tx, stockProduct, item.UseDate, item.StockSlot, stockQuantity); err != nil {
 				return err
@@ -605,6 +608,9 @@ func applySuccessfulRefundTx(tx *gorm.DB, order *model.Order, payment *model.Pay
 		if distributed {
 			key := "refund:" + refund.RefundNo + ":item:" + ledgerItemKey(item)
 			if err := refundDistributionAllocation(tx, order, item, order.TenantID, stockProduct.TenantID, cashCents, creditCents, key, listing.Name); err != nil {
+				return err
+			}
+			if err := releaseOfferQuotaTx(tx, item.ProductOfferID, stockQuantity); err != nil {
 				return err
 			}
 		}

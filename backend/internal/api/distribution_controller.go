@@ -20,6 +20,8 @@ func (c *DistributionController) CreateOffer(ctx *gin.Context) {
 		DistributorTenantID uint       `json:"distributor_tenant_id" binding:"required"`
 		SourceProductID     uint       `json:"source_product_id" binding:"required"`
 		SettlementPrice     float64    `json:"settlement_price" binding:"required"`
+		MinimumRetailPrice  float64    `json:"minimum_retail_price"`
+		Quota               int        `json:"quota"`
 		CommissionBPS       int64      `json:"commission_bps"`
 		AllowedChannels     string     `json:"allowed_channels" binding:"required"`
 		SalesStartAt        *time.Time `json:"sales_start_at"`
@@ -29,7 +31,7 @@ func (c *DistributionController) CreateOffer(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	offer, err := c.Service.CreateOffer(ctx.GetUint("tenant_id"), req.DistributorTenantID, req.SourceProductID, req.SettlementPrice, req.CommissionBPS, req.AllowedChannels, req.SalesStartAt, req.SalesEndAt)
+	offer, err := c.Service.CreateOfferWithPolicy(ctx.GetUint("tenant_id"), req.DistributorTenantID, req.SourceProductID, req.SettlementPrice, req.MinimumRetailPrice, req.Quota, req.CommissionBPS, req.AllowedChannels, req.SalesStartAt, req.SalesEndAt)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

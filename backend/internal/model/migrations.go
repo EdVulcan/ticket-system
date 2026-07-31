@@ -62,6 +62,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 32, name: "channel bill reconciliation facts", apply: migrateChannelBillReconciliation},
 		{version: 33, name: "digital refund operations state", apply: migrateDigitalRefundOperations},
 		{version: 34, name: "transaction record cent projections", apply: migrateTransactionRecordCentProjections},
+		{version: 35, name: "offer pricing floors and quotas", apply: migrateOfferPricingAndQuota},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -123,6 +124,25 @@ func migrateTransactionRecordCentProjections(db *gorm.DB) error {
 		    balance_after_cents = CAST(ROUND(balance_after * 100.0) AS INTEGER)
 		WHERE amount_cents = 0 AND (amount <> 0 OR balance_after <> 0)
 	`).Error
+}
+
+func migrateOfferPricingAndQuota(db *gorm.DB) error {
+	for _, column := range []struct {
+		table string
+		name  string
+		ddl   string
+	}{
+		{"product_offers", "minimum_retail_price_cents", `ALTER TABLE product_offers ADD COLUMN minimum_retail_price_cents INTEGER NOT NULL DEFAULT 0`},
+		{"product_offers", "quota", `ALTER TABLE product_offers ADD COLUMN quota INTEGER NOT NULL DEFAULT 0`},
+		{"product_offers", "reserved_quantity", `ALTER TABLE product_offers ADD COLUMN reserved_quantity INTEGER NOT NULL DEFAULT 0`},
+		{"seller_listings", "retail_price_cents", `ALTER TABLE seller_listings ADD COLUMN retail_price_cents INTEGER NOT NULL DEFAULT 0`},
+		{"order_items", "offer_reserved_quantity", `ALTER TABLE order_items ADD COLUMN offer_reserved_quantity INTEGER NOT NULL DEFAULT 0`},
+	} {
+		if err := addColumnIfMissing(db, column.table, column.name, column.ddl); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func migrateAfterSalesAndWorkflows(db *gorm.DB) error {

@@ -31,12 +31,12 @@ type Tenant struct {
 // User 用户
 type User struct {
 	Base
-	Username string `gorm:"size:50;uniqueIndex:idx_tenant_username;not null" json:"username"`
-	Password string `gorm:"size:100;not null" json:"-"`
-	Role     string `gorm:"size:20;default:'staff'" json:"role"` // admin, staff
+	Username     string `gorm:"size:50;uniqueIndex:idx_tenant_username;not null" json:"username"`
+	Password     string `gorm:"size:100;not null" json:"-"`
+	Role         string `gorm:"size:20;default:'staff'" json:"role"` // admin, staff
 	TenantID     uint   `gorm:"uniqueIndex:idx_tenant_username" json:"tenant_id"`
 	TokenVersion int    `gorm:"not null;default:1" json:"-"`
-	Tenant   Tenant `json:"tenant,omitempty"`
+	Tenant       Tenant `json:"tenant,omitempty"`
 }
 
 // Staff 员工 (一线作业人员)
@@ -209,6 +209,7 @@ type OrderItem struct {
 	ProductRevisionID       uint       `gorm:"index" json:"product_revision_id"`
 	CashCostCents           int64      `json:"cash_cost_cents"`
 	CreditCostCents         int64      `json:"credit_cost_cents"`
+	OfferReservedQuantity   int        `json:"offer_reserved_quantity"`
 	CommissionBPS           int64      `gorm:"not null;default:0" json:"commission_bps"`
 	Tickets                 []Ticket   `gorm:"foreignKey:OrderItemID" json:"tickets,omitempty"`
 }

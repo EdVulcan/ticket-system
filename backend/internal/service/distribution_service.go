@@ -164,7 +164,14 @@ func (s *DistributionService) ListDistributableProducts(agentTenantID, supplierT
 }
 
 func (s *DistributionService) CreateOffer(supplierTenantID, distributorTenantID, sourceProductID uint, settlementPrice float64, commissionBPS int64, allowedChannels string, salesStartAt, salesEndAt *time.Time) (*model.ProductOffer, error) {
-	if settlementPrice <= 0 || commissionBPS < 0 || commissionBPS > 10000 {
+	return s.CreateOfferWithPolicy(supplierTenantID, distributorTenantID, sourceProductID, settlementPrice, 0, 0, commissionBPS, allowedChannels, salesStartAt, salesEndAt)
+}
+
+// CreateOfferWithPolicy creates the supplier-owned authorization. The legacy
+// CreateOffer wrapper keeps existing integrations compatible while new callers
+// can set a retail floor and a bounded sales quota.
+func (s *DistributionService) CreateOfferWithPolicy(supplierTenantID, distributorTenantID, sourceProductID uint, settlementPrice float64, minimumRetailPrice float64, quota int, commissionBPS int64, allowedChannels string, salesStartAt, salesEndAt *time.Time) (*model.ProductOffer, error) {
+	if settlementPrice <= 0 || minimumRetailPrice < 0 || quota < 0 || commissionBPS < 0 || commissionBPS > 10000 {
 		return nil, errors.New("settlement price must be greater than zero")
 	}
 	if salesStartAt != nil && salesEndAt != nil && !salesEndAt.After(*salesStartAt) {
@@ -189,6 +196,13 @@ func (s *DistributionService) CreateOffer(supplierTenantID, distributorTenantID,
 		if source.ScenicAreaID == 0 {
 			return errors.New("source product has no scenic area")
 		}
+		minimumCents := moneyCents(minimumRetailPrice)
+		if minimumCents == 0 {
+			minimumCents = moneyCents(settlementPrice)
+		}
+		if minimumCents < moneyCents(settlementPrice) {
+			return errors.New("minimum retail price cannot be below settlement price")
+		}
 		revision, err := ensureProductRevisionTx(tx, &source)
 		if err != nil {
 			return err
@@ -197,6 +211,7 @@ func (s *DistributionService) CreateOffer(supplierTenantID, distributorTenantID,
 			SupplierTenantID: supplierTenantID, DistributorTenantID: distributorTenantID,
 			SourceProductID: source.ID, ProductRevisionID: revision.ID, FulfillmentScenicAreaID: source.ScenicAreaID,
 			SettlementPrice: roundMoney(settlementPrice), CommissionBPS: commissionBPS, Status: "active", AllowedChannels: strings.TrimSpace(allowedChannels),
+			MinimumRetailPriceCents: minimumCents, Quota: quota,
 			SalesStartAt: salesStartAt, SalesEndAt: salesEndAt,
 		}
 		var existing model.ProductOffer
@@ -204,6 +219,7 @@ func (s *DistributionService) CreateOffer(supplierTenantID, distributorTenantID,
 			if err := tx.Model(&existing).Updates(map[string]interface{}{
 				"product_revision_id": revision.ID, "fulfillment_scenic_area_id": source.ScenicAreaID,
 				"settlement_price": offer.SettlementPrice, "commission_bps": commissionBPS, "status": "active", "allowed_channels": offer.AllowedChannels,
+				"minimum_retail_price_cents": minimumCents, "quota": quota,
 				"sales_start_at": salesStartAt, "sales_end_at": salesEndAt,
 			}).Error; err != nil {
 				return err
@@ -255,6 +271,9 @@ func (s *DistributionService) ImportProduct(agentTenantID, sourceProductID uint,
 		if offer.ProductRevisionID == 0 || source.CurrentRevisionID != offer.ProductRevisionID {
 			return errors.New("supplier product offer does not match the current product revision")
 		}
+		if offer.MinimumRetailPriceCents > 0 && moneyCents(price) < offer.MinimumRetailPriceCents {
+			return fmt.Errorf("retail price must be at least %.2f", centsMoney(offer.MinimumRetailPriceCents))
+		}
 		var existingListing int64
 		if err := tx.Model(&model.SellerListing{}).Where("seller_tenant_id = ? AND product_offer_id = ?", agentTenantID, offer.ID).Count(&existingListing).Error; err != nil {
 			return err
@@ -288,7 +307,7 @@ func (s *DistributionService) ImportProduct(agentTenantID, sourceProductID uint,
 		}
 		return tx.Create(&model.SellerListing{
 			SellerTenantID: agentTenantID, ProductOfferID: offer.ID, ProductID: newProduct.ID,
-			Name: name, RetailPrice: price, Status: "online",
+			Name: name, RetailPrice: price, RetailPriceCents: moneyCents(price), Status: "online",
 		}).Error
 	})
 }

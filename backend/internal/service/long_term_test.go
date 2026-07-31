@@ -628,6 +628,44 @@ func TestDistributorCannotCreateOrImportWithoutSupplierOffer(t *testing.T) {
 	}
 }
 
+func TestSupplierOfferFloorAndQuotaAreEnforcedAndReleased(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.ProductOffer{}).Where("id = (SELECT product_offer_id FROM products WHERE id = ?)", scenario.listingID).
+			Updates(map[string]interface{}{"minimum_retail_price_cents": 9000, "quota": 1}).Error; err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tooCheap := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&tooCheap); err == nil {
+		t.Fatal("listing below supplier minimum price was accepted")
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&model.Product{}).Where("id = ?", scenario.listingID).Update("price", 90).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&first); err != nil {
+		t.Fatal(err)
+	}
+	second := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&second); err == nil {
+		t.Fatal("offer quota was exceeded")
+	}
+	if err := (&OrderService{}).Cancel(first.OrderNo, scenario.distributorID); err != nil {
+		t.Fatal(err)
+	}
+	third := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&third); err != nil {
+		t.Fatalf("quota was not released after cancellation: %v", err)
+	}
+}
+
 func TestProductUpdateCreatesNewRevisionForNewOrders(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
