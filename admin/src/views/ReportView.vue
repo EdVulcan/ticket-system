@@ -33,6 +33,53 @@
        </div>
     </div>
 
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+        <div class="text-xs text-gray-500">渠道差异</div>
+        <div class="text-2xl font-semibold text-amber-600 mt-1">{{ operations.channel_mismatch_count || 0 }}</div>
+        <div class="text-xs text-gray-400 mt-1">差异 ¥{{ centsToYuan(operations.channel_difference_cents) }}</div>
+      </div>
+      <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+        <div class="text-xs text-gray-500">退款待办</div>
+        <div class="text-2xl font-semibold text-blue-600 mt-1">{{ operations.pending_refund_count || 0 }}</div>
+        <div class="text-xs text-red-500 mt-1">人工复核 {{ operations.manual_review_refund_count || 0 }}</div>
+      </div>
+      <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+        <div class="text-xs text-gray-500">库存余量</div>
+        <div class="text-2xl font-semibold text-emerald-600 mt-1">{{ operations.inventory_remaining || 0 }}</div>
+        <div class="text-xs text-gray-400 mt-1">已售 {{ operations.inventory_sold || 0 }} / {{ operations.inventory_capacity || 0 }}</div>
+      </div>
+      <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+        <div class="text-xs text-gray-500">供应商待收</div>
+        <div class="text-2xl font-semibold text-indigo-600 mt-1">¥{{ centsToYuan(operations.supplier_receivable_cents) }}</div>
+        <div class="text-xs text-gray-400 mt-1">按履约与结算事实计算</div>
+      </div>
+    </div>
+
+    <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="text-lg font-bold text-gray-800">业务日期口径</h3>
+        <span class="text-xs text-gray-400">金额以整数分汇总</span>
+      </div>
+      <el-tabs v-model="activeFact">
+        <el-tab-pane label="销售日" name="sales">
+          <el-table :data="daily.sales" stripe><el-table-column prop="date" label="日期"/><el-table-column prop="order_count" label="订单数"/><el-table-column label="毛额"><template #default="{row}">¥{{ centsToYuan(row.gross_cents) }}</template></el-table-column><el-table-column label="退款"><template #default="{row}">¥{{ centsToYuan(row.refund_cents) }}</template></el-table-column><el-table-column label="净额"><template #default="{row}">¥{{ centsToYuan(row.net_cents) }}</template></el-table-column></el-table>
+        </el-tab-pane>
+        <el-tab-pane label="支付日" name="payments">
+          <el-table :data="daily.payments" stripe><el-table-column prop="date" label="日期"/><el-table-column prop="payment_count" label="支付笔数"/><el-table-column label="支付金额"><template #default="{row}">¥{{ centsToYuan(row.paid_cents) }}</template></el-table-column><el-table-column label="已退款"><template #default="{row}">¥{{ centsToYuan(row.refund_cents) }}</template></el-table-column></el-table>
+        </el-tab-pane>
+        <el-tab-pane label="游玩日" name="visits">
+          <el-table :data="daily.visits" stripe><el-table-column prop="date" label="日期"/><el-table-column prop="ticket_count" label="票数"/><el-table-column label="订单金额"><template #default="{row}">¥{{ centsToYuan(row.gross_cents) }}</template></el-table-column></el-table>
+        </el-tab-pane>
+        <el-tab-pane label="核销日" name="check_ins">
+          <el-table :data="daily.check_ins" stripe><el-table-column prop="date" label="日期"/><el-table-column prop="success_count" label="成功核销"/><el-table-column prop="failure_count" label="失败记录"/></el-table>
+        </el-tab-pane>
+        <el-tab-pane label="结算日" name="settlements">
+          <el-table :data="daily.settlements" stripe><el-table-column prop="date" label="日期"/><el-table-column prop="statement_count" label="结算单数"/><el-table-column label="应结金额"><template #default="{row}">¥{{ centsToYuan(row.net_cents) }}</template></el-table-column><el-table-column label="退款冲减"><template #default="{row}">¥{{ centsToYuan(row.refund_cents) }}</template></el-table-column></el-table>
+        </el-tab-pane>
+      </el-tabs>
+    </div>
+
     <!-- Product Table -->
     <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex-1 flex flex-col">
         <h3 class="text-lg font-bold text-gray-800 mb-4">热销商品排行 (Top 10)</h3>
@@ -76,6 +123,9 @@ const dateRange = ref([
 const salesStats = ref<any[]>([])
 const channelStats = ref<any[]>([])
 const productStats = ref<any[]>([])
+const daily = ref<any>({ sales: [], payments: [], visits: [], check_ins: [], settlements: [] })
+const operations = ref<any>({})
+const activeFact = ref('sales')
 
 const totalProductAmount = computed(() => {
     return productStats.value.reduce((sum, item) => sum + item.total_amount, 0) || 1
@@ -84,6 +134,8 @@ const totalProductAmount = computed(() => {
 const calcPercent = (val: number) => {
     return Math.round((val / totalProductAmount.value) * 100)
 }
+
+const centsToYuan = (value: number | undefined) => ((Number(value || 0) / 100).toFixed(2))
 
 const salesOption = computed(() => ({
     tooltip: { trigger: 'axis' },
@@ -132,15 +184,18 @@ const fetchAll = async () => {
     const [start, end] = dateRange.value
     const params = { start_date: start, end_date: end }
     
-    // Parallel requests
-    const res1 = await request.get('/reports/sales', { params })
+    const [res1, res2, res3, res4, res5] = await Promise.all([
+      request.get('/reports/sales', { params }),
+      request.get('/reports/channels', { params }),
+      request.get('/reports/products', { params }),
+      request.get('/reports/daily', { params }),
+      request.get('/reports/operations', { params })
+    ])
     salesStats.value = res1.data.data || []
-
-    const res2 = await request.get('/reports/channels', { params })
     channelStats.value = res2.data.data || []
-
-    const res3 = await request.get('/reports/products', { params })
     productStats.value = res3.data.data || []
+    daily.value = res4.data.data || daily.value
+    operations.value = res5.data.data || {}
 }
 
 onMounted(() => {

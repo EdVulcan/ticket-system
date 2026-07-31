@@ -319,7 +319,7 @@ func (s *PaymentService) completePayment(payment *model.Payment) error {
 			return fmt.Errorf("order cannot be paid from status %s", order.Status)
 		}
 		if err := tx.Model(&stored).Updates(map[string]interface{}{
-			"status": "paid", "transaction_id": payment.TransactionID, "code_url": payment.CodeURL,
+			"status": "paid", "transaction_id": payment.TransactionID, "code_url": payment.CodeURL, "paid_at": time.Now(),
 		}).Error; err != nil {
 			return err
 		}
@@ -383,7 +383,7 @@ func (s *PaymentService) CompleteNotification(tenantID uint, paymentNo, method, 
 			return fmt.Errorf("order cannot be paid from status %s", order.Status)
 		}
 		if err := tx.Model(&payment).Updates(map[string]interface{}{
-			"status": "paid", "transaction_id": transactionID, "error_message": "",
+			"status": "paid", "transaction_id": transactionID, "error_message": "", "paid_at": time.Now(),
 		}).Error; err != nil {
 			return err
 		}

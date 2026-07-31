@@ -22,6 +22,24 @@ const router = createRouter({
             meta: { scope: 'tenant', roles: ['admin', 'super_admin'], title: '分销中心' }
         },
         {
+            path: '/channels',
+            name: 'channels',
+            component: () => import('../views/ChannelView.vue'),
+            meta: { scope: 'tenant', roles: ['admin', 'super_admin'], title: '渠道连接' }
+        },
+        {
+            path: '/teams',
+            name: 'teams',
+            component: () => import('../views/TeamView.vue'),
+            meta: { scope: 'tenant', roles: ['seller', 'admin', 'super_admin'], title: '旅行社团队' }
+        },
+        {
+            path: '/refund-tasks',
+            name: 'refund-tasks',
+            component: () => import('../views/RefundTaskView.vue'),
+            meta: { scope: 'tenant', roles: ['admin', 'super_admin'], title: '退款待办' }
+        },
+        {
             path: '/finance',
             name: 'finance',
             component: () => import('../views/FinanceView.vue'),

@@ -61,6 +61,14 @@
                 <el-icon><Connection /></el-icon>
                 <span>分销商管理</span>
              </el-menu-item>
+             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor')" index="/channels" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+                <el-icon><Connection /></el-icon>
+                <span>渠道连接</span>
+             </el-menu-item>
+             <el-menu-item v-if="hasCapability('travel_agency')" index="/teams" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+                <el-icon><Tickets /></el-icon>
+                <span>旅行社团队</span>
+             </el-menu-item>
 
              <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">现场运营 (OPS)</div>
              <el-menu-item index="/operations" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
@@ -88,6 +96,10 @@
              <el-menu-item index="/report" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors text-indigo-400">
                 <el-icon><TrendCharts /></el-icon>
                 <span>经营数据 (BI)</span>
+             </el-menu-item>
+             <el-menu-item v-if="user.role === 'admin' || user.role === 'super_admin'" index="/refund-tasks" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+                <el-icon><Warning /></el-icon>
+                <span>退款待办</span>
              </el-menu-item>
           </template>
           
@@ -196,7 +208,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { 
   Odometer, Monitor, Location, Ticket, List, Setting, User, UserFilled,
   SwitchButton, OfficeBuilding, Connection, Money,
-  CaretBottom, Reading, TrendCharts, CreditCard, Tickets, Operation
+  CaretBottom, Reading, TrendCharts, CreditCard, Tickets, Operation, Warning
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 

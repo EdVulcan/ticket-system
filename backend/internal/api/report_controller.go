@@ -50,3 +50,27 @@ func (c *ReportController) GetChannels(ctx *gin.Context) {
 	}
 	ctx.JSON(http.StatusOK, gin.H{"data": stats})
 }
+
+func (c *ReportController) GetDaily(ctx *gin.Context) {
+	tenantID := ctx.GetUint("tenant_id")
+	start := ctx.DefaultQuery("start_date", time.Now().AddDate(0, 0, -30).Format("2006-01-02"))
+	end := ctx.DefaultQuery("end_date", time.Now().Format("2006-01-02"))
+	report, err := c.Service.GetDailyReport(tenantID, start, end)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": report, "start_date": start, "end_date": end})
+}
+
+func (c *ReportController) GetOperations(ctx *gin.Context) {
+	tenantID := ctx.GetUint("tenant_id")
+	start := ctx.DefaultQuery("start_date", time.Now().AddDate(0, 0, -30).Format("2006-01-02"))
+	end := ctx.DefaultQuery("end_date", time.Now().Format("2006-01-02"))
+	report, err := c.Service.GetOperationsReport(tenantID, start, end)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": report, "start_date": start, "end_date": end})
+}

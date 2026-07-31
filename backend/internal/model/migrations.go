@@ -64,6 +64,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 34, name: "transaction record cent projections", apply: migrateTransactionRecordCentProjections},
 		{version: 35, name: "offer pricing floors and quotas", apply: migrateOfferPricingAndQuota},
 		{version: 36, name: "legacy migration audit quarantine", apply: migrateMigrationAudit},
+		{version: 37, name: "payment success timestamps", apply: migratePaymentSuccessTimestamps},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -148,6 +149,13 @@ func migrateOfferPricingAndQuota(db *gorm.DB) error {
 
 func migrateMigrationAudit(db *gorm.DB) error {
 	return db.AutoMigrate(&MigrationAuditIssue{})
+}
+
+func migratePaymentSuccessTimestamps(db *gorm.DB) error {
+	if err := db.AutoMigrate(&Payment{}); err != nil {
+		return err
+	}
+	return db.Exec("UPDATE payments SET paid_at = created_at WHERE status IN ('paid', 'refunded') AND paid_at IS NULL").Error
 }
 
 func migrateAfterSalesAndWorkflows(db *gorm.DB) error {

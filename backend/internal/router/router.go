@@ -299,6 +299,8 @@ func InitRouter(r *gin.Engine) {
 		reportGroup.GET("/sales", reportController.GetSales)
 		reportGroup.GET("/products", reportController.GetProducts)
 		reportGroup.GET("/channels", reportController.GetChannels)
+		reportGroup.GET("/daily", reportController.GetDaily)
+		reportGroup.GET("/operations", reportController.GetOperations)
 	}
 
 	// Payment Routes
