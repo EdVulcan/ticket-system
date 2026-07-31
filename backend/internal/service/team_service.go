@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type TeamService struct{}
@@ -188,6 +189,21 @@ func (s *TeamService) AddMembers(tenantID, groupID uint, members []model.TourGro
 			if strings.TrimSpace(members[i].Name) == "" {
 				return errors.New("member name is required")
 			}
+			identity := strings.TrimSpace(members[i].IdentityNo)
+			if identity != "" {
+				var duplicate int64
+				if err := tx.Model(&model.TourGroupMember{}).Where("group_id = ? AND identity_no = ? AND identity_no != ''", groupID, identity).Count(&duplicate).Error; err != nil {
+					return err
+				}
+				if duplicate > 0 {
+					return fmt.Errorf("member identity %s already exists in group", identity)
+				}
+				for j := 0; j < i; j++ {
+					if strings.TrimSpace(members[j].IdentityNo) == identity {
+						return fmt.Errorf("member identity %s is duplicated in request", identity)
+					}
+				}
+			}
 			members[i].Base = model.Base{}
 			members[i].GroupID = groupID
 			if members[i].Status == "" {
@@ -204,6 +220,50 @@ func (s *TeamService) AddMembers(tenantID, groupID uint, members []model.TourGro
 		return tx.Model(&group).UpdateColumn("expected_count", gorm.Expr("expected_count + ?", len(members))).Error
 	})
 	return count, err
+}
+
+// ReplaceMembers is the safe roster import path. A roster can only be
+// replaced before the group is confirmed; once tickets or admission facts
+// exist, deleting rows would orphan entitlements and audit history.
+func (s *TeamService) ReplaceMembers(tenantID, groupID uint, members []model.TourGroupMember) (int, error) {
+	returnCount := len(members)
+	err := model.Write(func(tx *gorm.DB) error {
+		var group model.TourGroup
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
+			return errors.New("group not found")
+		}
+		if group.Status != "draft" || group.SalesOrderID != 0 {
+			return errors.New("roster can only be replaced before the group is confirmed")
+		}
+		seen := make(map[string]struct{})
+		for i := range members {
+			members[i].Name = strings.TrimSpace(members[i].Name)
+			members[i].IdentityNo = strings.TrimSpace(members[i].IdentityNo)
+			if members[i].Name == "" {
+				return errors.New("member name is required")
+			}
+			if members[i].IdentityNo != "" {
+				if _, exists := seen[members[i].IdentityNo]; exists {
+					return fmt.Errorf("member identity %s is duplicated in request", members[i].IdentityNo)
+				}
+				seen[members[i].IdentityNo] = struct{}{}
+			}
+			members[i].Base = model.Base{}
+			members[i].GroupID = groupID
+			members[i].Status = "planned"
+			members[i].TicketCode = ""
+		}
+		if err := tx.Where("group_id = ?", groupID).Delete(&model.TourGroupMember{}).Error; err != nil {
+			return err
+		}
+		if len(members) > 0 {
+			if err := tx.Create(&members).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Model(&group).Updates(map[string]interface{}{"expected_count": len(members), "status": "draft"}).Error
+	})
+	return returnCount, err
 }
 
 func (s *TeamService) ListMembers(tenantID, groupID uint) ([]model.TourGroupMember, error) {

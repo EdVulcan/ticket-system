@@ -137,6 +137,27 @@ func (c *TeamController) AddMembers(ctx *gin.Context) {
 	ctx.JSON(http.StatusCreated, gin.H{"added": count})
 }
 
+func (c *TeamController) ReplaceMembers(ctx *gin.Context) {
+	groupID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || groupID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid group id"})
+		return
+	}
+	var body struct {
+		Members []model.TourGroupMember `json:"members"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	count, err := c.Service.ReplaceMembers(ctx.GetUint("tenant_id"), uint(groupID), body.Members)
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"replaced": count})
+}
+
 func (c *TeamController) ListMembers(ctx *gin.Context) {
 	groupID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
 	if err != nil {

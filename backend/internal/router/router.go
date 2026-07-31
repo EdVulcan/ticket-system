@@ -240,6 +240,7 @@ func InitRouter(r *gin.Engine) {
 		teamGroup.POST("", teamController.CreateGroup)
 		teamGroup.GET("/:id/members", teamController.ListMembers)
 		teamGroup.POST("/:id/members", teamController.AddMembers)
+		teamGroup.PUT("/:id/members", teamController.ReplaceMembers)
 		teamGroup.POST("/:id/enter-batch", teamController.EnterBatch)
 		teamGroup.POST("/:id/attach-order", teamController.AttachOrder)
 		teamGroup.GET("/settlements", teamController.ListSettlements)

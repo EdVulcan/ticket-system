@@ -530,6 +530,70 @@ func TestTeamRosterAndEntryStayTenantScoped(t *testing.T) {
 	}
 }
 
+func TestTeamRosterReplaceIsIdempotentAndStopsAfterConfirmation(t *testing.T) {
+	resetBusinessData(t)
+	var travel, supplier model.Tenant
+	if err := model.Write(func(tx *gorm.DB) error {
+		travel = model.Tenant{Name: "Travel Replace", SystemCode: "TRAVEL-REPLACE", SecretKey: "t"}
+		supplier = model.Tenant{Name: "Supplier Replace", SystemCode: "SUP-REPLACE", SecretKey: "s"}
+		if err := tx.Create(&travel).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&supplier).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&model.TenantCapability{TenantID: travel.ID, Capability: "travel_agency", Status: "active"}).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&model.TenantCapability{TenantID: supplier.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
+			return err
+		}
+		area := model.ScenicArea{TenantID: supplier.ID, Code: "AREA-REPLACE", Name: "Main", Status: "active"}
+		if err := tx.Create(&area).Error; err != nil {
+			return err
+		}
+		contract := model.TravelContract{TravelTenantID: travel.ID, SupplierTenantID: supplier.ID, ContractNo: "CONTRACT-REPLACE", Status: "active"}
+		if err := tx.Create(&contract).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.DistributorRelationship{AgentTenantID: travel.ID, SupplierTenantID: supplier.ID, Status: "active"}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var area model.ScenicArea
+	if err := model.DB.Where("tenant_id = ?", supplier.ID).First(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	var contract model.TravelContract
+	if err := model.DB.Where("travel_tenant_id = ? AND supplier_tenant_id = ?", travel.ID, supplier.ID).First(&contract).Error; err != nil {
+		t.Fatal(err)
+	}
+	group := model.TourGroup{Name: "Replace Team", SupplierTenantID: supplier.ID, ScenicAreaID: area.ID, ContractID: contract.ID, VisitDate: time.Now().AddDate(0, 0, 1)}
+	if err := (&TeamService{}).CreateGroup(travel.ID, &group); err != nil {
+		t.Fatal(err)
+	}
+	count, err := (&TeamService{}).ReplaceMembers(travel.ID, group.ID, []model.TourGroupMember{{Name: "Alice", IdentityNo: "ID-A"}, {Name: "Bob", IdentityNo: "ID-B"}, {Name: "Cara", IdentityNo: "ID-C"}})
+	if err != nil || count != 3 {
+		t.Fatalf("replace count=%d err=%v", count, err)
+	}
+	if _, err := (&TeamService{}).ReplaceMembers(travel.ID, group.ID, []model.TourGroupMember{{Name: "Duplicate", IdentityNo: "ID-A"}, {Name: "Duplicate 2", IdentityNo: "ID-A"}}); err == nil {
+		t.Fatal("duplicate identity roster was accepted")
+	}
+	var stored model.TourGroup
+	if err := model.DB.First(&stored, group.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.ExpectedCount != 3 || stored.Status != "draft" {
+		t.Fatalf("stored group=%+v", stored)
+	}
+	if err := model.DB.Model(&stored).Updates(map[string]interface{}{"status": "confirmed", "sales_order_id": 1}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&TeamService{}).ReplaceMembers(travel.ID, group.ID, []model.TourGroupMember{{Name: "Late"}}); err == nil {
+		t.Fatal("confirmed team roster was replaced")
+	}
+}
+
 func TestDeviceOfflineCreatesOneAlert(t *testing.T) {
 	resetBusinessData(t)
 	var tenant model.Tenant
