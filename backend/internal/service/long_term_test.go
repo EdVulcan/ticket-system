@@ -746,6 +746,145 @@ func TestPOSPartialCashMustBeReturnedBeforeCancellation(t *testing.T) {
 	}
 }
 
+func TestMixedPaymentRefundAllocatesAndAppliesBusinessFactsOnce(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	paidAt := time.Now()
+	cash := model.Payment{
+		TenantID: tenantID, PaymentNo: "PAY-MIXED-CASH", OrderNo: order.OrderNo,
+		Amount: 40, AmountCents: 4000, TenderedCents: 4000, Method: "cash", PayType: "cash", Status: "paid", PaidAt: &paidAt,
+	}
+	digital := model.Payment{
+		TenantID: tenantID, PaymentNo: "PAY-MIXED-DIGITAL", OrderNo: order.OrderNo,
+		Amount: 59.50, AmountCents: 5950, Method: "wechat", PayType: "cscanb", Status: "paid", PaidAt: &paidAt, TransactionID: "WX-MIXED",
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create(&cash).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&digital).Error; err != nil {
+			return err
+		}
+		return tx.Model(&order).Update("status", "paid").Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_item_id IN (SELECT id FROM order_items WHERE order_id = ?)", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	refunds := &RefundService{}
+	root, err := refunds.CreateMixedRefund(tenantID, order.OrderNo, "mixed-refund-1", order.TotalAmount, []string{ticket.TicketCode}, "visitor requested refund")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if root.Status != "group_pending" || root.PaymentID != 0 || root.ParentRefundID != 0 {
+		t.Fatalf("mixed refund root=%+v", root)
+	}
+	replay, err := refunds.CreateMixedRefund(tenantID, order.OrderNo, "mixed-refund-1", order.TotalAmount, []string{ticket.TicketCode}, "visitor requested refund")
+	if err != nil || replay.ID != root.ID {
+		t.Fatalf("mixed refund replay=%+v err=%v", replay, err)
+	}
+	if _, err := refunds.CreateMixedRefund(tenantID+1, order.OrderNo, "mixed-refund-cross-tenant", order.TotalAmount, []string{ticket.TicketCode}, "forbidden"); err == nil {
+		t.Fatal("cross-tenant mixed refund was accepted")
+	}
+	var allocations []model.Refund
+	if err := model.DB.Where("parent_refund_id = ?", root.ID).Order("allocation_seq").Find(&allocations).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(allocations) != 2 || allocations[0].Method != "cash" || allocations[0].AmountCents != 4000 || allocations[0].Status != "succeeded" || allocations[1].Method != "wechat" || allocations[1].AmountCents != 5950 || allocations[1].Status != "pending" {
+		t.Fatalf("mixed allocations=%+v", allocations)
+	}
+	if err := model.DB.First(&ticket, ticket.ID).Error; err != nil || ticket.Status == "refunded" {
+		t.Fatalf("ticket changed before provider confirmation: ticket=%+v err=%v", ticket, err)
+	}
+	if err := model.DB.First(&order, order.ID).Error; err != nil || order.Status != "paid" {
+		t.Fatalf("order changed before provider confirmation: order=%+v err=%v", order, err)
+	}
+	afterSale := model.AfterSaleRequest{
+		TenantID: tenantID, RequestNo: "AS-MIXED-REFUND", IdempotencyKey: "as-mixed-refund",
+		OrderNo: order.OrderNo, Type: "refund", Status: "processing", Reason: "visitor requested refund",
+		TicketCodesJSON: root.TicketCodesJSON, AmountCents: root.AmountCents, PaymentMethod: "auto",
+		RefundID: root.ID, OperatorID: 801,
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&afterSale).Error }); err != nil {
+		t.Fatal(err)
+	}
+	providerCalls := 0
+	worker := &RefundService{Provider: refundProviderFunc(func(_ context.Context, refund *model.Refund, payment *model.Payment) (RefundProviderResult, error) {
+		if refund.ParentRefundID != root.ID || refund.AmountCents != 5950 || payment.ID != digital.ID {
+			t.Fatalf("provider allocation refund=%+v payment=%+v", refund, payment)
+		}
+		providerCalls++
+		if providerCalls == 1 {
+			return RefundProviderResult{}, errors.New("temporary provider outage")
+		}
+		return RefundProviderResult{Status: "succeeded", ProviderRefundID: "WX-REF-MIXED"}, nil
+	})}
+	processed, err := worker.ProcessDigitalRefundTasks(context.Background(), time.Now().Add(time.Second), 10)
+	if err != nil || processed != 1 {
+		t.Fatalf("processed=%d err=%v", processed, err)
+	}
+	if err := model.DB.First(&root, root.ID).Error; err != nil || root.Status != "group_pending" {
+		t.Fatalf("root changed after temporary provider failure: root=%+v err=%v", root, err)
+	}
+	if err := model.DB.First(&ticket, ticket.ID).Error; err != nil || ticket.Status == "refunded" {
+		t.Fatalf("ticket changed after temporary provider failure: ticket=%+v err=%v", ticket, err)
+	}
+	if _, err := refunds.CreateMixedRefund(tenantID, order.OrderNo, "mixed-refund-overlap", order.TotalAmount, []string{ticket.TicketCode}, "must not reuse failed allocation"); err == nil {
+		t.Fatal("failed but retryable allocation released its payment balance")
+	}
+	processed, err = worker.ProcessDigitalRefundTasks(context.Background(), time.Now().Add(2*time.Minute), 10)
+	if err != nil || processed != 1 {
+		t.Fatalf("retry processed=%d err=%v", processed, err)
+	}
+	if err := model.DB.First(&root, root.ID).Error; err != nil || root.Status != "group_succeeded" {
+		t.Fatalf("root=%+v err=%v", root, err)
+	}
+	if err := model.DB.First(&order, order.ID).Error; err != nil || order.Status != "refunded" {
+		t.Fatalf("order=%+v err=%v", order, err)
+	}
+	if err := model.DB.First(&ticket, ticket.ID).Error; err != nil || ticket.Status != "refunded" {
+		t.Fatalf("ticket=%+v err=%v", ticket, err)
+	}
+	if err := model.DB.First(&cash, cash.ID).Error; err != nil || cash.Status != "refunded" || cash.RefundedAmountCents != 4000 {
+		t.Fatalf("cash=%+v err=%v", cash, err)
+	}
+	if err := model.DB.First(&digital, digital.ID).Error; err != nil || digital.Status != "refunded" || digital.RefundedAmountCents != 5950 {
+		t.Fatalf("digital=%+v err=%v", digital, err)
+	}
+	if err := model.DB.First(&afterSale, afterSale.ID).Error; err != nil || afterSale.Status != "completed" || afterSale.CompletedAt == nil {
+		t.Fatalf("after-sale=%+v err=%v", afterSale, err)
+	}
+	group, err := refunds.GetRefundGroup(tenantID, root.ID)
+	if err != nil || group.Root.ID != root.ID || len(group.Allocations) != 2 || len(group.Tasks) != 1 || group.Tasks[0].Status != "succeeded" {
+		t.Fatalf("refund group=%+v err=%v", group, err)
+	}
+	if _, err := refunds.GetRefundGroup(tenantID+1, root.ID); err == nil {
+		t.Fatal("cross-tenant refund group was visible")
+	}
+	var completionEvents int64
+	if err := model.DB.Model(&model.AfterSaleEvent{}).Where("tenant_id = ? AND request_no = ? AND action = ?", tenantID, afterSale.RequestNo, "refund_completed").Count(&completionEvents).Error; err != nil || completionEvents != 1 {
+		t.Fatalf("completion events=%d err=%v", completionEvents, err)
+	}
+	var succeededAllocationCents int64
+	if err := model.DB.Model(&model.Refund{}).Where("parent_refund_id = ? AND status = ?", root.ID, "succeeded").Select("COALESCE(SUM(amount_cents), 0)").Scan(&succeededAllocationCents).Error; err != nil || succeededAllocationCents != 9950 {
+		t.Fatalf("succeeded allocation cents=%d err=%v", succeededAllocationCents, err)
+	}
+	stats, err := (&ReportService{}).GetSalesStats(tenantID, time.Now().AddDate(0, 0, -1).Format("2006-01-02"), time.Now().Format("2006-01-02"))
+	if err != nil || len(stats) == 0 || stats[len(stats)-1].RefundedAmount != 99.50 || stats[len(stats)-1].NetAmount != 0 {
+		t.Fatalf("mixed refund report=%+v err=%v", stats, err)
+	}
+	processed, err = worker.ProcessDigitalRefundTasks(context.Background(), time.Now().Add(2*time.Second), 10)
+	if err != nil || processed != 0 {
+		t.Fatalf("duplicate processing=%d err=%v", processed, err)
+	}
+}
+
 func TestPOSShiftCorrectionIsAppendOnlyAndAudited(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, _ := seedSellableProduct(t, "unlimited", 0)

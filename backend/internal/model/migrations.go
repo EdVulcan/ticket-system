@@ -76,6 +76,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 46, name: "POS shift reconciliation facts", apply: migratePOSShiftReconciliation},
 		{version: 47, name: "POS cash tender and shift corrections", apply: migratePOSCashAndShiftCorrections},
 		{version: 48, name: "POS split payment idempotency", apply: migratePOSSplitPaymentIdempotency},
+		{version: 49, name: "mixed payment refund allocations", apply: migrateMixedRefundAllocations},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -199,6 +200,14 @@ func migratePOSSplitPaymentIdempotency(db *gorm.DB) error {
 	}
 	return db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_idempotency
 		ON payments(tenant_id, idempotency_key) WHERE idempotency_key <> ''`).Error
+}
+
+func migrateMixedRefundAllocations(db *gorm.DB) error {
+	if err := db.AutoMigrate(&Refund{}); err != nil {
+		return err
+	}
+	return db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_refund_allocation_sequence
+		ON refunds(parent_refund_id, allocation_seq) WHERE parent_refund_id != 0`).Error
 }
 
 func migrateTeamSettlementFacts(db *gorm.DB) error {

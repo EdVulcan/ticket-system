@@ -202,7 +202,11 @@ func (s *AfterSaleService) Execute(tenantID, requestID uint, actor uint) (*model
 			if err := tx.Model(&req).Updates(map[string]interface{}{"refund_id": refund.ID}).Error; err != nil {
 				return err
 			}
-			if refund.Status == "succeeded" {
+			var storedRefund model.Refund
+			if err := tx.Where("id = ? AND tenant_id = ?", refund.ID, tenantID).First(&storedRefund).Error; err != nil {
+				return err
+			}
+			if storedRefund.Status == "succeeded" || storedRefund.Status == "group_succeeded" {
 				return completeAfterSaleTx(tx, &req, actor)
 			}
 			return nil
@@ -383,7 +387,10 @@ func (s *AfterSaleService) executeRefund(req *model.AfterSaleRequest) (*model.Re
 	amount := float64(req.AmountCents) / 100
 	method := req.PaymentMethod
 	if method == "" {
-		method = "cash"
+		method = "auto"
+	}
+	if method == "auto" || method == "mixed" {
+		return s.RefundService.CreateMixedRefund(req.TenantID, req.OrderNo, "after-sale:"+req.IdempotencyKey, amount, codes, req.Reason)
 	}
 	if method == "cash" {
 		return s.RefundService.CreateCashRefund(req.TenantID, req.OrderNo, "after-sale:"+req.IdempotencyKey, amount, codes, req.Reason)

@@ -241,8 +241,9 @@ const handleRefund = async (row: any) => {
   }).then(async () => {
     const ticketCodes = (row.items || []).flatMap((item: any) => (item.tickets || []).map((ticket: any) => ticket.ticket_code)).filter(Boolean)
     if (!ticketCodes.length) { ElMessage.warning('订单没有可退款的未使用票'); return }
-    await request.post('/payments/refunds/cash', { order_no: row.order_no, idempotency_key: `admin-${row.order_no}-${Date.now()}`, amount: row.total_amount, ticket_codes: ticketCodes, reason: '管理端全额退款' })
-    ElMessage.success('退款已完成')
+    const response = await request.post('/payments/refunds/mixed', { order_no: row.order_no, idempotency_key: `admin-${row.order_no}-${Date.now()}`, amount: row.total_amount, ticket_codes: ticketCodes, reason: '管理端全额退款' })
+    if (response.data.status === 'group_pending') ElMessage.info('退款已按原支付方式分摊，等待支付渠道确认')
+    else ElMessage.success('退款已完成')
     fetchData()
   }).catch(() => undefined)
 }

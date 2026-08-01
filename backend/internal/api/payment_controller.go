@@ -151,6 +151,44 @@ func (c *RefundController) CreateCash(ctx *gin.Context) {
 	ctx.JSON(http.StatusCreated, refund)
 }
 
+func (c *RefundController) CreateMixed(ctx *gin.Context) {
+	var body struct {
+		OrderNo        string   `json:"order_no" binding:"required"`
+		IdempotencyKey string   `json:"idempotency_key" binding:"required"`
+		Amount         float64  `json:"amount" binding:"required"`
+		TicketCodes    []string `json:"ticket_codes" binding:"required"`
+		Reason         string   `json:"reason"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	refund, err := c.Service.CreateMixedRefund(ctx.GetUint("tenant_id"), body.OrderNo, body.IdempotencyKey, body.Amount, body.TicketCodes, body.Reason)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	status := http.StatusCreated
+	if refund.Status == "group_pending" {
+		status = http.StatusAccepted
+	}
+	ctx.JSON(status, refund)
+}
+
+func (c *RefundController) GetGroup(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid refund id"})
+		return
+	}
+	group, err := c.Service.GetRefundGroup(ctx.GetUint("tenant_id"), uint(id))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "refund not found"})
+		return
+	}
+	ctx.JSON(http.StatusOK, group)
+}
+
 func (c *RefundController) CreateDigital(ctx *gin.Context) {
 	var body struct {
 		OrderNo        string   `json:"order_no" binding:"required"`

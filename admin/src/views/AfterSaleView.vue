@@ -59,7 +59,7 @@
           <el-form-item label="类型"><el-select v-model="form.type" class="w-full"><el-option v-for="item in types" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
           <el-form-item class="col-span-2" label="票码（逗号分隔，作废可留空）"><el-input v-model="form.ticket_codes" type="textarea" :rows="2" /></el-form-item>
           <el-form-item label="退款金额（分）"><el-input-number v-model="form.amount_cents" :min="0" class="w-full" /></el-form-item>
-          <el-form-item label="退款方式"><el-select v-model="form.payment_method" class="w-full"><el-option label="现金" value="cash" /><el-option label="微信" value="wechat" /><el-option label="支付宝" value="alipay" /></el-select></el-form-item>
+          <el-form-item label="退款方式"><el-select v-model="form.payment_method" class="w-full"><el-option label="按原支付方式自动分摊" value="auto" /><el-option label="现金" value="cash" /><el-option label="微信" value="wechat" /><el-option label="支付宝" value="alipay" /></el-select></el-form-item>
           <el-form-item label="目标日期"><el-date-picker v-model="form.target_date" value-format="YYYY-MM-DD" class="w-full" /></el-form-item>
           <el-form-item label="目标时段"><el-input v-model="form.target_slot" placeholder="可选" /></el-form-item>
           <el-form-item label="目标商品 ID"><el-input-number v-model="form.target_product_id" :min="0" class="w-full" /></el-form-item>
@@ -81,6 +81,14 @@
         <el-descriptions-item label="原因" :span="2">{{ selected.reason || '-' }}</el-descriptions-item>
         <el-descriptions-item label="错误" :span="2">{{ selected.error_message || '-' }}</el-descriptions-item>
       </el-descriptions>
+      <div v-if="refundDetail" class="mt-4">
+        <div class="flex items-center justify-between mb-2"><strong>退款资金进度</strong><el-tag :type="refundStatusType(refundDetail.root.status)">{{ refundStatusText(refundDetail.root.status) }}</el-tag></div>
+        <el-table :data="refundDetail.allocations" size="small" border>
+          <el-table-column label="原支付方式" width="120"><template #default="{ row }">{{ paymentMethodText(row.method) }}</template></el-table-column>
+          <el-table-column label="退款金额" width="120"><template #default="{ row }">¥{{ ((row.amount_cents || 0) / 100).toFixed(2) }}</template></el-table-column>
+          <el-table-column label="状态"><template #default="{ row }"><el-tag :type="refundStatusType(allocationStatus(row))">{{ refundStatusText(allocationStatus(row)) }}</el-tag></template></el-table-column>
+        </el-table>
+      </div>
     </el-dialog>
   </section>
 </template>
@@ -96,8 +104,9 @@ try { user.value = JSON.parse(localStorage.getItem('user') || '{}') } catch (_) 
 const canApprove = computed(() => user.value.role === 'admin' || user.value.role === 'super_admin')
 const rows = ref<any[]>([]); const loading = ref(false); const saving = ref(false); const total = ref(0); const page = ref(1); const pageSize = ref(20); const status = ref('')
 const createVisible = ref(false); const detailVisible = ref(false); const selected = ref<any>(null)
+const refundDetail = ref<any>(null)
 const types = [{ value: 'refund', label: '退票' }, { value: 'reschedule', label: '改期' }, { value: 'exchange', label: '换票' }, { value: 'void', label: '作废' }, { value: 'reissue', label: '补打' }]
-const emptyForm = () => ({ order_no: '', type: 'refund', ticket_codes: '', amount_cents: 0, payment_method: 'cash', target_date: '', target_slot: '', target_product_id: 0, device_id: 0, shift_id: 0, reason: '' })
+const emptyForm = () => ({ order_no: '', type: 'refund', ticket_codes: '', amount_cents: 0, payment_method: 'auto', target_date: '', target_slot: '', target_product_id: 0, device_id: 0, shift_id: 0, reason: '' })
 const form = reactive(emptyForm())
 
 const load = async () => { loading.value = true; try { const res = await request.get('/after-sales', { params: { page: page.value, page_size: pageSize.value, status: status.value } }); rows.value = res.data.data || []; total.value = res.data.total || 0 } finally { loading.value = false } }
@@ -106,10 +115,22 @@ const create = async () => { if (!form.order_no.trim() || !form.reason.trim()) {
 const approve = async (row: any) => { const reason = await ElMessageBox.prompt('请输入批准说明', '批准售后', { inputPlaceholder: '可选' }); await request.post(`/after-sales/${row.id}/approve`, { reason: reason.value }); ElMessage.success('已批准'); await load() }
 const reject = async (row: any) => { const reason = await ElMessageBox.prompt('请输入拒绝原因', '拒绝售后', { inputValidator: value => value.trim() ? true : '拒绝原因必填' }); await request.post(`/after-sales/${row.id}/reject`, { reason: reason.value }); ElMessage.success('已拒绝'); await load() }
 const execute = async (row: any) => { await ElMessageBox.confirm(`确认执行 ${typeText(row.type)} ${row.request_no}？`, '执行售后', { type: 'warning' }); await request.post(`/after-sales/${row.id}/execute`); ElMessage.success('已进入执行流程'); await load() }
-const showDetail = async (row: any) => { selected.value = (await request.get(`/after-sales/${row.id}`)).data; detailVisible.value = true }
+const showDetail = async (row: any) => {
+  selected.value = (await request.get(`/after-sales/${row.id}`)).data
+  refundDetail.value = null
+  if (selected.value.refund_id) {
+    try { refundDetail.value = (await request.get(`/payments/refunds/${selected.value.refund_id}`)).data }
+    catch (_) { ElMessage.warning('退款资金进度暂时无法加载') }
+  }
+  detailVisible.value = true
+}
+const allocationStatus = (row: any) => refundDetail.value?.tasks?.find((task: any) => task.refund_id === row.id)?.status || row.status
 const parseCodes = (value: string) => { try { return (JSON.parse(value || '[]') || []).join('，') } catch (_) { return value || '' } }
 const typeText = (value: string) => types.find(item => item.value === value)?.label || value
 const statusText = (value: string) => ({ pending: '待审核', approved: '已批准', processing: '处理中', completed: '已完成', rejected: '已拒绝', failed: '失败' } as any)[value] || value
 const statusType = (value: string) => ({ completed: 'success', rejected: 'info', failed: 'danger', processing: 'warning', approved: 'warning' } as any)[value] || 'info'
+const paymentMethodText = (value: string) => ({ cash: '现金', wechat: '微信', alipay: '支付宝', mixed: '混合支付' } as any)[value] || value
+const refundStatusText = (value: string) => ({ group_pending: '等待全部退款', group_succeeded: '退款完成', pending: '等待渠道', processing: '处理中', submitted: '渠道处理中', succeeded: '已退款', failed: '失败', manual_review: '待人工复核' } as any)[value] || value
+const refundStatusType = (value: string) => ({ group_succeeded: 'success', succeeded: 'success', failed: 'danger', manual_review: 'danger', group_pending: 'warning', pending: 'warning', processing: 'warning', submitted: 'warning' } as any)[value] || 'info'
 onMounted(load)
 </script>

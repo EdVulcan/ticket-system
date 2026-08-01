@@ -342,6 +342,8 @@ func InitRouter(r *gin.Engine) {
 		paymentGroup.GET("/orders/:orderNo", middleware.RequireAnyRole("seller", "admin", "super_admin"), paymentController.OrderProgress)
 		paymentGroup.POST("/orders/:orderNo/cancel-partial-cash", middleware.RequireAnyRole("seller", "admin", "super_admin"), paymentController.CancelPartialCash)
 		paymentGroup.POST("/refunds/cash", middleware.RequireAnyRole("seller", "admin", "super_admin"), refundController.CreateCash)
+		paymentGroup.POST("/refunds/mixed", middleware.RequireAnyRole("seller", "admin", "super_admin"), refundController.CreateMixed)
+		paymentGroup.GET("/refunds/:id", middleware.RequireAnyRole("seller", "admin", "super_admin"), refundController.GetGroup)
 		paymentGroup.POST("/refunds/digital", middleware.RequireAnyRole("seller", "admin", "super_admin"), refundController.CreateDigital)
 		paymentGroup.GET("/refund-tasks", middleware.RequireAnyRole("admin", "super_admin"), refundController.ListDigitalTasks)
 		paymentGroup.POST("/refund-tasks/:id/retry", middleware.RequireAnyRole("admin", "super_admin"), refundController.RetryDigitalTask)

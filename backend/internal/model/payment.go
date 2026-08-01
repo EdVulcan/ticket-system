@@ -59,10 +59,12 @@ type Refund struct {
 	IdempotencyKey   string  `gorm:"size:100;uniqueIndex:idx_refund_idempotency,priority:2;not null" json:"idempotency_key"`
 	OrderNo          string  `gorm:"size:50;index;not null" json:"order_no"`
 	PaymentID        uint    `gorm:"index;not null" json:"payment_id"`
+	ParentRefundID   uint    `gorm:"index" json:"parent_refund_id,omitempty"`
+	AllocationSeq    int     `gorm:"not null;default:0" json:"allocation_seq,omitempty"`
 	Amount           float64 `gorm:"type:decimal(10,2);not null" json:"amount"`
 	AmountCents      int64   `gorm:"not null;default:0" json:"amount_cents"`
 	Method           string  `gorm:"size:20;not null" json:"method"`
-	Status           string  `gorm:"size:20;not null;default:'succeeded'" json:"status"` // succeeded, pending, failed
+	Status           string  `gorm:"size:20;not null;default:'succeeded'" json:"status"` // succeeded, pending, failed, group_pending, group_succeeded
 	Reason           string  `gorm:"size:255" json:"reason"`
 	TicketCodesJSON  string  `gorm:"type:text" json:"ticket_codes,omitempty"`
 	ProviderRefundID string  `gorm:"size:100" json:"provider_refund_id,omitempty"`

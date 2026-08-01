@@ -37,6 +37,43 @@ type RefundService struct {
 	Provider       RefundProvider
 }
 
+type RefundGroupView struct {
+	Root        model.Refund              `json:"root"`
+	Allocations []model.Refund            `json:"allocations"`
+	Tasks       []model.DigitalRefundTask `json:"tasks"`
+}
+
+func (s *RefundService) GetRefundGroup(tenantID, refundID uint) (*RefundGroupView, error) {
+	if tenantID == 0 || refundID == 0 {
+		return nil, errors.New("tenant and refund are required")
+	}
+	var root model.Refund
+	if err := model.DB.Where("id = ? AND tenant_id = ?", refundID, tenantID).First(&root).Error; err != nil {
+		return nil, err
+	}
+	if root.ParentRefundID != 0 {
+		if err := model.DB.Where("id = ? AND tenant_id = ?", root.ParentRefundID, tenantID).First(&root).Error; err != nil {
+			return nil, err
+		}
+	}
+	var allocations []model.Refund
+	if err := model.DB.Where("tenant_id = ? AND parent_refund_id = ?", tenantID, root.ID).Order("allocation_seq ASC").Find(&allocations).Error; err != nil {
+		return nil, err
+	}
+	if len(allocations) == 0 {
+		allocations = []model.Refund{root}
+	}
+	allocationIDs := make([]uint, 0, len(allocations))
+	for i := range allocations {
+		allocationIDs = append(allocationIDs, allocations[i].ID)
+	}
+	var tasks []model.DigitalRefundTask
+	if err := model.DB.Where("tenant_id = ? AND refund_id IN ?", tenantID, allocationIDs).Order("id ASC").Find(&tasks).Error; err != nil {
+		return nil, err
+	}
+	return &RefundGroupView{Root: root, Allocations: allocations, Tasks: tasks}, nil
+}
+
 func generateRefundNo() string {
 	bytes := make([]byte, 5)
 	if _, err := rand.Read(bytes); err != nil {
@@ -330,6 +367,150 @@ func (s *RefundService) CreateDigitalRefund(tenantID uint, orderNo, idempotencyK
 		return nil, err
 	}
 	return &result, nil
+}
+
+// CreateMixedRefund allocates one business refund across the original payment
+// rows. Allocation refunds carry the real cash/provider amounts; the parent
+// coordinates the ticket, inventory and settlement transition exactly once.
+func (s *RefundService) CreateMixedRefund(tenantID uint, orderNo, idempotencyKey string, amount float64, ticketCodes []string, reason string) (*model.Refund, error) {
+	if tenantID == 0 || strings.TrimSpace(orderNo) == "" || strings.TrimSpace(idempotencyKey) == "" {
+		return nil, errors.New("tenant, order and idempotency key are required")
+	}
+	amountCents := moneyCents(amount)
+	if amountCents <= 0 {
+		return nil, errors.New("refund amount must be greater than zero")
+	}
+	cleanCodes := normalizeTicketCodes(ticketCodes)
+	if len(cleanCodes) == 0 {
+		return nil, errors.New("at least one ticket code is required")
+	}
+	codesJSON, err := json.Marshal(cleanCodes)
+	if err != nil {
+		return nil, err
+	}
+	var root model.Refund
+	err = model.Write(func(tx *gorm.DB) error {
+		var existing model.Refund
+		if err := tx.Where("tenant_id = ? AND idempotency_key = ?", tenantID, idempotencyKey).First(&existing).Error; err == nil {
+			existingAmount := existing.AmountCents
+			if existingAmount == 0 {
+				existingAmount = moneyCents(existing.Amount)
+			}
+			if existing.ParentRefundID != 0 || existing.OrderNo != orderNo || existingAmount != amountCents || existing.TicketCodesJSON != string(codesJSON) {
+				return errors.New("idempotency key was already used with different refund data")
+			}
+			root = existing
+			return nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		var order model.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Product").Preload("Items.Tickets").
+			Where("order_no = ? AND tenant_id = ?", orderNo, tenantID).First(&order).Error; err != nil {
+			return err
+		}
+		if order.Status != "paid" && order.Status != "partial_refunded" && order.Status != "completed" {
+			return fmt.Errorf("order cannot be refunded from status %s", order.Status)
+		}
+		selected, refundableAmount, err := selectRefundTickets(&order, cleanCodes)
+		if err != nil {
+			return err
+		}
+		if amountCents != moneyCents(refundableAmount) {
+			return fmt.Errorf("refund amount must equal selected ticket value %.2f", refundableAmount)
+		}
+
+		var payments []model.Payment
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+			"tenant_id = ? AND order_no = ? AND status IN ?", tenantID, orderNo, []string{"paid", "partial_refunded"},
+		).Order("created_at ASC, id ASC").Find(&payments).Error; err != nil {
+			return err
+		}
+		if len(payments) == 0 {
+			return errors.New("paid payment not found")
+		}
+
+		root = model.Refund{
+			TenantID: tenantID, RefundNo: generateRefundNo(), IdempotencyKey: idempotencyKey,
+			OrderNo: orderNo, Amount: centsMoney(amountCents), AmountCents: amountCents,
+			Method: "mixed", Status: "group_pending", Reason: strings.TrimSpace(reason), TicketCodesJSON: string(codesJSON),
+		}
+		if err := tx.Create(&root).Error; err != nil {
+			return err
+		}
+
+		remaining := amountCents
+		digitalAllocations := 0
+		allocationSeq := 0
+		for i := range payments {
+			payment := &payments[i]
+			paymentCents := payment.AmountCents
+			if paymentCents == 0 {
+				paymentCents = moneyCents(payment.Amount)
+			}
+			var reserved int64
+			if err := tx.Model(&model.Refund{}).Where("payment_id = ? AND (status IN ? OR (parent_refund_id != 0 AND status = ?))", payment.ID, []string{"pending", "succeeded"}, "failed").
+				Select("COALESCE(SUM(CASE WHEN amount_cents != 0 THEN amount_cents ELSE CAST(ROUND(amount * 100.0) AS INTEGER) END), 0)").Scan(&reserved).Error; err != nil {
+				return err
+			}
+			available := paymentCents - reserved
+			if available <= 0 {
+				continue
+			}
+			allocated := available
+			if allocated > remaining {
+				allocated = remaining
+			}
+			allocationSeq++
+			status := "pending"
+			if payment.Method == "cash" {
+				status = "succeeded"
+			} else if payment.Method != "wechat" && payment.Method != "alipay" {
+				return fmt.Errorf("unsupported refund payment method %s", payment.Method)
+			} else {
+				digitalAllocations++
+			}
+			allocation := model.Refund{
+				TenantID: tenantID, RefundNo: generateRefundNo(), IdempotencyKey: fmt.Sprintf("mixed:%d:%d", root.ID, allocationSeq),
+				OrderNo: orderNo, PaymentID: payment.ID, ParentRefundID: root.ID, AllocationSeq: allocationSeq,
+				Amount: centsMoney(allocated), AmountCents: allocated, Method: payment.Method,
+				Status: status, Reason: strings.TrimSpace(reason), TicketCodesJSON: "[]",
+			}
+			if err := tx.Create(&allocation).Error; err != nil {
+				return err
+			}
+			if payment.Method == "cash" {
+				if err := applyRefundPaymentFactTx(tx, payment, &allocation); err != nil {
+					return err
+				}
+			} else if err := tx.Create(&model.DigitalRefundTask{
+				RefundID: allocation.ID, TenantID: tenantID, Provider: payment.Method,
+				PaymentNo: payment.PaymentNo, Status: "pending", MaxAttempts: defaultDigitalRefundMaxAttempts,
+				NextAttemptAt: ptrTime(time.Now()),
+			}).Error; err != nil {
+				return err
+			}
+			remaining -= allocated
+			if remaining == 0 {
+				break
+			}
+		}
+		if remaining != 0 {
+			return errors.New("refund amount exceeds the remaining paid balance")
+		}
+		if digitalAllocations == 0 {
+			if err := completeMixedRefundBusinessTx(tx, &root, &order, selected); err != nil {
+				return err
+			}
+			root.Status = "group_succeeded"
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &root, nil
 }
 
 func selectRefundTickets(order *model.Order, cleanCodes []string) (map[string]*model.Ticket, float64, error) {
@@ -635,6 +816,18 @@ func (s *RefundService) completeDigitalRefund(taskID uint, lockedAt *time.Time, 
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", payment.ID, payment.TenantID).First(&storedPayment).Error; err != nil {
 			return err
 		}
+		if storedRefund.ParentRefundID != 0 {
+			if err := applyRefundPaymentFactTx(tx, &storedPayment, &storedRefund); err != nil {
+				return err
+			}
+			if err := tx.Model(&storedRefund).Updates(map[string]interface{}{"status": "succeeded", "provider_refund_id": providerRefundID}).Error; err != nil {
+				return err
+			}
+			if err := updateClaimedDigitalRefundTask(tx, taskID, lockedAt, map[string]interface{}{"status": "succeeded", "provider_refund": providerRefundID, "next_attempt_at": nil, "locked_at": nil, "last_error": ""}); err != nil {
+				return err
+			}
+			return tryCompleteMixedRefundTx(tx, storedRefund.TenantID, storedRefund.ParentRefundID)
+		}
 		var order model.Order
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Product").Preload("Items.Tickets").Where("order_no = ? AND tenant_id = ?", storedRefund.OrderNo, storedRefund.TenantID).First(&order).Error; err != nil {
 			return err
@@ -661,6 +854,13 @@ func (s *RefundService) completeDigitalRefund(taskID uint, lockedAt *time.Time, 
 }
 
 func applySuccessfulRefundTx(tx *gorm.DB, order *model.Order, payment *model.Payment, refund *model.Refund, selected map[string]*model.Ticket) error {
+	if err := applyRefundBusinessFactsTx(tx, order, refund, selected); err != nil {
+		return err
+	}
+	return applyRefundPaymentFactTx(tx, payment, refund)
+}
+
+func applyRefundBusinessFactsTx(tx *gorm.DB, order *model.Order, refund *model.Refund, selected map[string]*model.Ticket) error {
 	for itemIndex := range order.Items {
 		item := &order.Items[itemIndex]
 		selectedUnits, previouslyRefunded := 0, 0
@@ -710,10 +910,30 @@ func applySuccessfulRefundTx(tx *gorm.DB, order *model.Order, payment *model.Pay
 		if err := tx.Model(ticket).Update("status", "refunded").Error; err != nil {
 			return err
 		}
+		ticket.Status = "refunded"
 		if err := tx.Model(&model.TicketEntitlement{}).Where("ticket_id = ?", ticket.ID).Update("status", "refunded").Error; err != nil {
 			return err
 		}
 	}
+	var remainingTickets int64
+	if err := tx.Model(&model.Ticket{}).Where("order_item_id IN (SELECT id FROM order_items WHERE order_id = ?) AND status != ?", order.ID, "refunded").Count(&remainingTickets).Error; err != nil {
+		return err
+	}
+	orderStatus := "partial_refunded"
+	if remainingTickets == 0 {
+		orderStatus = "refunded"
+	}
+	if err := tx.Model(order).Update("status", orderStatus).Error; err != nil {
+		return err
+	}
+	order.Status = orderStatus
+	if orderStatus == "refunded" {
+		return updateFulfillmentOrdersTx(tx, order.ID, "cancelled")
+	}
+	return nil
+}
+
+func applyRefundPaymentFactTx(tx *gorm.DB, payment *model.Payment, refund *model.Refund) error {
 	payment.RefundedAmount = roundMoney(payment.RefundedAmount + refund.Amount)
 	refundAmountCents := refund.AmountCents
 	if refundAmountCents == 0 {
@@ -735,11 +955,68 @@ func applySuccessfulRefundTx(tx *gorm.DB, order *model.Order, payment *model.Pay
 	if err := tx.Model(payment).Updates(map[string]interface{}{"refunded_amount": payment.RefundedAmount, "refunded_amount_cents": payment.RefundedAmountCents, "amount_cents": paymentAmountCents, "status": newStatus}).Error; err != nil {
 		return err
 	}
-	if err := tx.Model(order).Update("status", newStatus).Error; err != nil {
+	return nil
+}
+
+func tryCompleteMixedRefundTx(tx *gorm.DB, tenantID, parentRefundID uint) error {
+	var remaining int64
+	if err := tx.Model(&model.Refund{}).Where("tenant_id = ? AND parent_refund_id = ? AND status != ?", tenantID, parentRefundID, "succeeded").Count(&remaining).Error; err != nil {
 		return err
 	}
-	if newStatus == "refunded" {
-		return updateFulfillmentOrdersTx(tx, order.ID, "cancelled")
+	if remaining > 0 {
+		return nil
+	}
+	var root model.Refund
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND parent_refund_id = 0", parentRefundID, tenantID).First(&root).Error; err != nil {
+		return err
+	}
+	if root.Status == "group_succeeded" {
+		return nil
+	}
+	var order model.Order
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Product").Preload("Items.Tickets").Where("order_no = ? AND tenant_id = ?", root.OrderNo, tenantID).First(&order).Error; err != nil {
+		return err
+	}
+	var codes []string
+	if err := json.Unmarshal([]byte(root.TicketCodesJSON), &codes); err != nil {
+		return err
+	}
+	selected, amount, err := selectRefundTickets(&order, normalizeTicketCodes(codes))
+	if err != nil {
+		return err
+	}
+	if moneyCents(amount) != root.AmountCents {
+		return errors.New("selected ticket value changed before mixed refund completion")
+	}
+	return completeMixedRefundBusinessTx(tx, &root, &order, selected)
+}
+
+func completeMixedRefundBusinessTx(tx *gorm.DB, root *model.Refund, order *model.Order, selected map[string]*model.Ticket) error {
+	if err := applyRefundBusinessFactsTx(tx, order, root, selected); err != nil {
+		return err
+	}
+	if err := tx.Model(&model.Refund{}).Where("tenant_id = ? AND parent_refund_id = ?", root.TenantID, root.ID).Update("ticket_codes_json", root.TicketCodesJSON).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(root).Update("status", "group_succeeded").Error; err != nil {
+		return err
+	}
+	root.Status = "group_succeeded"
+	now := time.Now()
+	var requests []model.AfterSaleRequest
+	if err := tx.Where("tenant_id = ? AND refund_id = ? AND status = ?", root.TenantID, root.ID, "processing").Find(&requests).Error; err != nil {
+		return err
+	}
+	for i := range requests {
+		request := &requests[i]
+		if err := tx.Model(request).Updates(map[string]interface{}{"status": "completed", "completed_at": now}).Error; err != nil {
+			return err
+		}
+		request.Status = "completed"
+		request.CompletedAt = &now
+		if err := appendAfterSaleEvent(tx, request, "processing", "completed", "refund_completed", request.OperatorID, root.Reason); err != nil {
+			return err
+		}
 	}
 	return nil
 }
