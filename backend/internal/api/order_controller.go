@@ -1,12 +1,14 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type OrderController struct {
@@ -54,6 +56,19 @@ func (c *OrderController) List(ctx *gin.Context) {
 		"total": total,
 		"page":  page,
 	})
+}
+
+func (c *OrderController) Get(ctx *gin.Context) {
+	detail, err := c.Service.GetDetail(ctx.Param("orderNo"), ctx.GetUint("tenant_id"))
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "order not found"})
+		} else {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load order detail"})
+		}
+		return
+	}
+	ctx.JSON(http.StatusOK, detail)
 }
 
 func (c *OrderController) Cancel(ctx *gin.Context) {

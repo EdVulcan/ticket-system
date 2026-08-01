@@ -23,7 +23,7 @@
         class="w-64"
         @change="fetchData"
       />
-      <el-select v-model="filterStatus" placeholder="订单状态" class="w-32" clearable>
+      <el-select v-model="filterStatus" placeholder="订单状态" class="w-32" clearable @change="fetchData">
         <el-option label="已支付" value="paid" />
         <el-option label="已完成" value="completed" />
         <el-option label="已退款" value="refunded" />
@@ -82,8 +82,8 @@
     </div>
 
     <!-- Detail Dialog -->
-    <el-dialog v-model="detailVisible" title="订单详情" width="700px">
-      <div v-if="currentOrder">
+    <el-dialog v-model="detailVisible" title="订单详情" width="980px">
+      <div v-if="currentOrder" v-loading="detailLoading">
         <el-descriptions title="基本信息" :column="2" border>
           <el-descriptions-item label="订单号">{{ currentOrder.order_no }}</el-descriptions-item>
           <el-descriptions-item label="状态">
@@ -95,26 +95,51 @@
           <el-descriptions-item label="总金额">¥{{ currentOrder.total_amount }}</el-descriptions-item>
         </el-descriptions>
 
-        <el-divider content-position="left">票据明细</el-divider>
-        <div v-for="item in currentOrder.items" :key="item.id" class="mb-4">
-          <div class="font-bold mb-2">{{ item.product_name }} ({{ item.quantity }}张)</div>
-          <el-table :data="item.tickets" border size="small">
-            <el-table-column prop="ticket_code" label="核销码" width="150" />
-            <el-table-column prop="visitor_name" label="游客姓名" />
-            <el-table-column prop="status" label="状态" width="100">
-              <template #default="{ row }">
-                <el-tag size="small" :type="row.status === 'used' ? 'info' : 'success'">
-                  {{ row.status === 'used' ? '已核销' : '未使用' }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="check_in_count" label="核销次数" width="80" align="center" />
-            <el-table-column label="操作" width="100" align="center">
-              <template #default="{ row }">
-                <el-button link type="primary" size="small" @click="handleVerify(row)">手动核销</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
+        <el-divider content-position="left">供应履约责任</el-divider>
+        <el-empty v-if="!detailLoading && responsibilities.length === 0" description="暂无履约信息" :image-size="72" />
+        <div v-for="fulfillment in responsibilities" :key="fulfillment.id" class="responsibility-section">
+          <div class="responsibility-heading">
+            <div>
+              <div class="font-semibold text-gray-900">{{ fulfillment.supplier_name }}</div>
+              <div class="text-xs text-gray-500 mt-1">{{ fulfillment.scenic_area_name }} · {{ fulfillment.fulfillment_no }}</div>
+            </div>
+            <div class="flex gap-2">
+              <el-tag size="small" effect="plain">{{ fulfillmentStatusText(fulfillment.status) }}</el-tag>
+              <el-tag size="small" :type="fulfillment.statement_status === 'paid' ? 'success' : 'info'">
+                {{ settlementStatusText(fulfillment.statement_status || fulfillment.settlement_status) }}
+              </el-tag>
+            </div>
+          </div>
+
+          <div class="responsibility-summary">
+            <div><span>票数</span><strong>{{ fulfillment.ticket_count }}</strong></div>
+            <div><span>已核销</span><strong>{{ fulfillment.used_count }}</strong></div>
+            <div><span>已退款</span><strong>{{ fulfillment.refunded_count }}</strong></div>
+            <div><span>履约总额</span><strong>¥{{ centsToYuan(fulfillment.gross_cents) }}</strong></div>
+            <div><span>退款冲减</span><strong>¥{{ centsToYuan(fulfillment.refund_cents) }}</strong></div>
+            <div><span>分销佣金</span><strong>¥{{ centsToYuan(fulfillment.commission_cents) }}</strong></div>
+            <div><span>应结净额</span><strong>¥{{ centsToYuan(fulfillment.net_cents) }}</strong></div>
+          </div>
+
+          <div v-for="item in fulfillment.items" :key="item.id" class="mt-4">
+            <div class="font-medium text-sm mb-2">{{ item.product_name }}（{{ item.quantity }}张）</div>
+            <el-table :data="item.tickets" border size="small" empty-text="暂无票据">
+              <el-table-column prop="ticket_code" label="核销码" min-width="170" />
+              <el-table-column prop="visitor_name" label="游客姓名" min-width="110" />
+              <el-table-column prop="status" label="状态" width="100">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="ticketStatusType(row.status)">{{ ticketStatusText(row.status) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="check_in_count" label="核销次数" width="90" align="center" />
+              <el-table-column label="操作" width="100" align="center">
+                <template #default="{ row }">
+                  <el-button v-if="fulfillment.can_verify && row.status === 'unused'" link type="primary" size="small" @click="handleVerify(row)">手动核销</el-button>
+                  <span v-else class="text-xs text-gray-400">不可核销</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
         </div>
       </div>
     </el-dialog>
@@ -157,6 +182,8 @@ const dateRange = ref<[string, string] | null>(null)
 
 const detailVisible = ref(false)
 const currentOrder = ref<any>(null)
+const detailLoading = ref(false)
+const responsibilities = ref<any[]>([])
 
 // Verify Logic
 const verifyDialogVisible = ref(false)
@@ -227,9 +254,20 @@ const fetchData = async () => {
   }
 }
 
-const handleDetail = (row: any) => {
+const handleDetail = async (row: any) => {
   currentOrder.value = row
+  responsibilities.value = []
   detailVisible.value = true
+  detailLoading.value = true
+  try {
+    const res = await request.get(`/orders/${encodeURIComponent(row.order_no)}`)
+    currentOrder.value = res.data.order
+    responsibilities.value = res.data.fulfillments || []
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '订单详情加载失败')
+  } finally {
+    detailLoading.value = false
+  }
 }
 
 const handleRefund = async (row: any) => {
@@ -254,12 +292,67 @@ const getStatusType = (status: string) => {
 }
 
 const getStatusText = (status: string) => {
-  const map: any = { paid: '已支付', unpaid: '待支付', refunded: '已退款', completed: '已完成' }
+  const map: any = { paid: '已支付', unpaid: '待支付', cancelled: '已取消', partial_refunded: '部分退款', refunded: '已退款', completed: '已完成' }
   return map[status] || status
 }
+
+const centsToYuan = (value: number) => ((value || 0) / 100).toFixed(2)
+const fulfillmentStatusText = (status: string) => ({ reserved: '已预占', paid: '待履约', fulfilled: '已履约', cancelled: '已取消' } as Record<string, string>)[status] || status || '-'
+const settlementStatusText = (status: string) => ({ open: '待结算', draft: '待供应商确认', supplier_confirmed: '待分销商确认', confirmed: '待付款', disputed: '有争议', paid: '已结清' } as Record<string, string>)[status] || status || '待结算'
+const ticketStatusText = (status: string) => ({ unused: '未使用', used: '已核销', refunded: '已退款', expired: '已过期', void: '已作废' } as Record<string, string>)[status] || status
+const ticketStatusType = (status: string) => ({ unused: 'success', used: 'info', refunded: 'warning', expired: 'info', void: 'danger' } as Record<string, string>)[status] || 'info'
 
 onMounted(() => {
   fetchData()
   fetchCheckPoints()
 })
 </script>
+
+<style scoped>
+.responsibility-section {
+  padding: 18px 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.responsibility-section:last-child {
+  border-bottom: 0;
+}
+
+.responsibility-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.responsibility-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+  padding: 12px 0;
+  border-top: 1px solid #f1f5f9;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.responsibility-summary div {
+  min-width: 0;
+}
+
+.responsibility-summary span,
+.responsibility-summary strong {
+  display: block;
+}
+
+.responsibility-summary span {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.responsibility-summary strong {
+  margin-top: 4px;
+  color: #111827;
+  font-size: 14px;
+}
+
+</style>

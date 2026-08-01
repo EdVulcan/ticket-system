@@ -21,6 +21,34 @@ const DefaultOrderReservationTTL = 15 * time.Minute
 
 type OrderService struct{}
 
+type SalesOrderFulfillmentView struct {
+	ID               uint              `json:"id"`
+	FulfillmentNo    string            `json:"fulfillment_no"`
+	SupplierTenantID uint              `json:"supplier_tenant_id"`
+	SupplierName     string            `json:"supplier_name"`
+	ScenicAreaID     uint              `json:"scenic_area_id"`
+	ScenicAreaName   string            `json:"scenic_area_name"`
+	Status           string            `json:"status"`
+	SettlementStatus string            `json:"settlement_status"`
+	CanVerify        bool              `json:"can_verify"`
+	TicketCount      int               `json:"ticket_count"`
+	UsedCount        int               `json:"used_count"`
+	RefundedCount    int               `json:"refunded_count"`
+	GrossCents       int64             `json:"gross_cents"`
+	RefundCents      int64             `json:"refund_cents"`
+	CommissionCents  int64             `json:"commission_cents"`
+	NetCents         int64             `json:"net_cents"`
+	StatementID      uint              `json:"statement_id,omitempty"`
+	StatementNo      string            `json:"statement_no,omitempty"`
+	StatementStatus  string            `json:"statement_status,omitempty"`
+	Items            []model.OrderItem `json:"items"`
+}
+
+type SalesOrderDetailView struct {
+	Order        model.Order                 `json:"order"`
+	Fulfillments []SalesOrderFulfillmentView `json:"fulfillments"`
+}
+
 func (s *OrderService) GenerateOrderNo() string {
 	random := make([]byte, 5)
 	if _, err := rand.Read(random); err != nil {
@@ -814,6 +842,82 @@ func (s *OrderService) GetByOrderNo(orderNo string, tenantID uint) (*model.Order
 	err := model.DB.Preload("Items").Preload("Items.Tickets").Preload("Items.VisitorRecords").
 		Where("order_no = ? AND tenant_id = ?", orderNo, tenantID).First(&order).Error
 	return &order, err
+}
+
+// GetDetail returns the seller-owned order together with its supplier
+// responsibilities. The sales tenant may see every fulfillment created from
+// its order, while supplier-only operational details remain on the scoped
+// distribution fulfillment endpoint.
+func (s *OrderService) GetDetail(orderNo string, tenantID uint) (*SalesOrderDetailView, error) {
+	if tenantID == 0 || strings.TrimSpace(orderNo) == "" {
+		return nil, errors.New("tenant and order number are required")
+	}
+	order, err := s.GetByOrderNo(orderNo, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	var fulfillments []model.FulfillmentOrder
+	if err := model.DB.Where("sales_order_id = ? AND sales_tenant_id = ?", order.ID, tenantID).Order("id ASC").Find(&fulfillments).Error; err != nil {
+		return nil, err
+	}
+	itemsByFulfillment := make(map[uint][]model.OrderItem)
+	for i := range order.Items {
+		item := order.Items[i]
+		itemsByFulfillment[item.FulfillmentOrderID] = append(itemsByFulfillment[item.FulfillmentOrderID], item)
+	}
+	views := make([]SalesOrderFulfillmentView, 0, len(fulfillments))
+	for i := range fulfillments {
+		fulfillment := &fulfillments[i]
+		var supplier model.Tenant
+		if err := model.DB.Select("id", "name").Where("id = ?", fulfillment.SupplierTenantID).First(&supplier).Error; err != nil {
+			return nil, err
+		}
+		var area model.ScenicArea
+		if err := model.DB.Select("id", "name").Where("id = ? AND tenant_id = ?", fulfillment.ScenicAreaID, fulfillment.SupplierTenantID).First(&area).Error; err != nil {
+			return nil, err
+		}
+		items := itemsByFulfillment[fulfillment.ID]
+		view := SalesOrderFulfillmentView{
+			ID: fulfillment.ID, FulfillmentNo: fulfillment.FulfillmentNo,
+			SupplierTenantID: fulfillment.SupplierTenantID, SupplierName: supplier.Name,
+			ScenicAreaID: fulfillment.ScenicAreaID, ScenicAreaName: area.Name,
+			Status: fulfillment.Status, SettlementStatus: fulfillment.SettlementStatus,
+			CanVerify: fulfillment.SupplierTenantID == tenantID, Items: items,
+		}
+		for itemIndex := range items {
+			for ticketIndex := range items[itemIndex].Tickets {
+				view.TicketCount++
+				switch items[itemIndex].Tickets[ticketIndex].Status {
+				case "used":
+					view.UsedCount++
+				case "refunded":
+					view.RefundedCount++
+				}
+			}
+		}
+		gross, refunded, commission, err := settlementAmountsForFulfillment(model.DB, fulfillment)
+		if err != nil {
+			return nil, err
+		}
+		view.GrossCents, view.RefundCents, view.CommissionCents = gross, refunded, commission
+		view.NetCents = gross - refunded - commission
+		var line model.SettlementLine
+		if err := model.DB.Where("fulfillment_order_id = ?", fulfillment.ID).First(&line).Error; err == nil {
+			view.StatementID = line.StatementID
+			var statement model.SettlementStatement
+			if err := model.DB.Where(
+				"id = ? AND supplier_tenant_id = ? AND distributor_tenant_id = ?",
+				line.StatementID, fulfillment.SupplierTenantID, tenantID,
+			).First(&statement).Error; err != nil {
+				return nil, err
+			}
+			view.StatementNo, view.StatementStatus = statement.StatementNo, statement.Status
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		views = append(views, view)
+	}
+	return &SalesOrderDetailView{Order: *order, Fulfillments: views}, nil
 }
 
 func (s *OrderService) GetByExternalNo(externalNo, channel string, tenantID uint) (*model.Order, error) {

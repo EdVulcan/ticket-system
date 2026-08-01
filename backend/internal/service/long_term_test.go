@@ -1442,6 +1442,65 @@ func TestSupplierFulfillmentWorklistIsScopedAndCountsEntitlements(t *testing.T) 
 	}
 }
 
+func TestSalesOrderDetailGroupsSupplierResponsibilitiesAndKeepsTenantScope(t *testing.T) {
+	resetBusinessData(t)
+	first := seedDistributionScenario(t)
+	second := seedDistributionScenario(t)
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.Tenant{}).Where("id = ?", second.supplierID).Update("name", "Supplier B").Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.ScenicArea{}).Where("tenant_id = ?", second.supplierID).Update("name", "Second Park").Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&model.DistributorRelationship{AgentTenantID: first.distributorID, SupplierTenantID: second.supplierID, Status: "active"}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.CapitalAccount{OwnerTenantID: first.distributorID, ManagerTenantID: second.supplierID, Balance: 100, Status: "active"}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&DistributionService{}).CreateOffer(second.supplierID, first.distributorID, second.sourceProductID, 60, 0, "window", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&DistributionService{}).ImportProduct(first.distributorID, second.sourceProductID, "Second Supplier Ticket", 85, "online"); err != nil {
+		t.Fatal(err)
+	}
+	var secondListing model.Product
+	if err := model.DB.Where("tenant_id = ? AND source_product_id = ?", first.distributorID, second.sourceProductID).First(&secondListing).Error; err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{TenantID: first.distributorID, Channel: "window", Items: []model.OrderItem{
+		{ProductID: first.listingID, Quantity: 1, Visitors: []model.VisitorInput{{Name: "First Visitor", Phone: "13800138000"}}},
+		{ProductID: secondListing.ID, Quantity: 1, Visitors: []model.VisitorInput{{Name: "Second Visitor", Phone: "13800138001"}}},
+	}}
+	orders := &OrderService{}
+	if err := orders.Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := orders.MarkAsPaid(order.OrderNo, first.distributorID); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := orders.GetDetail(order.OrderNo, first.distributorID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Order.ID != order.ID || len(detail.Fulfillments) != 2 {
+		t.Fatalf("unexpected sales order detail: %+v", detail)
+	}
+	firstView := detail.Fulfillments[0]
+	if firstView.SupplierTenantID != first.supplierID || firstView.SupplierName != "Supplier A" || firstView.ScenicAreaName != "Supplier Park" || firstView.TicketCount != 1 || firstView.GrossCents != 6000 {
+		t.Fatalf("unexpected first supplier responsibility: %+v", firstView)
+	}
+	secondView := detail.Fulfillments[1]
+	if secondView.SupplierTenantID != second.supplierID || secondView.SupplierName != "Supplier B" || secondView.ScenicAreaName != "Second Park" || secondView.TicketCount != 1 || secondView.GrossCents != 6000 {
+		t.Fatalf("unexpected second supplier responsibility: %+v", secondView)
+	}
+	if _, err := orders.GetDetail(order.OrderNo, first.supplierID); err == nil {
+		t.Fatal("supplier read distributor sales order detail")
+	}
+}
+
 func TestRechargeRejectsSuspendedDistributionRelationship(t *testing.T) {
 	resetBusinessData(t)
 	scenario := seedDistributionScenario(t)

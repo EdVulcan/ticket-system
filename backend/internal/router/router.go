@@ -119,6 +119,7 @@ func InitRouter(r *gin.Engine) {
 	{
 		orderGroup.POST("", orderController.Create)
 		orderGroup.GET("", orderController.List)
+		orderGroup.GET("/:orderNo", orderController.Get)
 		orderGroup.POST("/:orderNo/cancel", orderController.Cancel)
 	}
 
