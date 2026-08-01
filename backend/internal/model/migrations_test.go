@@ -29,8 +29,8 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if err := db.Order("version DESC").First(&latest).Error; err != nil {
 		t.Fatal(err)
 	}
-	if latest.Version != 44 {
-		t.Fatalf("latest migration=%d, want 44", latest.Version)
+	if latest.Version != 45 {
+		t.Fatalf("latest migration=%d, want 45", latest.Version)
 	}
 	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "pos_shifts", "pos_holds", "settlement_statements", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements", "channel_bill_records", "channel_reconciliations", "migration_audit_issues", "order_visitors"} {
 		var count int64
@@ -68,6 +68,12 @@ func TestStrictOwnershipGuardsRejectCrossTenantRows(t *testing.T) {
 	}
 	if err := db.Create(&CheckPoint{TenantID: first.ID, ScenicAreaID: area.ID, Name: "forbidden"}).Error; err == nil {
 		t.Fatal("cross-tenant checkpoint was accepted by database guard")
+	}
+	if err := db.Create(&OrderVisitor{
+		TenantID: first.ID, OrderID: 999, OrderItemID: 999, TicketID: 999,
+		TicketCode: "forbidden", Sequence: 1, Name: "cross-tenant",
+	}).Error; err == nil {
+		t.Fatal("orphan order visitor was accepted by database guard")
 	}
 }
 

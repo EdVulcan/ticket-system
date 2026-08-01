@@ -72,6 +72,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 42, name: "channel request leases", apply: migrateChannelRequestLeases},
 		{version: 43, name: "tenant qualification and lifecycle facts", apply: migrateTenantLifecycleFacts},
 		{version: 44, name: "per-ticket visitor snapshots", apply: migrateVisitorSnapshots},
+		{version: 45, name: "visitor snapshot ownership guards", apply: migrateVisitorSnapshotOwnership},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -149,6 +150,36 @@ func migrateVisitorSnapshots(db *gorm.DB) error {
 	// GORM AutoMigrate on it would rebuild the table and temporarily detach
 	// those triggers, so add this compatibility column with a guarded DDL.
 	return addColumnIfMissing(db, "tickets", "visitor_region", `ALTER TABLE tickets ADD COLUMN visitor_region TEXT`)
+}
+
+func migrateVisitorSnapshotOwnership(db *gorm.DB) error {
+	for _, statement := range []string{
+		`CREATE TRIGGER IF NOT EXISTS order_visitors_owner_insert BEFORE INSERT ON order_visitors
+			WHEN NEW.tenant_id = 0 OR NOT EXISTS (
+				SELECT 1 FROM orders o
+				JOIN order_items oi ON oi.order_id = o.id
+				JOIN tickets t ON t.order_item_id = oi.id
+				WHERE o.id = NEW.order_id AND oi.id = NEW.order_item_id AND t.id = NEW.ticket_id
+				  AND o.tenant_id = NEW.tenant_id AND t.tenant_id = NEW.tenant_id
+				  AND t.ticket_code = NEW.ticket_code
+			)
+			BEGIN SELECT RAISE(ABORT, 'order visitor ownership mismatch'); END`,
+		`CREATE TRIGGER IF NOT EXISTS order_visitors_owner_update BEFORE UPDATE OF tenant_id, order_id, order_item_id, ticket_id, ticket_code ON order_visitors
+			WHEN NEW.tenant_id = 0 OR NOT EXISTS (
+				SELECT 1 FROM orders o
+				JOIN order_items oi ON oi.order_id = o.id
+				JOIN tickets t ON t.order_item_id = oi.id
+				WHERE o.id = NEW.order_id AND oi.id = NEW.order_item_id AND t.id = NEW.ticket_id
+				  AND o.tenant_id = NEW.tenant_id AND t.tenant_id = NEW.tenant_id
+				  AND t.ticket_code = NEW.ticket_code
+			)
+			BEGIN SELECT RAISE(ABORT, 'order visitor ownership mismatch'); END`,
+	} {
+		if err := db.Exec(statement).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func migrateTeamSettlementFacts(db *gorm.DB) error {
