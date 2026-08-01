@@ -7,6 +7,14 @@ async function json(route: import('@playwright/test').Route, body: unknown, stat
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
+async function mockPOSBoot(page: Page, openShift: boolean) {
+  await page.route('**/api/v1/products?*', route => json(route, { data: [product], total: 1 }))
+  await page.route('**/api/v1/checkpoints?*', route => json(route, { data: [{ id: 31, name: '东门检票点' }], total: 1 }))
+  await page.route('**/api/v1/operations/shifts/open?*', route => openShift
+    ? json(route, { id: 41, opened_at: '2026-08-01T08:00:00Z', opening_cents: 10000 })
+    : json(route, { error: 'open shift not found' }, 404))
+}
+
 async function preparePOS(page: Page, openShift: boolean) {
   await page.addInitScript(({ staff, openShift }) => {
     sessionStorage.setItem('token', 'staff-token')
@@ -15,14 +23,11 @@ async function preparePOS(page: Page, openShift: boolean) {
     localStorage.setItem('pos_checkpoint_id', '31')
     if (openShift) localStorage.setItem('pos_shift_state', JSON.stringify({ isOpen: true, shiftId: 41, startTime: '2026-08-01T08:00:00Z', operator: staff.name, openingCents: 10000 }))
   }, { staff, openShift })
-  await page.route('**/api/v1/products?*', route => json(route, { data: [product], total: 1 }))
-  await page.route('**/api/v1/checkpoints?*', route => json(route, { data: [{ id: 31, name: '东门检票点' }], total: 1 }))
-  await page.route('**/api/v1/operations/shifts/open?*', route => openShift
-    ? json(route, { id: 41, opened_at: '2026-08-01T08:00:00Z', opening_cents: 10000 })
-    : json(route, { error: 'open shift not found' }, 404))
+  await mockPOSBoot(page, openShift)
 }
 
 test('员工可以登录窗口端', async ({ page }) => {
+  await mockPOSBoot(page, false)
   await page.route('**/api/v1/auth/staff/login', route => json(route, { token: 'staff-token', staff }))
   await page.goto('/#/login')
   await page.getByPlaceholder('请输入系统编号').fill('SYS001')
