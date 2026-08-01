@@ -30,7 +30,7 @@ test('景区租户登录后只显示已授权工作区', async ({ page }) => {
 
   await expect(page.getByRole('heading', { name: '经营控制台' })).toBeVisible()
   await expect(page.getByText('线上门票', { exact: true })).toBeVisible()
-  await expect(page.getByText('旅行社团队', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('menuitem', { name: '旅行社团队' })).toBeVisible()
   await expect(page.getByText('商户开户管理', { exact: true })).toHaveCount(0)
 })
 

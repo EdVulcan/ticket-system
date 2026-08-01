@@ -37,7 +37,7 @@ const router = createRouter({
             path: '/teams',
             name: 'teams',
             component: () => import('../views/TeamView.vue'),
-            meta: { scope: 'tenant', roles: ['seller', 'admin', 'super_admin'], title: '旅行社团队' }
+            meta: { scope: 'tenant', roles: ['seller', 'admin', 'super_admin'], capabilities: ['supplier', 'travel_agency'], title: '旅行社团队' }
         },
         {
             path: '/refund-tasks',
@@ -162,9 +162,10 @@ router.beforeEach((to, _from, next) => {
         const requiredScope = to.meta.scope as string | undefined
         const roles = to.meta.roles as string[] | undefined
         const capability = to.meta.capability as string | undefined
+        const capabilities = to.meta.capabilities as string[] | undefined
         const activeCapabilities = new Set((user.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability))
         const platformOnTenantRoute = user.scope === 'platform' && !requiredScope && to.name !== 'home'
-        if (platformOnTenantRoute || (requiredScope && user.scope !== requiredScope) || (roles && !roles.includes(user.role)) || (capability && !activeCapabilities.has(capability))) {
+        if (platformOnTenantRoute || (requiredScope && user.scope !== requiredScope) || (roles && !roles.includes(user.role)) || (capability && !activeCapabilities.has(capability)) || (capabilities && !capabilities.some(value => activeCapabilities.has(value)))) {
             next({ name: 'home' })
             return
         }

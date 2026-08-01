@@ -69,7 +69,7 @@
                 <el-icon><Connection /></el-icon>
                 <span>渠道连接</span>
              </el-menu-item>
-             <el-menu-item v-if="hasCapability('travel_agency')" index="/teams" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasAnyCapability('supplier', 'travel_agency')" index="/teams" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Tickets /></el-icon>
                 <span>旅行社团队</span>
              </el-menu-item>
