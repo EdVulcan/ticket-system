@@ -1,6 +1,8 @@
 package service
 
 import (
+	"bytes"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,6 +12,57 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
+
+func (s *TeamService) ExportTeamSettlementCSV(tenantID, statementID uint) ([]byte, string, error) {
+	var statement model.TeamSettlementStatement
+	if err := model.DB.Preload("Adjustments", func(db *gorm.DB) *gorm.DB { return db.Order("sequence ASC") }).
+		Where("id = ? AND (travel_tenant_id = ? OR supplier_tenant_id = ?)", statementID, tenantID, tenantID).
+		First(&statement).Error; err != nil {
+		return nil, "", err
+	}
+	var group model.TourGroup
+	if err := model.DB.Where("id = ? AND tenant_id = ? AND supplier_tenant_id = ?", statement.GroupID, statement.TravelTenantID, statement.SupplierTenantID).First(&group).Error; err != nil {
+		return nil, "", err
+	}
+	var travel, supplier model.Tenant
+	if err := model.DB.Select("id", "name").First(&travel, statement.TravelTenantID).Error; err != nil {
+		return nil, "", err
+	}
+	if err := model.DB.Select("id", "name").First(&supplier, statement.SupplierTenantID).Error; err != nil {
+		return nil, "", err
+	}
+	var scenic model.ScenicArea
+	if err := model.DB.Select("id", "name").Where("id = ? AND tenant_id = ?", group.ScenicAreaID, statement.SupplierTenantID).First(&scenic).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, "", err
+	}
+
+	var output bytes.Buffer
+	output.Write([]byte{0xEF, 0xBB, 0xBF})
+	records := [][]string{
+		{"团队结算单号", statement.StatementNo},
+		{"团队", csvSafeCell(group.GroupNo), csvSafeCell(group.Name)},
+		{"游玩日期", group.VisitDate.Format("2006-01-02")},
+		{"旅行社", csvSafeCell(travel.Name)},
+		{"供应商", csvSafeCell(supplier.Name)},
+		{"景区", csvSafeCell(scenic.Name)},
+		{"状态", statement.Status},
+		{"履约总额", formatCents(statement.GrossCents), "退款冲减", formatCents(statement.RefundCents), "已付预款", formatCents(statement.DepositCents)},
+		{"追加调整", formatCents(statement.AdjustmentCents), "最终应付", formatCents(statement.NetCents + statement.AdjustmentCents)},
+	}
+	if len(statement.Adjustments) > 0 {
+		records = append(records, []string{}, []string{"调整序号", "调整金额", "调整后累计", "原因", "时间"})
+		for i := range statement.Adjustments {
+			adjustment := statement.Adjustments[i]
+			records = append(records, []string{fmt.Sprint(adjustment.Sequence), formatCents(adjustment.AmountCents), formatCents(adjustment.NewAdjustmentCents), csvSafeCell(adjustment.Reason), adjustment.CreatedAt.Format("2006-01-02 15:04:05")})
+		}
+	}
+	writer := csv.NewWriter(&output)
+	writer.WriteAll(records)
+	if err := writer.Error(); err != nil {
+		return nil, "", err
+	}
+	return output.Bytes(), statement.StatementNo + ".csv", nil
+}
 
 // GenerateTeamSettlement snapshots one confirmed team's contract amount and
 // successful refunds. A retry returns the existing statement for the same

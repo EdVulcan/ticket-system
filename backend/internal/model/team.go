@@ -52,6 +52,7 @@ type TourGroup struct {
 	ScenicAreaID        uint      `gorm:"index;not null" json:"scenic_area_id"`
 	ContractID          uint      `gorm:"index" json:"contract_id"`
 	SalesOrderID        uint      `gorm:"index" json:"sales_order_id"`
+	SalesOrderNo        string    `gorm:"-" json:"sales_order_no,omitempty"`
 	GroupNo             string    `gorm:"size:80;uniqueIndex;not null" json:"group_no"`
 	Name                string    `gorm:"size:120;not null" json:"name"`
 	VisitDate           time.Time `gorm:"type:date;not null" json:"visit_date"`

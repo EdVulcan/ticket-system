@@ -11,7 +11,8 @@
       </div>
     </div>
 
-    <div class="flex gap-3">
+    <div class="flex flex-wrap gap-3">
+      <el-input v-model="orderNo" clearable placeholder="按订单号查询" class="w-64" @keyup.enter="applyFilters" @clear="applyFilters" />
       <el-select v-model="status" clearable placeholder="全部状态" class="w-40" @change="load">
         <el-option label="待审核" value="pending" />
         <el-option label="已批准" value="approved" />
@@ -149,15 +150,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 
+const route = useRoute()
+
 const user = ref<any>({})
 try { user.value = JSON.parse(localStorage.getItem('user') || '{}') } catch (_) { /* invalid session */ }
 const canApprove = computed(() => user.value.role === 'admin' || user.value.role === 'super_admin')
-const rows = ref<any[]>([]); const loading = ref(false); const saving = ref(false); const total = ref(0); const page = ref(1); const pageSize = ref(20); const status = ref('')
+const rows = ref<any[]>([]); const loading = ref(false); const saving = ref(false); const total = ref(0); const page = ref(1); const pageSize = ref(20); const status = ref(''); const orderNo = ref(String(route.query.order_no || ''))
 const createVisible = ref(false); const detailVisible = ref(false); const approveVisible = ref(false); const differenceVisible = ref(false); const selected = ref<any>(null)
 const approveTarget = ref<any>(null); const differenceTarget = ref<any>(null)
 const refundDetail = ref<any>(null)
@@ -168,8 +172,9 @@ const approveForm = reactive({ reason: '', settlement_exception: false, settleme
 const differenceForm = reactive({ method: 'cash', pay_type: 'cscanb', auth_code: '', shift_id: 0, device_id: 0, cash_tendered_cents: 0 })
 const differenceChange = computed(() => ((Math.max(0, differenceForm.cash_tendered_cents - (differenceTarget.value?.difference_cents || 0))) / 100).toFixed(2))
 
-const load = async () => { loading.value = true; try { const res = await request.get('/after-sales', { params: { page: page.value, page_size: pageSize.value, status: status.value } }); rows.value = res.data.data || []; total.value = res.data.total || 0 } finally { loading.value = false } }
-const openCreate = () => { Object.assign(form, emptyForm()); createVisible.value = true }
+const load = async () => { loading.value = true; try { const res = await request.get('/after-sales', { params: { page: page.value, page_size: pageSize.value, status: status.value, order_no: orderNo.value.trim() } }); rows.value = res.data.data || []; total.value = res.data.total || 0 } finally { loading.value = false } }
+const applyFilters = () => { page.value = 1; load() }
+const openCreate = () => { Object.assign(form, { ...emptyForm(), order_no: orderNo.value.trim() }); createVisible.value = true }
 const create = async () => { if (!form.order_no.trim() || !form.reason.trim()) { ElMessage.warning('订单号和原因必填'); return }; saving.value = true; try { await request.post('/after-sales', { ...form, ticket_codes: form.ticket_codes.split(/[,，\s]+/).map(value => value.trim()).filter(Boolean), idempotency_key: `admin-${Date.now()}-${Math.random().toString(36).slice(2)}` }); ElMessage.success('售后申请已提交'); createVisible.value = false; await load() } finally { saving.value = false } }
 const openApprove = (row: any) => { approveTarget.value = row; Object.assign(approveForm, { reason: '', settlement_exception: false, settlement_exception_reason: '' }); approveVisible.value = true }
 const confirmApprove = async () => { if (approveForm.settlement_exception && !approveForm.settlement_exception_reason.trim()) { ElMessage.warning('结算价例外必须填写原因'); return }; saving.value = true; try { await request.post(`/after-sales/${approveTarget.value.id}/approve`, approveForm); ElMessage.success('已批准'); approveVisible.value = false; await load() } finally { saving.value = false } }
@@ -197,5 +202,6 @@ const refundStatusType = (value: string) => ({ group_succeeded: 'success', succe
 const differenceStatusText = (value: string) => ({ payment_required: '待收取差价', payment_pending: '等待支付确认', refund_pending: '等待退款完成', settled: '已结清' } as any)[value] || value || '-'
 const eventActionText = (value: string) => ({ created: '提交申请', approved: '审核批准', rejected: '审核拒绝', settlement_exception: '批准结算例外', execution_started: '开始执行', execution_completed: '执行完成', execution_failed: '执行失败', difference_payment_required: '等待补收差价', difference_payment_started: '发起差价收款', difference_payment_completed: '差价收款完成', difference_payment_failed: '差价收款失败', difference_refund_pending: '差价退款处理中', difference_refund_completed: '差价退款完成', print_queued: '打印任务已排队', proxy_print_queued: '主管代补打', print_started: '开始打印', print_succeeded: '打印完成', print_failed: '打印失败' } as any)[value] || value
 const formatTime = (value: string) => value ? new Date(value).toLocaleString() : '-'
+watch(() => route.query.order_no, value => { orderNo.value = String(value || ''); applyFilters() })
 onMounted(load)
 </script>

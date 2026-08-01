@@ -170,6 +170,29 @@ func (s *TeamService) ListGroups(tenantID uint, page, pageSize int) ([]model.Tou
 	if err := query.Order("visit_date ASC, created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&groups).Error; err != nil {
 		return nil, 0, err
 	}
+	orderIDs := make([]uint, 0, len(groups))
+	for i := range groups {
+		if groups[i].SalesOrderID > 0 {
+			orderIDs = append(orderIDs, groups[i].SalesOrderID)
+		}
+	}
+	if len(orderIDs) > 0 {
+		var orders []model.Order
+		if err := model.DB.Select("id", "tenant_id", "order_no").Where("id IN ?", orderIDs).Find(&orders).Error; err != nil {
+			return nil, 0, err
+		}
+		orderNoByID := make(map[uint]string, len(orders))
+		orderTenantByID := make(map[uint]uint, len(orders))
+		for i := range orders {
+			orderNoByID[orders[i].ID] = orders[i].OrderNo
+			orderTenantByID[orders[i].ID] = orders[i].TenantID
+		}
+		for i := range groups {
+			if orderTenantByID[groups[i].SalesOrderID] == groups[i].TenantID {
+				groups[i].SalesOrderNo = orderNoByID[groups[i].SalesOrderID]
+			}
+		}
+	}
 	return groups, total, nil
 }
 

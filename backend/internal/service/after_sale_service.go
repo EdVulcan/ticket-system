@@ -770,7 +770,7 @@ func (s *AfterSaleService) Get(tenantID, requestID uint) (*model.AfterSaleReques
 	return &req, err
 }
 
-func (s *AfterSaleService) List(tenantID uint, status string, page, pageSize int) ([]model.AfterSaleRequest, int64, error) {
+func (s *AfterSaleService) List(tenantID uint, status, orderNo string, page, pageSize int) ([]model.AfterSaleRequest, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -780,6 +780,9 @@ func (s *AfterSaleService) List(tenantID uint, status string, page, pageSize int
 	query := model.DB.Model(&model.AfterSaleRequest{}).Where("tenant_id = ?", tenantID)
 	if strings.TrimSpace(status) != "" {
 		query = query.Where("status = ?", status)
+	}
+	if strings.TrimSpace(orderNo) != "" {
+		query = query.Where("order_no = ?", strings.TrimSpace(orderNo))
 	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {

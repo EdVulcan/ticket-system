@@ -119,6 +119,14 @@
           <el-descriptions-item label="状态">{{ groupStatusText(selectedGroup.status) }}</el-descriptions-item>
         </el-descriptions>
 
+        <div v-if="isGroupOwner(selectedGroup) && selectedGroup.sales_order_no" class="flex items-center justify-between rounded border border-gray-200 bg-gray-50 px-4 py-3">
+          <div>
+            <div class="text-sm font-medium text-gray-900">关联销售订单 {{ selectedGroup.sales_order_no }}</div>
+            <div class="text-xs text-gray-500">退票、改期、换票、作废和补打统一在现有售后工作台处理。</div>
+          </div>
+          <el-button type="primary" plain @click="openTeamAfterSales">查看订单售后</el-button>
+        </div>
+
         <section>
           <div class="mb-3 flex items-center justify-between">
             <div>
@@ -163,6 +171,9 @@
                 <el-button v-else-if="isGroupSupplier(selectedGroup)" link type="primary" @click="acknowledgeConfirmation(row)">确认收到</el-button>
                 <el-tag v-else type="warning" effect="plain">待确认</el-tag>
               </template>
+            </el-table-column>
+            <el-table-column label="操作" width="80" fixed="right">
+              <template #default="{ row }"><el-button link type="primary" :icon="Printer" @click="printConfirmation(row)">打印</el-button></template>
             </el-table-column>
           </el-table>
         </section>
@@ -268,6 +279,7 @@
       </section>
       <template #footer>
         <el-button @click="settlementDialog = false">关闭</el-button>
+        <el-button :icon="Download" :loading="settlementExporting" @click="downloadTeamSettlement">导出对账单</el-button>
         <el-button v-if="canDisputeSettlement" type="warning" plain :loading="settlementActionLoading" @click="disputeSettlement">提出争议</el-button>
         <el-button v-if="canAdjustSettlement" type="warning" :loading="settlementActionLoading" @click="openSettlementAdjustment">追加调整</el-button>
         <el-button v-if="canSupplierConfirmSettlement" type="primary" :loading="settlementActionLoading" @click="updateSettlementStatus('supplier_confirmed')">供应商确认</el-button>
@@ -291,9 +303,12 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { DocumentAdd, Plus, Refresh } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
+import { DocumentAdd, Download, Plus, Printer, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
+
+const router = useRouter()
 
 const user = computed<any>(() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })
 const currentTenantID = computed(() => Number(user.value.tenant_id || 0))
@@ -322,6 +337,49 @@ const memberStatusText = (status: string) => ({ planned: '待出票', ticketed: 
 const memberStatusType = (status: string) => status === 'entered' ? 'success' : status === 'ticketed' ? 'primary' : status === 'cancelled' ? 'danger' : 'info'
 const settlementStatusText = (status: string) => ({ open: '未生成', statement: '已生成', settled: '已结清', draft: '待供应商确认', supplier_confirmed: '待旅行社确认', confirmed: '待付款', disputed: '有争议', paid: '已付款' } as Record<string, string>)[status] || status || '-'
 const settlementStatusType = (status: string) => status === 'paid' ? 'success' : status === 'disputed' ? 'danger' : status === 'confirmed' ? 'warning' : status === 'supplier_confirmed' ? 'primary' : 'info'
+
+const openTeamAfterSales = () => {
+  if (!selectedGroup.value?.sales_order_no) return
+  detailDialog.value = false
+  router.push({ name: 'after-sales', query: { order_no: selectedGroup.value.sales_order_no } })
+}
+
+const printConfirmation = (row: any) => {
+  if (!selectedGroup.value) return
+  const printWindow = window.open('', '_blank', 'width=760,height=900')
+  if (!printWindow) { ElMessage.warning('浏览器阻止了打印窗口，请允许本页面打开新窗口'); return }
+  const document = printWindow.document
+  document.title = `${selectedGroup.value.group_no}-确认单-v${row.sequence}`
+  const style = document.createElement('style')
+  style.textContent = 'body{font-family:Arial,"Microsoft YaHei",sans-serif;color:#111;padding:36px;line-height:1.6}h1{text-align:center;font-size:24px;margin:0 0 28px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #555;padding:10px;text-align:left;vertical-align:top}th{width:22%;background:#f4f4f4}.note{margin-top:18px;color:#555;font-size:12px}@media print{body{padding:0}.note{display:none}}'
+  document.head.appendChild(style)
+  const title = document.createElement('h1')
+  title.textContent = '团队接待确认单'
+  document.body.appendChild(title)
+  const table = document.createElement('table')
+  const values = [
+    ['团队', `${selectedGroup.value.name}（${selectedGroup.value.group_no}）`],
+    ['游玩日期', dateOnly(selectedGroup.value.visit_date)],
+    ['确认版本', `第 ${row.sequence} 版`],
+    ['确认人数', `${row.confirmed_count} 人`],
+    ['导游', `${row.guide_name || '-'}${row.guide_phone ? ` / ${row.guide_phone}` : ''}`],
+    ['车辆', row.plate_number || '-'],
+    ['现场说明', row.notes || '-'],
+    ['提交时间', dateTime(row.submitted_at)],
+    ['供应商确认', row.supplier_acknowledged_at ? `已确认（${dateTime(row.supplier_acknowledged_at)}）` : '待确认'],
+  ]
+  values.forEach(([label, value]) => {
+    const tr = document.createElement('tr'); const th = document.createElement('th'); const td = document.createElement('td')
+    th.textContent = label; td.textContent = value; tr.append(th, td); table.appendChild(tr)
+  })
+  document.body.appendChild(table)
+  const note = document.createElement('p')
+  note.className = 'note'; note.textContent = '本确认单按该次提交时的确认信息生成，不代表游客名单的历史快照。'
+  document.body.appendChild(note)
+  document.close()
+  printWindow.focus()
+  window.setTimeout(() => printWindow.print(), 150)
+}
 
 const loadGroups = async () => {
   loading.value = true
@@ -559,7 +617,24 @@ const generateSettlement = async (row: any) => {
 const settlementDialog = ref(false)
 const selectedSettlement = ref<any>(null)
 const settlementActionLoading = ref(false)
+const settlementExporting = ref(false)
 const openSettlement = (row: any) => { selectedSettlement.value = row; settlementDialog.value = true }
+const downloadTeamSettlement = async () => {
+  if (!selectedSettlement.value) return
+  settlementExporting.value = true
+  try {
+    const response = await request.get(`/teams/settlements/${selectedSettlement.value.id}/export`, { responseType: 'blob' })
+    const url = URL.createObjectURL(response.data)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${selectedSettlement.value.statement_no}.csv`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  } catch (e: any) { ElMessage.error(e.response?.data?.error || '团队对账单导出失败') }
+  finally { settlementExporting.value = false }
+}
 const isSettlementSupplier = computed(() => Number(selectedSettlement.value?.supplier_tenant_id) === currentTenantID.value)
 const isSettlementTravel = computed(() => Number(selectedSettlement.value?.travel_tenant_id) === currentTenantID.value)
 const canSupplierConfirmSettlement = computed(() => isSettlementSupplier.value && selectedSettlement.value?.status === 'draft')

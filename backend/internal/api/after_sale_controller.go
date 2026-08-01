@@ -66,7 +66,7 @@ func (c *AfterSaleController) Create(ctx *gin.Context) {
 func (c *AfterSaleController) List(ctx *gin.Context) {
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
-	rows, total, err := c.Service.List(ctx.GetUint("tenant_id"), ctx.Query("status"), page, pageSize)
+	rows, total, err := c.Service.List(ctx.GetUint("tenant_id"), ctx.Query("status"), ctx.Query("order_no"), page, pageSize)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

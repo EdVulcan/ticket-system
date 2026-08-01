@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"ticket-backend/internal/model"
@@ -332,6 +333,21 @@ func (c *TeamController) ListSettlements(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"data": rows, "total": total, "page": page, "page_size": pageSize})
+}
+
+func (c *TeamController) ExportSettlement(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid settlement id"})
+		return
+	}
+	data, filename, err := c.Service.ExportTeamSettlementCSV(ctx.GetUint("tenant_id"), uint(id))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "team settlement not found"})
+		return
+	}
+	ctx.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	ctx.Data(http.StatusOK, "text/csv; charset=utf-8", data)
 }
 
 func (c *TeamController) ListAccountSummaries(ctx *gin.Context) {

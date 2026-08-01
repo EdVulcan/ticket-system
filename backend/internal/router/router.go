@@ -265,6 +265,7 @@ func InitRouter(r *gin.Engine) {
 		teamGroup.POST("/:id/member-changes", teamController.ChangeMember)
 		teamGroup.POST("/:id/attach-order", teamController.AttachOrder)
 		teamGroup.GET("/settlements", teamController.ListSettlements)
+		teamGroup.GET("/settlements/:id/export", teamController.ExportSettlement)
 		teamGroup.GET("/accounts", teamController.ListAccountSummaries)
 		teamGroup.POST("/:id/settlement", teamController.GenerateSettlement)
 		teamGroup.PATCH("/settlements/:id/status", teamController.SetSettlementStatus)

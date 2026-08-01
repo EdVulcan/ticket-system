@@ -1376,6 +1376,10 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	team := &TeamService{}
+	supplierGroups, total, err := team.ListGroups(supplier.ID, 1, 20)
+	if err != nil || total != 1 || len(supplierGroups) != 1 || supplierGroups[0].SalesOrderNo != "TEAM-ORDER-1" {
+		t.Fatalf("supplier group order context=%+v total=%d err=%v", supplierGroups, total, err)
+	}
 	statement, err := team.GenerateTeamSettlement(travel.ID, group.ID)
 	if err != nil || statement.NetCents != 9900 {
 		t.Fatalf("statement=%+v err=%v", statement, err)
@@ -1436,5 +1440,34 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 	otherAccounts, err := team.ListTeamAccountSummaries(supplier.ID + 999)
 	if err != nil || len(otherAccounts) != 0 {
 		t.Fatalf("unrelated team accounts=%+v err=%v", otherAccounts, err)
+	}
+	for _, tenantID := range []uint{travel.ID, supplier.ID} {
+		data, filename, exportErr := team.ExportTeamSettlementCSV(tenantID, statement.ID)
+		if exportErr != nil {
+			t.Fatalf("tenant %d export failed: %v", tenantID, exportErr)
+		}
+		if filename != statement.StatementNo+".csv" || !strings.HasPrefix(string(data), "\ufeff") || !strings.Contains(string(data), "补录已确认退款冲减") || !strings.Contains(string(data), "TEAM-1") {
+			t.Fatalf("unexpected team settlement export filename=%q data=%q", filename, string(data))
+		}
+	}
+	if _, _, err := team.ExportTeamSettlementCSV(supplier.ID+999, statement.ID); err == nil {
+		t.Fatal("unrelated tenant exported team settlement")
+	}
+}
+
+func TestAfterSaleListFiltersByExactOrderNumber(t *testing.T) {
+	resetBusinessData(t)
+	const tenantID = uint(701)
+	rows := []model.AfterSaleRequest{
+		{TenantID: tenantID, RequestNo: "AS-LIST-1", OrderNo: "ORDER-1", Type: "refund", IdempotencyKey: "as-list-1", Status: "pending"},
+		{TenantID: tenantID, RequestNo: "AS-LIST-2", OrderNo: "ORDER-2", Type: "refund", IdempotencyKey: "as-list-2", Status: "pending"},
+		{TenantID: tenantID + 1, RequestNo: "AS-LIST-3", OrderNo: "ORDER-1", Type: "refund", IdempotencyKey: "as-list-3", Status: "pending"},
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&rows).Error }); err != nil {
+		t.Fatal(err)
+	}
+	result, total, err := (&AfterSaleService{}).List(tenantID, "", "ORDER-1", 1, 20)
+	if err != nil || total != 1 || len(result) != 1 || result[0].RequestNo != "AS-LIST-1" {
+		t.Fatalf("filtered after-sales=%+v total=%d err=%v", result, total, err)
 	}
 }
