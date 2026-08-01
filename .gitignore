@@ -38,6 +38,8 @@ logs/
 # Build
 build/
 release/
+admin/playwright-report/
+admin/test-results/
 desktop/out/
 desktop/dist/
 desktop/build/bin/
