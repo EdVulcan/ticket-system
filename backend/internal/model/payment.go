@@ -27,6 +27,7 @@ type Payment struct {
 	Base
 	TenantID       uint    `json:"tenant_id"`
 	PaymentNo      string  `gorm:"size:50;uniqueIndex;not null" json:"payment_no"`
+	IdempotencyKey string  `gorm:"size:100;index" json:"idempotency_key,omitempty"`
 	OrderNo        string  `gorm:"size:50;index;not null" json:"order_no"` // 关联订单
 	Amount         float64 `gorm:"type:decimal(10,2)" json:"amount"`
 	RefundedAmount float64 `gorm:"type:decimal(10,2);default:0" json:"refunded_amount"`
@@ -42,7 +43,7 @@ type Payment struct {
 	TransactionID       string     `gorm:"size:100" json:"transaction_id"` // 第三方流水号
 	CodeURL             string     `gorm:"type:text" json:"code_url,omitempty"`
 	PayType             string     `gorm:"size:20" json:"pay_type"` // bscanc (被扫), cscanb (主扫), jsapi
-	AuthCode            string     `gorm:"size:100" json:"-"`       // 付款码 (For BScanC, not saved usually)
+	AuthCode            string     `gorm:"-" json:"-"`              // 付款码仅用于本次请求，不落库
 	ErrorMessage        string     `gorm:"size:255" json:"error_message"`
 	ShiftID             uint       `gorm:"index" json:"shift_id,omitempty"`
 	DeviceID            uint       `gorm:"index" json:"device_id,omitempty"`

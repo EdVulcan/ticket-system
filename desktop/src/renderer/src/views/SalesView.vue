@@ -203,8 +203,8 @@
       </section>
 
       <el-dialog v-model="showCalc" title="计算器" width="320px" :modal="false" draggable align-center><Calculator /></el-dialog>
-      <el-dialog v-model="showPayment" title="收款" width="500px" align-center :close-on-click-modal="false">
-        <PaymentModal v-if="showPayment" :amount="currentOrder?.total_amount || 0" :order-no="currentOrder?.order_no || ''" :shift-id="shiftState.shiftId || 0" :device-id="posDeviceId || 0" @success="handlePaymentSuccess" />
+      <el-dialog v-model="showPayment" title="收款" width="520px" align-center :close-on-click-modal="false" :close-on-press-escape="!paymentLocked" :show-close="!paymentLocked">
+        <PaymentModal v-if="showPayment" :amount="currentOrder?.total_amount || 0" :order-no="currentOrder?.order_no || ''" :shift-id="shiftState.shiftId || 0" :device-id="posDeviceId || 0" @success="handlePaymentSuccess" @cancelled="handlePaymentCancelled" @lock-change="paymentLocked = $event" />
       </el-dialog>
       <el-dialog v-model="showOpenShift" title="开始当班" width="420px" align-center :close-on-click-modal="false">
         <div class="shift-dialog-intro">请清点钱箱内用于找零的备用金。该金额会计入本班应交现金。</div>
@@ -337,6 +337,7 @@ const showPolicy = ref(false)
 const showNote = ref(false)
 const noteContent = ref('')
 const showPayment = ref(false)
+const paymentLocked = ref(false)
 const currentOrder = ref<any>(null)
 const showHolds = ref(false)
 const holds = ref<any[]>([])
@@ -722,6 +723,7 @@ const handleCheckout = async () => {
 }
 
 const handlePaymentSuccess = async () => {
+    paymentLocked.value = false
     showPayment.value = false
     ElMessage.success('支付成功！正在打印...')
     if (!currentOrder.value || !posDeviceId.value || !shiftState.value.shiftId) return
@@ -839,6 +841,13 @@ watch(currentView, (val) => {
     setTimeout(() => verifyInputRef.value?.focus(), 100)
   }
 })
+
+const handlePaymentCancelled = () => {
+  paymentLocked.value = false
+  showPayment.value = false
+  cart.value = []
+  currentOrder.value = null
+}
 
 onUnmounted(() => clearInterval(timer))
 </script>

@@ -27,7 +27,9 @@ func (c *PaymentController) Pay(ctx *gin.Context) {
 		AuthCode          string `json:"auth_code"`
 		ShiftID           uint   `json:"shift_id"`
 		DeviceID          uint   `json:"device_id"`
+		AmountCents       int64  `json:"amount_cents"`
 		CashTenderedCents int64  `json:"cash_tendered_cents"`
+		IdempotencyKey    string `json:"idempotency_key"`
 	}
 	if err := ctx.ShouldBindJSON(&body); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -40,7 +42,7 @@ func (c *PaymentController) Pay(ctx *gin.Context) {
 			return
 		}
 	}
-	req := model.Payment{OrderNo: body.OrderNo, Method: body.Method, PayType: body.PayType, AuthCode: body.AuthCode, ShiftID: body.ShiftID, DeviceID: body.DeviceID, OperatorID: ctx.GetUint("user_id"), TenderedCents: body.CashTenderedCents}
+	req := model.Payment{OrderNo: body.OrderNo, Method: body.Method, PayType: body.PayType, AuthCode: body.AuthCode, ShiftID: body.ShiftID, DeviceID: body.DeviceID, OperatorID: ctx.GetUint("user_id"), AmountCents: body.AmountCents, TenderedCents: body.CashTenderedCents, IdempotencyKey: body.IdempotencyKey}
 
 	tenantID := ctx.GetUint("tenant_id")
 	if err := c.Service.CreatePayment(tenantID, &req); err != nil {
@@ -53,6 +55,36 @@ func (c *PaymentController) Pay(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusCreated, req)
+}
+
+func (c *PaymentController) OrderProgress(ctx *gin.Context) {
+	progress, err := c.Service.GetOrderPaymentProgress(ctx.GetUint("tenant_id"), ctx.Param("orderNo"))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, progress)
+}
+
+func (c *PaymentController) CancelPartialCash(ctx *gin.Context) {
+	var body struct {
+		ShiftID  uint   `json:"shift_id" binding:"required"`
+		DeviceID uint   `json:"device_id" binding:"required"`
+		Reason   string `json:"reason" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := service.RequireStaffResource(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), ctx.GetString("role"), "device", body.DeviceID); err != nil {
+		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.CancelPartialCashPayment(ctx.GetUint("tenant_id"), ctx.Param("orderNo"), body.ShiftID, body.DeviceID, ctx.GetUint("user_id"), ctx.GetString("role"), body.Reason); err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.Status(http.StatusNoContent)
 }
 
 func (c *PaymentController) Query(ctx *gin.Context) {

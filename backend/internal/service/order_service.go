@@ -844,7 +844,7 @@ func (s *OrderService) ExpireUnpaid(now time.Time) (int, error) {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Preload("Items.Tickets").
 			Where("orders.status = ? AND orders.expires_at IS NOT NULL AND orders.expires_at <= ?", "unpaid", now).
-			Where("NOT EXISTS (SELECT 1 FROM payments WHERE payments.tenant_id = orders.tenant_id AND payments.order_no = orders.order_no AND payments.status = ?)", "pending").
+			Where("NOT EXISTS (SELECT 1 FROM payments WHERE payments.tenant_id = orders.tenant_id AND payments.order_no = orders.order_no AND payments.status IN ?)", []string{"pending", "paid", "partial_refunded"}).
 			Find(&orders).Error; err != nil {
 			return err
 		}
@@ -872,6 +872,13 @@ func cancelOrderTx(tx *gorm.DB, order *model.Order) error {
 	}
 	if pendingPayments > 0 {
 		return errors.New("order has a pending provider payment and cannot be cancelled")
+	}
+	var collectedPayments int64
+	if err := tx.Model(&model.Payment{}).Where("tenant_id = ? AND order_no = ? AND status IN ?", order.TenantID, order.OrderNo, []string{"paid", "partial_refunded"}).Count(&collectedPayments).Error; err != nil {
+		return err
+	}
+	if collectedPayments > 0 {
+		return errors.New("order has collected payments and must use the refund workflow")
 	}
 	for _, item := range order.Items {
 		for _, ticket := range item.Tickets {

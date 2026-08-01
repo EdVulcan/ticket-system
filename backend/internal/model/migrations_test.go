@@ -29,8 +29,8 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if err := db.Order("version DESC").First(&latest).Error; err != nil {
 		t.Fatal(err)
 	}
-	if latest.Version != 47 {
-		t.Fatalf("latest migration=%d, want 47", latest.Version)
+	if latest.Version != 48 {
+		t.Fatalf("latest migration=%d, want 48", latest.Version)
 	}
 	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "pos_shifts", "pos_shift_corrections", "pos_holds", "settlement_statements", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements", "channel_bill_records", "channel_reconciliations", "migration_audit_issues", "order_visitors"} {
 		var count int64
@@ -40,6 +40,13 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		if count != 1 {
 			t.Fatalf("table %s missing", table)
 		}
+	}
+	var paymentIdempotencyIndex int64
+	if err := db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = ?", "idx_payment_idempotency").Scan(&paymentIdempotencyIndex).Error; err != nil {
+		t.Fatal(err)
+	}
+	if paymentIdempotencyIndex != 1 {
+		t.Fatal("partial payment idempotency index missing")
 	}
 }
 

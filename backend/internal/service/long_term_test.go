@@ -590,6 +590,162 @@ func TestPOSCashPaymentRecordsTenderAndChange(t *testing.T) {
 	}
 }
 
+func TestPOSSplitPaymentConvergesAndReplaysCashIdempotently(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	var area model.ScenicArea
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	device := model.Device{TenantID: tenantID, ScenicAreaID: area.ID, Name: "Split POS", SerialNumber: "POS-SPLIT", Type: "pos", Status: "online"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&device).Error }); err != nil {
+		t.Fatal(err)
+	}
+	shift, err := (&OperationsService{}).OpenShift(tenantID, device.ID, 701, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expires := time.Now().Add(-time.Minute)
+	order := model.Order{TenantID: tenantID, Channel: "window", ExpiresAt: &expires, Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Model(&order).Update("expires_at", expires).Error }); err != nil {
+		t.Fatal(err)
+	}
+	cash := model.Payment{
+		OrderNo: order.OrderNo, Method: "cash", AmountCents: 4000, TenderedCents: 5000,
+		ShiftID: shift.ID, DeviceID: device.ID, OperatorID: 701, IdempotencyKey: "split-cash-1",
+	}
+	payments := &PaymentService{OrderService: &OrderService{}}
+	if err := payments.CreatePayment(tenantID, &cash); err != nil {
+		t.Fatal(err)
+	}
+	if cash.Status != "paid" || cash.AmountCents != 4000 || cash.ChangeCents != 1000 {
+		t.Fatalf("cash split=%+v", cash)
+	}
+	replay := model.Payment{
+		OrderNo: order.OrderNo, Method: "cash", AmountCents: 4000, TenderedCents: 5000,
+		ShiftID: shift.ID, DeviceID: device.ID, OperatorID: 701, IdempotencyKey: "split-cash-1",
+	}
+	if err := payments.CreatePayment(tenantID, &replay); err != nil || replay.ID != cash.ID {
+		t.Fatalf("cash replay=%+v err=%v", replay, err)
+	}
+	conflict := model.Payment{
+		OrderNo: order.OrderNo, Method: "cash", AmountCents: 4100, TenderedCents: 5000,
+		ShiftID: shift.ID, DeviceID: device.ID, OperatorID: 701, IdempotencyKey: "split-cash-1",
+	}
+	if err := payments.CreatePayment(tenantID, &conflict); err == nil {
+		t.Fatal("payment idempotency key accepted different split data")
+	}
+	var cashRows int64
+	if err := model.DB.Model(&model.Payment{}).Where("tenant_id = ? AND order_no = ? AND method = ?", tenantID, order.OrderNo, "cash").Count(&cashRows).Error; err != nil || cashRows != 1 {
+		t.Fatalf("cash rows=%d err=%v", cashRows, err)
+	}
+	progress, err := payments.GetOrderPaymentProgress(tenantID, order.OrderNo)
+	if err != nil || progress.PaidCents != 4000 || progress.RemainingCents != 5950 || !progress.HasPartialCash {
+		t.Fatalf("progress=%+v err=%v", progress, err)
+	}
+	if expired, err := (&OrderService{}).ExpireUnpaid(time.Now()); err != nil || expired != 0 {
+		t.Fatalf("partial paid order expired=%d err=%v", expired, err)
+	}
+	failedDigital := model.Payment{
+		OrderNo: order.OrderNo, Method: "alipay", PayType: "cscanb", AmountCents: 5950,
+		ShiftID: shift.ID, DeviceID: device.ID, OperatorID: 701, IdempotencyKey: "split-digital-unconfigured",
+	}
+	if err := payments.CreatePayment(tenantID, &failedDigital); err == nil {
+		t.Fatal("unconfigured digital payment unexpectedly succeeded")
+	}
+	if err := model.DB.First(&order, order.ID).Error; err != nil || order.Status != "unpaid" {
+		t.Fatalf("partial cash order was cancelled after digital failure: order=%+v err=%v", order, err)
+	}
+	digital := model.Payment{
+		TenantID: tenantID, PaymentNo: "PAY-SPLIT-DIGITAL", OrderNo: order.OrderNo,
+		Amount: 59.50, AmountCents: 5950, Method: "wechat", PayType: "cscanb", Status: "pending",
+		ShiftID: shift.ID, DeviceID: device.ID, OperatorID: 701,
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&digital).Error }); err != nil {
+		t.Fatal(err)
+	}
+	if err := payments.CompleteNotification(tenantID, digital.PaymentNo, digital.Method, "WX-SPLIT", 59.50); err != nil {
+		t.Fatal(err)
+	}
+	var storedOrder model.Order
+	if err := model.DB.Where("id = ?", order.ID).First(&storedOrder).Error; err != nil || storedOrder.Status != "paid" {
+		t.Fatalf("order=%+v err=%v", storedOrder, err)
+	}
+}
+
+func TestPOSPartialCashMustBeReturnedBeforeCancellation(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	var area model.ScenicArea
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	device := model.Device{TenantID: tenantID, ScenicAreaID: area.ID, Name: "Cancel Split POS", SerialNumber: "POS-SPLIT-CANCEL", Type: "pos", Status: "online"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&device).Error }); err != nil {
+		t.Fatal(err)
+	}
+	shift, err := (&OperationsService{}).OpenShift(tenantID, device.ID, 702, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	cash := model.Payment{
+		OrderNo: order.OrderNo, Method: "cash", AmountCents: 3000, TenderedCents: 3000,
+		ShiftID: shift.ID, DeviceID: device.ID, OperatorID: 702, IdempotencyKey: "split-cancel-cash",
+	}
+	payments := &PaymentService{OrderService: &OrderService{}}
+	if err := payments.CreatePayment(tenantID, &cash); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).Cancel(order.OrderNo, tenantID); err == nil {
+		t.Fatal("partially collected order cancelled without returning cash")
+	}
+	pending := model.Payment{
+		TenantID: tenantID, PaymentNo: "PAY-SPLIT-CANCEL-PENDING", OrderNo: order.OrderNo,
+		Amount: 69.50, AmountCents: 6950, Method: "wechat", PayType: "cscanb", Status: "pending",
+		ShiftID: shift.ID, DeviceID: device.ID, OperatorID: 702,
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&pending).Error }); err != nil {
+		t.Fatal(err)
+	}
+	if err := payments.CancelPartialCashPayment(tenantID, order.OrderNo, shift.ID, device.ID, 702, "seller", "provider still pending"); err == nil {
+		t.Fatal("cash was returned while provider payment remained pending")
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Model(&pending).Update("status", "failed").Error }); err != nil {
+		t.Fatal(err)
+	}
+	if err := payments.CancelPartialCashPayment(tenantID, order.OrderNo, shift.ID, device.ID, 703, "seller", "wrong cashier"); err == nil {
+		t.Fatal("another cashier returned the collected cash")
+	}
+	if err := payments.CancelPartialCashPayment(tenantID, order.OrderNo, shift.ID, device.ID, 702, "seller", "visitor changed payment plan"); err != nil {
+		t.Fatal(err)
+	}
+	var storedPayment model.Payment
+	if err := model.DB.First(&storedPayment, cash.ID).Error; err != nil || storedPayment.Status != "refunded" || storedPayment.RefundedAmountCents != 3000 {
+		t.Fatalf("payment=%+v err=%v", storedPayment, err)
+	}
+	var storedOrder model.Order
+	if err := model.DB.First(&storedOrder, order.ID).Error; err != nil || storedOrder.Status != "cancelled" {
+		t.Fatalf("order=%+v err=%v", storedOrder, err)
+	}
+	var refunds, audits int64
+	if err := model.DB.Model(&model.Refund{}).Where("payment_id = ? AND status = ?", cash.ID, "succeeded").Count(&refunds).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&model.AuditLog{}).Where("tenant_id = ? AND action = ? AND target_id = ?", tenantID, "payment.partial_cash.cancel", order.ID).Count(&audits).Error; err != nil {
+		t.Fatal(err)
+	}
+	if refunds != 1 || audits != 1 {
+		t.Fatalf("refunds=%d audits=%d", refunds, audits)
+	}
+}
+
 func TestPOSShiftCorrectionIsAppendOnlyAndAudited(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, _ := seedSellableProduct(t, "unlimited", 0)

@@ -6,6 +6,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -28,6 +29,26 @@ type PaymentService struct {
 }
 
 var ErrCashTenderInsufficient = errors.New("cash tender is less than the amount due")
+
+type OrderPaymentProgress struct {
+	OrderNo         string          `json:"order_no"`
+	OrderTotalCents int64           `json:"order_total_cents"`
+	PaidCents       int64           `json:"paid_cents"`
+	PendingCents    int64           `json:"pending_cents"`
+	RemainingCents  int64           `json:"remaining_cents"`
+	HasPartialCash  bool            `json:"has_partial_cash"`
+	Payments        []model.Payment `json:"payments"`
+}
+
+const paymentCentsSQL = "CASE WHEN amount_cents != 0 THEN amount_cents ELSE CAST(ROUND(amount * 100.0) AS INTEGER) END"
+
+func sumPaymentCentsTx(tx *gorm.DB, tenantID uint, orderNo string, statuses []string) (int64, error) {
+	var total int64
+	err := tx.Model(&model.Payment{}).
+		Where("tenant_id = ? AND order_no = ? AND status IN ?", tenantID, orderNo, statuses).
+		Select("COALESCE(SUM(" + paymentCentsSQL + "), 0)").Scan(&total).Error
+	return total, err
+}
 
 func (s *PaymentService) GetConfig(tenantID uint, provider string) (*model.PaymentConfig, error) {
 	var paymentConfig model.PaymentConfig
@@ -86,9 +107,32 @@ func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error 
 	if req.PayType == "bscanc" && strings.TrimSpace(req.AuthCode) == "" {
 		return fmt.Errorf("payment auth code is required")
 	}
+	req.IdempotencyKey = strings.TrimSpace(req.IdempotencyKey)
+	if len(req.IdempotencyKey) > 100 {
+		return fmt.Errorf("payment idempotency key is too long")
+	}
 
 	var order model.Order
+	replayed := false
 	if err := model.Write(func(tx *gorm.DB) error {
+		if req.IdempotencyKey != "" {
+			var existing model.Payment
+			err := tx.Where("tenant_id = ? AND idempotency_key = ?", tenantID, req.IdempotencyKey).First(&existing).Error
+			if err == nil {
+				if existing.OrderNo != req.OrderNo || existing.Method != req.Method ||
+					(req.AmountCents > 0 && existing.AmountCents != req.AmountCents) ||
+					(req.ShiftID > 0 && existing.ShiftID != req.ShiftID) ||
+					(req.DeviceID > 0 && existing.DeviceID != req.DeviceID) {
+					return errors.New("payment idempotency key was used with different data")
+				}
+				*req = existing
+				replayed = true
+				return nil
+			}
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		}
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_no = ? AND tenant_id = ?", req.OrderNo, tenantID).First(&order).Error; err != nil {
 			return fmt.Errorf("order not found")
 		}
@@ -106,18 +150,43 @@ func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error 
 		}
 		var activeAttempts int64
 		if err := tx.Model(&model.Payment{}).
-			Where("tenant_id = ? AND order_no = ? AND status IN ?", tenantID, req.OrderNo, []string{"pending", "paid"}).
+			Where("tenant_id = ? AND order_no = ? AND status = ?", tenantID, req.OrderNo, "pending").
 			Count(&activeAttempts).Error; err != nil {
 			return err
 		}
 		if activeAttempts > 0 {
-			return fmt.Errorf("an active payment already exists for this order")
+			return fmt.Errorf("a provider payment is already pending for this order")
+		}
+		paidCents, err := sumPaymentCentsTx(tx, tenantID, req.OrderNo, []string{"paid", "partial_refunded"})
+		if err != nil {
+			return err
+		}
+		orderTotalCents := moneyCents(order.TotalAmount)
+		remainingCents := orderTotalCents - paidCents
+		if remainingCents <= 0 {
+			return errors.New("order has no unpaid balance")
+		}
+		requestedCents := req.AmountCents
+		if requestedCents <= 0 {
+			requestedCents = remainingCents
+		}
+		if requestedCents <= 0 || requestedCents > remainingCents {
+			return fmt.Errorf("payment amount exceeds the remaining balance")
+		}
+		if req.Method != "cash" && requestedCents != remainingCents {
+			return errors.New("digital payment must settle the full remaining balance")
+		}
+		if requestedCents < remainingCents && order.Channel != "window" {
+			return errors.New("partial cash payment is only supported at a POS window")
+		}
+		if requestedCents < remainingCents && req.IdempotencyKey == "" {
+			return errors.New("partial cash payment requires an idempotency key")
 		}
 		req.Base = model.Base{}
 		req.TenantID = tenantID
 		req.PaymentNo = generatePaymentNo()
-		req.Amount = order.TotalAmount
-		req.AmountCents = moneyCents(order.TotalAmount)
+		req.AmountCents = requestedCents
+		req.Amount = centsMoney(requestedCents)
 		if req.Method == "cash" {
 			if req.TenderedCents == 0 {
 				req.TenderedCents = req.AmountCents
@@ -137,6 +206,14 @@ func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error 
 		return tx.Create(req).Error
 	}); err != nil {
 		return err
+	}
+	if replayed {
+		if req.Method == "cash" && req.Status == "pending" {
+			req.Status = "paid"
+			req.TransactionID = "CASH_" + req.PaymentNo
+			return s.completePayment(req)
+		}
+		return nil
 	}
 
 	var err error
@@ -167,7 +244,7 @@ func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error 
 				return fmt.Errorf("payment request unresolved and reconciliation could not be queued: %w", enqueueErr)
 			}
 		} else if s.OrderService != nil {
-			_ = s.OrderService.Cancel(req.OrderNo, tenantID)
+			_ = s.cancelOrderWithoutCollectedPayment(req.OrderNo, tenantID)
 		}
 		return err
 	}
@@ -322,26 +399,59 @@ func (s *PaymentService) completePayment(payment *model.Payment) error {
 			Where("id = ? AND tenant_id = ?", payment.ID, payment.TenantID).First(&stored).Error; err != nil {
 			return err
 		}
-		if stored.Status == "paid" {
-			return nil
-		}
 		var order model.Order
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("order_no = ? AND tenant_id = ?", stored.OrderNo, stored.TenantID).First(&order).Error; err != nil {
 			return err
 		}
+		if order.Status == "paid" && stored.Status == "paid" {
+			return nil
+		}
 		if order.Status != "unpaid" {
 			return fmt.Errorf("order cannot be paid from status %s", order.Status)
 		}
-		if err := tx.Model(&stored).Updates(map[string]interface{}{
-			"status": "paid", "transaction_id": payment.TransactionID, "code_url": payment.CodeURL, "paid_at": time.Now(),
-		}).Error; err != nil {
+		if stored.Status != "paid" {
+			if err := tx.Model(&stored).Updates(map[string]interface{}{
+				"status": "paid", "transaction_id": payment.TransactionID, "code_url": payment.CodeURL, "paid_at": time.Now(),
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return settleOrderIfFullyPaidTx(tx, &order)
+	})
+}
+
+func settleOrderIfFullyPaidTx(tx *gorm.DB, order *model.Order) error {
+	paidCents, err := sumPaymentCentsTx(tx, order.TenantID, order.OrderNo, []string{"paid", "partial_refunded"})
+	if err != nil {
+		return err
+	}
+	totalCents := moneyCents(order.TotalAmount)
+	if paidCents > totalCents {
+		return errors.New("paid amount exceeds order total")
+	}
+	if paidCents < totalCents {
+		return nil
+	}
+	if err := tx.Model(order).Update("status", "paid").Error; err != nil {
+		return err
+	}
+	order.Status = "paid"
+	return updateFulfillmentOrdersTx(tx, order.ID, "paid")
+}
+
+func (s *PaymentService) cancelOrderWithoutCollectedPayment(orderNo string, tenantID uint) error {
+	return model.Write(func(tx *gorm.DB) error {
+		paidCents, err := sumPaymentCentsTx(tx, tenantID, orderNo, []string{"paid", "partial_refunded"})
+		if err != nil || paidCents > 0 {
 			return err
 		}
-		if err := tx.Model(&order).Update("status", "paid").Error; err != nil {
+		var order model.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Tickets").
+			Where("order_no = ? AND tenant_id = ?", orderNo, tenantID).First(&order).Error; err != nil {
 			return err
 		}
-		return updateFulfillmentOrdersTx(tx, order.ID, "paid")
+		return cancelOrderTx(tx, &order)
 	})
 }
 
@@ -362,7 +472,7 @@ func (s *PaymentService) GetStatus(paymentID, tenantID uint) (*model.Payment, er
 		}
 	}
 	if payment.Status == "failed" && s.OrderService != nil {
-		_ = s.OrderService.Cancel(payment.OrderNo, tenantID)
+		_ = s.cancelOrderWithoutCollectedPayment(payment.OrderNo, tenantID)
 	}
 	return &payment, nil
 }
@@ -406,10 +516,7 @@ func (s *PaymentService) CompleteNotification(tenantID uint, paymentNo, method, 
 		}).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&order).Update("status", "paid").Error; err != nil {
-			return err
-		}
-		return updateFulfillmentOrdersTx(tx, order.ID, "paid")
+		return settleOrderIfFullyPaidTx(tx, &order)
 	})
 }
 
@@ -437,9 +544,137 @@ func (s *PaymentService) FailNotification(tenantID uint, paymentNo, method, reas
 			return err
 		}
 		if order.Status == "unpaid" {
-			return cancelOrderTx(tx, &order)
+			paidCents, err := sumPaymentCentsTx(tx, tenantID, order.OrderNo, []string{"paid", "partial_refunded"})
+			if err != nil {
+				return err
+			}
+			if paidCents == 0 {
+				return cancelOrderTx(tx, &order)
+			}
 		}
 		return nil
+	})
+}
+
+func (s *PaymentService) GetOrderPaymentProgress(tenantID uint, orderNo string) (*OrderPaymentProgress, error) {
+	if tenantID == 0 || strings.TrimSpace(orderNo) == "" {
+		return nil, errors.New("tenant and order are required")
+	}
+	var order model.Order
+	if err := model.DB.Where("tenant_id = ? AND order_no = ?", tenantID, orderNo).First(&order).Error; err != nil {
+		return nil, err
+	}
+	var payments []model.Payment
+	if err := model.DB.Where("tenant_id = ? AND order_no = ?", tenantID, orderNo).Order("created_at ASC, id ASC").Find(&payments).Error; err != nil {
+		return nil, err
+	}
+	progress := &OrderPaymentProgress{OrderNo: orderNo, OrderTotalCents: moneyCents(order.TotalAmount), Payments: payments}
+	for _, payment := range payments {
+		amountCents := payment.AmountCents
+		if amountCents == 0 {
+			amountCents = moneyCents(payment.Amount)
+		}
+		switch payment.Status {
+		case "paid", "partial_refunded":
+			progress.PaidCents += amountCents
+			if payment.Method == "cash" {
+				progress.HasPartialCash = true
+			}
+		case "pending":
+			progress.PendingCents += amountCents
+		}
+	}
+	progress.RemainingCents = progress.OrderTotalCents - progress.PaidCents
+	if progress.RemainingCents < 0 {
+		progress.RemainingCents = 0
+	}
+	progress.HasPartialCash = progress.HasPartialCash && progress.RemainingCents > 0
+	return progress, nil
+}
+
+// CancelPartialCashPayment explicitly records cash returned to the visitor
+// before releasing an unpaid POS order. It never deletes the collected cash
+// fact and refuses to act while a provider payment is unresolved.
+func (s *PaymentService) CancelPartialCashPayment(tenantID uint, orderNo string, shiftID, deviceID, operatorID uint, role, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if tenantID == 0 || strings.TrimSpace(orderNo) == "" || shiftID == 0 || deviceID == 0 || operatorID == 0 {
+		return errors.New("tenant, order, shift, device and operator are required")
+	}
+	if reason == "" {
+		return errors.New("cancellation reason is required")
+	}
+	if len(reason) > 255 {
+		return errors.New("cancellation reason is too long")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var order model.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Tickets").
+			Where("tenant_id = ? AND order_no = ?", tenantID, orderNo).First(&order).Error; err != nil {
+			return err
+		}
+		if order.Channel != "window" || order.Status != "unpaid" {
+			return fmt.Errorf("order cannot cancel partial cash from status %s", order.Status)
+		}
+		var shift model.POSShift
+		if err := tx.Where("id = ? AND tenant_id = ? AND device_id = ? AND operator_id = ? AND status = ?", shiftID, tenantID, deviceID, operatorID, "open").First(&shift).Error; err != nil {
+			return errors.New("open POS shift not found")
+		}
+		var pending int64
+		if err := tx.Model(&model.Payment{}).Where("tenant_id = ? AND order_no = ? AND status = ?", tenantID, orderNo, "pending").Count(&pending).Error; err != nil {
+			return err
+		}
+		if pending > 0 {
+			return errors.New("provider payment is still pending; query or close it before returning cash")
+		}
+		var payments []model.Payment
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND order_no = ? AND status IN ?", tenantID, orderNo, []string{"paid", "partial_refunded"}).Order("id ASC").Find(&payments).Error; err != nil {
+			return err
+		}
+		if len(payments) == 0 {
+			return errors.New("no collected cash was found")
+		}
+		returnedCents := int64(0)
+		for i := range payments {
+			payment := &payments[i]
+			if payment.Method != "cash" || payment.ShiftID != shiftID || payment.DeviceID != deviceID || payment.OperatorID != operatorID {
+				return errors.New("partial payment must be returned by its collecting cashier and shift")
+			}
+			amountCents := payment.AmountCents
+			if amountCents == 0 {
+				amountCents = moneyCents(payment.Amount)
+			}
+			refundedCents := payment.RefundedAmountCents
+			if refundedCents == 0 {
+				refundedCents = moneyCents(payment.RefundedAmount)
+			}
+			available := amountCents - refundedCents
+			if available <= 0 {
+				continue
+			}
+			refund := model.Refund{
+				TenantID: tenantID, RefundNo: generateRefundNo(), IdempotencyKey: "partial-cancel:" + payment.PaymentNo,
+				OrderNo: orderNo, PaymentID: payment.ID, Amount: centsMoney(available), AmountCents: available,
+				Method: "cash", Status: "succeeded", Reason: reason,
+			}
+			if err := tx.Create(&refund).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(payment).Updates(map[string]interface{}{
+				"refunded_amount": centsMoney(amountCents), "refunded_amount_cents": amountCents, "amount_cents": amountCents, "status": "refunded",
+			}).Error; err != nil {
+				return err
+			}
+			returnedCents += available
+		}
+		if returnedCents <= 0 {
+			return errors.New("no refundable cash remains")
+		}
+		if err := cancelOrderTx(tx, &order); err != nil {
+			return err
+		}
+		before, _ := json.Marshal(map[string]interface{}{"order_status": "unpaid", "collected_cash_cents": returnedCents})
+		after, _ := json.Marshal(map[string]interface{}{"order_status": "cancelled", "returned_cash_cents": returnedCents})
+		return recordAuditTx(tx, operatorID, tenantID, role, "tenant", "payment.partial_cash.cancel", "order", order.ID, reason, string(before), string(after))
 	})
 }
 

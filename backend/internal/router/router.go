@@ -339,6 +339,8 @@ func InitRouter(r *gin.Engine) {
 	paymentGroup := protected.Group("/payments")
 	{
 		paymentGroup.POST("/pay", middleware.RequireAnyRole("seller", "admin", "super_admin"), paymentController.Pay)
+		paymentGroup.GET("/orders/:orderNo", middleware.RequireAnyRole("seller", "admin", "super_admin"), paymentController.OrderProgress)
+		paymentGroup.POST("/orders/:orderNo/cancel-partial-cash", middleware.RequireAnyRole("seller", "admin", "super_admin"), paymentController.CancelPartialCash)
 		paymentGroup.POST("/refunds/cash", middleware.RequireAnyRole("seller", "admin", "super_admin"), refundController.CreateCash)
 		paymentGroup.POST("/refunds/digital", middleware.RequireAnyRole("seller", "admin", "super_admin"), refundController.CreateDigital)
 		paymentGroup.GET("/refund-tasks", middleware.RequireAnyRole("admin", "super_admin"), refundController.ListDigitalTasks)
