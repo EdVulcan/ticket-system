@@ -296,9 +296,7 @@ func InitRouter(r *gin.Engine) {
 		financeGroup.GET("/managed-ledger", financeController.ListManagedLedger)
 		financeGroup.GET("/documents", financeController.ListDocuments)
 		financeGroup.POST("/documents", financeController.CreateDocument)
-		financeGroup.POST("/documents/:id/submit", financeController.SubmitDocument)
 		financeGroup.POST("/documents/:id/approve", financeController.ApproveDocument)
-		financeGroup.POST("/documents/:id/reject", financeController.RejectDocument)
 	}
 
 	settlementController := &api.SettlementController{Service: service.SettlementService{}}

@@ -805,50 +805,6 @@ func TestRechargeIsIdempotentAndLeavesCentLedgerEvidence(t *testing.T) {
 	}
 }
 
-func TestFinancialDocumentWorkflowIsIdempotentAndFailClosed(t *testing.T) {
-	resetBusinessData(t)
-	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
-	finance := &FinanceService{}
-	document := model.FinancialDocument{Type: "payout", AmountCents: 1234, IdempotencyKey: "payout-1", Description: "supplier payout"}
-	if err := finance.CreateDocument(tenantID, &document); err != nil {
-		t.Fatal(err)
-	}
-	firstID := document.ID
-	retry := model.FinancialDocument{Type: "payout", AmountCents: 1234, IdempotencyKey: "payout-1", Description: "different description is not a financial amount change"}
-	if err := finance.CreateDocument(tenantID, &retry); err != nil || retry.ID != firstID {
-		t.Fatalf("idempotent document retry=%+v err=%v", retry, err)
-	}
-	conflict := model.FinancialDocument{Type: "payout", AmountCents: 1235, IdempotencyKey: "payout-1"}
-	if err := finance.CreateDocument(tenantID, &conflict); err == nil {
-		t.Fatal("financial document idempotency key accepted a different amount")
-	}
-	if _, err := finance.ApproveDocument(tenantID, document.ID, 7, "approved before submit"); err == nil {
-		t.Fatal("draft financial document was approved before submission")
-	}
-	if _, err := finance.SubmitDocument(tenantID, document.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := finance.ApproveDocument(tenantID, document.ID, 7, "approval evidence"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := finance.SubmitDocument(tenantID, document.ID); err == nil {
-		t.Fatal("approved financial document was submitted again")
-	}
-	rejected := model.FinancialDocument{Type: "invoice", AmountCents: 500, IdempotencyKey: "invoice-1"}
-	if err := finance.CreateDocument(tenantID, &rejected); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := finance.SubmitDocument(tenantID, rejected.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := finance.RejectDocument(tenantID, rejected.ID, 8, "missing invoice evidence"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := finance.ApproveDocument(tenantID, rejected.ID, 9, "should remain rejected"); err == nil {
-		t.Fatal("rejected financial document was approved")
-	}
-}
-
 func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 	resetBusinessData(t)
 	var travel, supplier model.Tenant

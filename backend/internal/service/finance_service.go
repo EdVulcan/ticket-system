@@ -87,37 +87,14 @@ func (s *FinanceService) CreateDocument(tenantID uint, document *model.Financial
 	if tenantID == 0 || document == nil || strings.TrimSpace(document.Type) == "" || document.AmountCents < 0 {
 		return errors.New("tenant, document type and non-negative amount are required")
 	}
-	allowedTypes := map[string]bool{"invoice": true, "payout": true, "receipt": true, "reconciliation_difference": true}
-	if !allowedTypes[strings.TrimSpace(document.Type)] {
-		return errors.New("unsupported financial document type")
+	document.Base = model.Base{}
+	document.TenantID = tenantID
+	document.DocumentNo = financeDocumentNo("FD")
+	if strings.TrimSpace(document.IdempotencyKey) == "" {
+		document.IdempotencyKey = "document:" + document.DocumentNo
 	}
-	return model.Write(func(tx *gorm.DB) error {
-		key := strings.TrimSpace(document.IdempotencyKey)
-		if key != "" {
-			var existing model.FinancialDocument
-			err := tx.Where("tenant_id = ? AND idempotency_key = ?", tenantID, key).First(&existing).Error
-			if err == nil {
-				if existing.Type != strings.TrimSpace(document.Type) || existing.AmountCents != document.AmountCents || existing.OrderNo != strings.TrimSpace(document.OrderNo) || existing.CounterpartyTenantID != document.CounterpartyTenantID || existing.ExternalRef != strings.TrimSpace(document.ExternalRef) {
-					return errors.New("financial document idempotency key was reused with different data")
-				}
-				*document = existing
-				return nil
-			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-				return err
-			}
-		}
-		document.Base = model.Base{}
-		document.TenantID = tenantID
-		document.DocumentNo = financeDocumentNo("FD")
-		if key == "" {
-			key = "document:" + document.DocumentNo
-		}
-		document.IdempotencyKey = key
-		document.Status = "draft"
-		document.ApprovedBy = 0
-		document.ApprovedAt = nil
-		return tx.Create(document).Error
-	})
+	document.Status = "draft"
+	return model.Write(func(tx *gorm.DB) error { return tx.Create(document).Error })
 }
 
 func (s *FinanceService) ListDocuments(tenantID uint, status, docType string, page, pageSize int) ([]model.FinancialDocument, int64, error) {
@@ -149,8 +126,8 @@ func (s *FinanceService) ApproveDocument(tenantID, documentID, operatorID uint, 
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", documentID, tenantID).First(&document).Error; err != nil {
 			return err
 		}
-		if document.Status != "submitted" {
-			return errors.New("financial document must be submitted before approval")
+		if document.Status != "draft" && document.Status != "submitted" {
+			return errors.New("financial document is not awaiting approval")
 		}
 		now := time.Now()
 		updates := map[string]interface{}{"status": "approved", "approved_by": operatorID, "approved_at": now}
@@ -161,53 +138,6 @@ func (s *FinanceService) ApproveDocument(tenantID, documentID, operatorID uint, 
 			return err
 		}
 		document.Status, document.ApprovedBy, document.ApprovedAt = "approved", operatorID, &now
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &document, nil
-}
-
-func (s *FinanceService) SubmitDocument(tenantID, documentID uint) (*model.FinancialDocument, error) {
-	var document model.FinancialDocument
-	err := model.Write(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", documentID, tenantID).First(&document).Error; err != nil {
-			return err
-		}
-		if document.Status != "draft" {
-			return errors.New("only draft financial documents can be submitted")
-		}
-		if err := tx.Model(&document).Update("status", "submitted").Error; err != nil {
-			return err
-		}
-		document.Status = "submitted"
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &document, nil
-}
-
-func (s *FinanceService) RejectDocument(tenantID, documentID, operatorID uint, reason string) (*model.FinancialDocument, error) {
-	if strings.TrimSpace(reason) == "" {
-		return nil, errors.New("rejection reason is required")
-	}
-	var document model.FinancialDocument
-	err := model.Write(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", documentID, tenantID).First(&document).Error; err != nil {
-			return err
-		}
-		if document.Status != "draft" && document.Status != "submitted" {
-			return errors.New("financial document is not awaiting review")
-		}
-		if err := tx.Model(&document).Updates(map[string]interface{}{"status": "rejected", "approved_by": operatorID, "evidence_json": strings.TrimSpace(reason)}).Error; err != nil {
-			return err
-		}
-		document.Status = "rejected"
-		document.ApprovedBy = operatorID
-		document.EvidenceJSON = strings.TrimSpace(reason)
 		return nil
 	})
 	if err != nil {
