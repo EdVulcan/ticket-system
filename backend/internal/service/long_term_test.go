@@ -447,6 +447,13 @@ func TestPOSShiftsAndPrintJobsStayTerminalScoped(t *testing.T) {
 	if closed1.ExpectedCents != 1000 || closed2.ExpectedCents != 2000+moneyCents(order2.TotalAmount) {
 		t.Fatalf("shift expected cents=%d/%d", closed1.ExpectedCents, closed2.ExpectedCents)
 	}
+	if _, err := ops.ReconcileShift(tenantID, closed1.ID, 101, "seller", ""); err == nil {
+		t.Fatal("cashier reconciled a shift without supervisory role")
+	}
+	reconciled, err := ops.ReconcileShift(tenantID, closed1.ID, 999, "admin", "cash counted")
+	if err != nil || reconciled.Status != "reconciled" || reconciled.VarianceCents != 0 || reconciled.ReconciledBy != 999 {
+		t.Fatalf("reconciled shift=%+v err=%v", reconciled, err)
+	}
 	today := time.Now().Format("2006-01-02")
 	productStats, err := (&ReportService{}).GetProductStats(tenantID, today, today)
 	if err != nil || len(productStats) != 1 || productStats[0].TotalSold != 1 || moneyCents(productStats[0].TotalAmount) != moneyCents(order2.TotalAmount) {

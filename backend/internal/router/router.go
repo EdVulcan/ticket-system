@@ -265,6 +265,7 @@ func InitRouter(r *gin.Engine) {
 		operationsGroup.GET("/shifts/open", operationsController.GetOpenShift)
 		operationsGroup.POST("/shifts", operationsController.OpenShift)
 		operationsGroup.POST("/shifts/:id/close", operationsController.CloseShift)
+		operationsGroup.POST("/shifts/:id/reconcile", operationsController.ReconcileShift)
 		operationsGroup.POST("/print-jobs", operationsController.QueuePrint)
 		operationsGroup.GET("/print-jobs", operationsController.ListPrintJobs)
 		operationsGroup.POST("/print-jobs/:id/status", operationsController.UpdatePrintStatus)

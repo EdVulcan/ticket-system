@@ -81,6 +81,27 @@ func (c *OperationsController) CloseShift(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, shift)
 }
 
+func (c *OperationsController) ReconcileShift(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid shift id"})
+		return
+	}
+	var body struct {
+		Notes string `json:"notes"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil && err.Error() != "EOF" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	shift, err := c.Service.ReconcileShift(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), ctx.GetString("role"), body.Notes)
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, shift)
+}
+
 func (c *OperationsController) QueuePrint(ctx *gin.Context) {
 	var body struct {
 		DeviceID   uint   `json:"device_id" binding:"required"`

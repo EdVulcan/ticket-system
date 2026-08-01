@@ -13,9 +13,11 @@ type POSShift struct {
 	OpeningCents  int64      `gorm:"not null;default:0" json:"opening_cents"`
 	ClosingCents  int64      `gorm:"not null;default:0" json:"closing_cents"`
 	ExpectedCents int64      `gorm:"not null;default:0" json:"expected_cents"`
+	VarianceCents int64      `gorm:"not null;default:0" json:"variance_cents"`
 	OpenedAt      time.Time  `gorm:"not null" json:"opened_at"`
 	ClosedAt      *time.Time `json:"closed_at,omitempty"`
 	ReconciledAt  *time.Time `json:"reconciled_at,omitempty"`
+	ReconciledBy  uint       `json:"reconciled_by,omitempty"`
 	Notes         string     `gorm:"size:255" json:"notes"`
 }
 

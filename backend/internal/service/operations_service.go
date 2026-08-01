@@ -272,6 +272,41 @@ func (s *OperationsService) CloseShiftForOperator(tenantID, shiftID, operatorID 
 	return s.closeShift(tenantID, shiftID, operatorID, role, closingCents, notes)
 }
 
+// ReconcileShift is a separate supervisory action from cashier close. A
+// closed shift is immutable in its sales/refund facts; reconciliation only
+// records the counted-cash variance and reviewer evidence.
+func (s *OperationsService) ReconcileShift(tenantID, shiftID, operatorID uint, role, notes string) (*model.POSShift, error) {
+	if tenantID == 0 || operatorID == 0 {
+		return nil, errors.New("tenant and reviewer are required")
+	}
+	if role != "admin" && role != "super_admin" {
+		return nil, errors.New("only an administrator can reconcile a shift")
+	}
+	var shift model.POSShift
+	err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", shiftID, tenantID).First(&shift).Error; err != nil {
+			return err
+		}
+		if shift.Status != "closed" {
+			return fmt.Errorf("shift cannot reconcile from status %s", shift.Status)
+		}
+		now := time.Now()
+		shift.Status = "reconciled"
+		shift.VarianceCents = shift.ClosingCents - shift.ExpectedCents
+		shift.ReconciledAt = &now
+		shift.ReconciledBy = operatorID
+		shift.Notes = strings.TrimSpace(notes)
+		return tx.Model(&shift).Updates(map[string]interface{}{
+			"status": shift.Status, "variance_cents": shift.VarianceCents, "reconciled_at": now,
+			"reconciled_by": operatorID, "notes": shift.Notes,
+		}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &shift, nil
+}
+
 func (s *OperationsService) closeShift(tenantID, shiftID, operatorID uint, role string, closingCents int64, notes string) (*model.POSShift, error) {
 	if closingCents < 0 {
 		return nil, errors.New("closing amount cannot be negative")
