@@ -262,6 +262,7 @@ func InitRouter(r *gin.Engine) {
 	operationsGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"))
 	{
 		operationsGroup.GET("/shifts", operationsController.ListShifts)
+		operationsGroup.GET("/shifts/:id/summary", operationsController.GetShiftSummary)
 		operationsGroup.GET("/shifts/open", operationsController.GetOpenShift)
 		operationsGroup.POST("/shifts", operationsController.OpenShift)
 		operationsGroup.POST("/shifts/:id/close", operationsController.CloseShift)

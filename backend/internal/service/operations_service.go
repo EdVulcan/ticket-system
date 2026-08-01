@@ -21,6 +21,25 @@ type POSHoldView struct {
 	Items []model.POSHoldLine `json:"items"`
 }
 
+// POSPaymentSummary is the cashier-facing breakdown for one payment method.
+// Gross and refund amounts are kept in cents and are calculated from the
+// immutable payment/refund facts belonging to the shift.
+type POSPaymentSummary struct {
+	Method        string `json:"method"`
+	PaymentCount  int64  `json:"payment_count"`
+	GrossCents    int64  `json:"gross_cents"`
+	RefundCents   int64  `json:"refund_cents"`
+	NetCents      int64  `json:"net_cents"`
+}
+
+type POSShiftSummary struct {
+	Shift            model.POSShift       `json:"shift"`
+	Payments         []POSPaymentSummary  `json:"payments"`
+	RefundCount      int64                `json:"refund_count"`
+	OrderCount       int64                `json:"order_count"`
+	CashExpectedCents int64               `json:"cash_expected_cents"`
+}
+
 func generatePOSHoldNo() string {
 	raw := make([]byte, 5)
 	if _, err := rand.Read(raw); err != nil {
@@ -408,6 +427,92 @@ func (s *OperationsService) ListShifts(tenantID uint, page, pageSize int) ([]mod
 		return nil, 0, err
 	}
 	return rows, total, nil
+}
+
+// GetShiftSummary gives a window operator or supervisor one practical
+// reconciliation view without introducing a separate accounting workflow.
+// The shift and all related payment/refund rows are tenant-scoped.
+func (s *OperationsService) GetShiftSummary(tenantID, shiftID uint) (*POSShiftSummary, error) {
+	if tenantID == 0 || shiftID == 0 {
+		return nil, errors.New("tenant and shift are required")
+	}
+	var shift model.POSShift
+	if err := model.DB.Where("id = ? AND tenant_id = ?", shiftID, tenantID).First(&shift).Error; err != nil {
+		return nil, err
+	}
+	var payments []model.Payment
+	if err := model.DB.Where("tenant_id = ? AND shift_id = ? AND status IN ?", tenantID, shiftID, []string{"paid", "partial_refunded", "refunded"}).Find(&payments).Error; err != nil {
+		return nil, err
+	}
+	var refunds []model.Refund
+	if err := model.DB.Table("refunds").
+		Joins("JOIN payments ON payments.id = refunds.payment_id").
+		Where("refunds.tenant_id = ? AND payments.tenant_id = ? AND payments.shift_id = ? AND refunds.status = ?", tenantID, tenantID, shiftID, "succeeded").
+		Find(&refunds).Error; err != nil {
+		return nil, err
+	}
+
+	byMethod := make(map[string]*POSPaymentSummary)
+	orderNos := make(map[string]struct{})
+	for i := range payments {
+		method := strings.TrimSpace(payments[i].Method)
+		if method == "" {
+			method = "unknown"
+		}
+		row := byMethod[method]
+		if row == nil {
+			row = &POSPaymentSummary{Method: method}
+			byMethod[method] = row
+		}
+		amount := payments[i].AmountCents
+		if amount == 0 {
+			amount = moneyCents(payments[i].Amount)
+		}
+		row.PaymentCount++
+		row.GrossCents += amount
+		orderNos[payments[i].OrderNo] = struct{}{}
+	}
+	var refundCount int64
+	for i := range refunds {
+		method := strings.TrimSpace(refunds[i].Method)
+		if method == "" {
+			method = "unknown"
+		}
+		row := byMethod[method]
+		if row == nil {
+			row = &POSPaymentSummary{Method: method}
+			byMethod[method] = row
+		}
+		amount := refunds[i].AmountCents
+		if amount == 0 {
+			amount = moneyCents(refunds[i].Amount)
+		}
+		row.RefundCents += amount
+		refundCount++
+	}
+	methods := make([]string, 0, len(byMethod))
+	for method := range byMethod {
+		methods = append(methods, method)
+	}
+	for i := 1; i < len(methods); i++ {
+		for j := i; j > 0 && methods[j] < methods[j-1]; j-- {
+			methods[j], methods[j-1] = methods[j-1], methods[j]
+		}
+	}
+	rows := make([]POSPaymentSummary, 0, len(methods))
+	var cashGross, cashRefund int64
+	for _, method := range methods {
+		row := *byMethod[method]
+		row.NetCents = row.GrossCents - row.RefundCents
+		if method == "cash" {
+			cashGross, cashRefund = row.GrossCents, row.RefundCents
+		}
+		rows = append(rows, row)
+	}
+	return &POSShiftSummary{
+		Shift: shift, Payments: rows, RefundCount: refundCount,
+		OrderCount: int64(len(orderNos)), CashExpectedCents: shift.OpeningCents + cashGross - cashRefund,
+	}, nil
 }
 
 func (s *OperationsService) GetOpenShift(tenantID, deviceID, operatorID uint) (*model.POSShift, error) {

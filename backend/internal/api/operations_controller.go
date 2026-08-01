@@ -24,6 +24,20 @@ func (c *OperationsController) ListShifts(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"data": rows, "total": total, "page": page, "page_size": pageSize})
 }
 
+func (c *OperationsController) GetShiftSummary(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid shift id"})
+		return
+	}
+	summary, err := c.Service.GetShiftSummary(ctx.GetUint("tenant_id"), uint(id))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, summary)
+}
+
 func (c *OperationsController) OpenShift(ctx *gin.Context) {
 	var body struct {
 		DeviceID     uint  `json:"device_id" binding:"required"`
