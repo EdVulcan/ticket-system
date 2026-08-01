@@ -54,6 +54,47 @@
             </el-table>
         </el-tab-pane>
 
+        <el-tab-pane v-if="canDistribute" label="组合产品" name="bundles">
+          <div class="flex items-center justify-between mb-4 mt-2">
+            <div>
+              <h3 class="font-bold text-gray-700">跨供应商组合产品</h3>
+              <p class="text-xs text-gray-500 mt-1">销售一个产品，系统按组件分别生成供应商票权和结算明细。</p>
+            </div>
+            <div class="flex gap-2">
+              <el-button link type="primary" @click="fetchBundles"><el-icon><Refresh /></el-icon></el-button>
+              <el-button type="primary" @click="openBundleForm()">新建组合产品</el-button>
+            </div>
+          </div>
+          <el-table :data="bundles" v-loading="loadingBundles" stripe>
+            <el-table-column prop="name" label="组合产品" min-width="180" />
+            <el-table-column label="售价" width="110"><template #default="{ row }">¥{{ centsToYuan(row.retail_price_cents) }}</template></el-table-column>
+            <el-table-column label="销售端" width="100"><template #default="{ row }">{{ row.type === 'offline' ? '售票窗口' : '线上' }}</template></el-table-column>
+            <el-table-column label="版本" width="80"><template #default="{ row }">V{{ row.version }}</template></el-table-column>
+            <el-table-column label="组件" min-width="280">
+              <template #default="{ row }">
+                <div v-for="component in row.components || []" :key="component.id" class="text-xs leading-6">
+                  {{ component.supplier_name }} · {{ component.seller_product_name }} × {{ component.quantity }}
+                  <span class="text-gray-400">（分摊 ¥{{ centsToYuan(component.retail_allocation_cents) }}）</span>
+                </div>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="130">
+              <template #default="{ row }">
+                <el-tag :type="row.status === 'online' && row.available ? 'success' : row.available ? 'info' : 'danger'">
+                  {{ !row.available ? '组件已失效' : row.status === 'online' ? '销售中' : '已下架' }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="操作" width="190" fixed="right">
+              <template #default="{ row }">
+                <el-button link type="primary" @click="openBundleForm(row)">编辑</el-button>
+                <el-button v-if="row.status !== 'online'" link type="success" :disabled="!row.available" @click="changeBundleStatus(row, 'online')">上架</el-button>
+                <el-button v-else link type="warning" @click="changeBundleStatus(row, 'offline')">下架</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-tab-pane>
+
         <!-- Tab 2: My Agents -->
         <el-tab-pane v-if="canSupply" label="我的分销商 (我是供应商)" name="agents">
             <div class="flex items-center justify-between mb-4 mt-2">
@@ -324,6 +365,47 @@
             <el-button type="primary" :loading="savingOffer" @click="createOffer">Create</el-button>
         </template>
     </el-dialog>
+
+    <el-dialog v-model="bundleFormVisible" :title="bundleForm.id ? '编辑组合产品' : '新建组合产品'" width="760px" destroy-on-close>
+      <el-form label-position="top">
+        <div class="grid grid-cols-2 gap-4">
+          <el-form-item label="组合产品名称"><el-input v-model="bundleForm.name" maxlength="100" /></el-form-item>
+          <el-form-item label="销售端">
+            <el-radio-group v-model="bundleForm.type" @change="loadBundleComponents">
+              <el-radio-button label="offline">售票窗口</el-radio-button>
+              <el-radio-button label="online">线上</el-radio-button>
+            </el-radio-group>
+          </el-form-item>
+        </div>
+        <el-form-item label="组合售价">
+          <el-input-number v-model="bundleForm.retail_price" :min="0.01" :precision="2" class="w-full" />
+        </el-form-item>
+        <div class="flex items-center justify-between mb-2">
+          <strong class="text-sm">产品组件</strong>
+          <span class="text-xs" :class="allocationDifference === 0 ? 'text-green-600' : 'text-orange-600'">
+            已分摊 ¥{{ bundleAllocationTotal.toFixed(2) }}，{{ allocationDifference === 0 ? '金额一致' : `还差 ¥${allocationDifference.toFixed(2)}` }}
+          </span>
+        </div>
+        <div v-for="(component, index) in bundleForm.components" :key="index" class="grid grid-cols-[1fr_110px_150px_36px] gap-2 items-end mb-3">
+          <el-form-item label="供应商产品" class="mb-0">
+            <el-select v-model="component.seller_product_id" filterable class="w-full" placeholder="选择已导入产品">
+              <el-option v-for="option in eligibleBundleComponents" :key="option.seller_product_id" :value="option.seller_product_id"
+                :disabled="isBundleComponentSelected(option.seller_product_id, index)"
+                :label="`${option.supplier_name} · ${option.seller_product_name}`" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="数量" class="mb-0"><el-input-number v-model="component.quantity" :min="1" :max="100" :precision="0" class="w-full" /></el-form-item>
+          <el-form-item label="售价分摊" class="mb-0"><el-input-number v-model="component.allocation" :min="0.01" :precision="2" class="w-full" /></el-form-item>
+          <el-button text type="danger" aria-label="删除组件" @click="removeBundleComponent(index)">×</el-button>
+        </div>
+        <el-button plain class="w-full" @click="addBundleComponent">添加组件</el-button>
+        <el-alert v-if="bundleForm.components.length < 2" class="mt-3" type="warning" :closable="false" title="组合产品至少需要两个不同供应商的产品" />
+      </el-form>
+      <template #footer>
+        <el-button @click="bundleFormVisible = false">取消</el-button>
+        <el-button type="primary" :loading="savingBundle" @click="saveBundle">保存并下架</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -394,6 +476,15 @@ const offerForm = reactive({
     allowed_channels: 'window,online,ota'
 })
 
+const loadingBundles = ref(false)
+const savingBundle = ref(false)
+const bundleFormVisible = ref(false)
+const bundles = ref<any[]>([])
+const eligibleBundleComponents = ref<any[]>([])
+const bundleForm = reactive<any>({ id: 0, name: '', type: 'offline', retail_price: 0, components: [] })
+const bundleAllocationTotal = computed(() => bundleForm.components.reduce((sum: number, item: any) => sum + Number(item.allocation || 0), 0))
+const allocationDifference = computed(() => Number((Number(bundleForm.retail_price || 0) - bundleAllocationTotal.value).toFixed(2)))
+
 // Methods
 const fetchSuppliers = async () => {
   loadingSuppliers.value = true
@@ -424,9 +515,85 @@ const handleTabChange = (tabName: string) => {
         fetchSuppliers()
     } else if (tabName === 'agents') {
         fetchAgents()
-    } else if (tabName === 'fulfillments') {
-        fetchFulfillments()
+	} else if (tabName === 'fulfillments') {
+		fetchFulfillments()
+	} else if (tabName === 'bundles') {
+		fetchBundles()
+	}
+}
+
+const fetchBundles = async () => {
+  loadingBundles.value = true
+  try {
+    bundles.value = (await request.get('/distribution/bundles')).data.data || []
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.error || '组合产品加载失败')
+  } finally {
+    loadingBundles.value = false
+  }
+}
+
+const loadBundleComponents = async () => {
+  try {
+    eligibleBundleComponents.value = (await request.get('/distribution/bundle-components', { params: { type: bundleForm.type } })).data.data || []
+  } catch (e: any) {
+    eligibleBundleComponents.value = []
+    ElMessage.error(e.response?.data?.error || '可用供应商产品加载失败')
+  }
+}
+
+const addBundleComponent = () => bundleForm.components.push({ seller_product_id: 0, quantity: 1, allocation: 0 })
+const removeBundleComponent = (index: number | string) => bundleForm.components.splice(Number(index), 1)
+const isBundleComponentSelected = (productID: number, currentIndex: number | string) => bundleForm.components.some((item: any, itemIndex: number) => itemIndex !== Number(currentIndex) && item.seller_product_id === productID)
+
+const openBundleForm = async (row?: any) => {
+  bundleForm.id = row?.id || 0
+  bundleForm.name = row?.name || ''
+  bundleForm.type = row?.type || 'offline'
+  bundleForm.retail_price = row ? Number(row.retail_price_cents || 0) / 100 : 0
+  bundleForm.components = row
+    ? (row.components || []).map((item: any) => ({ seller_product_id: item.seller_product_id, quantity: item.quantity, allocation: Number(item.retail_allocation_cents || 0) / 100 }))
+    : [{ seller_product_id: 0, quantity: 1, allocation: 0 }, { seller_product_id: 0, quantity: 1, allocation: 0 }]
+  await loadBundleComponents()
+  bundleFormVisible.value = true
+}
+
+const saveBundle = async () => {
+  if (!bundleForm.name.trim() || bundleForm.retail_price <= 0 || bundleForm.components.length < 2 || allocationDifference.value !== 0 || bundleForm.components.some((item: any) => !item.seller_product_id || item.quantity <= 0 || item.allocation <= 0)) {
+    ElMessage.warning('请填写完整信息，并确保组件分摊金额等于组合售价')
+    return
+  }
+  savingBundle.value = true
+  const payload = {
+    name: bundleForm.name.trim(), type: bundleForm.type, retail_price_cents: Math.round(bundleForm.retail_price * 100),
+    components: bundleForm.components.map((item: any) => ({ seller_product_id: item.seller_product_id, quantity: item.quantity, retail_allocation_cents: Math.round(item.allocation * 100) }))
+  }
+  try {
+    if (bundleForm.id) await request.put(`/distribution/bundles/${bundleForm.id}`, payload)
+    else await request.post('/distribution/bundles', payload)
+    ElMessage.success('组合产品已保存，请确认组件后再上架')
+    bundleFormVisible.value = false
+    await fetchBundles()
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.error || '组合产品保存失败')
+  } finally {
+    savingBundle.value = false
+  }
+}
+
+const changeBundleStatus = async (row: any, status: string) => {
+  try {
+    let reason = ''
+    if (status === 'offline') {
+      const result = await ElMessageBox.prompt('请输入下架原因', '下架组合产品', { inputPattern: /\S+/, inputErrorMessage: '必须填写原因' })
+      reason = result.value
     }
+    await request.patch(`/distribution/bundles/${row.id}/status`, { status, reason })
+    ElMessage.success(status === 'online' ? '组合产品已上架' : '组合产品已下架')
+    await fetchBundles()
+  } catch (e: any) {
+    if (e !== 'cancel' && e !== 'close') ElMessage.error(e.response?.data?.error || '状态更新失败')
+  }
 }
 
 const fetchFulfillments = async () => {

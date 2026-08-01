@@ -16,6 +16,8 @@ The product is a platform for supplier scenic areas, distributors, and travel ag
 - Derive tenant and ownership scope from authenticated server context. Never trust request-body tenant IDs or client-provided supplier/source/settlement fields.
 - Keep `Tenant` (organization) separate from `ScenicArea` (physical fulfillment and verification boundary). A tenant may later own multiple scenic areas.
 - A supplier owns products, product revisions, inventory, checkpoints, devices, fulfillment orders, and ticket entitlements. A distributor owns the sales order and listing, not the supplier's fulfillment rules.
+- A distributor-owned cross-supplier bundle is presentation and pricing composition only. Its immutable version must expand atomically into supplier-owned component inventory, fulfillment orders, ticket entitlements, settlement facts, and separate scenic-area ticket codes.
+- Never create a universal bundle ticket that verifies across suppliers or scenic areas. Component refunds use the sale-time retail allocation and affect only that component's supplier facts; supplier term changes stop new bundle sales without changing sold rights.
 - Represent distribution with agreement/offer/listing entities. Do not copy supplier products and rules into a distributor tenant as an authorization mechanism.
 - Verify a ticket against its immutable fulfillment scenic area and the checkpoint/device scenic area. Never relax tenant checks to make distributor tickets pass.
 - Snapshot the product revision and ticket rights at sale time. Later product edits, removal, or rule changes must not rewrite sold ticket rights.
@@ -63,8 +65,8 @@ Do not mark production-ready or start storefront/channel expansion until these a
 
 ## Primary code map
 
-- Models: `backend/internal/model/models.go`, `distribution.go`, `finance.go`.
-- Core workflows: `backend/internal/service/order_service.go`, `ticket_service.go`, `distribution_service.go`, `payment_service.go`.
+- Models: `backend/internal/model/models.go`, `bundle.go`, `distribution.go`, `finance.go`.
+- Core workflows: `backend/internal/service/order_service.go`, `bundle_service.go`, `ticket_service.go`, `distribution_service.go`, `payment_service.go`.
 - Boundaries: `backend/internal/router/router.go`, `backend/internal/api/ota_controller.go`, `backend/internal/middleware/ota_auth.go`.
 - Admin/POS: `admin/src/App.vue`, `admin/src/router/index.ts`, `admin/src/views/DistributionView.vue`, `admin/src/views/OperationsView.vue`, `desktop/src/renderer/src/views/SalesView.vue`, `desktop/src/renderer/src/components/PaymentModal.vue`.
 - Detailed target, risks, roadmap, test matrix, and open questions: `docs/platform-multitenancy-development-guide.md`.

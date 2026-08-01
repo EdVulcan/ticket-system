@@ -29,13 +29,13 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if err := db.Order("version DESC").First(&latest).Error; err != nil {
 		t.Fatal(err)
 	}
-	if latest.Version != 56 {
-		t.Fatalf("latest migration=%d, want 56", latest.Version)
+	if latest.Version != 57 {
+		t.Fatalf("latest migration=%d, want 57", latest.Version)
 	}
 	if !db.Migrator().HasIndex(&TourEntryBatch{}, "idx_team_entry_request") {
 		t.Fatal("team admission idempotency index was not created")
 	}
-	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "tour_entry_batches", "tour_group_confirmations", "tour_group_member_changes", "pos_shifts", "pos_shift_corrections", "pos_holds", "settlement_statements", "settlement_adjustments", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements", "team_settlement_adjustments", "channel_bill_records", "channel_reconciliations", "channel_reconciliation_lines", "migration_audit_issues", "order_visitors"} {
+	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "tour_entry_batches", "tour_group_confirmations", "tour_group_member_changes", "pos_shifts", "pos_shift_corrections", "pos_holds", "settlement_statements", "settlement_adjustments", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements", "team_settlement_adjustments", "channel_bill_records", "channel_reconciliations", "channel_reconciliation_lines", "migration_audit_issues", "order_visitors", "bundle_products", "bundle_versions", "bundle_components"} {
 		var count int64
 		if err := db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count).Error; err != nil {
 			t.Fatal(err)
@@ -91,6 +91,81 @@ func TestStrictOwnershipGuardsRejectCrossTenantRows(t *testing.T) {
 		TicketCode: "forbidden", Sequence: 1, Name: "cross-tenant",
 	}).Error; err == nil {
 		t.Fatal("orphan order visitor was accepted by database guard")
+	}
+}
+
+func TestBundleOwnershipGuardsRejectForgedSupplierFacts(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "bundle-guards.db")+"?_foreign_keys=on"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sqlDB, dbErr := db.DB(); dbErr == nil {
+		defer sqlDB.Close()
+	}
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	distributor := Tenant{Name: "Bundle Seller", SystemCode: "BUNDLE-SELLER", SecretKey: "d", Status: "active"}
+	supplier := Tenant{Name: "Bundle Supplier", SystemCode: "BUNDLE-SUPPLIER", SecretKey: "s", Status: "active"}
+	if err := db.Create(&distributor).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&supplier).Error; err != nil {
+		t.Fatal(err)
+	}
+	area := ScenicArea{TenantID: supplier.ID, Code: "SUP", Name: "Supplier Area", Status: "active"}
+	if err := db.Create(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	supplierRule := TicketRule{TenantID: supplier.ID, Name: "Supplier Rule", ValidityType: "date"}
+	sellerRule := TicketRule{TenantID: distributor.ID, Name: "Seller Rule", ValidityType: "date"}
+	if err := db.Create(&supplierRule).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&sellerRule).Error; err != nil {
+		t.Fatal(err)
+	}
+	source := Product{TenantID: supplier.ID, ScenicAreaID: area.ID, RuleID: supplierRule.ID, Name: "Source", Type: "online", Status: "online", IsDistributable: true, Price: 100, SettlementPrice: 60, ValidityType: "date", StockType: "unlimited", CodeMode: "ticket"}
+	if err := db.Create(&source).Error; err != nil {
+		t.Fatal(err)
+	}
+	offer := ProductOffer{SupplierTenantID: supplier.ID, DistributorTenantID: distributor.ID, SourceProductID: source.ID, FulfillmentScenicAreaID: area.ID, SettlementPrice: 60, Status: "active"}
+	if err := db.Create(&offer).Error; err != nil {
+		t.Fatal(err)
+	}
+	listing := Product{TenantID: distributor.ID, ScenicAreaID: area.ID, RuleID: sellerRule.ID, Name: "Listing", Type: "online", Status: "online", Price: 80, SourceProductID: source.ID, SourceTenantID: supplier.ID, FulfillmentProductID: source.ID, FulfillmentTenantID: supplier.ID, FulfillmentScenicAreaID: area.ID, ProductOfferID: offer.ID, ValidityType: "date", StockType: "unlimited", CodeMode: "ticket"}
+	if err := db.Create(&listing).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&SellerListing{SellerTenantID: distributor.ID, ProductOfferID: offer.ID, ProductID: listing.ID, Name: listing.Name, RetailPrice: 80, RetailPriceCents: 8000, Status: "online"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	bundle := BundleProduct{SellerTenantID: distributor.ID, Name: "Bundle", Type: "online", RetailPriceCents: 8000, Status: "offline"}
+	if err := db.Create(&bundle).Error; err != nil {
+		t.Fatal(err)
+	}
+	version := BundleVersion{BundleProductID: bundle.ID, SellerTenantID: distributor.ID, Version: 1, RetailPriceCents: 8000, Status: "active"}
+	if err := db.Create(&version).Error; err != nil {
+		t.Fatal(err)
+	}
+	valid := BundleComponent{BundleVersionID: version.ID, SellerTenantID: distributor.ID, SellerProductID: listing.ID, ProductOfferID: offer.ID, SupplierTenantID: supplier.ID, SourceProductID: source.ID, FulfillmentScenicAreaID: area.ID, Quantity: 1, RetailAllocationCents: 8000, SettlementUnitPriceCents: 6000}
+	if err := db.Create(&valid).Error; err != nil {
+		t.Fatalf("valid bundle component was rejected: %v", err)
+	}
+	if err := db.Model(&bundle).Update("current_version_id", version.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	order := Order{OrderNo: "BUNDLE-GUARD-ORDER", TenantID: distributor.ID, Channel: "online", Status: "unpaid", TotalAmount: 80, Items: []OrderItem{{
+		ProductID: listing.ID, ProductName: listing.Name, Price: 80, SettlementPrice: 60, Quantity: 1,
+		FulfillmentProductID: source.ID, FulfillmentTenantID: supplier.ID, FulfillmentScenicAreaID: area.ID,
+		ProductOfferID: offer.ID, BundleProductID: bundle.ID, BundleVersionID: version.ID, BundleComponentID: valid.ID, BundleName: bundle.Name, BundleUnitQuantity: 1,
+	}}}
+	if err := db.Create(&order).Error; err != nil {
+		t.Fatalf("valid nested bundle order was rejected by ownership guards: %v", err)
+	}
+	forged := BundleComponent{BundleVersionID: version.ID, SellerTenantID: distributor.ID, SellerProductID: listing.ID, ProductOfferID: offer.ID, SupplierTenantID: distributor.ID, SourceProductID: source.ID, FulfillmentScenicAreaID: area.ID, Quantity: 1, RetailAllocationCents: 8000, SettlementUnitPriceCents: 6000}
+	if err := db.Create(&forged).Error; err == nil {
+		t.Fatal("database accepted forged bundle supplier ownership")
 	}
 }
 

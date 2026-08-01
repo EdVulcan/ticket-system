@@ -85,6 +85,9 @@ func (s *OrderService) Create(req *model.Order) error {
 		if err := requireActiveTenant(tx, req.TenantID); err != nil {
 			return err
 		}
+		if err := expandBundleOrderItemsTx(tx, req); err != nil {
+			return err
+		}
 		var channelReservation *model.ChannelReservation
 		if req.ChannelReservationID > 0 {
 			if req.ChannelAccountID == 0 || req.Channel == "online" || req.Channel == "window" || req.ExternalNo == nil {
@@ -131,7 +134,15 @@ func (s *OrderService) Create(req *model.Order) error {
 				First(&listing).Error; err != nil {
 				return fmt.Errorf("product %d is unavailable", item.ProductID)
 			}
-			fulfillment, distributed, err := resolveFulfillmentProduct(tx, &listing, req.TenantID, req.Channel)
+			listingForResolution := listing
+			if item.BundleComponentID != 0 {
+				component, err := bundleComponentForOrderTx(tx, req.TenantID, item)
+				if err != nil {
+					return err
+				}
+				listingForResolution.Price = centsMoney(component.RetailAllocationCents / int64(component.Quantity))
+			}
+			fulfillment, distributed, err := resolveFulfillmentProduct(tx, &listingForResolution, req.TenantID, req.Channel)
 			if err != nil {
 				return fmt.Errorf("product %s: %w", listing.Name, err)
 			}
@@ -155,7 +166,7 @@ func (s *OrderService) Create(req *model.Order) error {
 			fulfillment.CurrentRevisionID = revision.ID
 
 			item.ProductName = listing.Name
-			item.Price = roundMoney(listing.Price)
+			item.Price = roundMoney(listingForResolution.Price)
 			item.SettlementPrice = roundMoney(fulfillment.SettlementPrice)
 			item.ValidityType = fulfillment.ValidityType
 			item.FulfillmentProductID = fulfillment.ID
@@ -459,8 +470,11 @@ func validateOrder(req *model.Order) error {
 		}
 	}
 	for _, item := range req.Items {
-		if item.ProductID == 0 || item.Quantity <= 0 || item.Quantity > 1000 {
+		if (item.ProductID == 0) == (item.BundleProductID == 0) || item.Quantity <= 0 || item.Quantity > 1000 {
 			return fmt.Errorf("item quantity must be between 1 and 1000")
+		}
+		if item.BundleProductID == 0 && (item.BundleVersionID != 0 || item.BundleComponentID != 0 || item.BundleName != "" || item.BundleUnitQuantity != 0) {
+			return errors.New("bundle ownership fields are server-controlled")
 		}
 	}
 	return nil

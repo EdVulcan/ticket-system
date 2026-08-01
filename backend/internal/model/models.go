@@ -217,6 +217,11 @@ type OrderItem struct {
 	CreditCostCents         int64      `json:"credit_cost_cents"`
 	OfferReservedQuantity   int        `json:"offer_reserved_quantity"`
 	CommissionBPS           int64      `gorm:"not null;default:0" json:"commission_bps"`
+	BundleProductID         uint       `gorm:"index" json:"bundle_product_id,omitempty"`
+	BundleVersionID         uint       `gorm:"index" json:"bundle_version_id,omitempty"`
+	BundleComponentID       uint       `gorm:"index" json:"bundle_component_id,omitempty"`
+	BundleName              string     `gorm:"size:100" json:"bundle_name,omitempty"`
+	BundleUnitQuantity      int        `gorm:"not null;default:0" json:"bundle_unit_quantity,omitempty"`
 	Tickets                 []Ticket   `gorm:"foreignKey:OrderItemID" json:"tickets,omitempty"`
 	// Visitors is request-only input. Persisted snapshots are exposed through
 	// VisitorRecords and are written after ticket IDs are assigned.

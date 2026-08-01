@@ -3,8 +3,9 @@ package model
 import "time"
 
 type POSHoldLine struct {
-	ProductID uint `json:"product_id"`
-	Quantity  int  `json:"quantity"`
+	ProductID       uint `json:"product_id,omitempty"`
+	BundleProductID uint `json:"bundle_product_id,omitempty"`
+	Quantity        int  `json:"quantity"`
 }
 
 // POSHold is a durable cashier draft. It intentionally stores the selected

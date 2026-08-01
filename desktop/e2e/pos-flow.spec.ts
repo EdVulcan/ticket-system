@@ -4,17 +4,40 @@ const staff = { id: 7, name: '测试售票员', job_number: 'SELLER001', roles: 
 const checkerStaff = { id: 8, name: '测试验票员', job_number: 'CHECKER001', roles: 'checker', tenant_id: 1 }
 const product = { id: 11, name: '标准成人票', price: 80, stock_type: 'unlimited', daily_stock: 0, tags: '["当日"]' }
 
+const bundle = { id: 21, name: '双景区联票', retail_price_cents: 15000, type: 'offline', status: 'online', is_bundle: true }
+
 async function json(route: import('@playwright/test').Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
 async function mockPOSBoot(page: Page, openShift: boolean) {
   await page.route('**/api/v1/products?*', route => json(route, { data: [product], total: 1 }))
+  await page.route('**/api/v1/bundle-catalog?*', route => json(route, { data: [bundle] }))
   await page.route('**/api/v1/checkpoints?*', route => json(route, { data: [{ id: 31, name: '东门检票点' }], total: 1 }))
   await page.route('**/api/v1/operations/shifts/open?*', route => openShift
     ? json(route, { id: 41, opened_at: '2026-08-01T08:00:00Z', opening_cents: 10000 })
     : json(route, { error: 'open shift not found' }, 404))
 }
+
+test('组合产品在窗口按一个商品销售并提交组合标识', async ({ page }) => {
+  await preparePOS(page, true)
+  let orderPayload: any
+  await page.route('**/api/v1/orders', async route => {
+    orderPayload = route.request().postDataJSON()
+    await json(route, { id: 52, order_no: 'POS-BUNDLE-1', total_amount: 150, status: 'unpaid' }, 201)
+  })
+
+  await page.goto('/#/')
+  await page.getByRole('button', { name: /双景区联票/ }).click()
+  await expect(page.locator('.cart-item').getByText('双景区联票', { exact: true })).toBeVisible()
+  await expect(page.locator('.cart-item')).toContainText('150.00')
+  await page.getByRole('button', { name: '收款' }).click()
+
+  await expect.poll(() => orderPayload).toMatchObject({
+    channel: 'window', total_amount: 150,
+    items: [{ bundle_product_id: 21, quantity: 1 }],
+  })
+})
 
 async function preparePOS(page: Page, openShift: boolean, sessionStaff = staff) {
   await page.addInitScript(({ staff, openShift }) => {

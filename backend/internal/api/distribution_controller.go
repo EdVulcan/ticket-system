@@ -13,7 +13,115 @@ import (
 )
 
 type DistributionController struct {
-	Service service.DistributionService
+	Service       service.DistributionService
+	BundleService service.BundleService
+}
+
+func (c *DistributionController) CreateBundle(ctx *gin.Context) {
+	var req service.BundleUpsertInput
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	bundle, err := c.BundleService.Create(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), req)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusCreated, gin.H{"data": bundle})
+}
+
+func (c *DistributionController) ListBundles(ctx *gin.Context) {
+	bundles, err := c.BundleService.List(ctx.GetUint("tenant_id"), ctx.Query("type"), ctx.Query("status"))
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": bundles})
+}
+
+func (c *DistributionController) GetBundle(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid bundle id"})
+		return
+	}
+	bundle, err := c.BundleService.Get(ctx.GetUint("tenant_id"), uint(id))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "bundle product not found"})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": bundle})
+}
+
+func (c *DistributionController) ReviseBundle(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid bundle id"})
+		return
+	}
+	var req service.BundleUpsertInput
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	bundle, err := c.BundleService.Revise(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), req)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": bundle})
+}
+
+func (c *DistributionController) SetBundleStatus(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid bundle id"})
+		return
+	}
+	var req struct {
+		Status string `json:"status" binding:"required"`
+		Reason string `json:"reason"`
+	}
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.BundleService.SetStatus(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), req.Status, req.Reason); err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"status": req.Status})
+}
+
+func (c *DistributionController) ListBundleComponents(ctx *gin.Context) {
+	components, err := c.BundleService.ListEligibleComponents(ctx.GetUint("tenant_id"), ctx.Query("type"))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": components})
+}
+
+// ListBundleCatalog exposes only cashier-facing presentation facts.
+func (c *DistributionController) ListBundleCatalog(ctx *gin.Context) {
+	bundles, err := c.BundleService.List(ctx.GetUint("tenant_id"), ctx.DefaultQuery("type", "offline"), "online")
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	rows := make([]gin.H, 0, len(bundles))
+	for i := range bundles {
+		if !bundles[i].Available {
+			continue
+		}
+		rows = append(rows, gin.H{
+			"id": bundles[i].ID, "name": bundles[i].Name, "type": bundles[i].Type,
+			"retail_price_cents": bundles[i].RetailPriceCents, "status": bundles[i].Status,
+			"is_bundle": true,
+		})
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": rows})
 }
 
 func (c *DistributionController) CreateOffer(ctx *gin.Context) {

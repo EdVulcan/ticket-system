@@ -57,7 +57,7 @@
           </div>
 
           <div class="product-grid custom-scrollbar">
-            <button v-for="p in filteredProducts" :key="p.id" class="product-tile" @click="addToCart(p)">
+            <button v-for="p in filteredProducts" :key="p.catalogKey" class="product-tile" @click="addToCart(p)">
               <div class="product-main">
                 <div class="product-name">{{ p.name }}</div>
                 <div class="product-tags">
@@ -101,7 +101,7 @@
               <strong>还没有选择票种</strong>
               <span>点击左侧票种即可加入</span>
             </div>
-            <div v-for="(item, idx) in cart" :key="item.id" class="cart-item">
+            <div v-for="(item, idx) in cart" :key="item.catalogKey" class="cart-item">
               <div class="cart-item-top">
                 <div class="cart-item-name">{{ item.name }}</div>
                 <strong>¥{{ (item.price * item.quantity).toFixed(2) }}</strong>
@@ -149,7 +149,7 @@
             <el-table-column prop="order_no" label="订单号" min-width="205" />
             <el-table-column prop="contact_name" label="联系人" width="120" />
             <el-table-column label="商品" min-width="240">
-              <template #default="{ row }"><span v-for="item in row.items" :key="item.id" class="order-item-text">{{ item.product_name }} × {{ item.quantity }}</span></template>
+              <template #default="{ row }"><span v-for="item in row.items" :key="item.id" class="order-item-text"><b v-if="item.bundle_name">{{ item.bundle_name }} · </b>{{ item.product_name }} × {{ item.quantity }}</span></template>
             </el-table-column>
             <el-table-column label="金额" width="110"><template #default="{ row }"><strong class="money">¥{{ row.total_amount }}</strong></template></el-table-column>
             <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="orderStatusTag(row.status)">{{ orderStatusLabel(row.status) }}</el-tag></template></el-table-column>
@@ -563,7 +563,7 @@ const handleHold = async () => {
     await axios.post('/operations/holds', {
       device_id: posDeviceId.value,
       shift_id: shiftState.value.shiftId,
-      items: cart.value.map(item => ({ product_id: item.id, quantity: item.quantity })),
+      items: cart.value.map(orderLinePayload),
       contact_name: '窗口散客'
     })
     cart.value = []
@@ -591,19 +591,16 @@ const loadHolds = async () => {
 }
 
 const formatHoldItems = (hold: any) => {
-  try {
-    return (hold.items || []).map((item: any) => `商品 #${item.product_id} x${item.quantity}`).join('，')
-  } catch (_) {
-    return '商品明细不可读'
-  }
+  return (hold.items || []).map((item: any) => `${item.bundle_product_id ? `组合 #${item.bundle_product_id}` : `商品 #${item.product_id}`} x${item.quantity}`).join('，')
 }
 
 const resumeHold = async (hold: any) => {
   try {
     const { data } = await axios.post(`/operations/holds/${hold.id}/resume`)
     const restored = (data.items || []).map((line: any) => {
-      const product = products.value.find(item => item.id === line.product_id)
-      if (!product) throw new Error(`商品 #${line.product_id} 已不再可售`)
+      const key = line.bundle_product_id ? `bundle-${line.bundle_product_id}` : `product-${line.product_id}`
+      const product = products.value.find(item => item.catalogKey === key)
+      if (!product) throw new Error(`${line.bundle_product_id ? '组合产品' : '商品'} #${line.bundle_product_id || line.product_id} 已不再可售`)
       return { ...product, quantity: line.quantity }
     })
     cart.value = restored
@@ -680,17 +677,23 @@ const updateTime = () => {
 
 const fetchProducts = async () => {
   try {
-    const res = await axios.get('/products', { 
-      params: { page_size: 100, type: 'offline' } 
-    })
-    products.value = res.data.data.map((p: any) => {
+    const [productResponse, bundleResponse] = await Promise.all([
+      axios.get('/products', { params: { page_size: 100, type: 'offline' } }),
+      axios.get('/bundle-catalog', { params: { type: 'offline' } })
+    ])
+    const ordinary = productResponse.data.data.map((p: any) => {
       try {
         p.parsedTags = p.tags ? JSON.parse(p.tags) : []
       } catch (e) {
         p.parsedTags = []
       }
-      return p
+      return { ...p, catalogKey: `product-${p.id}`, is_bundle: false }
     })
+    const bundles = (bundleResponse.data.data || []).map((item: any) => ({
+      ...item, catalogKey: `bundle-${item.id}`, price: Number(item.retail_price_cents || 0) / 100,
+      parsedTags: ['组合产品'], stock_type: 'unlimited', daily_stock: 0, is_bundle: true
+    }))
+    products.value = [...ordinary, ...bundles]
   } catch (e) {
     ElMessage.error('获取产品失败')
   }
@@ -698,7 +701,7 @@ const fetchProducts = async () => {
 
 
 const addToCart = (product: any) => {
-  const existing = cart.value.find(item => item.id === product.id)
+  const existing = cart.value.find(item => item.catalogKey === product.catalogKey)
   if (existing) {
     existing.quantity++
   } else {
@@ -733,7 +736,7 @@ const handleCheckout = async () => {
       contact_phone: '',
       channel: 'window',
       total_amount: totalAmount.value,
-      items: cart.value.map(item => ({ product_id: item.id, quantity: item.quantity }))
+      items: cart.value.map(orderLinePayload)
     }
     const res = await axios.post('/orders', orderData)
     currentOrder.value = res.data
@@ -827,6 +830,10 @@ const fetchOrders = async () => {
     ordersLoading.value = false
   }
 }
+
+const orderLinePayload = (item: any) => item.is_bundle
+  ? { bundle_product_id: item.id, quantity: item.quantity }
+  : { product_id: item.id, quantity: item.quantity }
 
 const searchOrders = () => {
   orderPage.value = 1

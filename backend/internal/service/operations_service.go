@@ -65,20 +65,33 @@ func (s *OperationsService) CreatePOSHold(tenantID, deviceID, operatorID, shiftI
 		ttl = 2 * time.Hour
 	}
 	clean := make([]model.POSHoldLine, 0, len(lines))
-	seen := make(map[uint]int)
+	type holdKey struct{ productID, bundleID uint }
+	seen := make(map[holdKey]int)
 	for _, line := range lines {
-		if line.ProductID == 0 || line.Quantity <= 0 {
+		if (line.ProductID == 0) == (line.BundleProductID == 0) || line.Quantity <= 0 {
 			return nil, errors.New("product and positive quantity are required")
 		}
-		seen[line.ProductID] += line.Quantity
+		seen[holdKey{productID: line.ProductID, bundleID: line.BundleProductID}] += line.Quantity
 	}
-	for productID, quantity := range seen {
-		clean = append(clean, model.POSHoldLine{ProductID: productID, Quantity: quantity})
+	for key, quantity := range seen {
+		clean = append(clean, model.POSHoldLine{ProductID: key.productID, BundleProductID: key.bundleID, Quantity: quantity})
 	}
 	// Stable ordering makes the persisted draft and idempotent client retries
 	// deterministic without trusting any client-provided amount.
+	lessHoldLine := func(left, right model.POSHoldLine) bool {
+		if left.BundleProductID == 0 && right.BundleProductID != 0 {
+			return true
+		}
+		if left.BundleProductID != 0 && right.BundleProductID == 0 {
+			return false
+		}
+		if left.BundleProductID != 0 {
+			return left.BundleProductID < right.BundleProductID
+		}
+		return left.ProductID < right.ProductID
+	}
 	for i := 1; i < len(clean); i++ {
-		for j := i; j > 0 && clean[j].ProductID < clean[j-1].ProductID; j-- {
+		for j := i; j > 0 && lessHoldLine(clean[j], clean[j-1]); j-- {
 			clean[j], clean[j-1] = clean[j-1], clean[j]
 		}
 	}
@@ -98,6 +111,17 @@ func (s *OperationsService) CreatePOSHold(tenantID, deviceID, operatorID, shiftI
 		}
 		var totalCents int64
 		for _, line := range clean {
+			if line.BundleProductID != 0 {
+				if _, err := loadSellableBundleTx(tx, tenantID, line.BundleProductID, "offline", false); err != nil {
+					return err
+				}
+				var bundle model.BundleProduct
+				if err := tx.Where("id = ? AND seller_tenant_id = ?", line.BundleProductID, tenantID).First(&bundle).Error; err != nil {
+					return err
+				}
+				totalCents += bundle.RetailPriceCents * int64(line.Quantity)
+				continue
+			}
 			var product model.Product
 			if err := tx.Where("id = ? AND tenant_id = ? AND status = ? AND type = ?", line.ProductID, tenantID, "online", "offline").First(&product).Error; err != nil {
 				return fmt.Errorf("product %d is unavailable", line.ProductID)
@@ -191,6 +215,12 @@ func (s *OperationsService) ResumePOSHold(tenantID, holdID, operatorID uint) (*P
 		}
 		lines := decoded.Items
 		for _, line := range lines {
+			if line.BundleProductID != 0 {
+				if _, err := loadSellableBundleTx(tx, tenantID, line.BundleProductID, "offline", false); err != nil {
+					return err
+				}
+				continue
+			}
 			var product model.Product
 			if err := tx.Where("id = ? AND tenant_id = ? AND status = ? AND type = ?", line.ProductID, tenantID, "online", "offline").First(&product).Error; err != nil {
 				return fmt.Errorf("product %d is no longer available", line.ProductID)

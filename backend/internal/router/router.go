@@ -174,7 +174,7 @@ func InitRouter(r *gin.Engine) {
 	}
 
 	// Distribution Routes (B2B)
-	distController := &api.DistributionController{Service: service.DistributionService{}}
+	distController := &api.DistributionController{Service: service.DistributionService{}, BundleService: service.BundleService{}}
 	distGroup := protected.Group("/distribution")
 	distGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
 	{
@@ -196,7 +196,14 @@ func InitRouter(r *gin.Engine) {
 		distGroup.GET("/products", distController.ListDistributableProducts)
 		distGroup.POST("/products/import", distController.ImportProduct)
 		distGroup.POST("/listings/:id/sync", distController.SyncListing)
+		distGroup.GET("/bundle-components", distController.ListBundleComponents)
+		distGroup.GET("/bundles", distController.ListBundles)
+		distGroup.POST("/bundles", distController.CreateBundle)
+		distGroup.GET("/bundles/:id", distController.GetBundle)
+		distGroup.PUT("/bundles/:id", distController.ReviseBundle)
+		distGroup.PATCH("/bundles/:id/status", distController.SetBundleStatus)
 	}
+	protected.GET("/bundle-catalog", middleware.RequireAnyRole("seller", "admin", "super_admin"), distController.ListBundleCatalog)
 
 	// OTA Routes (External Integration)
 	otaController := &api.OTAController{

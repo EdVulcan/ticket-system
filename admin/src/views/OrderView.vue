@@ -41,7 +41,7 @@
       <el-table-column label="订单内容" min-width="200">
         <template #default="{ row }">
           <div v-for="item in row.items" :key="item.id" class="text-sm mb-1">
-            <span class="font-medium">{{ item.product_name }}</span>
+            <div><el-tag v-if="item.bundle_name" size="small" effect="plain" class="mr-2">{{ item.bundle_name }}</el-tag><span class="font-medium">{{ item.product_name }}</span></div>
             <span class="text-gray-500 mx-1">x</span>
             <span>{{ item.quantity }}</span>
           </div>
@@ -122,7 +122,7 @@
           </div>
 
           <div v-for="item in fulfillment.items" :key="item.id" class="mt-4">
-            <div class="font-medium text-sm mb-2">{{ item.product_name }}（{{ item.quantity }}张）</div>
+            <div class="font-medium text-sm mb-2"><span v-if="item.bundle_name">{{ item.bundle_name }} · </span>{{ item.product_name }}（{{ item.quantity }}张）</div>
             <el-table :data="item.tickets" border size="small" empty-text="暂无票据">
               <el-table-column prop="ticket_code" label="核销码" min-width="170" />
               <el-table-column prop="visitor_name" label="游客姓名" min-width="110" />

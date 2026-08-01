@@ -84,6 +84,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 54, name: "team confirmations and member changes", apply: migrateTeamConfirmationsAndChanges},
 		{version: 55, name: "recoverable channel requests", apply: migrateRecoverableChannelRequests},
 		{version: 56, name: "channel reconciliation detail and tenant key", apply: migrateChannelReconciliationDetails},
+		{version: 57, name: "cross supplier bundle products", apply: migrateBundleProducts},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -100,6 +101,74 @@ func runMigrations(db *gorm.DB) error {
 			return tx.Create(&SchemaMigration{Version: item.version, Name: item.name, AppliedAt: time.Now()}).Error
 		}); err != nil {
 			return fmt.Errorf("migration %d (%s): %w", item.version, item.name, err)
+		}
+	}
+	return nil
+}
+
+func migrateBundleProducts(db *gorm.DB) error {
+	if err := db.AutoMigrate(&BundleProduct{}, &BundleVersion{}, &BundleComponent{}); err != nil {
+		return err
+	}
+	for _, column := range []struct {
+		name string
+		ddl  string
+	}{
+		{"bundle_product_id", `ALTER TABLE order_items ADD COLUMN bundle_product_id INTEGER`},
+		{"bundle_version_id", `ALTER TABLE order_items ADD COLUMN bundle_version_id INTEGER`},
+		{"bundle_component_id", `ALTER TABLE order_items ADD COLUMN bundle_component_id INTEGER`},
+		{"bundle_name", `ALTER TABLE order_items ADD COLUMN bundle_name TEXT`},
+		{"bundle_unit_quantity", `ALTER TABLE order_items ADD COLUMN bundle_unit_quantity INTEGER NOT NULL DEFAULT 0`},
+	} {
+		if err := addColumnIfMissing(db, "order_items", column.name, column.ddl); err != nil {
+			return err
+		}
+	}
+	statements := []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_bundle_component_product ON bundle_components(bundle_version_id, seller_product_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_order_items_bundle_product_id ON order_items(bundle_product_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_order_items_bundle_version_id ON order_items(bundle_version_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_order_items_bundle_component_id ON order_items(bundle_component_id)`,
+		`CREATE TRIGGER IF NOT EXISTS bundle_versions_owner_insert BEFORE INSERT ON bundle_versions
+		 WHEN NOT EXISTS (SELECT 1 FROM bundle_products b WHERE b.id = NEW.bundle_product_id AND b.seller_tenant_id = NEW.seller_tenant_id)
+		 BEGIN SELECT RAISE(ABORT, 'bundle version ownership mismatch'); END`,
+		`CREATE TRIGGER IF NOT EXISTS bundle_versions_owner_update BEFORE UPDATE OF bundle_product_id, seller_tenant_id ON bundle_versions
+		 WHEN NOT EXISTS (SELECT 1 FROM bundle_products b WHERE b.id = NEW.bundle_product_id AND b.seller_tenant_id = NEW.seller_tenant_id)
+		 BEGIN SELECT RAISE(ABORT, 'bundle version ownership mismatch'); END`,
+		`CREATE TRIGGER IF NOT EXISTS bundle_versions_immutable_update BEFORE UPDATE OF bundle_product_id, seller_tenant_id, version, retail_price_cents ON bundle_versions
+		 BEGIN SELECT RAISE(ABORT, 'bundle version facts are immutable'); END`,
+		`CREATE TRIGGER IF NOT EXISTS bundle_components_owner_insert BEFORE INSERT ON bundle_components
+		 WHEN NOT EXISTS (
+		  SELECT 1 FROM bundle_versions v
+		  JOIN products p ON p.id = NEW.seller_product_id AND p.tenant_id = NEW.seller_tenant_id
+		  JOIN seller_listings l ON l.product_id = p.id AND l.seller_tenant_id = NEW.seller_tenant_id AND l.product_offer_id = NEW.product_offer_id
+		  JOIN product_offers o ON o.id = NEW.product_offer_id AND o.distributor_tenant_id = NEW.seller_tenant_id
+		  WHERE v.id = NEW.bundle_version_id AND v.seller_tenant_id = NEW.seller_tenant_id
+		    AND o.supplier_tenant_id = NEW.supplier_tenant_id AND o.source_product_id = NEW.source_product_id
+		    AND o.product_revision_id = NEW.product_revision_id AND o.fulfillment_scenic_area_id = NEW.fulfillment_scenic_area_id
+		 ) BEGIN SELECT RAISE(ABORT, 'bundle component ownership mismatch'); END`,
+		`CREATE TRIGGER IF NOT EXISTS bundle_components_immutable_update BEFORE UPDATE ON bundle_components
+		 BEGIN SELECT RAISE(ABORT, 'bundle component facts are immutable'); END`,
+		`CREATE TRIGGER IF NOT EXISTS order_items_bundle_owner_insert BEFORE INSERT ON order_items
+		 WHEN NEW.bundle_component_id != 0 AND NOT EXISTS (
+		  SELECT 1 FROM bundle_components c JOIN bundle_versions v ON v.id = c.bundle_version_id
+		  JOIN bundle_products b ON b.id = v.bundle_product_id JOIN orders o ON o.id = NEW.order_id
+		  WHERE c.id = NEW.bundle_component_id AND c.bundle_version_id = NEW.bundle_version_id
+		    AND b.id = NEW.bundle_product_id AND b.seller_tenant_id = o.tenant_id
+		    AND c.seller_tenant_id = o.tenant_id AND c.seller_product_id = NEW.product_id
+		 ) BEGIN SELECT RAISE(ABORT, 'order item bundle ownership mismatch'); END`,
+		`CREATE TRIGGER IF NOT EXISTS order_items_bundle_owner_update BEFORE UPDATE OF bundle_product_id, bundle_version_id, bundle_component_id, product_id ON order_items
+		 WHEN NEW.bundle_component_id != 0 AND NOT EXISTS (
+		  SELECT 1 FROM bundle_components c JOIN bundle_versions v ON v.id = c.bundle_version_id
+		  JOIN bundle_products b ON b.id = v.bundle_product_id JOIN orders o ON o.id = NEW.order_id
+		  WHERE c.id = NEW.bundle_component_id AND c.bundle_version_id = NEW.bundle_version_id
+		    AND b.id = NEW.bundle_product_id AND b.seller_tenant_id = o.tenant_id
+		    AND c.seller_tenant_id = o.tenant_id AND c.seller_product_id = NEW.product_id
+		 ) BEGIN SELECT RAISE(ABORT, 'order item bundle ownership mismatch'); END`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return err
 		}
 	}
 	return nil
