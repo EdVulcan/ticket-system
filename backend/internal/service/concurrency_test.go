@@ -41,7 +41,7 @@ func TestMain(m *testing.M) {
 		&model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{},
 		&model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.TourGroup{}, &model.TourGroupMember{}, &model.TourEntryBatch{},
 		&model.POSShift{}, &model.POSShiftCorrection{}, &model.PrintJob{}, &model.DeviceAlert{}, &model.POSHold{},
-		&model.ProductRevision{}, &model.SettlementStatement{}, &model.SettlementLine{}, &model.StaffResourceScope{},
+		&model.ProductRevision{}, &model.SettlementStatement{}, &model.SettlementLine{}, &model.SettlementAdjustment{}, &model.StaffResourceScope{},
 		&model.AfterSaleRequest{}, &model.AfterSaleEvent{}, &model.HardwareCommand{}, &model.HardwareEvent{}, &model.ChannelReservation{}, &model.FinancialDocument{}, &model.TeamSettlementStatement{},
 		&model.ChannelBillRecord{}, &model.ChannelReconciliation{},
 	); err != nil {
@@ -70,7 +70,7 @@ func resetBusinessData(t *testing.T) {
 			&model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{}, &model.ChannelReservation{}, &model.TourGroupMember{}, &model.TourGroup{}, &model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.TourEntryBatch{}, &model.POSShiftCorrection{}, &model.POSShift{}, &model.PrintJob{}, &model.DeviceAlert{}, &model.POSHold{},
 			&model.AfterSaleEvent{}, &model.AfterSaleRequest{}, &model.HardwareEvent{}, &model.HardwareCommand{}, &model.FinancialDocument{}, &model.TeamSettlementStatement{},
 			&model.ChannelBillRecord{}, &model.ChannelReconciliation{},
-			&model.ProductRevision{}, &model.SettlementLine{}, &model.SettlementStatement{},
+			&model.ProductRevision{}, &model.SettlementLine{}, &model.SettlementAdjustment{}, &model.SettlementStatement{},
 			&model.CheckInRecord{}, &model.OrderVisitor{}, &model.Ticket{}, &model.OrderItem{}, &model.Order{}, &model.ProductInventory{},
 			&model.Product{}, &model.RuleItem{}, &model.RuleGroup{}, &model.TicketRule{}, &model.Device{}, &model.CheckPoint{},
 			&model.TransactionRecord{}, &model.CapitalAccount{}, &model.DistributorRelationship{}, &model.TenantCapability{}, &model.ScenicArea{}, &model.PlatformUser{}, &model.TicketEntitlement{}, &model.FulfillmentOrder{}, &model.SellerListing{}, &model.ProductOffer{}, &model.Tenant{},

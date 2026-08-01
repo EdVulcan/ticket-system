@@ -120,6 +120,25 @@ func TestSettlementUsesFulfillmentSnapshot(t *testing.T) {
 	if err := settlements.SetStatus(scenario.distributorID, statement.ID, "confirmed", ""); err != nil {
 		t.Fatal(err)
 	}
+	if err := settlements.SetStatus(scenario.distributorID, statement.ID, "disputed", "missing service fee correction"); err != nil {
+		t.Fatal(err)
+	}
+	if err := settlements.AdjustDisputed(scenario.distributorID+999, statement.ID, 9, 100, "forbidden correction"); err == nil {
+		t.Fatal("unrelated tenant adjusted settlement")
+	}
+	if err := settlements.AdjustDisputed(scenario.supplierID, statement.ID, 8, 100, "agreed service fee correction"); err != nil {
+		t.Fatal(err)
+	}
+	detail, err = settlements.GetStatement(scenario.distributorID, statement.ID)
+	if err != nil || detail.Status != "draft" || detail.AdjustmentCents != 100 || len(detail.Adjustments) != 1 || detail.Adjustments[0].NewAdjustmentCents != 100 {
+		t.Fatalf("adjusted settlement detail=%+v err=%v", detail, err)
+	}
+	if err := settlements.SetStatus(scenario.supplierID, statement.ID, "supplier_confirmed", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := settlements.SetStatus(scenario.distributorID, statement.ID, "confirmed", ""); err != nil {
+		t.Fatal(err)
+	}
 	if err := settlements.SetStatus(scenario.distributorID, statement.ID, "paid", ""); err == nil {
 		t.Fatal("settlement was paid without proof")
 	}
@@ -128,6 +147,17 @@ func TestSettlementUsesFulfillmentSnapshot(t *testing.T) {
 	}
 	if err := settlements.SetStatus(scenario.distributorID, statement.ID, "paid", "bank-slip"); err != nil {
 		t.Fatal(err)
+	}
+	if err := model.DB.First(&line, line.ID).Error; err != nil || line.Status != "paid" {
+		t.Fatalf("paid settlement line=%+v err=%v", line, err)
+	}
+	var fulfillment model.FulfillmentOrder
+	if err := model.DB.First(&fulfillment, line.FulfillmentOrderID).Error; err != nil || fulfillment.SettlementStatus != "paid" {
+		t.Fatalf("paid fulfillment=%+v err=%v", fulfillment, err)
+	}
+	var settlementAudits int64
+	if err := model.DB.Model(&model.AuditLog{}).Where("tenant_id IN ? AND target_type = ? AND target_id = ? AND action IN ?", []uint{scenario.supplierID, scenario.distributorID}, "settlement_statement", statement.ID, []string{"settlement.status", "settlement.adjust"}).Count(&settlementAudits).Error; err != nil || settlementAudits < 6 {
+		t.Fatalf("settlement audits=%d err=%v", settlementAudits, err)
 	}
 }
 
@@ -1356,7 +1386,10 @@ func TestSupplierProductLifecycleSynchronizesDistributorListings(t *testing.T) {
 func TestSupplierFulfillmentWorklistIsScopedAndCountsEntitlements(t *testing.T) {
 	resetBusinessData(t)
 	scenario := seedDistributionScenario(t)
-	order := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	order := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{
+		ProductID: scenario.listingID, Quantity: 1,
+		Visitors: []model.VisitorInput{{Name: "Fulfillment Visitor", Phone: "13800138000", IdentityNo: "ID-FULFILLMENT-1", Region: "CN"}},
+	}}}
 	if err := (&OrderService{}).Create(&order); err != nil {
 		t.Fatal(err)
 	}
@@ -1372,6 +1405,37 @@ func TestSupplierFulfillmentWorklistIsScopedAndCountsEntitlements(t *testing.T) 
 	}
 	if views[0].SupplierTenantID != scenario.supplierID || views[0].SalesTenantID != scenario.distributorID || views[0].TicketCount != 1 || views[0].UsedCount != 0 {
 		t.Fatalf("unexpected fulfillment view=%+v", views[0])
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("fulfillment_order_id = ?", views[0].ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	afterSale := model.AfterSaleRequest{TenantID: scenario.distributorID, OrderNo: order.OrderNo, Type: "reissue", IdempotencyKey: "fulfillment-detail-reissue", OperatorID: 5, Reason: "visitor lost ticket"}
+	if err := (&AfterSaleService{}).Create(&afterSale, []string{ticket.TicketCode}); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&TicketService{}).Verify(ticket.TicketCode, scenario.supplierCheckpointID, scenario.supplierDeviceID, scenario.supplierID); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := (&DistributionService{}).GetFulfillmentOrder(scenario.supplierID, views[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Items) != 1 || len(detail.Items[0].Tickets) != 1 || len(detail.Items[0].Tickets[0].CheckInRecords) != 1 {
+		t.Fatalf("unexpected fulfillment detail=%+v", detail)
+	}
+	visitor := detail.Items[0].Tickets[0]
+	if visitor.VisitorName != "Fulfillment Visitor" || visitor.VisitorID != "ID-FULFILLMENT-1" || visitor.Entitlement != "used" {
+		t.Fatalf("unexpected fulfillment visitor=%+v", visitor)
+	}
+	if len(detail.AfterSales) != 1 || detail.AfterSales[0].ID != afterSale.ID {
+		t.Fatalf("unexpected fulfillment after-sales=%+v", detail.AfterSales)
+	}
+	if detail.Settlement.GrossCents != 6000 || detail.Settlement.RefundCents != 0 || detail.Settlement.NetCents != 6000 {
+		t.Fatalf("unexpected fulfillment settlement=%+v", detail.Settlement)
+	}
+	if _, err := (&DistributionService{}).GetFulfillmentOrder(scenario.distributorID, views[0].ID); err == nil {
+		t.Fatal("distributor accessed supplier fulfillment detail")
 	}
 	if _, _, err := (&DistributionService{}).ListFulfillmentOrders(scenario.distributorID, 0, "", 1, 20); err == nil {
 		t.Fatal("distributor accessed supplier fulfillment worklist")

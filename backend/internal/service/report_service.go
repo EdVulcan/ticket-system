@@ -145,7 +145,7 @@ func (s *ReportService) GetDailyReport(tenantID uint, startDate, endDate string)
 		return nil, err
 	}
 	if err := model.DB.Table("settlement_statements").Select(`DATE(COALESCE(paid_at, confirmed_at, created_at)) AS date, COUNT(id) AS statement_count,
-		COALESCE(SUM(net_cents), 0) AS net_cents, COALESCE(SUM(refund_cents), 0) AS refund_cents`).
+		COALESCE(SUM(net_cents + adjustment_cents), 0) AS net_cents, COALESCE(SUM(refund_cents), 0) AS refund_cents`).
 		Where("(supplier_tenant_id = ? OR distributor_tenant_id = ?) AND COALESCE(paid_at, confirmed_at, created_at) BETWEEN ? AND ?", tenantID, tenantID, start, end).
 		Group("DATE(COALESCE(paid_at, confirmed_at, created_at))").Order("date ASC").Scan(&report.Settlements).Error; err != nil {
 		return nil, err

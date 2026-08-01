@@ -39,6 +39,7 @@ func (c *AuthController) Login(ctx *gin.Context) {
 		"token": token,
 		"user": gin.H{
 			"id":           user.ID,
+			"tenant_id":    user.TenantID,
 			"username":     user.Username,
 			"role":         user.Role,
 			"system_code":  user.Tenant.SystemCode,

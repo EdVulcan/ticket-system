@@ -40,16 +40,32 @@
       </el-tab-pane>
 
       <el-tab-pane v-if="hasAnyCapability('supplier', 'distributor')" label="结算" name="settlements">
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-sm text-gray-500">只处理供应商与分销商之间的履约对账和付款确认。</span>
+          <el-button v-if="hasCapability('supplier')" type="primary" @click="openGenerateSettlement">生成结算单</el-button>
+        </div>
         <el-table :data="rows.settlements" v-loading="loading">
           <el-table-column prop="statement_no" label="结算单" width="210" />
           <el-table-column prop="period_start" label="开始" width="170" />
           <el-table-column prop="period_end" label="结束" width="170" />
-          <el-table-column label="净额" width="130"><template #default="{ row }">¥{{ cents(row.net_cents) }}</template></el-table-column>
-          <el-table-column prop="status" label="状态" width="150" />
+          <el-table-column label="应结净额" width="130"><template #default="{ row }">¥{{ cents(Number(row.net_cents || 0) + Number(row.adjustment_cents || 0)) }}</template></el-table-column>
+          <el-table-column label="状态" width="150"><template #default="{ row }"><el-tag :type="settlementStatusType(row.status)">{{ settlementStatusText(row.status) }}</el-tag></template></el-table-column>
+          <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openSettlement(row)">详情</el-button></template></el-table-column>
         </el-table>
       </el-tab-pane>
 
       <el-tab-pane v-if="hasAnyCapability('supplier', 'distributor')" label="总账" name="ledger">
+        <h3 class="detail-title">上下游账户</h3>
+        <el-table :data="financialAccounts" v-loading="loading" size="small" class="mb-5">
+          <el-table-column label="合作方" min-width="180"><template #default="{ row }"><div>{{ row.side === 'managed' ? row.owner_name : row.supplier_name }}</div><div class="text-xs text-gray-400">{{ row.side === 'managed' ? row.owner_code : row.supplier_code }}</div></template></el-table-column>
+          <el-table-column label="预付余额"><template #default="{ row }">¥{{ cents(row.balance_cents) }}</template></el-table-column>
+          <el-table-column label="授信额度"><template #default="{ row }">¥{{ cents(row.credit_line_cents) }}</template></el-table-column>
+          <el-table-column label="已用授信"><template #default="{ row }">¥{{ cents(row.used_credit_cents) }}</template></el-table-column>
+          <el-table-column label="可用授信"><template #default="{ row }">¥{{ cents(Math.max(0, Number(row.credit_line_cents || 0) - Number(row.used_credit_cents || 0))) }}</template></el-table-column>
+          <el-table-column label="冻结"><template #default="{ row }">¥{{ cents(row.frozen_cents) }}</template></el-table-column>
+          <el-table-column prop="status" label="状态" width="100" />
+        </el-table>
+        <h3 class="detail-title">账户流水</h3>
         <el-table :data="rows.ledger" v-loading="loading">
           <el-table-column prop="created_at" label="时间" width="180" />
           <el-table-column prop="entry_type" label="事实类型" width="180" />
@@ -92,6 +108,71 @@
         </el-table>
       </el-tab-pane>
     </el-tabs>
+
+    <el-dialog v-model="generateSettlementDialog" title="生成结算单" width="520px" align-center>
+      <el-form label-position="top">
+        <el-form-item label="分销商租户 ID" required><el-input-number v-model="settlementGenerate.distributor_tenant_id" :min="1" class="w-full" /></el-form-item>
+        <el-form-item label="结算周期" required><el-date-picker v-model="settlementGenerate.period" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" class="w-full" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="generateSettlementDialog = false">取消</el-button><el-button type="primary" :loading="settlementActionLoading" @click="generateSettlement">生成</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="settlementDialog" title="结算对账详情" width="980px" align-center :close-on-click-modal="false">
+      <div v-loading="settlementDetailLoading" class="space-y-5">
+        <el-descriptions v-if="settlementDetail" :column="3" border>
+          <el-descriptions-item label="结算单">{{ settlementDetail.statement_no }}</el-descriptions-item>
+          <el-descriptions-item label="供应商">租户 {{ settlementDetail.supplier_tenant_id }}</el-descriptions-item>
+          <el-descriptions-item label="分销商">租户 {{ settlementDetail.distributor_tenant_id }}</el-descriptions-item>
+          <el-descriptions-item label="履约总额">¥{{ cents(settlementDetail.gross_cents) }}</el-descriptions-item>
+          <el-descriptions-item label="退款冲减">¥{{ cents(settlementDetail.refund_cents) }}</el-descriptions-item>
+          <el-descriptions-item label="佣金">¥{{ cents(settlementDetail.commission_cents) }}</el-descriptions-item>
+          <el-descriptions-item label="追加调整">{{ signedCents(settlementDetail.adjustment_cents) }}</el-descriptions-item>
+          <el-descriptions-item label="最终应结"><strong>¥{{ cents(settlementPayable) }}</strong></el-descriptions-item>
+          <el-descriptions-item label="状态"><el-tag :type="settlementStatusType(settlementDetail.status)">{{ settlementStatusText(settlementDetail.status) }}</el-tag></el-descriptions-item>
+          <el-descriptions-item v-if="settlementDetail.dispute_reason" label="争议原因" :span="3">{{ settlementDetail.dispute_reason }}</el-descriptions-item>
+          <el-descriptions-item v-if="settlementDetail.payment_proof" label="付款凭证" :span="3">{{ settlementDetail.payment_proof }}</el-descriptions-item>
+        </el-descriptions>
+
+        <section v-if="settlementDetail">
+          <h3 class="detail-title">履约结算行</h3>
+          <el-table :data="settlementDetail.lines || []" size="small" border>
+            <el-table-column prop="fulfillment_order_id" label="履约单 ID" width="120" />
+            <el-table-column label="履约总额"><template #default="{ row }">¥{{ cents(row.gross_cents) }}</template></el-table-column>
+            <el-table-column label="退款冲减"><template #default="{ row }">¥{{ cents(row.refund_cents) }}</template></el-table-column>
+            <el-table-column label="佣金"><template #default="{ row }">¥{{ cents(row.commission_cents) }}</template></el-table-column>
+            <el-table-column label="净额"><template #default="{ row }">¥{{ cents(row.net_cents) }}</template></el-table-column>
+          </el-table>
+        </section>
+
+        <section v-if="settlementDetail?.adjustments?.length">
+          <h3 class="detail-title">争议调整记录</h3>
+          <el-table :data="settlementDetail.adjustments" size="small">
+            <el-table-column prop="sequence" label="序号" width="70" />
+            <el-table-column label="调整金额" width="130"><template #default="{ row }">{{ signedCents(row.amount_cents) }}</template></el-table-column>
+            <el-table-column prop="actor_tenant_id" label="操作租户" width="100" />
+            <el-table-column prop="reason" label="原因" min-width="260" />
+            <el-table-column prop="created_at" label="时间" width="180" />
+          </el-table>
+        </section>
+
+        <div v-if="settlementDetail" class="flex justify-end gap-2">
+          <el-button v-if="canSupplierConfirm" type="primary" :loading="settlementActionLoading" @click="updateSettlementStatus('supplier_confirmed')">供应商确认</el-button>
+          <el-button v-if="canDistributorConfirm" type="success" :loading="settlementActionLoading" @click="updateSettlementStatus('confirmed')">分销商确认</el-button>
+          <el-button v-if="canDispute" type="warning" :loading="settlementActionLoading" @click="disputeSettlement">提出争议</el-button>
+          <el-button v-if="canAdjust" type="warning" plain @click="settlementAdjustmentDialog = true">追加调整</el-button>
+          <el-button v-if="canMarkPaid" type="success" :loading="settlementActionLoading" @click="markSettlementPaid">登记付款</el-button>
+        </div>
+      </div>
+      <template #footer><el-button @click="settlementDialog = false">关闭</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="settlementAdjustmentDialog" title="追加争议调整" width="520px" append-to-body>
+      <el-form label-position="top">
+        <el-form-item label="调整金额"><el-input-number v-model="settlementAdjustment.amount" :precision="2" :step="1" :controls="false" class="w-full" /><div class="text-xs text-gray-500 mt-1">正数增加应结，负数减少应结。</div></el-form-item>
+        <el-form-item label="调整原因" required><el-input v-model="settlementAdjustment.reason" type="textarea" :rows="3" maxlength="255" show-word-limit /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="settlementAdjustmentDialog = false">取消</el-button><el-button type="primary" :loading="settlementActionLoading" @click="submitSettlementAdjustment">追加并重新确认</el-button></template>
+    </el-dialog>
 
     <el-dialog v-model="shiftDialog" title="班次对账与复核" width="860px" align-center :close-on-click-modal="false">
       <div v-loading="shiftDetailLoading" class="shift-detail">
@@ -150,7 +231,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, onMounted } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 
 const user = computed<any>(() => {
@@ -160,16 +241,34 @@ const capabilities = computed(() => new Set((user.value.capabilities || []).filt
 const hasCapability = (value: string) => capabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(hasCapability)
 const isSupervisor = computed(() => ['admin', 'super_admin'].includes(user.value.role))
+const currentTenantID = computed(() => Number(user.value.tenant_id || 0))
 const firstTab = () => hasCapability('supplier') ? 'scenic' : hasCapability('travel_agency') ? 'teams' : 'channels'
 const activeTab = ref(firstTab())
 const loading = ref(false)
 const rows = reactive<Record<string, any[]>>({ scenic: [], channels: [], teams: [], settlements: [], ledger: [], shifts: [], prints: [], alerts: [] })
+const financialAccounts = ref<any[]>([])
 const endpoints: Record<string, string> = {
   scenic: '/scenic-areas', channels: '/channel-accounts', teams: '/teams', settlements: '/settlements', ledger: '/finance/ledger', shifts: '/operations/shifts', prints: '/operations/print-jobs', alerts: '/operations/alerts'
 }
 const loadActiveTab = async () => {
   loading.value = true
   try {
+    if (activeTab.value === 'ledger') {
+      const accountRequests: Promise<any>[] = []
+      const ledgerRequests: Promise<any>[] = []
+      if (hasCapability('supplier')) {
+        accountRequests.push(request.get('/finance/managed-accounts'))
+        ledgerRequests.push(request.get('/finance/managed-ledger', { params: { page: 1, page_size: 100 } }))
+      }
+      if (hasCapability('distributor')) {
+        accountRequests.push(request.get('/finance/accounts'))
+        ledgerRequests.push(request.get('/finance/ledger', { params: { page: 1, page_size: 100 } }))
+      }
+      const [accountResponses, ledgerResponses] = await Promise.all([Promise.all(accountRequests), Promise.all(ledgerRequests)])
+      financialAccounts.value = accountResponses.flatMap((response, index) => (response.data.data || []).map((row: any) => ({ ...row, side: hasCapability('supplier') && index === 0 ? 'managed' : 'owned' })))
+      rows.ledger = ledgerResponses.flatMap(response => response.data.data || []).sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
+      return
+    }
     const response = await request.get(endpoints[activeTab.value], { params: { page: 1, page_size: 100 } })
     rows[activeTab.value] = response.data.data || []
   } finally { loading.value = false }
@@ -179,6 +278,89 @@ const signedCents = (value: number) => `${Number(value || 0) > 0 ? '+' : Number(
 const varianceClass = (value: number) => Number(value || 0) === 0 ? 'variance-ok' : 'variance-alert'
 const shiftStatusLabel = (status: string) => ({ open: '当班中', closed: '待复核', reconciled: '已复核' } as Record<string, string>)[status] || status
 const shiftStatusType = (status: string) => status === 'reconciled' ? 'success' : status === 'closed' ? 'warning' : 'primary'
+
+const settlementDialog = ref(false)
+const settlementDetailLoading = ref(false)
+const settlementActionLoading = ref(false)
+const settlementDetail = ref<any>(null)
+const generateSettlementDialog = ref(false)
+const settlementGenerate = reactive<{ distributor_tenant_id: number, period: string[] }>({ distributor_tenant_id: 0, period: [] })
+const settlementAdjustmentDialog = ref(false)
+const settlementAdjustment = reactive({ amount: 0, reason: '' })
+const settlementPayable = computed(() => Number(settlementDetail.value?.net_cents || 0) + Number(settlementDetail.value?.adjustment_cents || 0))
+const isSettlementSupplier = computed(() => currentTenantID.value > 0 && currentTenantID.value === Number(settlementDetail.value?.supplier_tenant_id))
+const isSettlementDistributor = computed(() => currentTenantID.value > 0 && currentTenantID.value === Number(settlementDetail.value?.distributor_tenant_id))
+const canSupplierConfirm = computed(() => settlementDetail.value?.status === 'draft' && isSettlementSupplier.value)
+const canDistributorConfirm = computed(() => settlementDetail.value?.status === 'supplier_confirmed' && isSettlementDistributor.value)
+const canDispute = computed(() => ['supplier_confirmed', 'confirmed'].includes(settlementDetail.value?.status) && (isSettlementSupplier.value || isSettlementDistributor.value))
+const canAdjust = computed(() => settlementDetail.value?.status === 'disputed' && (isSettlementSupplier.value || isSettlementDistributor.value))
+const canMarkPaid = computed(() => settlementDetail.value?.status === 'confirmed' && isSettlementDistributor.value)
+const settlementStatusText = (status: string) => ({ draft: '草稿', supplier_confirmed: '供应商已确认', confirmed: '双方已确认', disputed: '有争议', paid: '已付款' } as Record<string, string>)[status] || status
+const settlementStatusType = (status: string) => status === 'paid' ? 'success' : status === 'disputed' ? 'danger' : status === 'confirmed' ? 'success' : status === 'supplier_confirmed' ? 'warning' : 'info'
+
+const loadSettlementDetail = async (id: number) => {
+  settlementDetailLoading.value = true
+  try { settlementDetail.value = (await request.get(`/settlements/${id}`)).data }
+  finally { settlementDetailLoading.value = false }
+}
+
+const openSettlement = async (row: any) => {
+  settlementDialog.value = true
+  await loadSettlementDetail(row.id)
+}
+
+const openGenerateSettlement = () => {
+  settlementGenerate.distributor_tenant_id = 0
+  settlementGenerate.period = []
+  generateSettlementDialog.value = true
+}
+
+const generateSettlement = async () => {
+  if (!settlementGenerate.distributor_tenant_id || settlementGenerate.period.length !== 2) { ElMessage.warning('请选择分销商和结算周期'); return }
+  settlementActionLoading.value = true
+  try {
+    const response = await request.post('/settlements/generate', { distributor_tenant_id: settlementGenerate.distributor_tenant_id, start_date: settlementGenerate.period[0], end_date: settlementGenerate.period[1] })
+    generateSettlementDialog.value = false
+    ElMessage.success('结算单已生成')
+    await loadActiveTab()
+    await openSettlement(response.data)
+  } finally { settlementActionLoading.value = false }
+}
+
+const updateSettlementStatus = async (status: string, detail = '') => {
+  if (!settlementDetail.value?.id) return
+  settlementActionLoading.value = true
+  try {
+    await request.patch(`/settlements/${settlementDetail.value.id}/status`, { status, detail })
+    ElMessage.success('结算状态已更新')
+    await loadSettlementDetail(settlementDetail.value.id)
+    await loadActiveTab()
+  } finally { settlementActionLoading.value = false }
+}
+
+const disputeSettlement = async () => {
+  const result = await ElMessageBox.prompt('请输入具体差异或争议原因', '提出结算争议', { inputType: 'textarea', inputValidator: value => value.trim() ? true : '争议原因必填' })
+  await updateSettlementStatus('disputed', result.value.trim())
+}
+
+const submitSettlementAdjustment = async () => {
+  if (!settlementDetail.value?.id || !settlementAdjustment.amount || !settlementAdjustment.reason.trim()) { ElMessage.warning('调整金额不能为 0，且必须填写原因'); return }
+  settlementActionLoading.value = true
+  try {
+    await request.post(`/settlements/${settlementDetail.value.id}/adjustments`, { amount_cents: Math.round(settlementAdjustment.amount * 100), reason: settlementAdjustment.reason.trim() })
+    settlementAdjustmentDialog.value = false
+    settlementAdjustment.amount = 0
+    settlementAdjustment.reason = ''
+    ElMessage.success('调整已追加，结算单回到重新确认流程')
+    await loadSettlementDetail(settlementDetail.value.id)
+    await loadActiveTab()
+  } finally { settlementActionLoading.value = false }
+}
+
+const markSettlementPaid = async () => {
+  const result = await ElMessageBox.prompt('填写银行流水号、转账单号或付款凭证位置', '登记付款', { inputValidator: value => value.trim() ? true : '付款凭证必填' })
+  await updateSettlementStatus('paid', result.value.trim())
+}
 
 const shiftDialog = ref(false)
 const shiftDetailLoading = ref(false)

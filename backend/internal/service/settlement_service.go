@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"ticket-backend/internal/model"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type SettlementService struct{}
@@ -162,13 +164,54 @@ func (s *SettlementService) GetStatement(tenantID, statementID uint) (*model.Set
 		return nil, errors.New("tenant and statement are required")
 	}
 	var statement model.SettlementStatement
-	if err := model.DB.Preload("Lines").Where("id = ? AND (supplier_tenant_id = ? OR distributor_tenant_id = ?)", statementID, tenantID, tenantID).First(&statement).Error; err != nil {
+	if err := model.DB.Preload("Lines").Preload("Adjustments", func(db *gorm.DB) *gorm.DB { return db.Order("sequence ASC") }).Where("id = ? AND (supplier_tenant_id = ? OR distributor_tenant_id = ?)", statementID, tenantID, tenantID).First(&statement).Error; err != nil {
 		return nil, err
 	}
 	return &statement, nil
 }
 
-func (s *SettlementService) SetStatus(tenantID, statementID uint, status, detail string) error {
+func (s *SettlementService) AdjustDisputed(tenantID, statementID, actorUserID uint, amountCents int64, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if tenantID == 0 || statementID == 0 || amountCents == 0 || reason == "" {
+		return errors.New("statement, non-zero adjustment and reason are required")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var statement model.SettlementStatement
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND (supplier_tenant_id = ? OR distributor_tenant_id = ?)", statementID, tenantID, tenantID).First(&statement).Error; err != nil {
+			return err
+		}
+		if statement.Status != "disputed" {
+			return errors.New("only a disputed statement can be adjusted")
+		}
+		newAdjustment := statement.AdjustmentCents + amountCents
+		if statement.NetCents+newAdjustment < 0 {
+			return errors.New("adjusted settlement payable cannot be negative")
+		}
+		var count int64
+		if err := tx.Model(&model.SettlementAdjustment{}).Where("statement_id = ?", statement.ID).Count(&count).Error; err != nil {
+			return err
+		}
+		adjustment := model.SettlementAdjustment{
+			StatementID: statement.ID, Sequence: int(count) + 1, ActorTenantID: tenantID, ActorUserID: actorUserID,
+			AmountCents: amountCents, PreviousAdjustmentCents: statement.AdjustmentCents, NewAdjustmentCents: newAdjustment, Reason: reason,
+		}
+		if err := tx.Create(&adjustment).Error; err != nil {
+			return err
+		}
+		updates := map[string]interface{}{
+			"adjustment_cents": newAdjustment, "status": "draft", "supplier_confirmed_at": nil,
+			"distributor_confirmed_at": nil, "confirmed_at": nil,
+		}
+		if err := tx.Model(&statement).Updates(updates).Error; err != nil {
+			return err
+		}
+		return recordAuditTx(tx, actorUserID, tenantID, "admin", "tenant", "settlement.adjust", "settlement_statement", statement.ID, reason,
+			fmt.Sprintf(`{"status":%q,"adjustment_cents":%d}`, statement.Status, statement.AdjustmentCents),
+			fmt.Sprintf(`{"status":"draft","adjustment_cents":%d}`, newAdjustment))
+	})
+}
+
+func (s *SettlementService) SetStatus(tenantID, statementID uint, status, detail string, actorUserIDs ...uint) error {
 	if status != "supplier_confirmed" && status != "confirmed" && status != "paid" && status != "disputed" {
 		return errors.New("invalid settlement status")
 	}
@@ -178,6 +221,7 @@ func (s *SettlementService) SetStatus(tenantID, statementID uint, status, detail
 			return err
 		}
 		now := time.Now()
+		beforeStatus := statement.Status
 		values := map[string]interface{}{"status": status}
 		switch status {
 		case "supplier_confirmed":
@@ -209,6 +253,26 @@ func (s *SettlementService) SetStatus(tenantID, statementID uint, status, detail
 			values["paid_at"] = now
 			values["payment_proof"] = detail
 		}
-		return tx.Model(&statement).Updates(values).Error
+		if err := tx.Model(&statement).Updates(values).Error; err != nil {
+			return err
+		}
+		if status == "paid" {
+			if err := tx.Model(&model.SettlementLine{}).Where("statement_id = ?", statement.ID).Update("status", "paid").Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&model.FulfillmentOrder{}).Where("id IN (SELECT fulfillment_order_id FROM settlement_lines WHERE statement_id = ?)", statement.ID).Update("settlement_status", "paid").Error; err != nil {
+				return err
+			}
+		}
+		actorUserID := uint(0)
+		if len(actorUserIDs) > 0 {
+			actorUserID = actorUserIDs[0]
+		}
+		reason := strings.TrimSpace(detail)
+		if reason == "" {
+			reason = "settlement status changed to " + status
+		}
+		return recordAuditTx(tx, actorUserID, tenantID, "admin", "tenant", "settlement.status", "settlement_statement", statement.ID, reason,
+			fmt.Sprintf(`{"status":%q}`, beforeStatus), fmt.Sprintf(`{"status":%q}`, status))
 	})
 }

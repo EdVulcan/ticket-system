@@ -190,6 +190,7 @@ func InitRouter(r *gin.Engine) {
 		distGroup.GET("/offers", distController.ListOffers)
 		distGroup.PATCH("/offers/:id/status", distController.SetOfferStatus)
 		distGroup.GET("/fulfillments", distController.ListFulfillmentOrders)
+		distGroup.GET("/fulfillments/:id", distController.GetFulfillmentOrder)
 		distGroup.GET("/products", distController.ListDistributableProducts)
 		distGroup.POST("/products/import", distController.ImportProduct)
 		distGroup.POST("/listings/:id/sync", distController.SyncListing)
@@ -309,6 +310,7 @@ func InitRouter(r *gin.Engine) {
 		settlementGroup.GET("/:id", settlementController.Get)
 		settlementGroup.POST("/generate", settlementController.Generate)
 		settlementGroup.PATCH("/:id/status", settlementController.SetStatus)
+		settlementGroup.POST("/:id/adjustments", settlementController.Adjust)
 	}
 
 	// Report Routes

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -323,6 +324,47 @@ type FulfillmentOrderView struct {
 	UsedCount   int64 `json:"used_count"`
 }
 
+type FulfillmentTicketView struct {
+	ID             uint                  `json:"id"`
+	TicketCode     string                `json:"ticket_code"`
+	Status         string                `json:"status"`
+	Entitlement    string                `json:"entitlement_status"`
+	VisitorName    string                `json:"visitor_name"`
+	VisitorPhone   string                `json:"visitor_phone"`
+	VisitorID      string                `json:"visitor_id"`
+	VisitorRegion  string                `json:"visitor_region"`
+	CheckInCount   int                   `json:"check_in_count"`
+	CheckInRecords []model.CheckInRecord `json:"check_in_records"`
+}
+
+type FulfillmentItemView struct {
+	ID                   uint                    `json:"id"`
+	ProductName          string                  `json:"product_name"`
+	Quantity             int                     `json:"quantity"`
+	UseDate              *time.Time              `json:"use_date,omitempty"`
+	StockSlot            string                  `json:"stock_slot,omitempty"`
+	SettlementPriceCents int64                   `json:"settlement_price_cents"`
+	CommissionBPS        int64                   `json:"commission_bps"`
+	Tickets              []FulfillmentTicketView `json:"tickets"`
+}
+
+type FulfillmentSettlementView struct {
+	GrossCents      int64  `json:"gross_cents"`
+	RefundCents     int64  `json:"refund_cents"`
+	CommissionCents int64  `json:"commission_cents"`
+	NetCents        int64  `json:"net_cents"`
+	StatementID     uint   `json:"statement_id,omitempty"`
+	StatementNo     string `json:"statement_no,omitempty"`
+	StatementStatus string `json:"statement_status,omitempty"`
+}
+
+type FulfillmentDetailView struct {
+	Fulfillment model.FulfillmentOrder    `json:"fulfillment"`
+	Items       []FulfillmentItemView     `json:"items"`
+	AfterSales  []model.AfterSaleRequest  `json:"after_sales"`
+	Settlement  FulfillmentSettlementView `json:"settlement"`
+}
+
 func (s *DistributionService) ListFulfillmentOrders(supplierTenantID, distributorTenantID uint, status string, page, pageSize int) ([]FulfillmentOrderView, int64, error) {
 	if supplierTenantID == 0 {
 		return nil, 0, errors.New("supplier tenant is required")
@@ -363,6 +405,126 @@ func (s *DistributionService) ListFulfillmentOrders(supplierTenantID, distributo
 		views = append(views, FulfillmentOrderView{FulfillmentOrder: orders[i], TicketCount: ticketCount, UsedCount: usedCount})
 	}
 	return views, total, nil
+}
+
+// GetFulfillmentOrder returns only facts owned by the supplier fulfillment
+// projection. It intentionally does not expose unrelated items from the sales
+// tenant's order when one sales order spans multiple suppliers.
+func (s *DistributionService) GetFulfillmentOrder(supplierTenantID, fulfillmentID uint) (*FulfillmentDetailView, error) {
+	if supplierTenantID == 0 || fulfillmentID == 0 {
+		return nil, errors.New("supplier tenant and fulfillment are required")
+	}
+	if err := requireActiveTenantCapability(model.DB, supplierTenantID, "supplier"); err != nil {
+		return nil, err
+	}
+	var fulfillment model.FulfillmentOrder
+	if err := model.DB.Where("id = ? AND supplier_tenant_id = ?", fulfillmentID, supplierTenantID).First(&fulfillment).Error; err != nil {
+		return nil, err
+	}
+	var items []model.OrderItem
+	if err := model.DB.Where("fulfillment_order_id = ? AND fulfillment_tenant_id = ?", fulfillment.ID, supplierTenantID).Order("id ASC").Find(&items).Error; err != nil {
+		return nil, err
+	}
+	var tickets []model.Ticket
+	if err := model.DB.Where("fulfillment_order_id = ? AND fulfillment_tenant_id = ?", fulfillment.ID, supplierTenantID).Order("id ASC").Find(&tickets).Error; err != nil {
+		return nil, err
+	}
+	ticketIDs := make([]uint, 0, len(tickets))
+	ticketCodes := make(map[string]struct{}, len(tickets))
+	for i := range tickets {
+		ticketIDs = append(ticketIDs, tickets[i].ID)
+		ticketCodes[tickets[i].TicketCode] = struct{}{}
+	}
+	var entitlements []model.TicketEntitlement
+	var visitors []model.OrderVisitor
+	var checkIns []model.CheckInRecord
+	if len(ticketIDs) > 0 {
+		if err := model.DB.Where("supplier_tenant_id = ? AND fulfillment_order_id = ? AND ticket_id IN ?", supplierTenantID, fulfillment.ID, ticketIDs).Find(&entitlements).Error; err != nil {
+			return nil, err
+		}
+		if err := model.DB.Where("order_id = ? AND ticket_id IN ?", fulfillment.SalesOrderID, ticketIDs).Find(&visitors).Error; err != nil {
+			return nil, err
+		}
+		if err := model.DB.Preload("CheckPoint").Where("tenant_id = ? AND scenic_area_id = ? AND ticket_id IN ?", supplierTenantID, fulfillment.ScenicAreaID, ticketIDs).Order("check_in_time ASC").Find(&checkIns).Error; err != nil {
+			return nil, err
+		}
+	}
+	entitlementByTicket := make(map[uint]string, len(entitlements))
+	for i := range entitlements {
+		entitlementByTicket[entitlements[i].TicketID] = entitlements[i].Status
+	}
+	visitorByTicket := make(map[uint]model.OrderVisitor, len(visitors))
+	for i := range visitors {
+		visitorByTicket[visitors[i].TicketID] = visitors[i]
+	}
+	checkInsByTicket := make(map[uint][]model.CheckInRecord)
+	for i := range checkIns {
+		checkInsByTicket[checkIns[i].TicketID] = append(checkInsByTicket[checkIns[i].TicketID], checkIns[i])
+	}
+	ticketsByItem := make(map[uint][]FulfillmentTicketView)
+	for i := range tickets {
+		ticket := &tickets[i]
+		visitor := visitorByTicket[ticket.ID]
+		name, phone, identity, region := ticket.VisitorName, ticket.VisitorPhone, ticket.VisitorID, ticket.VisitorRegion
+		if visitor.ID != 0 {
+			name, phone, identity, region = visitor.Name, visitor.Phone, visitor.IdentityNo, visitor.Region
+		}
+		ticketsByItem[ticket.OrderItemID] = append(ticketsByItem[ticket.OrderItemID], FulfillmentTicketView{
+			ID: ticket.ID, TicketCode: ticket.TicketCode, Status: ticket.Status, Entitlement: entitlementByTicket[ticket.ID],
+			VisitorName: name, VisitorPhone: phone, VisitorID: identity, VisitorRegion: region,
+			CheckInCount: ticket.CheckInCount, CheckInRecords: checkInsByTicket[ticket.ID],
+		})
+	}
+	itemViews := make([]FulfillmentItemView, 0, len(items))
+	for i := range items {
+		item := &items[i]
+		itemViews = append(itemViews, FulfillmentItemView{
+			ID: item.ID, ProductName: item.ProductName, Quantity: item.Quantity, UseDate: item.UseDate, StockSlot: item.StockSlot,
+			SettlementPriceCents: moneyCents(item.SettlementPrice), CommissionBPS: item.CommissionBPS, Tickets: ticketsByItem[item.ID],
+		})
+	}
+	var afterSales []model.AfterSaleRequest
+	if err := model.DB.Where("tenant_id = ? AND order_no = ?", fulfillment.SalesTenantID, fulfillment.SalesOrderNo).Order("created_at DESC").Find(&afterSales).Error; err != nil {
+		return nil, err
+	}
+	visibleAfterSales := make([]model.AfterSaleRequest, 0, len(afterSales))
+	for i := range afterSales {
+		var codes []string
+		if strings.TrimSpace(afterSales[i].TicketCodesJSON) != "" {
+			if err := json.Unmarshal([]byte(afterSales[i].TicketCodesJSON), &codes); err != nil {
+				return nil, fmt.Errorf("invalid after-sale ticket allocation: %w", err)
+			}
+		}
+		if len(codes) == 0 || codeListIntersects(codes, ticketCodes) {
+			visibleAfterSales = append(visibleAfterSales, afterSales[i])
+		}
+	}
+	gross, refundCents, commission, err := settlementAmountsForFulfillment(model.DB, &fulfillment)
+	if err != nil {
+		return nil, err
+	}
+	settlement := FulfillmentSettlementView{GrossCents: gross, RefundCents: refundCents, CommissionCents: commission, NetCents: gross - refundCents - commission}
+	var line model.SettlementLine
+	if err := model.DB.Where("fulfillment_order_id = ?", fulfillment.ID).First(&line).Error; err == nil {
+		settlement.StatementID = line.StatementID
+		var statement model.SettlementStatement
+		if err := model.DB.Where("id = ? AND supplier_tenant_id = ?", line.StatementID, supplierTenantID).First(&statement).Error; err != nil {
+			return nil, err
+		}
+		settlement.StatementNo, settlement.StatementStatus = statement.StatementNo, statement.Status
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	return &FulfillmentDetailView{Fulfillment: fulfillment, Items: itemViews, AfterSales: visibleAfterSales, Settlement: settlement}, nil
+}
+
+func codeListIntersects(codes []string, wanted map[string]struct{}) bool {
+	for _, code := range codes {
+		if _, ok := wanted[strings.TrimSpace(code)]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *DistributionService) ImportProduct(agentTenantID, sourceProductID uint, name string, price float64, productType string) error {

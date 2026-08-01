@@ -29,10 +29,10 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if err := db.Order("version DESC").First(&latest).Error; err != nil {
 		t.Fatal(err)
 	}
-	if latest.Version != 49 {
-		t.Fatalf("latest migration=%d, want 49", latest.Version)
+	if latest.Version != 50 {
+		t.Fatalf("latest migration=%d, want 50", latest.Version)
 	}
-	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "pos_shifts", "pos_shift_corrections", "pos_holds", "settlement_statements", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements", "channel_bill_records", "channel_reconciliations", "migration_audit_issues", "order_visitors"} {
+	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "pos_shifts", "pos_shift_corrections", "pos_holds", "settlement_statements", "settlement_adjustments", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements", "channel_bill_records", "channel_reconciliations", "migration_audit_issues", "order_visitors"} {
 		var count int64
 		if err := db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count).Error; err != nil {
 			t.Fatal(err)

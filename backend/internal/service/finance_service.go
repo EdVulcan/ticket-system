@@ -171,6 +171,8 @@ func (s *FinanceService) ListAccounts(agentTenantID uint) ([]map[string]interfac
 			"balance_cents":     acc.BalanceCents,
 			"credit_line":       acc.CreditLine,
 			"credit_line_cents": acc.CreditLineCents,
+			"used_credit":       acc.UsedCredit,
+			"used_credit_cents": acc.UsedCreditCents,
 			"frozen":            acc.FrozenAmount,
 			"frozen_cents":      acc.FrozenCents,
 			"status":            acc.Status,
@@ -192,8 +194,13 @@ func (s *FinanceService) ListManagedAccounts(managerTenantID uint) ([]map[string
 	}
 	result := make([]map[string]interface{}, 0, len(accounts))
 	for _, account := range accounts {
+		var owner model.Tenant
+		if err := model.DB.Select("id", "name", "system_code").First(&owner, account.OwnerTenantID).Error; err != nil {
+			return nil, err
+		}
 		result = append(result, map[string]interface{}{
 			"id": account.ID, "owner_tenant_id": account.OwnerTenantID, "manager_tenant_id": account.ManagerTenantID,
+			"owner_name": owner.Name, "owner_code": owner.SystemCode,
 			"balance_cents": account.BalanceCents, "credit_line_cents": account.CreditLineCents,
 			"used_credit_cents": account.UsedCreditCents, "frozen_cents": account.FrozenCents, "status": account.Status,
 		})

@@ -93,34 +93,80 @@
             </el-table>
         </el-tab-pane>
 
-        <el-tab-pane v-if="canSupply" label="Fulfillment worklist" name="fulfillments">
+        <el-tab-pane v-if="canSupply" label="供应履约" name="fulfillments">
             <div class="flex items-center justify-between mb-4 mt-2">
                 <div class="flex gap-2 items-center">
-                    <el-select v-model="fulfillmentStatus" clearable placeholder="All statuses" style="width: 160px" @change="fetchFulfillments">
-                        <el-option label="Reserved" value="reserved" />
-                        <el-option label="Paid" value="paid" />
-                        <el-option label="Fulfilled" value="fulfilled" />
-                        <el-option label="Cancelled" value="cancelled" />
+                    <el-select v-model="fulfillmentStatus" clearable placeholder="全部状态" style="width: 160px" @change="fetchFulfillments">
+                        <el-option label="已预占" value="reserved" />
+                        <el-option label="已支付" value="paid" />
+                        <el-option label="已履约" value="fulfilled" />
+                        <el-option label="已取消" value="cancelled" />
                     </el-select>
-                    <el-input v-model="fulfillmentDistributorId" placeholder="Distributor tenant ID" style="width: 180px" @keyup.enter="fetchFulfillments" />
+                    <el-input v-model="fulfillmentDistributorId" placeholder="分销商租户 ID" style="width: 180px" @keyup.enter="fetchFulfillments" />
                 </div>
                 <el-button link type="primary" @click="fetchFulfillments"><el-icon><Refresh /></el-icon></el-button>
             </div>
             <el-table :data="fulfillments" style="width: 100%" v-loading="loadingFulfillments" stripe>
-                <el-table-column prop="fulfillment_no" label="Fulfillment" min-width="180" />
-                <el-table-column prop="sales_order_no" label="Sales order" min-width="180" />
-                <el-table-column prop="sales_tenant_id" label="Distributor" width="100" />
-                <el-table-column prop="scenic_area_id" label="Scenic area" width="100" />
-                <el-table-column prop="settlement_amount" label="Settlement" width="110" />
-                <el-table-column prop="status" label="Status" width="110" />
-                <el-table-column label="Tickets" width="100">
-                    <template #default="{ row }">{{ row.used_count }}/{{ row.ticket_count }} used</template>
+                <el-table-column prop="fulfillment_no" label="履约单" min-width="190" />
+                <el-table-column prop="sales_order_no" label="销售订单" min-width="190" />
+                <el-table-column prop="sales_tenant_id" label="分销商" width="100" />
+                <el-table-column prop="scenic_area_id" label="景区" width="90" />
+                <el-table-column label="应结" width="110"><template #default="{ row }">¥{{ Number(row.settlement_amount || 0).toFixed(2) }}</template></el-table-column>
+                <el-table-column label="状态" width="110"><template #default="{ row }">{{ fulfillmentStatusText(row.status) }}</template></el-table-column>
+                <el-table-column label="票数" width="120">
+                    <template #default="{ row }">{{ row.used_count }}/{{ row.ticket_count }} 已核销</template>
                 </el-table-column>
+                <el-table-column label="操作" width="90" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openFulfillment(row)">详情</el-button></template></el-table-column>
             </el-table>
         </el-tab-pane>
 
       </el-tabs>
     </div>
+
+    <el-drawer v-model="fulfillmentDrawer" title="供应履约详情" size="78%" destroy-on-close>
+      <div v-loading="loadingFulfillmentDetail" class="space-y-6">
+        <el-descriptions v-if="fulfillmentDetail" :column="3" border>
+          <el-descriptions-item label="履约单">{{ fulfillmentDetail.fulfillment.fulfillment_no }}</el-descriptions-item>
+          <el-descriptions-item label="销售订单">{{ fulfillmentDetail.fulfillment.sales_order_no }}</el-descriptions-item>
+          <el-descriptions-item label="履约状态">{{ fulfillmentStatusText(fulfillmentDetail.fulfillment.status) }}</el-descriptions-item>
+          <el-descriptions-item label="分销商租户">{{ fulfillmentDetail.fulfillment.sales_tenant_id }}</el-descriptions-item>
+          <el-descriptions-item label="履约景区">{{ fulfillmentDetail.fulfillment.scenic_area_id }}</el-descriptions-item>
+          <el-descriptions-item label="结算状态">{{ fulfillmentDetail.settlement.statement_status ? settlementStatusText(fulfillmentDetail.settlement.statement_status) : '尚未生成结算单' }}</el-descriptions-item>
+        </el-descriptions>
+
+        <div v-if="fulfillmentDetail" class="grid grid-cols-4 gap-3">
+          <div class="bg-gray-50 p-4"><div class="text-xs text-gray-500">履约总额</div><strong>¥{{ centsToYuan(fulfillmentDetail.settlement.gross_cents) }}</strong></div>
+          <div class="bg-gray-50 p-4"><div class="text-xs text-gray-500">退款冲减</div><strong>¥{{ centsToYuan(fulfillmentDetail.settlement.refund_cents) }}</strong></div>
+          <div class="bg-gray-50 p-4"><div class="text-xs text-gray-500">佣金</div><strong>¥{{ centsToYuan(fulfillmentDetail.settlement.commission_cents) }}</strong></div>
+          <div class="bg-gray-50 p-4"><div class="text-xs text-gray-500">应结净额</div><strong class="text-green-700">¥{{ centsToYuan(fulfillmentDetail.settlement.net_cents) }}</strong></div>
+        </div>
+
+        <section v-for="item in fulfillmentDetail?.items || []" :key="item.id">
+          <div class="flex items-center justify-between mb-2">
+            <strong>{{ item.product_name }}</strong>
+            <span class="text-sm text-gray-500">{{ formatDate(item.use_date) }} · {{ item.quantity }} 张 · 结算价 ¥{{ centsToYuan(item.settlement_price_cents) }}</span>
+          </div>
+          <el-table :data="item.tickets" size="small" border>
+            <el-table-column prop="ticket_code" label="票码" min-width="180" />
+            <el-table-column label="游客" min-width="160"><template #default="{ row }"><div>{{ row.visitor_name || '-' }}</div><div class="text-xs text-gray-400">{{ row.visitor_phone || '-' }}</div></template></el-table-column>
+            <el-table-column prop="visitor_id" label="证件号" min-width="180" show-overflow-tooltip />
+            <el-table-column label="票状态" width="110"><template #default="{ row }">{{ ticketStatusText(row.entitlement_status || row.status) }}</template></el-table-column>
+            <el-table-column label="核销记录" min-width="240"><template #default="{ row }"><span v-if="!row.check_in_records?.length">暂无</span><div v-for="record in row.check_in_records || []" :key="record.id" class="text-xs">{{ formatDateTime(record.check_in_time) }} · {{ record.check_point?.name || `检票点 ${record.check_point_id}` }} · {{ record.result === 'success' ? '成功' : '失败' }}</div></template></el-table-column>
+          </el-table>
+        </section>
+
+        <section v-if="fulfillmentDetail">
+          <h3 class="font-semibold mb-2">退款与售后责任</h3>
+          <el-table :data="fulfillmentDetail.after_sales" size="small" empty-text="该履约单暂无售后记录">
+            <el-table-column prop="request_no" label="售后单" min-width="180" />
+            <el-table-column label="类型" width="100"><template #default="{ row }">{{ afterSaleTypeText(row.type) }}</template></el-table-column>
+            <el-table-column label="状态" width="110"><template #default="{ row }">{{ afterSaleStatusText(row.status) }}</template></el-table-column>
+            <el-table-column label="退款金额" width="120"><template #default="{ row }">¥{{ centsToYuan(row.amount_cents) }}</template></el-table-column>
+            <el-table-column prop="reason" label="原因" min-width="220" />
+          </el-table>
+        </section>
+      </div>
+    </el-drawer>
 
     <!-- Apply Dialog -->
     <el-dialog v-model="dialogVisible" title="申请代理权益" width="500px">
@@ -304,6 +350,9 @@ const loadingFulfillments = ref(false)
 const fulfillments = ref<any[]>([])
 const fulfillmentStatus = ref('')
 const fulfillmentDistributorId = ref('')
+const fulfillmentDrawer = ref(false)
+const loadingFulfillmentDetail = ref(false)
+const fulfillmentDetail = ref<any>(null)
 
 // Apply Dialog State
 const dialogVisible = ref(false)
@@ -394,6 +443,28 @@ const fetchFulfillments = async () => {
         loadingFulfillments.value = false
     }
 }
+
+const openFulfillment = async (row: any) => {
+    fulfillmentDrawer.value = true
+    loadingFulfillmentDetail.value = true
+    fulfillmentDetail.value = null
+    try {
+        fulfillmentDetail.value = (await request.get(`/distribution/fulfillments/${row.id}`)).data
+    } catch (e: any) {
+        ElMessage.error(e.response?.data?.error || '履约详情加载失败')
+    } finally {
+        loadingFulfillmentDetail.value = false
+    }
+}
+
+const centsToYuan = (value: number) => (Number(value || 0) / 100).toFixed(2)
+const formatDate = (value: string) => value ? new Date(value).toLocaleDateString('zh-CN') : '未指定日期'
+const formatDateTime = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
+const fulfillmentStatusText = (value: string) => ({ reserved: '已预占', paid: '已支付', fulfilled: '已履约', cancelled: '已取消' } as any)[value] || value
+const settlementStatusText = (value: string) => ({ draft: '草稿', supplier_confirmed: '供应商已确认', confirmed: '双方已确认', disputed: '有争议', paid: '已付款' } as any)[value] || value
+const ticketStatusText = (value: string) => ({ issued: '已出票', active: '可使用', unused: '未使用', used: '已核销', refunded: '已退款', void: '已作废', expired: '已过期' } as any)[value] || value
+const afterSaleTypeText = (value: string) => ({ refund: '退票', reschedule: '改期', exchange: '换票', void: '作废', reissue: '补打' } as any)[value] || value
+const afterSaleStatusText = (value: string) => ({ pending: '待审核', approved: '已批准', processing: '处理中', completed: '已完成', rejected: '已拒绝', failed: '失败' } as any)[value] || value
 
 const handleSearch = async () => {
   if (!targetSystemCode.value) return

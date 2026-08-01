@@ -38,7 +38,7 @@ func (c *SettlementController) List(ctx *gin.Context) {
 
 func (c *SettlementController) Generate(ctx *gin.Context) {
 	var body struct {
-		SupplierTenantID    uint   `json:"supplier_tenant_id" binding:"required"`
+		SupplierTenantID    uint   `json:"supplier_tenant_id"`
 		DistributorTenantID uint   `json:"distributor_tenant_id" binding:"required"`
 		StartDate           string `json:"start_date" binding:"required"`
 		EndDate             string `json:"end_date" binding:"required"`
@@ -47,7 +47,8 @@ func (c *SettlementController) Generate(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if body.SupplierTenantID != ctx.GetUint("tenant_id") {
+	body.SupplierTenantID = ctx.GetUint("tenant_id")
+	if body.SupplierTenantID == 0 {
 		ctx.JSON(http.StatusForbidden, gin.H{"error": "settlement scope denied"})
 		return
 	}
@@ -69,6 +70,27 @@ func (c *SettlementController) Generate(ctx *gin.Context) {
 	ctx.JSON(http.StatusCreated, statement)
 }
 
+func (c *SettlementController) Adjust(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid statement id"})
+		return
+	}
+	var body struct {
+		AmountCents int64  `json:"amount_cents" binding:"required"`
+		Reason      string `json:"reason" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.AdjustDisputed(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), body.AmountCents, body.Reason); err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"status": "draft"})
+}
+
 func (c *SettlementController) SetStatus(ctx *gin.Context) {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
 	if err != nil {
@@ -83,7 +105,7 @@ func (c *SettlementController) SetStatus(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := c.Service.SetStatus(ctx.GetUint("tenant_id"), uint(id), body.Status, body.Detail); err != nil {
+	if err := c.Service.SetStatus(ctx.GetUint("tenant_id"), uint(id), body.Status, body.Detail, ctx.GetUint("user_id")); err != nil {
 		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}

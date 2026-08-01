@@ -76,6 +76,7 @@ type PlatformSettlementView struct {
 	GrossCents          int64     `json:"gross_cents"`
 	RefundCents         int64     `json:"refund_cents"`
 	CommissionCents     int64     `json:"commission_cents"`
+	AdjustmentCents     int64     `json:"adjustment_cents"`
 	NetCents            int64     `json:"net_cents"`
 	Status              string    `json:"status"`
 	CreatedAt           time.Time `json:"created_at"`
@@ -308,7 +309,7 @@ func (s *PlatformService) ListSettlements(tenantID uint, status string, page, pa
 		return nil, 0, err
 	}
 	rows := make([]PlatformSettlementView, 0)
-	err := query.Select("ss.id, ss.statement_no, ss.supplier_tenant_id, st.name AS supplier_name, ss.distributor_tenant_id, dt.name AS distributor_name, ss.gross_cents, ss.refund_cents, ss.commission_cents, ss.net_cents, ss.status, ss.created_at").
+	err := query.Select("ss.id, ss.statement_no, ss.supplier_tenant_id, st.name AS supplier_name, ss.distributor_tenant_id, dt.name AS distributor_name, ss.gross_cents, ss.refund_cents, ss.commission_cents, ss.adjustment_cents, ss.net_cents + ss.adjustment_cents AS net_cents, ss.status, ss.created_at").
 		Order("ss.created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Scan(&rows).Error
 	return rows, total, err
 }
