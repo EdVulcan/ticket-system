@@ -9,7 +9,7 @@ description: Project-specific guardrails for the multi-tenant scenic ticketing p
 
 Before changing domain code, read [the development baseline](../../../docs/platform-multitenancy-development-guide.md) completely for the affected area, then read [the current goal-alignment audit](../../../docs/current-stage-goal-alignment-audit-2026-07-31.md). Treat the baseline as the target design, the audit as the current blocker list, and the code as an evolving legacy state. Keep detailed rules in those documents; do not duplicate them here.
 
-The product is a platform for supplier scenic areas, distributors, and travel agencies. It is not a reproduction of Zhiyoubao. The current implementation is a modular Go monolith with SQLite, an admin Vue app, and an Electron POS; the next work phase is Phase 0: repair P0 domain ownership and isolation before adding new channels or storefronts.
+The product is a platform for supplier scenic areas, distributors, and travel agencies. It is not a reproduction of Zhiyoubao. The current implementation is a modular Go monolith with SQLite, a Vue admin app, and a Wails v2 + Vue POS; Electron remains only as a migration fallback. Read `docs/current-development-roadmap-2026-08-01.md` for the active six-level delivery order. Do not add channels or storefronts ahead of the current production-closure work.
 
 ## Non-negotiable invariants
 
@@ -66,5 +66,6 @@ Do not mark production-ready or start storefront/channel expansion until these a
 - Models: `backend/internal/model/models.go`, `distribution.go`, `finance.go`.
 - Core workflows: `backend/internal/service/order_service.go`, `ticket_service.go`, `distribution_service.go`, `payment_service.go`.
 - Boundaries: `backend/internal/router/router.go`, `backend/internal/api/ota_controller.go`, `backend/internal/middleware/ota_auth.go`.
-- Admin/POS: `admin/src/App.vue`, `admin/src/router/index.ts`, `admin/src/views/DistributionView.vue`, `desktop/src/renderer/src/views/SalesView.vue`.
+- Admin/POS: `admin/src/App.vue`, `admin/src/router/index.ts`, `admin/src/views/DistributionView.vue`, `admin/src/views/OperationsView.vue`, `desktop/src/renderer/src/views/SalesView.vue`, `desktop/src/renderer/src/components/PaymentModal.vue`.
 - Detailed target, risks, roadmap, test matrix, and open questions: `docs/platform-multitenancy-development-guide.md`.
+- Active implementation order and acceptance scope: `docs/current-development-roadmap-2026-08-01.md`.

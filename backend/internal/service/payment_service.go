@@ -27,6 +27,8 @@ type PaymentService struct {
 	OrderService *OrderService
 }
 
+var ErrCashTenderInsufficient = errors.New("cash tender is less than the amount due")
+
 func (s *PaymentService) GetConfig(tenantID uint, provider string) (*model.PaymentConfig, error) {
 	var paymentConfig model.PaymentConfig
 	if err := model.DB.Where("tenant_id = ? AND provider = ? AND status = ?", tenantID, provider, true).First(&paymentConfig).Error; err != nil {
@@ -116,6 +118,18 @@ func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error 
 		req.PaymentNo = generatePaymentNo()
 		req.Amount = order.TotalAmount
 		req.AmountCents = moneyCents(order.TotalAmount)
+		if req.Method == "cash" {
+			if req.TenderedCents == 0 {
+				req.TenderedCents = req.AmountCents
+			}
+			if req.TenderedCents < req.AmountCents {
+				return ErrCashTenderInsufficient
+			}
+			req.ChangeCents = req.TenderedCents - req.AmountCents
+		} else {
+			req.TenderedCents = 0
+			req.ChangeCents = 0
+		}
 		req.Status = "pending"
 		req.TransactionID = ""
 		req.CodeURL = ""

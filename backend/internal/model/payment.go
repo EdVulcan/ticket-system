@@ -34,6 +34,8 @@ type Payment struct {
 	// transitions. The decimal fields remain for backwards-compatible clients.
 	AmountCents         int64      `gorm:"not null;default:0" json:"amount_cents"`
 	RefundedAmountCents int64      `gorm:"not null;default:0" json:"refunded_amount_cents"`
+	TenderedCents       int64      `gorm:"not null;default:0" json:"tendered_cents"`
+	ChangeCents         int64      `gorm:"not null;default:0" json:"change_cents"`
 	Method              string     `gorm:"size:20" json:"method"`                   // cash, wechat, alipay
 	Status              string     `gorm:"size:20;default:'pending'" json:"status"` // pending, paid, failed, refunded
 	PaidAt              *time.Time `json:"paid_at,omitempty"`

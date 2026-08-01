@@ -74,6 +74,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 44, name: "per-ticket visitor snapshots", apply: migrateVisitorSnapshots},
 		{version: 45, name: "visitor snapshot ownership guards", apply: migrateVisitorSnapshotOwnership},
 		{version: 46, name: "POS shift reconciliation facts", apply: migratePOSShiftReconciliation},
+		{version: 47, name: "POS cash tender and shift corrections", apply: migratePOSCashAndShiftCorrections},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -185,6 +186,10 @@ func migrateVisitorSnapshotOwnership(db *gorm.DB) error {
 
 func migratePOSShiftReconciliation(db *gorm.DB) error {
 	return db.AutoMigrate(&POSShift{})
+}
+
+func migratePOSCashAndShiftCorrections(db *gorm.DB) error {
+	return db.AutoMigrate(&Payment{}, &POSShift{}, &POSShiftCorrection{})
 }
 
 func migrateTeamSettlementFacts(db *gorm.DB) error {

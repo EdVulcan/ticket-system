@@ -196,6 +196,7 @@
           <section class="settings-section">
             <div class="section-heading"><el-icon><Notebook /></el-icon><div><h2>当前班次</h2><p>{{ shiftState.isOpen ? `开始于 ${new Date(shiftState.startTime!).toLocaleString()}` : '开班后才能进行窗口收款' }}</p></div></div>
             <div class="shift-summary"><span>状态</span><el-tag :type="shiftState.isOpen ? 'success' : 'info'">{{ shiftState.isOpen ? '当班中' : '未开班' }}</el-tag></div>
+            <div v-if="shiftState.isOpen" class="shift-summary"><span>开班备用金</span><strong>¥{{ cents(shiftState.openingCents) }}</strong></div>
             <el-button :type="shiftState.isOpen ? 'danger' : 'success'" size="large" class="w-full" @click="handleShiftAction">{{ shiftState.isOpen ? '结束当班并交班' : '开始当班' }}</el-button>
           </section>
         </div>
@@ -204,6 +205,43 @@
       <el-dialog v-model="showCalc" title="计算器" width="320px" :modal="false" draggable align-center><Calculator /></el-dialog>
       <el-dialog v-model="showPayment" title="收款" width="500px" align-center :close-on-click-modal="false">
         <PaymentModal v-if="showPayment" :amount="currentOrder?.total_amount || 0" :order-no="currentOrder?.order_no || ''" :shift-id="shiftState.shiftId || 0" :device-id="posDeviceId || 0" @success="handlePaymentSuccess" />
+      </el-dialog>
+      <el-dialog v-model="showOpenShift" title="开始当班" width="420px" align-center :close-on-click-modal="false">
+        <div class="shift-dialog-intro">请清点钱箱内用于找零的备用金。该金额会计入本班应交现金。</div>
+        <el-form label-position="top">
+          <el-form-item label="开班备用金（元）">
+            <el-input-number v-model="openingAmount" :min="0" :precision="2" :step="10" :controls="false" class="money-input" />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="showOpenShift = false">取消</el-button>
+          <el-button type="success" :loading="shiftSubmitting" @click="submitOpenShift">确认开班</el-button>
+        </template>
+      </el-dialog>
+      <el-dialog v-model="showCloseShift" title="交班清点" width="720px" align-center :close-on-click-modal="false">
+        <div v-loading="shiftSummaryLoading">
+          <div class="shift-summary-grid">
+            <div v-for="method in shiftMethods" :key="method.key" class="shift-method-panel">
+              <div class="shift-method-title"><span>{{ method.label }}</span><strong>净收 ¥{{ cents(methodSummary(method.key).net_cents) }}</strong></div>
+              <div><span>实收</span><b>¥{{ cents(methodSummary(method.key).gross_cents) }}</b></div>
+              <div><span>退款</span><b>¥{{ cents(methodSummary(method.key).refund_cents) }}</b></div>
+            </div>
+          </div>
+          <div class="cash-count-panel">
+            <div class="cash-fact"><span>开班备用金</span><strong>¥{{ cents(closeSummary?.shift?.opening_cents) }}</strong></div>
+            <div class="cash-fact"><span>应交现金</span><strong>¥{{ cents(closeSummary?.cash_expected_cents) }}</strong></div>
+            <div class="cash-count-input">
+              <label>钱箱实盘（元）</label>
+              <el-input-number v-model="closingAmount" :min="0" :precision="2" :step="10" :controls="false" />
+            </div>
+            <div class="cash-difference" :class="{ balanced: closeDifferenceCents === 0 }"><span>差异</span><strong>{{ signedCents(closeDifferenceCents) }}</strong></div>
+          </div>
+          <el-form label-position="top" class="mt-4"><el-form-item label="交班说明"><el-input v-model="closingNotes" type="textarea" :rows="3" maxlength="255" show-word-limit placeholder="有差异或需交接的事项请在此说明" /></el-form-item></el-form>
+        </div>
+        <template #footer>
+          <el-button @click="showCloseShift = false">取消</el-button>
+          <el-button type="danger" :loading="shiftSubmitting" :disabled="shiftSummaryLoading" @click="submitCloseShift">确认关班</el-button>
+        </template>
       </el-dialog>
       <el-dialog v-model="showHolds" title="挂单列表" width="760px" align-center>
         <div class="flex justify-between items-center mb-3">
@@ -324,8 +362,22 @@ const shiftState = ref({
   isOpen: false,
   shiftId: null as number | null,
   startTime: null as string | null,
-  operator: '未登录员工'
+  operator: '未登录员工',
+  openingCents: 0
 })
+const showOpenShift = ref(false)
+const showCloseShift = ref(false)
+const openingAmount = ref(0)
+const closingAmount = ref(0)
+const closingNotes = ref('')
+const closeSummary = ref<any>(null)
+const shiftSummaryLoading = ref(false)
+const shiftSubmitting = ref(false)
+const shiftMethods = [
+  { key: 'cash', label: '现金' },
+  { key: 'wechat', label: '微信' },
+  { key: 'alipay', label: '支付宝' }
+]
 
 const fetchCheckPoints = async () => {
   try {
@@ -372,46 +424,63 @@ const handleShiftAction = async () => {
     return
   }
   if (!shiftState.value.isOpen) {
-    try {
-      const res = await axios.post('/operations/shifts', { device_id: deviceId, opening_cents: 0 })
-      const shift = res.data
-      shiftState.value = { isOpen: true, shiftId: shift.id, startTime: shift.opened_at, operator: currentStaff.value.name || '当前操作员' }
-      localStorage.setItem('pos_shift_state', JSON.stringify(shiftState.value))
-      ElMessage.success('已开始当班')
-    } catch (error: any) {
-      ElMessage.error(error.response?.data?.error || '开班失败')
-    }
+    openingAmount.value = 0
+    showOpenShift.value = true
   } else {
-    if (!shiftState.value.shiftId) { ElMessage.error('当前班次缺少服务端编号，请重新开班'); return }
-    try {
-      await ElMessageBox.confirm('确定要结束当前班次吗？', '交班确认', { confirmButtonText: '确认交班', cancelButtonText: '取消', type: 'warning' })
-      const input = await ElMessageBox.prompt('请输入钱箱实收金额（元）', '交班金额', { inputPattern: /^\d+(\.\d{1,2})?$/, inputErrorMessage: '请输入有效金额', confirmButtonText: '提交', cancelButtonText: '取消' })
-      const closingCents = Math.round(Number(input.value) * 100)
-      const res = await axios.post(`/operations/shifts/${shiftState.value.shiftId}/close`, { closing_cents: closingCents, notes: noteContent.value })
-      const shift = res.data
-      const endTime = new Date()
-      const duration = shiftState.value.startTime ? 
-        ((endTime.getTime() - new Date(shiftState.value.startTime).getTime()) / 1000 / 60 / 60).toFixed(1) : '0'
-      
-      const report = [
-        `操作员：${shiftState.value.operator}`,
-        `当班时长：${duration} 小时`,
-        `开始时间：${new Date(shiftState.value.startTime!).toLocaleString()}`,
-        `结束时间：${endTime.toLocaleString()}`,
-        noteContent.value ? `交班便签：${noteContent.value}` : '',
-        '请在后台查看详细销售报表。'
-      ].filter(Boolean).join('\n')
-      ElMessageBox.alert(`${report}\n\n应收：¥${(shift.expected_cents / 100).toFixed(2)}\n实收：¥${(shift.closing_cents / 100).toFixed(2)}`, '交班报告')
-      shiftState.value.isOpen = false
-      shiftState.value.shiftId = null
-      shiftState.value.startTime = null
-      localStorage.removeItem('pos_shift_state')
-      // Clear note
-      noteContent.value = ''
-      localStorage.removeItem('pos_shift_note')
-    } catch (error: any) {
-      if (error !== 'cancel' && error !== 'close') ElMessage.error(error.response?.data?.error || '交班失败')
-    }
+    await prepareCloseShift()
+  }
+}
+
+const submitOpenShift = async () => {
+  if (!posDeviceId.value) return
+  shiftSubmitting.value = true
+  try {
+    const res = await axios.post('/operations/shifts', { device_id: posDeviceId.value, opening_cents: Math.round(openingAmount.value * 100) })
+    const shift = res.data
+    shiftState.value = { isOpen: true, shiftId: shift.id, startTime: shift.opened_at, operator: currentStaff.value.name || '当前操作员', openingCents: shift.opening_cents || 0 }
+    localStorage.setItem('pos_shift_state', JSON.stringify(shiftState.value))
+    showOpenShift.value = false
+    ElMessage.success('已开始当班')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '开班失败')
+  } finally {
+    shiftSubmitting.value = false
+  }
+}
+
+const prepareCloseShift = async () => {
+  if (!shiftState.value.shiftId) { ElMessage.error('当前班次缺少服务端编号，请重新登录恢复'); return }
+  showCloseShift.value = true
+  shiftSummaryLoading.value = true
+  try {
+    const { data } = await axios.get(`/operations/shifts/${shiftState.value.shiftId}/summary`)
+    closeSummary.value = data
+    closingAmount.value = (data.cash_expected_cents || 0) / 100
+    closingNotes.value = noteContent.value
+  } catch (error: any) {
+    showCloseShift.value = false
+    ElMessage.error(error.response?.data?.error || '获取班次汇总失败')
+  } finally {
+    shiftSummaryLoading.value = false
+  }
+}
+
+const submitCloseShift = async () => {
+  if (!shiftState.value.shiftId) return
+  shiftSubmitting.value = true
+  try {
+    await axios.post(`/operations/shifts/${shiftState.value.shiftId}/close`, { closing_cents: Math.round(closingAmount.value * 100), notes: closingNotes.value })
+    const difference = closeDifferenceCents.value
+    showCloseShift.value = false
+    shiftState.value = { isOpen: false, shiftId: null, startTime: null, operator: currentStaff.value.name || '当前员工', openingCents: 0 }
+    localStorage.removeItem('pos_shift_state')
+    noteContent.value = ''
+    localStorage.removeItem('pos_shift_note')
+    ElMessage.success(difference === 0 ? '交班完成，现金账实相符' : `交班完成，现金差异 ${signedCents(difference)}`)
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '交班失败')
+  } finally {
+    shiftSubmitting.value = false
   }
 }
 
@@ -420,11 +489,11 @@ const restoreOpenShift = async () => {
   if (!deviceId) return
   try {
     const { data: shift } = await axios.get('/operations/shifts/open', { params: { device_id: deviceId } })
-    shiftState.value = { isOpen: true, shiftId: shift.id, startTime: shift.opened_at, operator: currentStaff.value.name || '当前员工' }
+    shiftState.value = { isOpen: true, shiftId: shift.id, startTime: shift.opened_at, operator: currentStaff.value.name || '当前员工', openingCents: shift.opening_cents || 0 }
     localStorage.setItem('pos_shift_state', JSON.stringify(shiftState.value))
   } catch (error: any) {
     if (error.response?.status === 404) {
-      shiftState.value = { isOpen: false, shiftId: null, startTime: null, operator: currentStaff.value.name || '当前员工' }
+      shiftState.value = { isOpen: false, shiftId: null, startTime: null, operator: currentStaff.value.name || '当前员工', openingCents: 0 }
       localStorage.removeItem('pos_shift_state')
     }
   }
@@ -576,6 +645,10 @@ const filteredProducts = computed(() => {
 })
 
 const totalAmount = computed(() => cart.value.reduce((sum, item) => sum + item.price * item.quantity, 0))
+const closeDifferenceCents = computed(() => Math.round(closingAmount.value * 100) - Number(closeSummary.value?.cash_expected_cents || 0))
+const cents = (value: number | undefined) => ((Number(value) || 0) / 100).toFixed(2)
+const signedCents = (value: number | undefined) => `${Number(value || 0) > 0 ? '+' : Number(value || 0) < 0 ? '-' : ''}¥${cents(Math.abs(Number(value || 0)))}`
+const methodSummary = (method: string) => closeSummary.value?.payments?.find((item: any) => item.method === method) || { gross_cents: 0, refund_cents: 0, net_cents: 0 }
 
 // --- Methods ---
 const updateTime = () => {
@@ -937,7 +1010,26 @@ onUnmounted(() => clearInterval(timer))
 .section-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 18px; }
 .hardware-row, .shift-summary { justify-content: space-between; min-height: 46px; border-top: 1px solid #ecefeb; }
 .hardware-row:last-child { border-bottom: 1px solid #ecefeb; }
-.shift-summary { margin-bottom: 16px; }
+.shift-summary:last-of-type { margin-bottom: 16px; }
+.shift-dialog-intro { margin-bottom: 18px; padding: 10px 12px; border: 1px solid #dfe4dc; border-radius: 6px; background: #f6f8f5; color: #626a62; font-size: 13px; line-height: 20px; }
+.money-input { width: 100%; }
+.money-input :deep(.el-input__wrapper) { min-height: 48px; }
+.money-input :deep(.el-input__inner) { text-align: left; font-size: 22px; font-weight: 700; }
+.shift-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.shift-method-panel { padding: 12px; border: 1px solid #dfe3dc; border-radius: 7px; background: #fafbf9; }
+.shift-method-panel > div { display: flex; align-items: center; justify-content: space-between; min-height: 27px; color: #697169; font-size: 12px; }
+.shift-method-panel .shift-method-title { min-height: 34px; margin-bottom: 5px; padding-bottom: 7px; border-bottom: 1px solid #e5e9e3; color: #303630; }
+.shift-method-title span { font-size: 15px; font-weight: 700; }
+.shift-method-title strong { color: #16784a; }
+.shift-method-panel b { color: #343a34; font-weight: 600; }
+.cash-count-panel { display: grid; grid-template-columns: 1fr 1fr 1.4fr 1fr; align-items: end; gap: 10px; margin-top: 12px; padding: 14px; border: 1px solid #d9ded7; border-radius: 7px; background: #fff; }
+.cash-fact, .cash-difference { min-height: 52px; display: flex; flex-direction: column; justify-content: center; gap: 4px; }
+.cash-fact span, .cash-difference span, .cash-count-input label { color: #717971; font-size: 12px; }
+.cash-fact strong, .cash-difference strong { font-size: 18px; font-variant-numeric: tabular-nums; }
+.cash-count-input :deep(.el-input-number) { width: 100%; margin-top: 5px; }
+.cash-count-input :deep(.el-input__inner) { text-align: left; font-weight: 700; }
+.cash-difference strong { color: #bf3f3f; }
+.cash-difference.balanced strong { color: #16784a; }
 
 .custom-scrollbar::-webkit-scrollbar { width: 6px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }

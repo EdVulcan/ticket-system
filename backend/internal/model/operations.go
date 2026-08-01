@@ -4,21 +4,35 @@ import "time"
 
 type POSShift struct {
 	Base
-	TenantID      uint       `gorm:"index;not null" json:"tenant_id"`
-	ScenicAreaID  uint       `gorm:"index;not null" json:"scenic_area_id"`
-	DeviceID      uint       `gorm:"index;not null" json:"device_id"`
-	OperatorID    uint       `gorm:"index;not null" json:"operator_id"`
-	ShiftNo       string     `gorm:"size:80;uniqueIndex;not null" json:"shift_no"`
-	Status        string     `gorm:"size:20;not null;default:'open';index" json:"status"` // open, closed, reconciled
-	OpeningCents  int64      `gorm:"not null;default:0" json:"opening_cents"`
-	ClosingCents  int64      `gorm:"not null;default:0" json:"closing_cents"`
-	ExpectedCents int64      `gorm:"not null;default:0" json:"expected_cents"`
-	VarianceCents int64      `gorm:"not null;default:0" json:"variance_cents"`
-	OpenedAt      time.Time  `gorm:"not null" json:"opened_at"`
-	ClosedAt      *time.Time `json:"closed_at,omitempty"`
-	ReconciledAt  *time.Time `json:"reconciled_at,omitempty"`
-	ReconciledBy  uint       `json:"reconciled_by,omitempty"`
-	Notes         string     `gorm:"size:255" json:"notes"`
+	TenantID       uint       `gorm:"index;not null" json:"tenant_id"`
+	ScenicAreaID   uint       `gorm:"index;not null" json:"scenic_area_id"`
+	DeviceID       uint       `gorm:"index;not null" json:"device_id"`
+	OperatorID     uint       `gorm:"index;not null" json:"operator_id"`
+	ShiftNo        string     `gorm:"size:80;uniqueIndex;not null" json:"shift_no"`
+	Status         string     `gorm:"size:20;not null;default:'open';index" json:"status"` // open, closed, reconciled
+	OpeningCents   int64      `gorm:"not null;default:0" json:"opening_cents"`
+	ClosingCents   int64      `gorm:"not null;default:0" json:"closing_cents"`
+	ExpectedCents  int64      `gorm:"not null;default:0" json:"expected_cents"`
+	VarianceCents  int64      `gorm:"not null;default:0" json:"variance_cents"`
+	OpenedAt       time.Time  `gorm:"not null" json:"opened_at"`
+	ClosedAt       *time.Time `json:"closed_at,omitempty"`
+	ReconciledAt   *time.Time `json:"reconciled_at,omitempty"`
+	ReconciledBy   uint       `json:"reconciled_by,omitempty"`
+	Notes          string     `gorm:"size:255" json:"notes"`
+	ReconcileNotes string     `gorm:"size:255" json:"reconcile_notes"`
+}
+
+// POSShiftCorrection is an append-only supervisory correction to the counted
+// cash amount. POSShift.ClosingCents remains the cashier's original fact.
+type POSShiftCorrection struct {
+	Base
+	TenantID              uint   `gorm:"index;not null;uniqueIndex:idx_shift_correction_sequence,priority:1" json:"tenant_id"`
+	ShiftID               uint   `gorm:"index;not null;uniqueIndex:idx_shift_correction_sequence,priority:2" json:"shift_id"`
+	Sequence              int    `gorm:"not null;uniqueIndex:idx_shift_correction_sequence,priority:3" json:"sequence"`
+	PreviousClosingCents  int64  `gorm:"not null" json:"previous_closing_cents"`
+	CorrectedClosingCents int64  `gorm:"not null" json:"corrected_closing_cents"`
+	OperatorID            uint   `gorm:"index;not null" json:"operator_id"`
+	Reason                string `gorm:"size:255;not null" json:"reason"`
 }
 
 type PrintJob struct {

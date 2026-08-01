@@ -547,6 +547,110 @@ func TestPOSShiftUsesPaymentAndRefundCentFacts(t *testing.T) {
 	}
 }
 
+func TestPOSCashPaymentRecordsTenderAndChange(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	var area model.ScenicArea
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	device := model.Device{TenantID: tenantID, ScenicAreaID: area.ID, Name: "Cash POS", SerialNumber: "POS-CASH", Type: "pos", Status: "online"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&device).Error }); err != nil {
+		t.Fatal(err)
+	}
+	shift, err := (&OperationsService{}).OpenShift(tenantID, device.ID, 401, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	insufficient := model.Payment{OrderNo: order.OrderNo, Method: "cash", ShiftID: shift.ID, DeviceID: device.ID, OperatorID: 401, TenderedCents: 9000}
+	if err := (&PaymentService{}).CreatePayment(tenantID, &insufficient); err == nil {
+		t.Fatal("insufficient cash tender was accepted")
+	}
+	var attempts int64
+	if err := model.DB.Model(&model.Payment{}).Where("tenant_id = ? AND order_no = ?", tenantID, order.OrderNo).Count(&attempts).Error; err != nil || attempts != 0 {
+		t.Fatalf("failed cash attempt count=%d err=%v", attempts, err)
+	}
+	payment := model.Payment{OrderNo: order.OrderNo, Method: "cash", ShiftID: shift.ID, DeviceID: device.ID, OperatorID: 401, TenderedCents: 10000}
+	if err := (&PaymentService{}).CreatePayment(tenantID, &payment); err != nil {
+		t.Fatal(err)
+	}
+	if payment.Status != "paid" || payment.AmountCents != 9950 || payment.TenderedCents != 10000 || payment.ChangeCents != 50 {
+		t.Fatalf("cash payment=%+v", payment)
+	}
+	var stored model.Payment
+	if err := model.DB.First(&stored, payment.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.TenderedCents != 10000 || stored.ChangeCents != 50 {
+		t.Fatalf("stored cash facts=%+v", stored)
+	}
+}
+
+func TestPOSShiftCorrectionIsAppendOnlyAndAudited(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	var area model.ScenicArea
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	device := model.Device{TenantID: tenantID, ScenicAreaID: area.ID, Name: "Review POS", SerialNumber: "POS-REVIEW", Type: "pos", Status: "online"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&device).Error }); err != nil {
+		t.Fatal(err)
+	}
+	ops := &OperationsService{}
+	shift, err := ops.OpenShift(tenantID, device.ID, 501, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed, err := ops.CloseShiftForOperator(tenantID, shift.ID, 501, "admin", 900, "cashier counted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ops.RecordShiftCorrection(tenantID, closed.ID, 501, "seller", 1000, "counted again"); err == nil {
+		t.Fatal("cashier added a supervisory correction")
+	}
+	first, err := ops.RecordShiftCorrection(tenantID, closed.ID, 601, "admin", 1000, "one banknote was left in the drawer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.PreviousClosingCents != 900 || first.CorrectedClosingCents != 1000 {
+		t.Fatalf("first correction=%+v", first)
+	}
+	reconciled, err := ops.ReconcileShift(tenantID, closed.ID, 601, "admin", "review complete")
+	if err != nil || reconciled.VarianceCents != 0 {
+		t.Fatalf("reconciled=%+v err=%v", reconciled, err)
+	}
+	if _, err := ops.RecordShiftCorrection(tenantID+1, closed.ID, 601, "admin", 950, "wrong tenant"); err == nil {
+		t.Fatal("cross-tenant correction was accepted")
+	}
+	second, err := ops.RecordShiftCorrection(tenantID, closed.ID, 602, "super_admin", 950, "final recount")
+	if err != nil || second.PreviousClosingCents != 1000 {
+		t.Fatalf("second correction=%+v err=%v", second, err)
+	}
+	summary, err := ops.GetShiftSummary(tenantID, closed.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Shift.ClosingCents != 900 || summary.EffectiveClosingCents != 950 || summary.EffectiveVarianceCents != -50 || len(summary.Corrections) != 2 {
+		t.Fatalf("corrected summary=%+v", summary)
+	}
+	var stored model.POSShift
+	if err := model.DB.First(&stored, closed.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.ClosingCents != 900 || stored.VarianceCents != -50 || stored.Status != "reconciled" {
+		t.Fatalf("stored shift=%+v", stored)
+	}
+	var auditCount int64
+	if err := model.DB.Model(&model.AuditLog{}).Where("tenant_id = ? AND action = ? AND target_id = ?", tenantID, "pos.shift.correct", closed.ID).Count(&auditCount).Error; err != nil || auditCount != 2 {
+		t.Fatalf("correction audit count=%d err=%v", auditCount, err)
+	}
+}
+
 func TestStaffResourceScopesFailClosed(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, _ := seedSellableProduct(t, "unlimited", 0)

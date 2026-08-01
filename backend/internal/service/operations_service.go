@@ -25,19 +25,22 @@ type POSHoldView struct {
 // Gross and refund amounts are kept in cents and are calculated from the
 // immutable payment/refund facts belonging to the shift.
 type POSPaymentSummary struct {
-	Method        string `json:"method"`
-	PaymentCount  int64  `json:"payment_count"`
-	GrossCents    int64  `json:"gross_cents"`
-	RefundCents   int64  `json:"refund_cents"`
-	NetCents      int64  `json:"net_cents"`
+	Method       string `json:"method"`
+	PaymentCount int64  `json:"payment_count"`
+	GrossCents   int64  `json:"gross_cents"`
+	RefundCents  int64  `json:"refund_cents"`
+	NetCents     int64  `json:"net_cents"`
 }
 
 type POSShiftSummary struct {
-	Shift            model.POSShift       `json:"shift"`
-	Payments         []POSPaymentSummary  `json:"payments"`
-	RefundCount      int64                `json:"refund_count"`
-	OrderCount       int64                `json:"order_count"`
-	CashExpectedCents int64               `json:"cash_expected_cents"`
+	Shift                  model.POSShift             `json:"shift"`
+	Payments               []POSPaymentSummary        `json:"payments"`
+	Corrections            []model.POSShiftCorrection `json:"corrections"`
+	RefundCount            int64                      `json:"refund_count"`
+	OrderCount             int64                      `json:"order_count"`
+	CashExpectedCents      int64                      `json:"cash_expected_cents"`
+	EffectiveClosingCents  int64                      `json:"effective_closing_cents"`
+	EffectiveVarianceCents int64                      `json:"effective_variance_cents"`
 }
 
 func generatePOSHoldNo() string {
@@ -309,21 +312,101 @@ func (s *OperationsService) ReconcileShift(tenantID, shiftID, operatorID uint, r
 		if shift.Status != "closed" {
 			return fmt.Errorf("shift cannot reconcile from status %s", shift.Status)
 		}
+		effectiveClosing, err := effectiveShiftClosingTx(tx, &shift)
+		if err != nil {
+			return err
+		}
 		now := time.Now()
 		shift.Status = "reconciled"
-		shift.VarianceCents = shift.ClosingCents - shift.ExpectedCents
+		shift.VarianceCents = effectiveClosing - shift.ExpectedCents
 		shift.ReconciledAt = &now
 		shift.ReconciledBy = operatorID
-		shift.Notes = strings.TrimSpace(notes)
+		shift.ReconcileNotes = strings.TrimSpace(notes)
 		return tx.Model(&shift).Updates(map[string]interface{}{
 			"status": shift.Status, "variance_cents": shift.VarianceCents, "reconciled_at": now,
-			"reconciled_by": operatorID, "notes": shift.Notes,
+			"reconciled_by": operatorID, "reconcile_notes": shift.ReconcileNotes,
 		}).Error
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &shift, nil
+}
+
+func effectiveShiftClosingTx(tx *gorm.DB, shift *model.POSShift) (int64, error) {
+	var correction model.POSShiftCorrection
+	err := tx.Where("tenant_id = ? AND shift_id = ?", shift.TenantID, shift.ID).Order("sequence DESC").First(&correction).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return shift.ClosingCents, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return correction.CorrectedClosingCents, nil
+}
+
+// RecordShiftCorrection appends a supervisory recount without rewriting the
+// cashier's original close fact. Reconciled shifts remain reconciled and their
+// derived variance is refreshed from the new effective count.
+func (s *OperationsService) RecordShiftCorrection(tenantID, shiftID, operatorID uint, role string, correctedCents int64, reason string) (*model.POSShiftCorrection, error) {
+	reason = strings.TrimSpace(reason)
+	if tenantID == 0 || shiftID == 0 || operatorID == 0 {
+		return nil, errors.New("tenant, shift and supervisor are required")
+	}
+	if role != "admin" && role != "super_admin" {
+		return nil, errors.New("only an administrator can correct a shift")
+	}
+	if correctedCents < 0 {
+		return nil, errors.New("corrected cash amount cannot be negative")
+	}
+	if reason == "" {
+		return nil, errors.New("correction reason is required")
+	}
+	if len(reason) > 255 {
+		return nil, errors.New("correction reason is too long")
+	}
+	var correction model.POSShiftCorrection
+	err := model.Write(func(tx *gorm.DB) error {
+		var shift model.POSShift
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", shiftID, tenantID).First(&shift).Error; err != nil {
+			return err
+		}
+		if shift.Status != "closed" && shift.Status != "reconciled" {
+			return fmt.Errorf("shift cannot be corrected from status %s", shift.Status)
+		}
+		previous, err := effectiveShiftClosingTx(tx, &shift)
+		if err != nil {
+			return err
+		}
+		if previous == correctedCents {
+			return errors.New("corrected cash amount is unchanged")
+		}
+		var sequence int64
+		if err := tx.Model(&model.POSShiftCorrection{}).Where("tenant_id = ? AND shift_id = ?", tenantID, shiftID).Count(&sequence).Error; err != nil {
+			return err
+		}
+		correction = model.POSShiftCorrection{
+			TenantID: tenantID, ShiftID: shiftID, Sequence: int(sequence) + 1,
+			PreviousClosingCents: previous, CorrectedClosingCents: correctedCents,
+			OperatorID: operatorID, Reason: reason,
+		}
+		if err := tx.Create(&correction).Error; err != nil {
+			return err
+		}
+		if shift.Status == "reconciled" {
+			shift.VarianceCents = correctedCents - shift.ExpectedCents
+			if err := tx.Model(&shift).Update("variance_cents", shift.VarianceCents).Error; err != nil {
+				return err
+			}
+		}
+		before, _ := json.Marshal(map[string]int64{"effective_closing_cents": previous})
+		after, _ := json.Marshal(map[string]interface{}{"effective_closing_cents": correctedCents, "sequence": correction.Sequence})
+		return recordAuditTx(tx, operatorID, tenantID, role, "tenant", "pos.shift.correct", "pos_shift", shiftID, reason, string(before), string(after))
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &correction, nil
 }
 
 func (s *OperationsService) closeShift(tenantID, shiftID, operatorID uint, role string, closingCents int64, notes string) (*model.POSShift, error) {
@@ -451,6 +534,10 @@ func (s *OperationsService) GetShiftSummary(tenantID, shiftID uint) (*POSShiftSu
 		Find(&refunds).Error; err != nil {
 		return nil, err
 	}
+	var corrections []model.POSShiftCorrection
+	if err := model.DB.Where("tenant_id = ? AND shift_id = ?", tenantID, shiftID).Order("sequence ASC").Find(&corrections).Error; err != nil {
+		return nil, err
+	}
 
 	byMethod := make(map[string]*POSPaymentSummary)
 	orderNos := make(map[string]struct{})
@@ -509,9 +596,15 @@ func (s *OperationsService) GetShiftSummary(tenantID, shiftID uint) (*POSShiftSu
 		}
 		rows = append(rows, row)
 	}
+	cashExpected := shift.OpeningCents + cashGross - cashRefund
+	effectiveClosing := shift.ClosingCents
+	if len(corrections) > 0 {
+		effectiveClosing = corrections[len(corrections)-1].CorrectedClosingCents
+	}
 	return &POSShiftSummary{
-		Shift: shift, Payments: rows, RefundCount: refundCount,
-		OrderCount: int64(len(orderNos)), CashExpectedCents: shift.OpeningCents + cashGross - cashRefund,
+		Shift: shift, Payments: rows, Corrections: corrections, RefundCount: refundCount,
+		OrderCount: int64(len(orderNos)), CashExpectedCents: cashExpected,
+		EffectiveClosingCents: effectiveClosing, EffectiveVarianceCents: effectiveClosing - cashExpected,
 	}, nil
 }
 

@@ -116,6 +116,28 @@ func (c *OperationsController) ReconcileShift(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, shift)
 }
 
+func (c *OperationsController) CorrectShift(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid shift id"})
+		return
+	}
+	var body struct {
+		CorrectedCents int64  `json:"corrected_cents"`
+		Reason         string `json:"reason" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	correction, err := c.Service.RecordShiftCorrection(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), ctx.GetString("role"), body.CorrectedCents, body.Reason)
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusCreated, correction)
+}
+
 func (c *OperationsController) QueuePrint(ctx *gin.Context) {
 	var body struct {
 		DeviceID   uint   `json:"device_id" binding:"required"`

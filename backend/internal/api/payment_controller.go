@@ -21,12 +21,13 @@ type RefundController struct {
 
 func (c *PaymentController) Pay(ctx *gin.Context) {
 	var body struct {
-		OrderNo  string `json:"order_no" binding:"required"`
-		Method   string `json:"method" binding:"required"`
-		PayType  string `json:"pay_type"`
-		AuthCode string `json:"auth_code"`
-		ShiftID  uint   `json:"shift_id"`
-		DeviceID uint   `json:"device_id"`
+		OrderNo           string `json:"order_no" binding:"required"`
+		Method            string `json:"method" binding:"required"`
+		PayType           string `json:"pay_type"`
+		AuthCode          string `json:"auth_code"`
+		ShiftID           uint   `json:"shift_id"`
+		DeviceID          uint   `json:"device_id"`
+		CashTenderedCents int64  `json:"cash_tendered_cents"`
 	}
 	if err := ctx.ShouldBindJSON(&body); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -39,11 +40,15 @@ func (c *PaymentController) Pay(ctx *gin.Context) {
 			return
 		}
 	}
-	req := model.Payment{OrderNo: body.OrderNo, Method: body.Method, PayType: body.PayType, AuthCode: body.AuthCode, ShiftID: body.ShiftID, DeviceID: body.DeviceID, OperatorID: ctx.GetUint("user_id")}
+	req := model.Payment{OrderNo: body.OrderNo, Method: body.Method, PayType: body.PayType, AuthCode: body.AuthCode, ShiftID: body.ShiftID, DeviceID: body.DeviceID, OperatorID: ctx.GetUint("user_id"), TenderedCents: body.CashTenderedCents}
 
 	tenantID := ctx.GetUint("tenant_id")
 	if err := c.Service.CreatePayment(tenantID, &req); err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		status := http.StatusInternalServerError
+		if errors.Is(err, service.ErrCashTenderInsufficient) {
+			status = http.StatusBadRequest
+		}
+		ctx.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 
