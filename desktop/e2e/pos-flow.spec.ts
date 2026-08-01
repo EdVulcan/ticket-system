@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 const staff = { id: 7, name: '测试售票员', job_number: 'SELLER001', roles: 'seller', tenant_id: 1 }
+const checkerStaff = { id: 8, name: '测试验票员', job_number: 'CHECKER001', roles: 'checker', tenant_id: 1 }
 const product = { id: 11, name: '标准成人票', price: 80, stock_type: 'unlimited', daily_stock: 0, tags: '["当日"]' }
 
 async function json(route: import('@playwright/test').Route, body: unknown, status = 200) {
@@ -15,14 +16,14 @@ async function mockPOSBoot(page: Page, openShift: boolean) {
     : json(route, { error: 'open shift not found' }, 404))
 }
 
-async function preparePOS(page: Page, openShift: boolean) {
+async function preparePOS(page: Page, openShift: boolean, sessionStaff = staff) {
   await page.addInitScript(({ staff, openShift }) => {
     sessionStorage.setItem('token', 'staff-token')
     sessionStorage.setItem('staff', JSON.stringify(staff))
     localStorage.setItem('pos_device_id', '21')
     localStorage.setItem('pos_checkpoint_id', '31')
     if (openShift) localStorage.setItem('pos_shift_state', JSON.stringify({ isOpen: true, shiftId: 41, startTime: '2026-08-01T08:00:00Z', operator: staff.name, openingCents: 10000 }))
-  }, { staff, openShift })
+  }, { staff: sessionStaff, openShift })
   await mockPOSBoot(page, openShift)
 }
 
@@ -36,6 +37,21 @@ test('员工可以登录窗口端', async ({ page }) => {
   await page.getByRole('button', { name: '登录窗口端' }).click()
   await expect(page.getByText('窗口售票', { exact: true })).toBeVisible()
   await expect(page.getByText('测试售票员 · SELLER001', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '核销', exact: true })).toHaveCount(0)
+})
+
+test('纯验票员工只进入核销工作区', async ({ page }) => {
+  await preparePOS(page, false, checkerStaff)
+  await page.goto('/#/')
+  await expect(page.getByRole('heading', { name: '票券核销' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '核销', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '终端', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '售票', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '订单', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: /未开班|当班中/ })).toHaveCount(0)
+  await page.getByRole('button', { name: '终端', exact: true }).click()
+  await expect(page.getByRole('heading', { name: '窗口归属' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '当前班次' })).toHaveCount(0)
 })
 
 test('备用金开班和交班汇总按支付方式展示', async ({ page }) => {
@@ -72,6 +88,28 @@ test('备用金开班和交班汇总按支付方式展示', async ({ page }) => 
   await expect(dialog.getByText('¥125.00')).toBeVisible()
   await page.getByRole('button', { name: '确认关班' }).click()
   await expect(page.getByRole('button', { name: /未开班/ })).toBeVisible()
+})
+
+test('窗口订单使用服务端真实退款状态筛选', async ({ page }) => {
+  await preparePOS(page, true)
+  const orderQueries: string[] = []
+  await page.route('**/api/v1/orders?*', route => {
+    orderQueries.push(route.request().url())
+    return json(route, { data: [{ id: 51, order_no: 'POS-REFUNDED-1', contact_name: '退款游客', total_amount: 80, status: 'refunded', items: [], created_at: '2026-08-01T09:00:00Z' }], total: 41 })
+  })
+
+  await page.goto('/#/')
+  await page.getByRole('button', { name: '订单', exact: true }).click()
+  await page.getByRole('combobox', { name: '订单状态' }).press('ArrowDown')
+  await page.getByRole('option', { name: '已退款', exact: true }).click()
+
+  await expect.poll(() => orderQueries.some(url => new URL(url).searchParams.get('status') === 'refunded')).toBe(true)
+  const refundedRow = page.getByRole('row').filter({ hasText: 'POS-REFUNDED-1' })
+  await expect(refundedRow.getByText('POS-REFUNDED-1')).toBeVisible()
+  await expect(refundedRow.getByText('已退款', { exact: true })).toBeVisible()
+  await expect(page.locator('.el-pagination__total')).toContainText('41')
+  await page.locator('.el-pager li').filter({ hasText: '2' }).click()
+  await expect.poll(() => orderQueries.some(url => new URL(url).searchParams.get('page') === '2')).toBe(true)
 })
 
 test('现金找零正确且打印未配置时保留订单与购物清单', async ({ page }) => {

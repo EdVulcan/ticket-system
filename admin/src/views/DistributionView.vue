@@ -522,7 +522,7 @@ const confirmRecharge = async () => {
     recharging.value = true
     try {
         await request.post(`/distribution/agents/${rechargeForm.agent_id}/recharge`, {
-            amount: rechargeForm.amount,
+            amount_cents: Math.round(rechargeForm.amount * 100),
             idempotency_key: `admin-recharge-${rechargeForm.agent_id}-${Date.now()}-${Math.random().toString(36).slice(2)}`
         })
         ElMessage.success('充值成功')

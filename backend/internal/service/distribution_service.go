@@ -745,10 +745,15 @@ func (s *DistributionService) SyncListing(distributorTenantID, listingID, operat
 	return &result, nil
 }
 
-func (s *DistributionService) RechargeAgent(supplierTenantID, agentTenantID uint, amount float64, idempotencyKey string, operatorID uint) (*model.FinancialDocument, error) {
-	amountCents := moneyCents(amount)
-	if amountCents <= 0 {
-		return nil, errors.New("recharge amount must be greater than zero")
+// RechargeRelationship resolves the counterparty inside the distribution
+// service so controllers never perform unscoped ownership lookups.
+func (s *DistributionService) RechargeRelationship(supplierTenantID, relationshipID uint, amountCents int64, idempotencyKey string, operatorID uint) (*model.FinancialDocument, error) {
+	if supplierTenantID == 0 || relationshipID == 0 || amountCents <= 0 {
+		return nil, errors.New("supplier, relationship and recharge amount are required")
 	}
-	return (&FinanceService{}).RechargeAccount(supplierTenantID, agentTenantID, amountCents, idempotencyKey, operatorID, "supplier recharge")
+	var relationship model.DistributorRelationship
+	if err := model.DB.Where("id = ? AND supplier_tenant_id = ?", relationshipID, supplierTenantID).First(&relationship).Error; err != nil {
+		return nil, errors.New("distribution relationship not found")
+	}
+	return (&FinanceService{}).RechargeAccount(supplierTenantID, relationship.AgentTenantID, amountCents, idempotencyKey, operatorID, "supplier recharge")
 }

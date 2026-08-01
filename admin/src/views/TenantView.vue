@@ -109,7 +109,7 @@
               <el-input v-model="form.admin_username" placeholder="默认: admin" />
             </el-form-item>
             <el-form-item label="初始密码" prop="admin_password">
-              <el-input v-model="form.admin_password" type="password" show-password placeholder="必填" />
+              <el-input v-model="form.admin_password" type="password" show-password placeholder="至少8位" />
             </el-form-item>
         </div>
       </el-form>
@@ -162,7 +162,10 @@ const rules = computed(() => {
     if (!isEdit.value) {
         return {
             ...base,
-            admin_password: [{ required: true, message: '请设置初始密码', trigger: 'blur' }]
+            admin_password: [
+              { required: true, message: '请设置初始密码', trigger: 'blur' },
+              { min: 8, message: '密码长度至少8位', trigger: 'blur' }
+            ]
         }
     }
     return base

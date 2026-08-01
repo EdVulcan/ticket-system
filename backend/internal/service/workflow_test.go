@@ -1335,6 +1335,7 @@ func TestChannelBillImportMatchesOrdersAndReplaysIdempotently(t *testing.T) {
 func TestRechargeIsIdempotentAndLeavesCentLedgerEvidence(t *testing.T) {
 	resetBusinessData(t)
 	var supplier, distributor model.Tenant
+	var relationship model.DistributorRelationship
 	if err := model.Write(func(tx *gorm.DB) error {
 		supplier = model.Tenant{Name: "Supplier", SystemCode: "FIN-S", SecretKey: "s"}
 		distributor = model.Tenant{Name: "Distributor", SystemCode: "FIN-D", SecretKey: "d"}
@@ -1350,7 +1351,8 @@ func TestRechargeIsIdempotentAndLeavesCentLedgerEvidence(t *testing.T) {
 		if err := tx.Create(&model.TenantCapability{TenantID: distributor.ID, Capability: "distributor", Status: "active"}).Error; err != nil {
 			return err
 		}
-		if err := tx.Create(&model.DistributorRelationship{AgentTenantID: distributor.ID, SupplierTenantID: supplier.ID, Status: "active"}).Error; err != nil {
+		relationship = model.DistributorRelationship{AgentTenantID: distributor.ID, SupplierTenantID: supplier.ID, Status: "active"}
+		if err := tx.Create(&relationship).Error; err != nil {
 			return err
 		}
 		return tx.Create(&model.CapitalAccount{OwnerTenantID: distributor.ID, ManagerTenantID: supplier.ID, Status: "active", Balance: 10}).Error
@@ -1390,6 +1392,14 @@ func TestRechargeIsIdempotentAndLeavesCentLedgerEvidence(t *testing.T) {
 	}
 	if _, _, err := finance.ListManagedLedger(distributor.ID+999, 1, 20, 0); err != nil {
 		t.Fatal(err)
+	}
+	distribution := &DistributionService{}
+	document, err := distribution.RechargeRelationship(supplier.ID, relationship.ID, 500, "topup-by-relationship", 7)
+	if err != nil || document.AmountCents != 500 || document.CounterpartyTenantID != distributor.ID {
+		t.Fatalf("relationship recharge=%+v err=%v", document, err)
+	}
+	if _, err := distribution.RechargeRelationship(distributor.ID, relationship.ID, 500, "cross-tenant-topup", 7); err == nil {
+		t.Fatal("another tenant recharged through a relationship it does not own")
 	}
 }
 

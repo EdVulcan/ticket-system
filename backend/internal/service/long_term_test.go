@@ -1519,14 +1519,16 @@ func TestSalesOrderDetailGroupsSupplierResponsibilitiesAndKeepsTenantScope(t *te
 func TestRechargeRejectsSuspendedDistributionRelationship(t *testing.T) {
 	resetBusinessData(t)
 	scenario := seedDistributionScenario(t)
+	var relationship model.DistributorRelationship
 	if err := model.Write(func(tx *gorm.DB) error {
-		return tx.Model(&model.DistributorRelationship{}).
-			Where("supplier_tenant_id = ? AND agent_tenant_id = ?", scenario.supplierID, scenario.distributorID).
-			Update("status", "suspended").Error
+		if err := tx.Where("supplier_tenant_id = ? AND agent_tenant_id = ?", scenario.supplierID, scenario.distributorID).First(&relationship).Error; err != nil {
+			return err
+		}
+		return tx.Model(&relationship).Update("status", "suspended").Error
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := (&DistributionService{}).RechargeAgent(scenario.supplierID, scenario.distributorID, 10, "suspended-recharge", 1); err == nil {
+	if _, err := (&DistributionService{}).RechargeRelationship(scenario.supplierID, relationship.ID, 1000, "suspended-recharge", 1); err == nil {
 		t.Fatal("recharge succeeded for suspended distribution relationship")
 	}
 }

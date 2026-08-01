@@ -158,8 +158,8 @@ const handleResetPassword = (row: any) => {
   ElMessageBox.prompt('请输入新密码', '重置密码', {
     confirmButtonText: '确定',
     cancelButtonText: '取消',
-    inputPattern: /.{6,}/,
-    inputErrorMessage: '密码长度至少6位'
+    inputPattern: /.{8,}/,
+    inputErrorMessage: '密码长度至少8位'
   }).then(async ({ value }) => {
     try {
       await request.put(`/staff/${row.id}/password`, { password: value })

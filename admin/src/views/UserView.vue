@@ -100,6 +100,10 @@ const handleCreate = async () => {
     ElMessage.warning('请填写完整信息')
     return
   }
+  if (form.password.length < 8) {
+    ElMessage.warning('密码长度至少8位')
+    return
+  }
   
   try {
     await request.post('/users', form)
@@ -135,8 +139,8 @@ const handleResetPassword = (row: any) => {
   ElMessageBox.prompt('请输入新密码', '重置密码', {
     confirmButtonText: '确定',
     cancelButtonText: '取消',
-    inputPattern: /.{6,}/,
-    inputErrorMessage: '密码长度至少6位'
+    inputPattern: /.{8,}/,
+    inputErrorMessage: '密码长度至少8位'
   }).then(async ({ value }) => {
     try {
       await request.put(`/users/${row.id}/password`, { password: value })

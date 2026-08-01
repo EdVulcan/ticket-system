@@ -10,13 +10,13 @@
       </div>
 
       <nav class="workspace-tabs" aria-label="窗口工作区">
-        <button class="workspace-tab" :class="{ active: currentView === 'pos' }" @click="currentView = 'pos'">
+        <button v-if="canSell" class="workspace-tab" :class="{ active: currentView === 'pos' }" @click="currentView = 'pos'">
           <el-icon><Monitor /></el-icon><span>售票</span>
         </button>
-        <button class="workspace-tab" :class="{ active: currentView === 'orders' }" @click="currentView = 'orders'">
+        <button v-if="canSell" class="workspace-tab" :class="{ active: currentView === 'orders' }" @click="currentView = 'orders'">
           <el-icon><List /></el-icon><span>订单</span>
         </button>
-        <button class="workspace-tab" :class="{ active: currentView === 'verify' }" @click="currentView = 'verify'">
+        <button v-if="canVerify" class="workspace-tab" :class="{ active: currentView === 'verify' }" @click="currentView = 'verify'">
           <el-icon><Checked /></el-icon><span>核销</span>
         </button>
         <button class="workspace-tab" :class="{ active: currentView === 'settings' }" @click="currentView = 'settings'">
@@ -29,7 +29,7 @@
           <span class="clock">{{ currentTime }}</span>
           <span>{{ currentStaff.name }} · {{ currentStaff.job_number }}</span>
         </div>
-        <button class="shift-chip" :class="{ open: shiftState.isOpen }" @click="handleShiftAction">
+        <button v-if="canSell" class="shift-chip" :class="{ open: shiftState.isOpen }" @click="handleShiftAction">
           <span class="status-dot"></span>{{ shiftState.isOpen ? '当班中' : '未开班' }}
         </button>
         <el-tooltip content="退出登录" placement="bottom">
@@ -132,13 +132,17 @@
       <section v-if="currentView === 'orders'" class="page-workspace">
         <div class="page-heading"><div><h1>窗口订单</h1><p>查询售票记录并处理后续操作</p></div></div>
         <div class="filter-bar">
-          <el-input v-model="orderSearchQuery" placeholder="订单号或联系人" clearable :prefix-icon="Search" @keyup.enter="fetchOrders" />
-          <el-date-picker v-model="orderDateRange" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" value-format="YYYY-MM-DD" @change="fetchOrders" />
-          <el-select v-model="orderStatus" placeholder="全部状态" clearable @change="fetchOrders">
+          <el-input v-model="orderSearchQuery" placeholder="订单号或联系人" clearable :prefix-icon="Search" @keyup.enter="searchOrders" />
+          <el-date-picker v-model="orderDateRange" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" value-format="YYYY-MM-DD" @change="searchOrders" />
+          <el-select v-model="orderStatus" aria-label="订单状态" placeholder="全部状态" clearable @change="searchOrders">
+            <el-option label="待支付" value="unpaid" />
             <el-option label="已支付" value="paid" />
-            <el-option label="已退款" value="refund" />
+            <el-option label="已完成" value="completed" />
+            <el-option label="部分退款" value="partial_refunded" />
+            <el-option label="已退款" value="refunded" />
+            <el-option label="已取消" value="cancelled" />
           </el-select>
-          <el-button type="primary" :icon="Search" @click="fetchOrders">查询</el-button>
+          <el-button type="primary" :icon="Search" @click="searchOrders">查询</el-button>
         </div>
         <div class="data-panel">
           <el-table v-loading="ordersLoading" :data="orders" height="100%" stripe>
@@ -148,10 +152,20 @@
               <template #default="{ row }"><span v-for="item in row.items" :key="item.id" class="order-item-text">{{ item.product_name }} × {{ item.quantity }}</span></template>
             </el-table-column>
             <el-table-column label="金额" width="110"><template #default="{ row }"><strong class="money">¥{{ row.total_amount }}</strong></template></el-table-column>
-            <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="row.status === 'paid' ? 'success' : row.status === 'refund' ? 'danger' : 'info'">{{ orderStatusLabel(row.status) }}</el-tag></template></el-table-column>
+            <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="orderStatusTag(row.status)">{{ orderStatusLabel(row.status) }}</el-tag></template></el-table-column>
             <el-table-column label="下单时间" width="180"><template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template></el-table-column>
           </el-table>
         </div>
+        <el-pagination
+          v-model:current-page="orderPage"
+          v-model:page-size="orderPageSize"
+          class="order-pagination"
+          :page-sizes="[10, 20, 40]"
+          :total="orderTotal"
+          layout="total, sizes, prev, pager, next"
+          @current-change="fetchOrders"
+          @size-change="searchOrders"
+        />
       </section>
 
       <section v-if="currentView === 'verify'" class="verify-workspace">
@@ -193,7 +207,7 @@
             <div class="hardware-row"><span>小票打印机</span><el-tag type="warning">待配置</el-tag></div>
             <div class="hardware-row"><span>证件阅读器</span><el-tag type="info">待配置</el-tag></div>
           </section>
-          <section class="settings-section">
+          <section v-if="canSell" class="settings-section">
             <div class="section-heading"><el-icon><Notebook /></el-icon><div><h2>当前班次</h2><p>{{ shiftState.isOpen ? `开始于 ${new Date(shiftState.startTime!).toLocaleString()}` : '开班后才能进行窗口收款' }}</p></div></div>
             <div class="shift-summary"><span>状态</span><el-tag :type="shiftState.isOpen ? 'success' : 'info'">{{ shiftState.isOpen ? '当班中' : '未开班' }}</el-tag></div>
             <div v-if="shiftState.isOpen" class="shift-summary"><span>开班备用金</span><strong>¥{{ cents(shiftState.openingCents) }}</strong></div>
@@ -328,7 +342,10 @@ const products = ref<any[]>([])
 const cart = ref<any[]>([])
 const searchInput = ref()
 const currentTime = ref('')
-const currentStaff = ref({ name: '?', job_number: '?' })
+const currentStaff = ref({ name: '?', job_number: '?', roles: '' })
+const staffRoles = computed(() => String(currentStaff.value.roles || '').split(',').map(role => role.trim()).filter(Boolean))
+const canSell = computed(() => staffRoles.value.includes('seller'))
+const canVerify = computed(() => staffRoles.value.includes('checker'))
 
 
 // --- Modals State ---
@@ -349,6 +366,9 @@ const orderSearchQuery = ref('')
 const orderDateRange = ref<[string, string] | null>(null)
 const orderStatus = ref('')
 const ordersLoading = ref(false)
+const orderPage = ref(1)
+const orderPageSize = ref(20)
+const orderTotal = ref(0)
 
 // --- Verify State ---
 const verifyInput = ref('')
@@ -628,9 +648,10 @@ const currentCheckpointName = computed(() => {
 })
 
 const orderStatusLabel = (status: string) => {
-  const labels: Record<string, string> = { unpaid: '待支付', paid: '已支付', cancelled: '已取消', refund: '已退款', refunded: '已退款' }
+  const labels: Record<string, string> = { unpaid: '待支付', paid: '已支付', completed: '已完成', partial_refunded: '部分退款', refunded: '已退款', cancelled: '已取消' }
   return labels[status] || status
 }
+const orderStatusTag = (status: string) => status === 'paid' || status === 'completed' ? 'success' : status === 'partial_refunded' ? 'warning' : status === 'refunded' || status === 'cancelled' ? 'danger' : 'info'
 
 const filteredProducts = computed(() => {
   let res = products.value
@@ -789,7 +810,7 @@ const handleVerify = async () => {
 const fetchOrders = async () => {
   ordersLoading.value = true
   try {
-    const params: any = { page_size: 50, channel: 'window' }
+    const params: any = { page: orderPage.value, page_size: orderPageSize.value, channel: 'window' }
     if (orderSearchQuery.value) params.search = orderSearchQuery.value
     if (orderStatus.value) params.status = orderStatus.value
     if (orderDateRange.value && orderDateRange.value.length === 2) {
@@ -799,6 +820,7 @@ const fetchOrders = async () => {
     
     const res = await axios.get('/orders', { params })
     orders.value = res.data.data
+    orderTotal.value = res.data.total || 0
   } catch (e) {
     ElMessage.error('获取订单失败')
   } finally {
@@ -806,32 +828,38 @@ const fetchOrders = async () => {
   }
 }
 
+const searchOrders = () => {
+  orderPage.value = 1
+  fetchOrders()
+}
+
 // --- Lifecycle ---
 let timer: any
-onMounted(async () => {
-  fetchProducts()
-  fetchCheckPoints()
-  loadSettings()
-  timer = setInterval(updateTime, 1000)
-  updateTime()
+const handleGlobalKeydown = (e: KeyboardEvent) => {
+  if (e.key === 'F2' && canSell.value) { e.preventDefault(); searchInput.value?.focus() }
+  if (e.key === 'F3' || (e.ctrlKey && e.key === 'f')) { e.preventDefault(); showPolicy.value = true }
+  if (e.key === 'F5' && canSell.value) { e.preventDefault(); fetchProducts() }
+  if (e.key === 'F4' && canSell.value) { e.preventDefault(); handleHold() }
+  if (e.key === 'Delete' && canSell.value) clearCart()
+  if (e.code === 'Space' && canSell.value && currentView.value === 'pos') { e.preventDefault(); handleCheckout() }
+}
 
-  // Load Staff
+onMounted(async () => {
+  loadSettings()
   const staffStr = sessionStorage.getItem('staff')
   if (staffStr) {
-      try {
-          currentStaff.value = JSON.parse(staffStr)
-      } catch(e) {}
+    try {
+      currentStaff.value = JSON.parse(staffStr)
+    } catch(e) {}
   }
-  await restoreOpenShift()
-  
-  window.addEventListener('keydown', (e) => {
-    if (e.key === 'F2') { e.preventDefault(); searchInput.value?.focus() }
-    if (e.key === 'F3' || (e.ctrlKey && e.key === 'f')) { e.preventDefault(); showPolicy.value = true } // Policy
-    if (e.key === 'F5') { e.preventDefault(); fetchProducts() }
-    if (e.key === 'F4') { e.preventDefault(); handleHold() }
-    if (e.key === 'Delete') { clearCart() } // Clear
-    if (e.code === 'Space' && currentView.value === 'pos') { e.preventDefault(); handleCheckout() }
-  })
+  if (!canSell.value && canVerify.value) currentView.value = 'verify'
+  if (canSell.value) {
+    await Promise.all([fetchProducts(), restoreOpenShift()])
+  }
+  await fetchCheckPoints()
+  timer = setInterval(updateTime, 1000)
+  updateTime()
+  window.addEventListener('keydown', handleGlobalKeydown)
 })
 
 import { watch } from 'vue'
@@ -849,7 +877,10 @@ const handlePaymentCancelled = () => {
   currentOrder.value = null
 }
 
-onUnmounted(() => clearInterval(timer))
+onUnmounted(() => {
+  clearInterval(timer)
+  window.removeEventListener('keydown', handleGlobalKeydown)
+})
 </script>
 
 <style scoped>
@@ -981,6 +1012,7 @@ onUnmounted(() => clearInterval(timer))
 .filter-bar :deep(.el-date-editor) { width: 260px; }
 .filter-bar :deep(.el-select) { width: 140px; }
 .data-panel { min-height: 0; flex: 1; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+.order-pagination { justify-content: flex-end; padding-top: 12px; }
 .order-item-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .money { color: var(--amber); font-variant-numeric: tabular-nums; }
 
