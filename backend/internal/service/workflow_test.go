@@ -60,6 +60,64 @@ func TestCoreChannelAdapterUsesMappingAndAccountScope(t *testing.T) {
 	}
 }
 
+func TestChannelOrderWorkbenchKeepsAccountAndTenantBoundaries(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 1)
+	account := model.ChannelAccount{TenantID: tenantID, Code: "order-workbench", Type: "ota", Status: "active"}
+	otherAccount := model.ChannelAccount{TenantID: tenantID, Code: "order-workbench-other", Type: "ota", Status: "active"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&account).Create(&otherAccount).Error }); err != nil {
+		t.Fatal(err)
+	}
+	externalNo := "EXT-WORKBENCH-1"
+	order := model.Order{OrderNo: "CHANNEL-WORKBENCH-1", TenantID: tenantID, Channel: account.Code, ChannelAccountID: account.ID, ExternalNo: &externalNo, Status: "paid", TotalAmount: 80, ContactName: "渠道游客", ContactPhone: "13800138000"}
+	if err := model.Write(func(tx *gorm.DB) error {
+		var checkpoint model.CheckPoint
+		if err := tx.Where("tenant_id = ?", tenantID).First(&checkpoint).Error; err != nil {
+			return err
+		}
+		var device model.Device
+		if err := tx.Where("tenant_id = ? AND check_point_id = ?", tenantID, checkpoint.ID).First(&device).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&order).Error; err != nil {
+			return err
+		}
+		item := model.OrderItem{OrderID: order.ID, ProductID: productID, ProductName: "成人票", Price: 80, Quantity: 1}
+		if err := tx.Create(&item).Error; err != nil {
+			return err
+		}
+		ticket := model.Ticket{OrderID: order.ID, OrderItemID: item.ID, TenantID: tenantID, ScenicAreaID: checkpoint.ScenicAreaID, FulfillmentTenantID: tenantID, FulfillmentScenicAreaID: checkpoint.ScenicAreaID, TicketCode: "CHANNEL-TICKET-1", Status: "used"}
+		if err := tx.Create(&ticket).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&model.Payment{TenantID: tenantID, PaymentNo: "CHANNEL-PAY-1", OrderNo: order.OrderNo, Amount: 80, AmountCents: 8000, Method: "wechat", Status: "paid"}).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&model.CheckInRecord{TenantID: tenantID, ScenicAreaID: checkpoint.ScenicAreaID, TicketID: ticket.ID, TicketCode: ticket.TicketCode, CheckPointID: checkpoint.ID, DeviceID: device.ID, Result: "success", CheckInTime: time.Now()}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.AfterSaleRequest{TenantID: tenantID, RequestNo: "CHANNEL-AS-1", IdempotencyKey: "CHANNEL-AS-1", OrderNo: order.OrderNo, Type: "refund", Status: "pending", Reason: "游客申请"}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	channel := &ChannelService{}
+	rows, total, err := channel.ListOrders(tenantID, account.ID, "13800138000", "paid", 1, 20)
+	if err != nil || total != 1 || len(rows) != 1 || rows[0].ExternalNo == nil || *rows[0].ExternalNo != externalNo || rows[0].TicketCount != 1 || rows[0].UsedTicketCount != 1 || rows[0].PaidCents != 8000 {
+		t.Fatalf("rows=%+v total=%d err=%v", rows, total, err)
+	}
+	detail, err := channel.GetOrder(tenantID, account.ID, order.OrderNo)
+	if err != nil || detail.Order.OrderNo != order.OrderNo || len(detail.Order.Items) != 1 || len(detail.Order.Items[0].Tickets) != 1 || len(detail.Payments) != 1 || len(detail.AfterSales) != 1 || len(detail.CheckIns) != 1 {
+		t.Fatalf("detail=%+v err=%v", detail, err)
+	}
+	if rows, total, err := channel.ListOrders(tenantID, otherAccount.ID, "", "", 1, 20); err != nil || total != 0 || len(rows) != 0 {
+		t.Fatalf("other account rows=%+v total=%d err=%v", rows, total, err)
+	}
+	if _, err := channel.GetOrder(tenantID, otherAccount.ID, order.OrderNo); err == nil {
+		t.Fatal("another channel account could read the order")
+	}
+}
+
 func TestPlatformWorklistsRespectTargetTenantFilter(t *testing.T) {
 	resetBusinessData(t)
 	firstTenant, firstProduct := seedSellableProduct(t, "unlimited", 1)

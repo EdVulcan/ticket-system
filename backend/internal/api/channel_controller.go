@@ -117,6 +117,36 @@ func (c *ChannelController) ListRequests(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"data": rows, "total": total, "page": page, "page_size": pageSize})
 }
 
+func (c *ChannelController) ListOrders(ctx *gin.Context) {
+	accountID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || accountID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
+	rows, total, err := c.Service.ListOrders(ctx.GetUint("tenant_id"), uint(accountID), ctx.Query("search"), ctx.Query("status"), page, pageSize)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": rows, "total": total, "page": page, "page_size": pageSize})
+}
+
+func (c *ChannelController) GetOrder(ctx *gin.Context) {
+	accountID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || accountID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	row, err := c.Service.GetOrder(ctx.GetUint("tenant_id"), uint(accountID), ctx.Param("orderNo"))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "channel order not found"})
+		return
+	}
+	ctx.JSON(http.StatusOK, row)
+}
+
 func (c *ChannelController) AuthorizeRequestRetry(ctx *gin.Context) {
 	accountID, accountErr := strconv.ParseUint(ctx.Param("id"), 10, 32)
 	requestID, requestErr := strconv.ParseUint(ctx.Param("requestId"), 10, 32)

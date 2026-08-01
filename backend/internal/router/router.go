@@ -237,6 +237,8 @@ func InitRouter(r *gin.Engine) {
 		channelAdminGroup.GET("/:id/reconciliations/:reconciliationId", channelController.GetReconciliation)
 		channelAdminGroup.GET("/:id/requests", channelController.ListRequests)
 		channelAdminGroup.POST("/:id/requests/:requestId/authorize-retry", channelController.AuthorizeRequestRetry)
+		channelAdminGroup.GET("/:id/orders", channelController.ListOrders)
+		channelAdminGroup.GET("/:id/orders/:orderNo", channelController.GetOrder)
 	}
 
 	teamController := &api.TeamController{Service: service.TeamService{}}

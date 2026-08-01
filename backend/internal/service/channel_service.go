@@ -14,6 +14,30 @@ import (
 
 type ChannelService struct{}
 
+type ChannelOrderSummary struct {
+	ID                  uint      `json:"id"`
+	OrderNo             string    `json:"order_no"`
+	ExternalNo          *string   `json:"external_no,omitempty"`
+	Status              string    `json:"status"`
+	ContactName         string    `json:"contact_name"`
+	ContactPhone        string    `json:"contact_phone"`
+	TotalAmount         float64   `json:"total_amount"`
+	TicketCount         int64     `json:"ticket_count"`
+	UsedTicketCount     int64     `json:"used_ticket_count"`
+	RefundedTicketCount int64     `json:"refunded_ticket_count"`
+	PaidCents           int64     `json:"paid_cents"`
+	RefundedCents       int64     `json:"refunded_cents"`
+	CreatedAt           time.Time `json:"created_at"`
+}
+
+type ChannelOrderDetail struct {
+	Order      model.Order              `json:"order"`
+	Payments   []model.Payment          `json:"payments"`
+	Refunds    []model.Refund           `json:"refunds"`
+	AfterSales []model.AfterSaleRequest `json:"after_sales"`
+	CheckIns   []model.CheckInRecord    `json:"check_ins"`
+}
+
 func randomChannelSecret() string {
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
@@ -191,6 +215,74 @@ func (s *ChannelService) ListRequests(tenantID, accountID uint, status string, p
 		return nil, 0, err
 	}
 	return rows, total, nil
+}
+
+func (s *ChannelService) ListOrders(tenantID, accountID uint, search, status string, page, pageSize int) ([]ChannelOrderSummary, int64, error) {
+	if tenantID == 0 || accountID == 0 {
+		return nil, 0, errors.New("tenant and channel are required")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	query := model.DB.Model(&model.Order{}).
+		Joins("JOIN channel_accounts ON channel_accounts.id = orders.channel_account_id").
+		Where("orders.tenant_id = ? AND orders.channel_account_id = ? AND channel_accounts.tenant_id = ?", tenantID, accountID, tenantID)
+	if value := strings.TrimSpace(status); value != "" {
+		query = query.Where("orders.status = ?", value)
+	}
+	if value := strings.TrimSpace(search); value != "" {
+		pattern := "%" + value + "%"
+		query = query.Where("orders.order_no LIKE ? OR orders.external_no LIKE ? OR orders.contact_name LIKE ? OR orders.contact_phone LIKE ?", pattern, pattern, pattern, pattern)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []ChannelOrderSummary
+	selectColumns := `orders.id, orders.order_no, orders.external_no, orders.status, orders.contact_name, orders.contact_phone,
+		orders.total_amount, orders.created_at,
+		(SELECT COUNT(*) FROM tickets WHERE tickets.order_id = orders.id) AS ticket_count,
+		(SELECT COUNT(*) FROM tickets WHERE tickets.order_id = orders.id AND tickets.status = 'used') AS used_ticket_count,
+		(SELECT COUNT(*) FROM tickets WHERE tickets.order_id = orders.id AND tickets.status = 'refunded') AS refunded_ticket_count,
+		(SELECT COALESCE(SUM(amount_cents), 0) FROM payments WHERE payments.tenant_id = orders.tenant_id AND payments.order_no = orders.order_no AND payments.status IN ('paid', 'refunded')) AS paid_cents,
+		(SELECT COALESCE(SUM(amount_cents), 0) FROM refunds WHERE refunds.tenant_id = orders.tenant_id AND refunds.order_no = orders.order_no AND refunds.status IN ('succeeded', 'group_succeeded')) AS refunded_cents`
+	if err := query.Select(selectColumns).Order("orders.created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+func (s *ChannelService) GetOrder(tenantID, accountID uint, orderNo string) (*ChannelOrderDetail, error) {
+	if tenantID == 0 || accountID == 0 || strings.TrimSpace(orderNo) == "" {
+		return nil, errors.New("tenant, channel and order are required")
+	}
+	var order model.Order
+	if err := model.DB.
+		Preload("Items.Tickets").Preload("Items.VisitorRecords").
+		Joins("JOIN channel_accounts ON channel_accounts.id = orders.channel_account_id").
+		Where("orders.order_no = ? AND orders.tenant_id = ? AND orders.channel_account_id = ? AND channel_accounts.tenant_id = ?", strings.TrimSpace(orderNo), tenantID, accountID, tenantID).
+		First(&order).Error; err != nil {
+		return nil, err
+	}
+	detail := &ChannelOrderDetail{Order: order}
+	if err := model.DB.Where("tenant_id = ? AND order_no = ?", tenantID, order.OrderNo).Order("created_at").Find(&detail.Payments).Error; err != nil {
+		return nil, err
+	}
+	if err := model.DB.Where("tenant_id = ? AND order_no = ?", tenantID, order.OrderNo).Order("created_at").Find(&detail.Refunds).Error; err != nil {
+		return nil, err
+	}
+	if err := model.DB.Preload("Events").Where("tenant_id = ? AND order_no = ?", tenantID, order.OrderNo).Order("created_at").Find(&detail.AfterSales).Error; err != nil {
+		return nil, err
+	}
+	if err := model.DB.Table("check_in_records").Select("check_in_records.*").
+		Joins("JOIN tickets ON tickets.id = check_in_records.ticket_id").
+		Where("tickets.order_id = ?", order.ID).Order("check_in_records.check_in_time").Scan(&detail.CheckIns).Error; err != nil {
+		return nil, err
+	}
+	return detail, nil
 }
 
 func (s *ChannelService) AuthorizeRequestRetry(tenantID, accountID, requestID, actorUserID uint, actorRole, reason string) error {

@@ -17,9 +17,10 @@
       <el-table-column prop="status" label="状态" width="120"><template #default="{row}"><el-tag :type="row.status === 'active' ? 'success' : row.status === 'sandbox' ? 'warning' : 'info'">{{ row.status }}</el-tag></template></el-table-column>
       <el-table-column prop="rate_limit_per_min" label="限流/分钟" width="120" />
       <el-table-column prop="permissions_json" label="权限" min-width="220" show-overflow-tooltip />
-      <el-table-column label="操作" width="460" fixed="right">
+      <el-table-column label="操作" width="530" fixed="right">
         <template #default="{row}">
           <el-button link type="primary" @click="openMapping(row)">商品映射</el-button>
+          <el-button link type="primary" @click="openOrders(row)">渠道订单</el-button>
           <el-button link type="primary" @click="openRequests(row)">请求日志</el-button>
           <el-button link type="primary" @click="openReconciliations(row)">账单对账</el-button>
           <el-button link type="warning" @click="toggleStatus(row)">{{ row.status === 'disabled' ? '启用' : '停用' }}</el-button>
@@ -76,6 +77,80 @@
         </el-table-column>
       </el-table>
       <template #footer><el-button @click="requestsDialog = false">关闭</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="ordersDialog" :title="`渠道订单：${selectedAccount?.code || ''}`" width="1120px" :close-on-click-modal="false">
+      <div class="mb-3 flex items-center gap-2">
+        <el-input v-model="orderSearch" clearable placeholder="订单号、外部单号、姓名或手机号" style="width: 300px" @keyup.enter="loadOrders(1)" />
+        <el-select v-model="orderStatus" clearable placeholder="全部状态" style="width: 150px" @change="loadOrders(1)">
+          <el-option label="待支付" value="unpaid" />
+          <el-option label="已支付" value="paid" />
+          <el-option label="已完成" value="completed" />
+          <el-option label="部分退款" value="partial_refunded" />
+          <el-option label="已退款" value="refunded" />
+          <el-option label="已取消" value="cancelled" />
+        </el-select>
+        <el-button type="primary" @click="loadOrders(1)">查询</el-button>
+        <el-button :icon="Refresh" @click="loadOrders(orderPage)">刷新</el-button>
+      </div>
+      <el-table :data="channelOrders" v-loading="ordersLoading" stripe height="470" empty-text="暂无渠道订单">
+        <el-table-column prop="external_no" label="外部单号" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="order_no" label="内部订单" min-width="170" show-overflow-tooltip />
+        <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag effect="plain">{{ orderStatusText(row.status) }}</el-tag></template></el-table-column>
+        <el-table-column label="游客" min-width="150"><template #default="{ row }"><div>{{ row.contact_name || '-' }}</div><div class="text-xs text-gray-500">{{ row.contact_phone || '-' }}</div></template></el-table-column>
+        <el-table-column label="票况" width="125"><template #default="{ row }"><div>{{ row.ticket_count }} 张</div><div class="text-xs text-gray-500">已核销 {{ row.used_ticket_count }} / 已退 {{ row.refunded_ticket_count }}</div></template></el-table-column>
+        <el-table-column label="订单金额" width="110"><template #default="{ row }">¥{{ Number(row.total_amount || 0).toFixed(2) }}</template></el-table-column>
+        <el-table-column label="实收/退款" width="130"><template #default="{ row }"><div>收 ¥{{ cents(row.paid_cents) }}</div><div class="text-xs text-gray-500">退 ¥{{ cents(row.refunded_cents) }}</div></template></el-table-column>
+        <el-table-column label="下单时间" width="165"><template #default="{ row }">{{ dateTime(row.created_at) }}</template></el-table-column>
+        <el-table-column label="操作" width="80" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openOrderDetail(row)">详情</el-button></template></el-table-column>
+      </el-table>
+      <div class="mt-3 flex justify-end"><el-pagination v-model:current-page="orderPage" :page-size="20" :total="orderTotal" layout="prev, pager, next, total" @current-change="loadOrders" /></div>
+      <template #footer><el-button @click="ordersDialog = false">关闭</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="orderDetailDialog" title="渠道订单详情" width="1080px" append-to-body>
+      <div v-loading="orderDetailLoading">
+        <el-descriptions v-if="orderDetail" :column="4" border>
+          <el-descriptions-item label="外部单号">{{ orderDetail.order.external_no || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="内部订单">{{ orderDetail.order.order_no }}</el-descriptions-item>
+          <el-descriptions-item label="状态">{{ orderStatusText(orderDetail.order.status) }}</el-descriptions-item>
+          <el-descriptions-item label="金额">¥{{ Number(orderDetail.order.total_amount || 0).toFixed(2) }}</el-descriptions-item>
+          <el-descriptions-item label="联系人">{{ orderDetail.order.contact_name || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="手机号">{{ orderDetail.order.contact_phone || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="创建时间" :span="2">{{ dateTime(orderDetail.order.created_at) }}</el-descriptions-item>
+        </el-descriptions>
+        <el-tabs v-if="orderDetail" class="mt-4">
+          <el-tab-pane label="门票">
+            <el-table :data="orderTickets(orderDetail.order)" stripe max-height="380" empty-text="暂无门票">
+              <el-table-column prop="ticket_code" label="票码" min-width="180" />
+              <el-table-column prop="product_name" label="产品" min-width="180" />
+              <el-table-column prop="visitor_name" label="游客" width="120" />
+              <el-table-column prop="visitor_phone" label="手机号" width="140" />
+              <el-table-column prop="status" label="状态" width="100" />
+              <el-table-column prop="check_in_count" label="核销次数" width="100" />
+            </el-table>
+          </el-tab-pane>
+          <el-tab-pane :label="`支付与退款 (${orderDetail.payments.length}/${orderDetail.refunds.length})`">
+            <el-table :data="orderDetail.payments" stripe max-height="180" empty-text="暂无支付">
+              <el-table-column prop="payment_no" label="支付单" min-width="160" /><el-table-column prop="method" label="方式" width="100" /><el-table-column label="金额" width="120"><template #default="{ row }">¥{{ cents(row.amount_cents) }}</template></el-table-column><el-table-column prop="status" label="状态" width="110" /><el-table-column prop="transaction_id" label="渠道流水" min-width="160" />
+            </el-table>
+            <el-table :data="orderDetail.refunds" stripe max-height="180" class="mt-3" empty-text="暂无退款">
+              <el-table-column prop="refund_no" label="退款单" min-width="160" /><el-table-column prop="method" label="方式" width="100" /><el-table-column label="金额" width="120"><template #default="{ row }">¥{{ cents(row.amount_cents) }}</template></el-table-column><el-table-column prop="status" label="状态" width="110" /><el-table-column prop="reason" label="原因" min-width="180" />
+            </el-table>
+          </el-tab-pane>
+          <el-tab-pane :label="`核销 (${orderDetail.check_ins.length})`">
+            <el-table :data="orderDetail.check_ins" stripe max-height="380" empty-text="暂无核销">
+              <el-table-column prop="ticket_code" label="票码" min-width="180" /><el-table-column prop="result" label="结果" width="100" /><el-table-column prop="message" label="说明" min-width="180" /><el-table-column label="时间" width="180"><template #default="{ row }">{{ dateTime(row.check_in_time) }}</template></el-table-column>
+            </el-table>
+          </el-tab-pane>
+          <el-tab-pane :label="`售后 (${orderDetail.after_sales.length})`">
+            <el-table :data="orderDetail.after_sales" stripe max-height="380" empty-text="暂无售后">
+              <el-table-column prop="request_no" label="售后单" min-width="170" /><el-table-column prop="type" label="类型" width="100" /><el-table-column prop="status" label="状态" width="110" /><el-table-column prop="reason" label="原因" min-width="200" /><el-table-column label="申请时间" width="180"><template #default="{ row }">{{ dateTime(row.created_at) }}</template></el-table-column>
+            </el-table>
+          </el-tab-pane>
+        </el-tabs>
+      </div>
+      <template #footer><el-button @click="orderDetailDialog = false">关闭</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="reconciliationsDialog" :title="`渠道账单对账：${selectedAccount?.code || ''}`" width="1000px" :close-on-click-modal="false">
@@ -143,6 +218,16 @@ const selectedAccount = ref<any>(null)
 const channelRequests = ref<any[]>([])
 const requestStatus = ref('')
 const requestTotal = ref(0)
+const ordersDialog = ref(false)
+const ordersLoading = ref(false)
+const channelOrders = ref<any[]>([])
+const orderSearch = ref('')
+const orderStatus = ref('')
+const orderPage = ref(1)
+const orderTotal = ref(0)
+const orderDetailDialog = ref(false)
+const orderDetailLoading = ref(false)
+const orderDetail = ref<any>(null)
 const reconciliationsDialog = ref(false)
 const reconciliationsLoading = ref(false)
 const reconciliations = ref<any[]>([])
@@ -167,6 +252,33 @@ const cents = (value: number) => (Number(value || 0) / 100).toFixed(2)
 const signedCents = (value: number) => `${Number(value || 0) > 0 ? '+' : Number(value || 0) < 0 ? '-' : ''}¥${cents(Math.abs(Number(value || 0)))}`
 const requestStatusText = (status: string) => ({ processing: '处理中', completed: '已完成', failed: '失败待处理', retryable: '已授权重试' } as Record<string, string>)[status] || status
 const requestStatusType = (status: string) => status === 'completed' ? 'success' : status === 'failed' ? 'danger' : status === 'retryable' ? 'warning' : 'primary'
+const orderStatusText = (status: string) => ({ unpaid: '待支付', paid: '已支付', completed: '已完成', partial_refunded: '部分退款', refunded: '已退款', cancelled: '已取消' } as Record<string, string>)[status] || status
+const orderTickets = (order: any) => (order?.items || []).flatMap((item: any) => (item.tickets || []).map((ticket: any) => ({ ...ticket, product_name: item.product_name })))
+const loadOrders = async (page = 1) => {
+  if (!selectedAccount.value) return
+  orderPage.value = page
+  ordersLoading.value = true
+  try {
+    const response = await request.get(`/channel-accounts/${selectedAccount.value.id}/orders`, { params: { search: orderSearch.value.trim(), status: orderStatus.value, page, page_size: 20 } })
+    channelOrders.value = response.data.data || []
+    orderTotal.value = Number(response.data.total || 0)
+  } finally { ordersLoading.value = false }
+}
+const openOrders = async (row: any) => {
+  selectedAccount.value = row
+  orderSearch.value = ''
+  orderStatus.value = ''
+  ordersDialog.value = true
+  await loadOrders(1)
+}
+const openOrderDetail = async (row: any) => {
+  if (!selectedAccount.value) return
+  orderDetail.value = null
+  orderDetailDialog.value = true
+  orderDetailLoading.value = true
+  try { orderDetail.value = (await request.get(`/channel-accounts/${selectedAccount.value.id}/orders/${encodeURIComponent(row.order_no)}`)).data }
+  finally { orderDetailLoading.value = false }
+}
 const loadRequests = async () => {
   if (!selectedAccount.value) return
   requestsLoading.value = true
