@@ -52,7 +52,33 @@ func validateSalePolicyTx(tx *gorm.DB, product *model.Product, order *model.Orde
 	if item.VisitorRegion == "" {
 		item.VisitorRegion = order.VisitorRegion
 	}
-	if product.RealNameRequired && (strings.TrimSpace(item.VisitorName) == "" || strings.TrimSpace(item.VisitorID) == "") {
+	if len(item.Visitors) > 0 {
+		expected := item.Quantity
+		if product.CodeMode == "order" {
+			expected = 1
+		}
+		if len(item.Visitors) != expected {
+			return fmt.Errorf("product %s requires exactly %d per-ticket visitors", product.Name, expected)
+		}
+		for i := range item.Visitors {
+			item.Visitors[i].Name = strings.TrimSpace(item.Visitors[i].Name)
+			item.Visitors[i].Phone = strings.TrimSpace(item.Visitors[i].Phone)
+			item.Visitors[i].IdentityNo = strings.TrimSpace(item.Visitors[i].IdentityNo)
+			item.Visitors[i].Region = strings.TrimSpace(item.Visitors[i].Region)
+			if item.Visitors[i].Name == "" {
+				return fmt.Errorf("product %s visitor %d name is required", product.Name, i+1)
+			}
+			if product.RealNameRequired && item.Visitors[i].IdentityNo == "" {
+				return fmt.Errorf("product %s visitor %d identity number is required", product.Name, i+1)
+			}
+			if err := validateRegion(product.RegionLimit, item.Visitors[i].Region); err != nil {
+				return fmt.Errorf("%s visitor %d: %w", product.Name, i+1, err)
+			}
+		}
+	} else if product.RealNameRequired && item.Quantity > 1 && product.CodeMode != "order" {
+		return fmt.Errorf("product %s requires one visitor per ticket", product.Name)
+	}
+	if product.RealNameRequired && len(item.Visitors) == 0 && (strings.TrimSpace(item.VisitorName) == "" || strings.TrimSpace(item.VisitorID) == "") {
 		return fmt.Errorf("product %s requires visitor name and identity number", product.Name)
 	}
 	if product.LimitPerPhone > 0 {

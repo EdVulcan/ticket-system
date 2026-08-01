@@ -176,9 +176,12 @@ func (s *ProductService) Update(id, tenantID uint, product *model.Product, rule 
 		if _, err := createProductRevisionTx(tx, &revised); err != nil {
 			return err
 		}
-		return tx.Model(&model.ProductOffer{}).
+		if err := tx.Model(&model.ProductOffer{}).
 			Where("source_product_id = ? AND supplier_tenant_id = ? AND status = ? AND product_revision_id != ?", revised.ID, tenantID, "active", revised.CurrentRevisionID).
-			Update("status", "suspended").Error
+			Update("status", "suspended").Error; err != nil {
+			return err
+		}
+		return syncListingsForSourceProductTx(tx, tenantID, revised.ID, 0, "supplier product revision changed")
 	})
 }
 
@@ -422,12 +425,26 @@ func (s *ProductService) UpdateStatus(id, tenantID uint, status string) error {
 		return fmt.Errorf("invalid product status")
 	}
 	return model.Write(func(tx *gorm.DB) error {
-		result := tx.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", id, tenantID).Update("status", status)
+		var product model.Product
+		if err := tx.Where("id = ? AND tenant_id = ?", id, tenantID).First(&product).Error; err != nil {
+			return err
+		}
+		capability := "supplier"
+		if isDistributedListing(&product) {
+			capability = "distributor"
+		}
+		if err := requireActiveTenantCapability(tx, tenantID, capability); err != nil {
+			return err
+		}
+		result := tx.Model(&product).Where("id = ? AND tenant_id = ?", id, tenantID).Update("status", status)
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
+		}
+		if capability == "supplier" {
+			return syncListingsForSourceProductTx(tx, tenantID, id, 0, "supplier product status changed")
 		}
 		return nil
 	})

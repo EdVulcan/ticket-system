@@ -217,6 +217,64 @@ func TestProductSalePolicyRejectsIdentityAndLimitViolations(t *testing.T) {
 	}
 }
 
+func TestRealNameOrderPersistsPerTicketVisitors(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&model.Product{}).Where("id = ?", productID).Updates(map[string]interface{}{
+			"real_name_required": true, "region_limit": `["CN"]`,
+		}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	order := model.Order{
+		TenantID: tenantID, Channel: "online", ContactName: "联系人", ContactPhone: "13800000000", VisitorRegion: "CN",
+		Items: []model.OrderItem{{
+			ProductID: productID, Quantity: 2,
+			Visitors: []model.VisitorInput{
+				{Name: "游客甲", Phone: "13800000001", IdentityNo: "ID-A", Region: "CN"},
+				{Name: "游客乙", Phone: "13800000002", IdentityNo: "ID-B", Region: "CN"},
+			},
+		}},
+	}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+
+	var visitors []model.OrderVisitor
+	if err := model.DB.Where("order_id = ?", order.ID).Order("sequence").Find(&visitors).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(visitors) != 2 || visitors[0].TicketCode == "" || visitors[1].TicketCode == "" || visitors[0].TicketCode == visitors[1].TicketCode {
+		t.Fatalf("visitor snapshots=%+v", visitors)
+	}
+	if visitors[0].Name != "游客甲" || visitors[0].IdentityNo != "ID-A" || visitors[1].Name != "游客乙" || visitors[1].IdentityNo != "ID-B" {
+		t.Fatalf("visitor snapshots lost identity=%+v", visitors)
+	}
+
+	var tickets []model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).Order("ticket_code").Find(&tickets).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(tickets) != 2 {
+		t.Fatalf("tickets=%d, want 2", len(tickets))
+	}
+	for _, ticket := range tickets {
+		if ticket.VisitorName == "" || ticket.VisitorID == "" || ticket.VisitorRegion != "CN" {
+			t.Fatalf("ticket visitor fields were not assigned: %+v", ticket)
+		}
+	}
+
+	missingVisitors := model.Order{
+		TenantID: tenantID, Channel: "online", ContactName: "联系人", ContactPhone: "13800000003", VisitorRegion: "CN",
+		Items: []model.OrderItem{{ProductID: productID, Quantity: 2}},
+	}
+	if err := (&OrderService{}).Create(&missingVisitors); err == nil {
+		t.Fatal("multi-ticket real-name order without visitor snapshots was accepted")
+	}
+}
+
 func TestProductSalePolicyCountsDuplicateLinesInOneOrder(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)

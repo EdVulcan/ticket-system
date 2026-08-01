@@ -218,6 +218,10 @@ type OrderItem struct {
 	OfferReservedQuantity   int        `json:"offer_reserved_quantity"`
 	CommissionBPS           int64      `gorm:"not null;default:0" json:"commission_bps"`
 	Tickets                 []Ticket   `gorm:"foreignKey:OrderItemID" json:"tickets,omitempty"`
+	// Visitors is request-only input. Persisted snapshots are exposed through
+	// VisitorRecords and are written after ticket IDs are assigned.
+	Visitors       []VisitorInput `gorm:"-" json:"visitors,omitempty"`
+	VisitorRecords []OrderVisitor `gorm:"foreignKey:OrderItemID" json:"visitor_records,omitempty"`
 }
 
 // Ticket 具体票据 (对应一个游客或一个二维码)
@@ -239,9 +243,10 @@ type Ticket struct {
 	Status                  string    `gorm:"size:20;default:'unused'" json:"status"`          // unused, used, refunded, expired
 
 	// Visitor Info
-	VisitorName  string `gorm:"size:50" json:"visitor_name"`
-	VisitorPhone string `gorm:"size:20" json:"visitor_phone"`
-	VisitorID    string `gorm:"size:50" json:"visitor_id"`
+	VisitorName   string `gorm:"size:50" json:"visitor_name"`
+	VisitorPhone  string `gorm:"size:20" json:"visitor_phone"`
+	VisitorID     string `gorm:"size:50" json:"visitor_id"`
+	VisitorRegion string `gorm:"size:50" json:"visitor_region"`
 
 	// Usage Tracking
 	CheckInCount int `gorm:"default:0" json:"check_in_count"` // 总核销次数

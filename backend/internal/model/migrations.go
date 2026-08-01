@@ -71,6 +71,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 41, name: "digital refund task leases", apply: migrateDigitalRefundTaskLeases},
 		{version: 42, name: "channel request leases", apply: migrateChannelRequestLeases},
 		{version: 43, name: "tenant qualification and lifecycle facts", apply: migrateTenantLifecycleFacts},
+		{version: 44, name: "per-ticket visitor snapshots", apply: migrateVisitorSnapshots},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -108,6 +109,46 @@ func migrateTenantLifecycleFacts(db *gorm.DB) error {
 	// Preserve their current ability to operate, while making every new tenant
 	// explicitly qualify before a platform operator can reactivate it.
 	return db.Exec("UPDATE tenants SET qualification_status = 'approved' WHERE qualification_status IS NULL OR qualification_status = ''").Error
+}
+
+func migrateVisitorSnapshots(db *gorm.DB) error {
+	// Use explicit idempotent DDL here. GORM AutoMigrate may rebuild related
+	// SQLite tables; upgraded databases already contain ownership triggers on
+	// orders/products/tickets and those triggers must never be detached during
+	// a metadata-only migration.
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS order_visitors (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		created_at DATETIME,
+		updated_at DATETIME,
+		deleted_at DATETIME,
+		tenant_id INTEGER NOT NULL,
+		order_id INTEGER NOT NULL,
+		order_item_id INTEGER NOT NULL,
+		ticket_id INTEGER NOT NULL,
+		ticket_code TEXT NOT NULL,
+		sequence INTEGER NOT NULL,
+		name TEXT NOT NULL,
+		phone TEXT,
+		identity_no TEXT,
+		region TEXT
+	)`).Error; err != nil {
+		return err
+	}
+	for _, statement := range []string{
+		`CREATE INDEX IF NOT EXISTS idx_order_visitors_tenant_id ON order_visitors(tenant_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_order_visitors_order_id ON order_visitors(order_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_order_visitors_order_item_id ON order_visitors(order_item_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_order_visitors_ticket_id ON order_visitors(ticket_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_order_visitors_ticket_code ON order_visitors(ticket_code)`,
+	} {
+		if err := db.Exec(statement).Error; err != nil {
+			return err
+		}
+	}
+	// Ticket already has ownership triggers in upgraded databases. Calling
+	// GORM AutoMigrate on it would rebuild the table and temporarily detach
+	// those triggers, so add this compatibility column with a guarded DDL.
+	return addColumnIfMissing(db, "tickets", "visitor_region", `ALTER TABLE tickets ADD COLUMN visitor_region TEXT`)
 }
 
 func migrateTeamSettlementFacts(db *gorm.DB) error {
@@ -918,6 +959,7 @@ func migrateInitialSchema(db *gorm.DB) error {
 		&Tenant{}, &TenantCapability{}, &ScenicArea{}, &PlatformUser{}, &User{}, &Staff{}, &CheckPoint{}, &Device{},
 		&TicketRule{}, &RuleGroup{}, &RuleItem{}, &Product{}, &ProductOffer{}, &SellerListing{}, &ProductInventory{},
 		&Order{}, &OrderItem{}, &Ticket{}, &FulfillmentOrder{}, &TicketEntitlement{}, &CheckInRecord{},
+		&OrderVisitor{},
 		&DistributorRelationship{}, &CapitalAccount{}, &TransactionRecord{}, &LedgerEntry{}, &ProductRevision{},
 		&Policy{}, &PaymentConfig{}, &Payment{}, &Refund{}, &PaymentReconciliationTask{}, &AuditLog{}, &OTANonce{},
 		&DigitalRefundTask{}, &ChannelAccount{}, &ChannelProductMapping{}, &ChannelRequest{},

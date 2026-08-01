@@ -167,10 +167,16 @@ func (s *OrderService) Create(req *model.Order) error {
 			if err != nil {
 				return fmt.Errorf("%s: %w", listing.Name, err)
 			}
+			if err := assignTicketVisitors(item); err != nil {
+				return fmt.Errorf("%s: %w", listing.Name, err)
+			}
 			for ticketIndex := range item.Tickets {
-				item.Tickets[ticketIndex].VisitorName = item.VisitorName
-				item.Tickets[ticketIndex].VisitorPhone = item.VisitorPhone
-				item.Tickets[ticketIndex].VisitorID = item.VisitorID
+				if len(item.Visitors) == 0 {
+					item.Tickets[ticketIndex].VisitorName = item.VisitorName
+					item.Tickets[ticketIndex].VisitorPhone = item.VisitorPhone
+					item.Tickets[ticketIndex].VisitorID = item.VisitorID
+					item.Tickets[ticketIndex].VisitorRegion = item.VisitorRegion
+				}
 			}
 		}
 
@@ -186,6 +192,9 @@ func (s *OrderService) Create(req *model.Order) error {
 		// carries a denormalized OrderID used by operational queries. Backfill it
 		// inside the same transaction so the two ownership paths cannot diverge.
 		if err := tx.Exec("UPDATE tickets SET order_id = ? WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = ?)", req.ID, req.ID).Error; err != nil {
+			return err
+		}
+		if err := persistOrderVisitorsTx(tx, req); err != nil {
 			return err
 		}
 		return createFulfillmentProjections(tx, s, req)
@@ -717,6 +726,49 @@ func buildTickets(service *OrderService, product *model.Product, quantity int, o
 	return tickets, nil
 }
 
+func assignTicketVisitors(item *model.OrderItem) error {
+	if item == nil || len(item.Visitors) == 0 {
+		return nil
+	}
+	if len(item.Visitors) != len(item.Tickets) {
+		return errors.New("visitor count does not match ticket count")
+	}
+	for i := range item.Tickets {
+		visitor := item.Visitors[i]
+		item.Tickets[i].VisitorName = visitor.Name
+		item.Tickets[i].VisitorPhone = visitor.Phone
+		item.Tickets[i].VisitorID = visitor.IdentityNo
+		item.Tickets[i].VisitorRegion = visitor.Region
+	}
+	return nil
+}
+
+func persistOrderVisitorsTx(tx *gorm.DB, order *model.Order) error {
+	if order == nil || order.ID == 0 {
+		return errors.New("order is required")
+	}
+	for itemIndex := range order.Items {
+		item := &order.Items[itemIndex]
+		if len(item.Visitors) == 0 {
+			continue
+		}
+		if len(item.Visitors) != len(item.Tickets) {
+			return errors.New("visitor count does not match ticket count")
+		}
+		for index, visitor := range item.Visitors {
+			ticket := item.Tickets[index]
+			if err := tx.Create(&model.OrderVisitor{
+				TenantID: order.TenantID, OrderID: order.ID, OrderItemID: item.ID,
+				TicketID: ticket.ID, TicketCode: ticket.TicketCode, Sequence: index + 1,
+				Name: visitor.Name, Phone: visitor.Phone, IdentityNo: visitor.IdentityNo, Region: visitor.Region,
+			}).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (s *OrderService) List(page, pageSize int, tenantID uint, status, channel, startDate, endDate, search string) ([]model.Order, int64, error) {
 	var orders []model.Order
 	var total int64
@@ -733,7 +785,7 @@ func (s *OrderService) List(page, pageSize int, tenantID uint, status, channel, 
 		pageSize = 100
 	}
 
-	query := model.DB.Model(&model.Order{}).Preload("Items").Preload("Items.Tickets").Where("tenant_id = ?", tenantID)
+	query := model.DB.Model(&model.Order{}).Preload("Items").Preload("Items.Tickets").Preload("Items.VisitorRecords").Where("tenant_id = ?", tenantID)
 	if status != "" {
 		query = query.Where("status = ?", status)
 	}
@@ -759,14 +811,14 @@ func (s *OrderService) List(page, pageSize int, tenantID uint, status, channel, 
 
 func (s *OrderService) GetByOrderNo(orderNo string, tenantID uint) (*model.Order, error) {
 	var order model.Order
-	err := model.DB.Preload("Items").Preload("Items.Tickets").
+	err := model.DB.Preload("Items").Preload("Items.Tickets").Preload("Items.VisitorRecords").
 		Where("order_no = ? AND tenant_id = ?", orderNo, tenantID).First(&order).Error
 	return &order, err
 }
 
 func (s *OrderService) GetByExternalNo(externalNo, channel string, tenantID uint) (*model.Order, error) {
 	var order model.Order
-	err := model.DB.Preload("Items").Preload("Items.Tickets").
+	err := model.DB.Preload("Items").Preload("Items.Tickets").Preload("Items.VisitorRecords").
 		Where("external_no = ? AND channel = ? AND tenant_id = ?", externalNo, channel, tenantID).First(&order).Error
 	return &order, err
 }

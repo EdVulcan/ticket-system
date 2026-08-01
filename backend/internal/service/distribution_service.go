@@ -306,7 +306,11 @@ func (s *DistributionService) SetOfferStatus(supplierTenantID, offerID, operator
 		if err := tx.Model(&offer).Update("status", status).Error; err != nil {
 			return err
 		}
-		return recordAuditTx(tx, operatorID, supplierTenantID, "admin", "tenant", "distribution.offer.status", "product_offer", offer.ID, strings.TrimSpace(reason), `{"status":"`+before+`"}`, `{"status":"`+status+`"}`)
+		if err := recordAuditTx(tx, operatorID, supplierTenantID, "admin", "tenant", "distribution.offer.status", "product_offer", offer.ID, strings.TrimSpace(reason), fmt.Sprintf(`{"status":%q}`, before), fmt.Sprintf(`{"status":%q}`, status)); err != nil {
+			return err
+		}
+		offer.Status = status
+		return syncOfferListingsTx(tx, &offer, operatorID, "supplier offer status changed")
 	})
 }
 
@@ -441,15 +445,109 @@ func (s *DistributionService) ImportProduct(agentTenantID, sourceProductID uint,
 }
 
 type ListingSyncResult struct {
-	ListingID       uint   `json:"listing_id"`
-	ProductID       uint   `json:"product_id"`
-	OfferID         uint   `json:"offer_id"`
-	OfferStatus     string `json:"offer_status"`
-	SourceStatus    string `json:"source_status"`
-	SourceRevision  uint   `json:"source_revision"`
-	ListingStatus   string `json:"listing_status"`
-	Eligible        bool   `json:"eligible"`
-	Reason          string `json:"reason,omitempty"`
+	ListingID      uint   `json:"listing_id"`
+	ProductID      uint   `json:"product_id"`
+	OfferID        uint   `json:"offer_id"`
+	OfferStatus    string `json:"offer_status"`
+	SourceStatus   string `json:"source_status"`
+	SourceRevision uint   `json:"source_revision"`
+	ListingStatus  string `json:"listing_status"`
+	Eligible       bool   `json:"eligible"`
+	Reason         string `json:"reason,omitempty"`
+}
+
+// syncListingTx is the single source of truth for the sell-side projection.
+// It is deliberately transaction-scoped so a supplier change cannot commit
+// while only some of its distributor listings have been made unavailable.
+func syncListingTx(tx *gorm.DB, listing *model.SellerListing, offer *model.ProductOffer, operatorID uint, reason string) (*ListingSyncResult, error) {
+	if listing == nil || offer == nil {
+		return nil, errors.New("listing and offer are required")
+	}
+	var source model.Product
+	sourceErr := tx.Unscoped().Select("id, tenant_id, status, current_revision_id, is_distributable, scenic_area_id").
+		Where("id = ? AND tenant_id = ?", offer.SourceProductID, offer.SupplierTenantID).First(&source).Error
+	retailPriceCents := listing.RetailPriceCents
+	if retailPriceCents == 0 && listing.RetailPrice != 0 {
+		retailPriceCents = moneyCents(listing.RetailPrice)
+	}
+	now := time.Now()
+	eligible := sourceErr == nil && offer.Status == "active" && source.Status == "online" && source.IsDistributable &&
+		offer.ProductRevisionID > 0 && source.CurrentRevisionID == offer.ProductRevisionID &&
+		(offer.SalesStartAt == nil || !now.Before(*offer.SalesStartAt)) &&
+		(offer.SalesEndAt == nil || !now.After(*offer.SalesEndAt)) &&
+		(offer.MinimumRetailPriceCents == 0 || retailPriceCents >= offer.MinimumRetailPriceCents)
+	status := "offline"
+	reasonText := "supplier offer or source product is unavailable"
+	if sourceErr != nil {
+		reasonText = "source product is unavailable"
+	} else if eligible {
+		status = "online"
+		reasonText = "supplier offer and product revision are valid"
+	} else if offer.Status != "active" {
+		reasonText = "supplier offer is not active"
+	} else if source.Status != "online" || !source.IsDistributable {
+		reasonText = "supplier product is not distributable or online"
+	} else if offer.ProductRevisionID == 0 || source.CurrentRevisionID != offer.ProductRevisionID {
+		reasonText = "supplier product revision changed"
+	} else if offer.MinimumRetailPriceCents > 0 && retailPriceCents < offer.MinimumRetailPriceCents {
+		reasonText = "listing price is below supplier minimum retail price"
+	} else if (offer.SalesStartAt != nil && now.Before(*offer.SalesStartAt)) || (offer.SalesEndAt != nil && now.After(*offer.SalesEndAt)) {
+		reasonText = "listing is outside supplier sales period"
+	}
+	previousStatus := listing.Status
+	if err := tx.Model(listing).Update("status", status).Error; err != nil {
+		return nil, err
+	}
+	if err := tx.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", listing.ProductID, listing.SellerTenantID).Update("status", status).Error; err != nil {
+		return nil, err
+	}
+	result := &ListingSyncResult{
+		ListingID: listing.ID, ProductID: listing.ProductID, OfferID: offer.ID,
+		OfferStatus: offer.Status, SourceStatus: source.Status, SourceRevision: source.CurrentRevisionID,
+		ListingStatus: status, Eligible: eligible, Reason: reasonText,
+	}
+	auditReason := strings.TrimSpace(reason)
+	if auditReason != "" {
+		auditReason += ": "
+	}
+	auditReason += reasonText
+	if err := recordAuditTx(tx, operatorID, listing.SellerTenantID, "system", "tenant", "distribution.listing.sync", "seller_listing", listing.ID, auditReason,
+		fmt.Sprintf(`{"status":%q}`, previousStatus), fmt.Sprintf(`{"status":%q}`, status)); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func syncOfferListingsTx(tx *gorm.DB, offer *model.ProductOffer, operatorID uint, reason string) error {
+	if offer == nil || offer.ID == 0 {
+		return errors.New("offer is required")
+	}
+	var listings []model.SellerListing
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("product_offer_id = ? AND seller_tenant_id = ?", offer.ID, offer.DistributorTenantID).Find(&listings).Error; err != nil {
+		return err
+	}
+	for i := range listings {
+		if _, err := syncListingTx(tx, &listings[i], offer, operatorID, reason); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// syncListingsForSourceProductTx is used by supplier product lifecycle
+// changes. It intentionally recalculates every offer rather than copying the
+// supplier product into a distributor tenant.
+func syncListingsForSourceProductTx(tx *gorm.DB, supplierTenantID, sourceProductID, operatorID uint, reason string) error {
+	var offers []model.ProductOffer
+	if err := tx.Where("supplier_tenant_id = ? AND source_product_id = ?", supplierTenantID, sourceProductID).Find(&offers).Error; err != nil {
+		return err
+	}
+	for i := range offers {
+		if err := syncOfferListingsTx(tx, &offers[i], operatorID, reason); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SyncListing re-evaluates a distributor listing against the supplier-owned
@@ -473,34 +571,11 @@ func (s *DistributionService) SyncListing(distributorTenantID, listingID, operat
 		if err := tx.Where("id = ? AND distributor_tenant_id = ?", listing.ProductOfferID, distributorTenantID).First(&offer).Error; err != nil {
 			return errors.New("listing offer is unavailable")
 		}
-		var source model.Product
-		if err := tx.Unscoped().Select("id, tenant_id, status, current_revision_id, is_distributable, scenic_area_id").Where("id = ? AND tenant_id = ?", offer.SourceProductID, offer.SupplierTenantID).First(&source).Error; err != nil {
-			return errors.New("source product is unavailable")
+		synced, err := syncListingTx(tx, &listing, &offer, operatorID, reason)
+		if synced != nil {
+			result = *synced
 		}
-		now := time.Now()
-		retailPriceCents := listing.RetailPriceCents
-		if retailPriceCents == 0 && listing.RetailPrice != 0 {
-			retailPriceCents = moneyCents(listing.RetailPrice)
-		}
-		eligible := offer.Status == "active" && source.Status == "online" && source.IsDistributable && offer.ProductRevisionID > 0 && source.CurrentRevisionID == offer.ProductRevisionID && (offer.SalesStartAt == nil || !now.Before(*offer.SalesStartAt)) && (offer.SalesEndAt == nil || !now.After(*offer.SalesEndAt)) && (offer.MinimumRetailPriceCents == 0 || retailPriceCents >= offer.MinimumRetailPriceCents)
-		status := "offline"
-		reasonText := "supplier offer or source product is unavailable"
-		if eligible {
-			status = "online"
-			reasonText = "supplier offer and product revision are valid"
-		} else if offer.MinimumRetailPriceCents > 0 && retailPriceCents < offer.MinimumRetailPriceCents {
-			reasonText = "listing price is below supplier minimum retail price"
-		} else if source.CurrentRevisionID != offer.ProductRevisionID {
-			reasonText = "supplier product revision changed"
-		}
-		if err := tx.Model(&listing).Update("status", status).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", listing.ProductID, distributorTenantID).Update("status", status).Error; err != nil {
-			return err
-		}
-		result = ListingSyncResult{ListingID: listing.ID, ProductID: listing.ProductID, OfferID: offer.ID, OfferStatus: offer.Status, SourceStatus: source.Status, SourceRevision: source.CurrentRevisionID, ListingStatus: status, Eligible: eligible, Reason: reasonText}
-		return recordAuditTx(tx, operatorID, distributorTenantID, "admin", "tenant", "distribution.listing.sync", "seller_listing", listing.ID, strings.TrimSpace(reason)+": "+reasonText, `{"status":"`+listing.Status+`"}`, `{"status":"`+status+`"}`)
+		return err
 	})
 	if err != nil {
 		return nil, err

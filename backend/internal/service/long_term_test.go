@@ -887,6 +887,10 @@ func TestDistributorListingSyncFollowsSupplierOfferState(t *testing.T) {
 	if err := (&DistributionService{}).SetOfferStatus(scenario.supplierID, offer.ID, 1, "suspended", "supplier maintenance"); err != nil {
 		t.Fatal(err)
 	}
+	var listing model.Product
+	if err := model.DB.First(&listing, scenario.listingID).Error; err != nil || listing.Status != "offline" {
+		t.Fatalf("listing was not automatically disabled after offer suspension: %+v err=%v", listing, err)
+	}
 	var sellerListing model.SellerListing
 	if err := model.DB.Where("product_id = ? AND seller_tenant_id = ?", scenario.listingID, scenario.distributorID).First(&sellerListing).Error; err != nil {
 		t.Fatal(err)
@@ -895,16 +899,37 @@ func TestDistributorListingSyncFollowsSupplierOfferState(t *testing.T) {
 	if err != nil || result.Eligible || result.ListingStatus != "offline" {
 		t.Fatalf("suspended sync result=%+v err=%v", result, err)
 	}
-	var listing model.Product
 	if err := model.DB.First(&listing, scenario.listingID).Error; err != nil || listing.Status != "offline" {
 		t.Fatalf("listing status=%s err=%v", listing.Status, err)
 	}
 	if err := (&DistributionService{}).SetOfferStatus(scenario.supplierID, offer.ID, 1, "active", "maintenance complete"); err != nil {
 		t.Fatal(err)
 	}
+	if err := model.DB.First(&listing, scenario.listingID).Error; err != nil || listing.Status != "online" {
+		t.Fatalf("listing was not automatically restored after offer activation: %+v err=%v", listing, err)
+	}
 	result, err = (&DistributionService{}).SyncListing(scenario.distributorID, sellerListing.ID, 2, "scheduled supplier sync")
 	if err != nil || !result.Eligible || result.ListingStatus != "online" {
 		t.Fatalf("reactivated sync result=%+v err=%v", result, err)
+	}
+}
+
+func TestSupplierProductLifecycleSynchronizesDistributorListings(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	products := &ProductService{}
+	if err := products.UpdateStatus(scenario.sourceProductID, scenario.supplierID, "offline"); err != nil {
+		t.Fatal(err)
+	}
+	var listing model.Product
+	if err := model.DB.First(&listing, scenario.listingID).Error; err != nil || listing.Status != "offline" {
+		t.Fatalf("listing status after source offline=%s err=%v", listing.Status, err)
+	}
+	if err := products.UpdateStatus(scenario.sourceProductID, scenario.supplierID, "online"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.First(&listing, scenario.listingID).Error; err != nil || listing.Status != "online" {
+		t.Fatalf("listing status after source online=%s err=%v", listing.Status, err)
 	}
 }
 

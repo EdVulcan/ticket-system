@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 	}
 	if err := db.AutoMigrate(
 		&model.Tenant{}, &model.TenantCapability{}, &model.User{}, &model.Staff{}, &model.ScenicArea{}, &model.PlatformUser{}, &model.CheckPoint{}, &model.Device{}, &model.TicketRule{}, &model.RuleGroup{}, &model.RuleItem{},
-		&model.Product{}, &model.ProductOffer{}, &model.SellerListing{}, &model.ProductInventory{}, &model.Order{}, &model.OrderItem{}, &model.Ticket{}, &model.FulfillmentOrder{}, &model.TicketEntitlement{},
+		&model.Product{}, &model.ProductOffer{}, &model.SellerListing{}, &model.ProductInventory{}, &model.Order{}, &model.OrderItem{}, &model.Ticket{}, &model.OrderVisitor{}, &model.FulfillmentOrder{}, &model.TicketEntitlement{},
 		&model.CheckInRecord{}, &model.DistributorRelationship{}, &model.CapitalAccount{}, &model.TransactionRecord{},
 		&model.LedgerEntry{}, &model.DigitalRefundTask{}, &model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{},
 		&model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{},
@@ -71,7 +71,7 @@ func resetBusinessData(t *testing.T) {
 			&model.AfterSaleEvent{}, &model.AfterSaleRequest{}, &model.HardwareEvent{}, &model.HardwareCommand{}, &model.FinancialDocument{}, &model.TeamSettlementStatement{},
 			&model.ChannelBillRecord{}, &model.ChannelReconciliation{},
 			&model.ProductRevision{}, &model.SettlementLine{}, &model.SettlementStatement{},
-			&model.CheckInRecord{}, &model.Ticket{}, &model.OrderItem{}, &model.Order{}, &model.ProductInventory{},
+			&model.CheckInRecord{}, &model.OrderVisitor{}, &model.Ticket{}, &model.OrderItem{}, &model.Order{}, &model.ProductInventory{},
 			&model.Product{}, &model.RuleItem{}, &model.RuleGroup{}, &model.TicketRule{}, &model.Device{}, &model.CheckPoint{},
 			&model.TransactionRecord{}, &model.CapitalAccount{}, &model.DistributorRelationship{}, &model.TenantCapability{}, &model.ScenicArea{}, &model.PlatformUser{}, &model.TicketEntitlement{}, &model.FulfillmentOrder{}, &model.SellerListing{}, &model.ProductOffer{}, &model.Tenant{},
 		} {
