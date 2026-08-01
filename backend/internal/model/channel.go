@@ -43,8 +43,11 @@ type ChannelRequest struct {
 	Endpoint         string     `gorm:"size:120;not null" json:"endpoint"`
 	BodyHash         string     `gorm:"size:64;not null" json:"body_hash"`
 	ResponseJSON     string     `gorm:"type:text" json:"response_json,omitempty"`
-	Status           string     `gorm:"size:20;not null;default:'processing'" json:"status"` // processing, completed, rejected
+	Status           string     `gorm:"size:20;not null;default:'processing'" json:"status"` // processing, completed, failed, retryable
 	ResponseStatus   int        `gorm:"not null;default:200" json:"response_status"`
 	RemoteIP         string     `gorm:"size:64" json:"remote_ip,omitempty"`
+	AttemptCount     int        `gorm:"not null;default:1" json:"attempt_count"`
+	LastAttemptAt    *time.Time `gorm:"index" json:"last_attempt_at,omitempty"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
 	LockedAt         *time.Time `gorm:"index" json:"-"`
 }

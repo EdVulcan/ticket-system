@@ -7,6 +7,7 @@ import (
 	"strings"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/utils"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -160,4 +161,68 @@ func (s *ChannelService) GetByCode(code string) (*model.ChannelAccount, string, 
 		return nil, "", fmt.Errorf("decrypt channel secret: %w", err)
 	}
 	return &account, secret, nil
+}
+
+func (s *ChannelService) ListRequests(tenantID, accountID uint, status string, page, pageSize int) ([]model.ChannelRequest, int64, error) {
+	if tenantID == 0 {
+		return nil, 0, errors.New("tenant is required")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	query := model.DB.Model(&model.ChannelRequest{}).
+		Joins("JOIN channel_accounts ON channel_accounts.id = channel_requests.channel_account_id").
+		Where("channel_accounts.tenant_id = ?", tenantID)
+	if accountID > 0 {
+		query = query.Where("channel_requests.channel_account_id = ?", accountID)
+	}
+	if strings.TrimSpace(status) != "" {
+		query = query.Where("channel_requests.status = ?", strings.TrimSpace(status))
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []model.ChannelRequest
+	if err := query.Select("channel_requests.*").Order("channel_requests.created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+func (s *ChannelService) AuthorizeRequestRetry(tenantID, accountID, requestID, actorUserID uint, actorRole, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if tenantID == 0 || accountID == 0 || requestID == 0 || reason == "" {
+		return errors.New("channel request and retry reason are required")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var account model.ChannelAccount
+		if err := tx.Where("id = ? AND tenant_id = ?", accountID, tenantID).First(&account).Error; err != nil {
+			return errors.New("channel account not found")
+		}
+		var request model.ChannelRequest
+		if err := tx.Where("id = ? AND channel_account_id = ?", requestID, account.ID).First(&request).Error; err != nil {
+			return errors.New("channel request not found")
+		}
+		if request.Status == "processing" {
+			leaseAt := request.CreatedAt
+			if request.LockedAt != nil {
+				leaseAt = *request.LockedAt
+			}
+			if time.Since(leaseAt) < 5*time.Minute {
+				return errors.New("channel request is still processing")
+			}
+		} else if request.Status != "failed" {
+			return errors.New("only failed or stale processing requests can be retried")
+		}
+		if err := tx.Model(&request).Updates(map[string]interface{}{"status": "retryable", "locked_at": nil}).Error; err != nil {
+			return err
+		}
+		return recordAuditTx(tx, actorUserID, tenantID, actorRole, "tenant", "channel.request.retry_authorized", "channel_request", request.ID, reason,
+			fmt.Sprintf(`{"status":%q,"response_status":%d,"attempt_count":%d}`, request.Status, request.ResponseStatus, request.AttemptCount),
+			fmt.Sprintf(`{"status":"retryable","attempt_count":%d}`, request.AttemptCount))
+	})
 }

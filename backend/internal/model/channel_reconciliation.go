@@ -28,14 +28,32 @@ type ChannelBillRecord struct {
 // It never mutates the external records or silently marks a mismatch as paid.
 type ChannelReconciliation struct {
 	Base
-	TenantID         uint      `gorm:"index;not null" json:"tenant_id"`
-	ChannelAccountID uint      `gorm:"index;not null" json:"channel_account_id"`
-	IdempotencyKey   string    `gorm:"size:120;not null;uniqueIndex" json:"idempotency_key"`
-	PeriodStart      time.Time `gorm:"not null" json:"period_start"`
-	PeriodEnd        time.Time `gorm:"not null" json:"period_end"`
-	Status           string    `gorm:"size:20;not null;index" json:"status"` // completed, needs_review
-	RecordCount      int       `gorm:"not null;default:0" json:"record_count"`
-	MatchedCount     int       `gorm:"not null;default:0" json:"matched_count"`
-	DifferenceCents  int64     `gorm:"not null;default:0" json:"difference_cents"`
-	SummaryJSON      string    `gorm:"type:text" json:"summary_json,omitempty"`
+	TenantID         uint                        `gorm:"index;not null" json:"tenant_id"`
+	ChannelAccountID uint                        `gorm:"index;not null;uniqueIndex:idx_channel_reconciliation_key,priority:1" json:"channel_account_id"`
+	IdempotencyKey   string                      `gorm:"size:120;not null;uniqueIndex:idx_channel_reconciliation_key,priority:2" json:"idempotency_key"`
+	InputHash        string                      `gorm:"size:64;not null" json:"-"`
+	PeriodStart      time.Time                   `gorm:"not null" json:"period_start"`
+	PeriodEnd        time.Time                   `gorm:"not null" json:"period_end"`
+	Status           string                      `gorm:"size:20;not null;index" json:"status"` // completed, needs_review
+	RecordCount      int                         `gorm:"not null;default:0" json:"record_count"`
+	MatchedCount     int                         `gorm:"not null;default:0" json:"matched_count"`
+	DifferenceCents  int64                       `gorm:"not null;default:0" json:"difference_cents"`
+	SummaryJSON      string                      `gorm:"type:text" json:"summary_json,omitempty"`
+	Lines            []ChannelReconciliationLine `gorm:"foreignKey:ReconciliationID" json:"lines,omitempty"`
+}
+
+// ChannelReconciliationLine snapshots how one imported external fact matched
+// at the time of a reconciliation batch.
+type ChannelReconciliationLine struct {
+	Base
+	ReconciliationID uint   `gorm:"uniqueIndex:idx_channel_reconciliation_line,priority:1;not null" json:"reconciliation_id"`
+	BillRecordID     uint   `gorm:"uniqueIndex:idx_channel_reconciliation_line,priority:2;index;not null" json:"bill_record_id"`
+	ExternalNo       string `gorm:"size:120;index;not null" json:"external_no"`
+	Operation        string `gorm:"size:20;not null" json:"operation"`
+	AmountCents      int64  `gorm:"not null" json:"amount_cents"`
+	Status           string `gorm:"size:20;not null;index" json:"status"`
+	MatchedOrderNo   string `gorm:"size:80" json:"matched_order_no,omitempty"`
+	MatchedPaymentNo string `gorm:"size:80" json:"matched_payment_no,omitempty"`
+	MatchedRefundNo  string `gorm:"size:80" json:"matched_refund_no,omitempty"`
+	DifferenceCents  int64  `gorm:"not null" json:"difference_cents"`
 }

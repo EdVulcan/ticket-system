@@ -43,7 +43,7 @@ func TestMain(m *testing.M) {
 		&model.POSShift{}, &model.POSShiftCorrection{}, &model.PrintJob{}, &model.DeviceAlert{}, &model.POSHold{},
 		&model.ProductRevision{}, &model.SettlementStatement{}, &model.SettlementLine{}, &model.SettlementAdjustment{}, &model.StaffResourceScope{},
 		&model.AfterSaleRequest{}, &model.AfterSaleEvent{}, &model.HardwareCommand{}, &model.HardwareEvent{}, &model.ChannelReservation{}, &model.FinancialDocument{}, &model.TeamSettlementStatement{}, &model.TeamSettlementAdjustment{},
-		&model.ChannelBillRecord{}, &model.ChannelReconciliation{},
+		&model.ChannelBillRecord{}, &model.ChannelReconciliation{}, &model.ChannelReconciliationLine{},
 	); err != nil {
 		panic(err)
 	}
@@ -69,7 +69,7 @@ func resetBusinessData(t *testing.T) {
 			&model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{}, &model.LedgerEntry{}, &model.DigitalRefundTask{},
 			&model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{}, &model.ChannelReservation{}, &model.TourGroupConfirmation{}, &model.TourGroupMemberChange{}, &model.TourGroupMember{}, &model.TourEntryBatch{}, &model.TourGroup{}, &model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.POSShiftCorrection{}, &model.POSShift{}, &model.PrintJob{}, &model.DeviceAlert{}, &model.POSHold{},
 			&model.AfterSaleEvent{}, &model.AfterSaleRequest{}, &model.HardwareEvent{}, &model.HardwareCommand{}, &model.FinancialDocument{}, &model.TeamSettlementAdjustment{}, &model.TeamSettlementStatement{},
-			&model.ChannelBillRecord{}, &model.ChannelReconciliation{},
+			&model.ChannelReconciliationLine{}, &model.ChannelBillRecord{}, &model.ChannelReconciliation{},
 			&model.ProductRevision{}, &model.SettlementLine{}, &model.SettlementAdjustment{}, &model.SettlementStatement{},
 			&model.CheckInRecord{}, &model.OrderVisitor{}, &model.Ticket{}, &model.OrderItem{}, &model.Order{}, &model.ProductInventory{},
 			&model.Product{}, &model.RuleItem{}, &model.RuleGroup{}, &model.TicketRule{}, &model.Device{}, &model.CheckPoint{},

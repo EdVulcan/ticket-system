@@ -1229,9 +1229,16 @@ func TestChannelBillImportMatchesOrdersAndReplaysIdempotently(t *testing.T) {
 	if err != nil || report.Status != "completed" || report.MatchedCount != 1 || report.DifferenceCents != 0 {
 		t.Fatalf("report=%+v err=%v", report, err)
 	}
+	detail, err := (&ChannelService{}).GetReconciliation(tenantID, account.ID, report.ID)
+	if err != nil || len(detail.Lines) != 1 || detail.Lines[0].MatchedOrderNo != order.OrderNo || detail.Lines[0].Status != "matched" {
+		t.Fatalf("reconciliation detail=%+v err=%v", detail, err)
+	}
 	retry, err := (&ChannelService{}).ImportBill(tenantID, account.ID, "bill-batch-1", []ChannelBillInput{{ExternalNo: externalNo, Operation: "sale", AmountCents: moneyCents(order.TotalAmount)}})
 	if err != nil || retry.ID != report.ID {
 		t.Fatalf("retry=%+v err=%v", retry, err)
+	}
+	if _, err := (&ChannelService{}).ImportBill(tenantID, account.ID, "bill-batch-1", []ChannelBillInput{{ExternalNo: externalNo, Operation: "sale", AmountCents: moneyCents(order.TotalAmount) + 1}}); err == nil {
+		t.Fatal("bill idempotency key accepted different records")
 	}
 	mismatch, err := (&ChannelService{}).ImportBill(tenantID, account.ID, "bill-batch-2", []ChannelBillInput{{ExternalNo: externalNo, Operation: "payment", AmountCents: moneyCents(order.TotalAmount) + 1}})
 	if err != nil || mismatch.Status != "needs_review" || mismatch.DifferenceCents != 1 {
@@ -1254,6 +1261,16 @@ func TestChannelBillImportMatchesOrdersAndReplaysIdempotently(t *testing.T) {
 	refundReport, err := (&ChannelService{}).ImportBill(tenantID, account.ID, "bill-batch-refund", []ChannelBillInput{{ExternalNo: "WX-REFUND-1", Operation: "refund", AmountCents: moneyCents(order.TotalAmount)}})
 	if err != nil || refundReport.Status != "completed" || refundReport.MatchedCount != 1 {
 		t.Fatalf("provider refund report=%+v err=%v", refundReport, err)
+	}
+	otherAccount := model.ChannelAccount{TenantID: tenantID, Code: "bill-channel-other", Type: "ota", Status: "active"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&otherAccount).Error }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&ChannelService{}).ImportBill(tenantID, otherAccount.ID, "bill-batch-1", []ChannelBillInput{{ExternalNo: "OTHER-ORDER", Operation: "sale", AmountCents: 1}}); err != nil {
+		t.Fatalf("same batch key on another channel account failed: %v", err)
+	}
+	if _, err := (&ChannelService{}).GetReconciliation(tenantID, otherAccount.ID, report.ID); err == nil {
+		t.Fatal("reconciliation detail crossed channel account boundary")
 	}
 }
 

@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,25 +36,36 @@ func (s *ChannelService) ImportBill(tenantID, accountID uint, idempotencyKey str
 		if err := tx.Where("id = ? AND tenant_id = ? AND status != ?", accountID, tenantID, "disabled").First(&account).Error; err != nil {
 			return errors.New("channel account is unavailable")
 		}
-		if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND idempotency_key = ?", tenantID, accountID, idempotencyKey).First(&result).Error; err == nil {
-			return nil
-		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
 		normalized, start, end, err := normalizeChannelBillInputs(records)
 		if err != nil {
 			return err
 		}
+		encodedInput, err := json.Marshal(normalized)
+		if err != nil {
+			return err
+		}
+		hash := sha256.Sum256(encodedInput)
+		inputHash := hex.EncodeToString(hash[:])
+		if err := tx.Preload("Lines").Where("tenant_id = ? AND channel_account_id = ? AND idempotency_key = ?", tenantID, accountID, idempotencyKey).First(&result).Error; err == nil {
+			if result.InputHash != "" && result.InputHash != inputHash {
+				return errors.New("bill idempotency key was used with different records")
+			}
+			return nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
 		result = model.ChannelReconciliation{
 			TenantID: tenantID, ChannelAccountID: accountID, IdempotencyKey: strings.TrimSpace(idempotencyKey),
-			PeriodStart: start, PeriodEnd: end, RecordCount: len(normalized), Status: "completed",
+			InputHash: inputHash, PeriodStart: start, PeriodEnd: end, RecordCount: len(normalized), Status: "completed",
 		}
+		lines := make([]model.ChannelReconciliationLine, 0, len(normalized))
 		for _, input := range normalized {
 			match, err := matchChannelBill(tx, tenantID, accountID, input)
 			if err != nil {
 				return err
 			}
 			var existing model.ChannelBillRecord
+			var billRecordID uint
 			err = tx.Where("channel_account_id = ? AND external_no = ? AND operation = ?", accountID, input.ExternalNo, input.Operation).First(&existing).Error
 			if err == nil {
 				if existing.AmountCents != input.AmountCents || existing.Currency != input.Currency {
@@ -63,6 +76,7 @@ func (s *ChannelService) ImportBill(tenantID, accountID uint, idempotencyKey str
 				match.MatchedPaymentNo = existing.MatchedPaymentNo
 				match.MatchedRefundNo = existing.MatchedRefundNo
 				match.DifferenceCents = existing.DifferenceCents
+				billRecordID = existing.ID
 			} else if errors.Is(err, gorm.ErrRecordNotFound) {
 				fact := model.ChannelBillRecord{
 					TenantID: tenantID, ChannelAccountID: accountID, ExternalNo: input.ExternalNo, Operation: input.Operation,
@@ -74,6 +88,7 @@ func (s *ChannelService) ImportBill(tenantID, accountID uint, idempotencyKey str
 				if err := tx.Create(&fact).Error; err != nil {
 					return err
 				}
+				billRecordID = fact.ID
 			} else {
 				return err
 			}
@@ -81,6 +96,11 @@ func (s *ChannelService) ImportBill(tenantID, accountID uint, idempotencyKey str
 				result.MatchedCount++
 			}
 			result.DifferenceCents += match.DifferenceCents
+			lines = append(lines, model.ChannelReconciliationLine{
+				BillRecordID: billRecordID, ExternalNo: input.ExternalNo, Operation: input.Operation, AmountCents: input.AmountCents,
+				Status: match.Status, MatchedOrderNo: match.MatchedOrderNo, MatchedPaymentNo: match.MatchedPaymentNo,
+				MatchedRefundNo: match.MatchedRefundNo, DifferenceCents: match.DifferenceCents,
+			})
 		}
 		if result.DifferenceCents != 0 || result.MatchedCount != result.RecordCount {
 			result.Status = "needs_review"
@@ -90,9 +110,31 @@ func (s *ChannelService) ImportBill(tenantID, accountID uint, idempotencyKey str
 			return err
 		}
 		result.SummaryJSON = string(summary)
-		return tx.Create(&result).Error
+		if err := tx.Create(&result).Error; err != nil {
+			return err
+		}
+		for i := range lines {
+			lines[i].ReconciliationID = result.ID
+		}
+		if err := tx.Create(&lines).Error; err != nil {
+			return err
+		}
+		result.Lines = lines
+		return nil
 	})
 	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+func (s *ChannelService) GetReconciliation(tenantID, accountID, reconciliationID uint) (*model.ChannelReconciliation, error) {
+	if tenantID == 0 || accountID == 0 || reconciliationID == 0 {
+		return nil, errors.New("tenant, channel and reconciliation are required")
+	}
+	var result model.ChannelReconciliation
+	if err := model.DB.Preload("Lines", func(db *gorm.DB) *gorm.DB { return db.Order("id ASC") }).
+		Where("id = ? AND tenant_id = ? AND channel_account_id = ?", reconciliationID, tenantID, accountID).First(&result).Error; err != nil {
 		return nil, err
 	}
 	return &result, nil

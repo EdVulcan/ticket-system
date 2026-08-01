@@ -82,6 +82,8 @@ func runMigrations(db *gorm.DB) error {
 		{version: 52, name: "idempotent team admission batches", apply: migrateTeamAdmissionBatches},
 		{version: 53, name: "append-only team settlement adjustments", apply: migrateTeamSettlementAdjustments},
 		{version: 54, name: "team confirmations and member changes", apply: migrateTeamConfirmationsAndChanges},
+		{version: 55, name: "recoverable channel requests", apply: migrateRecoverableChannelRequests},
+		{version: 56, name: "channel reconciliation detail and tenant key", apply: migrateChannelReconciliationDetails},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -101,6 +103,30 @@ func runMigrations(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func migrateChannelReconciliationDetails(db *gorm.DB) error {
+	if err := db.Exec(`DROP INDEX IF EXISTS idx_channel_reconciliations_idempotency_key`).Error; err != nil {
+		return err
+	}
+	return db.AutoMigrate(&ChannelReconciliation{}, &ChannelReconciliationLine{})
+}
+
+func migrateRecoverableChannelRequests(db *gorm.DB) error {
+	if err := db.AutoMigrate(&ChannelRequest{}); err != nil {
+		return err
+	}
+	return db.Exec(`
+		UPDATE channel_requests
+		SET status = CASE
+		        WHEN status = 'rejected' AND response_status >= 500 THEN 'failed'
+		        WHEN status = 'rejected' THEN 'completed'
+		        ELSE status
+		    END,
+		    attempt_count = CASE WHEN attempt_count < 1 THEN 1 ELSE attempt_count END,
+		    last_attempt_at = COALESCE(last_attempt_at, created_at),
+		    completed_at = CASE WHEN status = 'completed' THEN COALESCE(completed_at, updated_at) ELSE completed_at END
+	`).Error
 }
 
 func migrateTeamConfirmationsAndChanges(db *gorm.DB) error {

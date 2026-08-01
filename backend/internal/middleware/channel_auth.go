@@ -106,22 +106,28 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 				if existing.BodyHash != hex.EncodeToString(bodyHash[:]) || existing.Endpoint != ctx.Request.URL.Path {
 					return errors.New("channel request id reused with different data")
 				}
-				if (existing.Status == "completed" || existing.Status == "rejected") && existing.ResponseJSON != "" {
+				if existing.Status == "completed" && existing.ResponseJSON != "" {
 					replayResponse = existing.ResponseJSON
 					if existing.ResponseStatus > 0 {
 						replayStatus = existing.ResponseStatus
 					}
 					return nil
 				}
+				if existing.Status == "failed" {
+					return errors.New("channel request failed and requires retry authorization")
+				}
 				leaseAt := existing.CreatedAt
 				if existing.LockedAt != nil {
 					leaseAt = *existing.LockedAt
 				}
-				if !leaseAt.IsZero() && now.Sub(leaseAt) < staleChannelRequestAfter {
+				if existing.Status == "processing" && !leaseAt.IsZero() && now.Sub(leaseAt) < staleChannelRequestAfter {
 					return errors.New("channel request is already processing")
 				}
 				requestLeaseAt = &now
-				return tx.Model(&existing).Updates(map[string]interface{}{"locked_at": now}).Error
+				return tx.Model(&existing).Updates(map[string]interface{}{
+					"status": "processing", "locked_at": now, "response_json": "", "response_status": http.StatusOK,
+					"attempt_count": gorm.Expr("attempt_count + 1"), "last_attempt_at": now, "completed_at": nil,
+				}).Error
 			}
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
@@ -136,7 +142,7 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 				}
 			}
 			requestLeaseAt = &now
-			return tx.Create(&model.ChannelRequest{ChannelAccountID: account.ID, RequestID: requestID, Endpoint: ctx.Request.URL.Path, BodyHash: hex.EncodeToString(bodyHash[:]), Status: "processing", ResponseStatus: http.StatusOK, RemoteIP: remoteIP, LockedAt: requestLeaseAt}).Error
+			return tx.Create(&model.ChannelRequest{ChannelAccountID: account.ID, RequestID: requestID, Endpoint: ctx.Request.URL.Path, BodyHash: hex.EncodeToString(bodyHash[:]), Status: "processing", ResponseStatus: http.StatusOK, RemoteIP: remoteIP, AttemptCount: 1, LastAttemptAt: &now, LockedAt: requestLeaseAt}).Error
 		}); err != nil {
 			ctx.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return
@@ -160,16 +166,21 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 		ctx.Next()
 		status := "completed"
 		if ctx.Writer.Status() >= http.StatusInternalServerError {
-			status = "rejected"
+			status = "failed"
 		}
 		responseStatus := ctx.Writer.Status()
+		completedAt := time.Now()
+		var completedAtValue interface{} = completedAt
+		if status == "failed" {
+			completedAtValue = nil
+		}
 		_ = model.Write(func(tx *gorm.DB) error {
 			query := tx.Model(&model.ChannelRequest{}).
 				Where("channel_account_id = ? AND request_id = ? AND status = ?", account.ID, requestID, "processing")
 			if requestLeaseAt != nil {
 				query = query.Where("locked_at = ?", *requestLeaseAt)
 			}
-			return query.Updates(map[string]interface{}{"status": status, "response_json": capture.body.String(), "response_status": responseStatus, "locked_at": nil}).Error
+			return query.Updates(map[string]interface{}{"status": status, "response_json": capture.body.String(), "response_status": responseStatus, "completed_at": completedAtValue, "locked_at": nil}).Error
 		})
 	}
 }

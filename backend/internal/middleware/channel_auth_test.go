@@ -30,7 +30,7 @@ func TestChannelSignatureCoversBodyAndRejectsConflict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.ChannelAccount{}, &model.ChannelRequest{}); err != nil {
+	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.ChannelAccount{}, &model.ChannelRequest{}, &model.AuditLog{}); err != nil {
 		t.Fatal(err)
 	}
 	model.DB = db
@@ -61,8 +61,14 @@ func TestChannelSignatureCoversBodyAndRejectsConflict(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	handlerCalls := 0
+	failNext := false
 	engine.POST("/channels/:code/orders/create", ChannelAuthMiddleware(), func(ctx *gin.Context) {
 		handlerCalls++
+		if failNext {
+			failNext = false
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "temporary provider failure"})
+			return
+		}
 		ctx.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 	timestamp := fmt.Sprint(time.Now().Unix())
@@ -126,6 +132,34 @@ func TestChannelSignatureCoversBodyAndRejectsConflict(t *testing.T) {
 	}
 	if completed.Status != "completed" || completed.LockedAt != nil {
 		t.Fatalf("stale request state=%+v", completed)
+	}
+	requestID = "request-failed-retry"
+	nonce = "nonce-failed-retry"
+	failNext = true
+	if resp := request(body); resp.Code != http.StatusInternalServerError || handlerCalls != 3 {
+		t.Fatalf("failed channel request status=%d calls=%d body=%s", resp.Code, handlerCalls, resp.Body.String())
+	}
+	if resp := request(body); resp.Code != http.StatusConflict || handlerCalls != 3 || !strings.Contains(resp.Body.String(), "retry authorization") {
+		t.Fatalf("unauthorized retry status=%d calls=%d body=%s", resp.Code, handlerCalls, resp.Body.String())
+	}
+	var failed model.ChannelRequest
+	if err := db.Where("channel_account_id = ? AND request_id = ?", account.ID, requestID).First(&failed).Error; err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != "failed" || failed.AttemptCount != 1 {
+		t.Fatalf("failed request state=%+v", failed)
+	}
+	if err := (&service.ChannelService{}).AuthorizeRequestRetry(tenant.ID, account.ID, failed.ID, 0, "admin", "temporary dependency recovered"); err != nil {
+		t.Fatal(err)
+	}
+	if resp := request(body); resp.Code != http.StatusOK || handlerCalls != 4 {
+		t.Fatalf("authorized retry status=%d calls=%d body=%s", resp.Code, handlerCalls, resp.Body.String())
+	}
+	if err := db.First(&failed, failed.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if failed.Status != "completed" || failed.AttemptCount != 2 || failed.CompletedAt == nil {
+		t.Fatalf("retried request state=%+v", failed)
 	}
 	if err := db.Model(&tenant).Update("status", "frozen").Error; err != nil {
 		t.Fatal(err)
