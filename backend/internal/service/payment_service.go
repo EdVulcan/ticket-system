@@ -399,6 +399,11 @@ func (s *PaymentService) completePayment(payment *model.Payment) error {
 			Where("id = ? AND tenant_id = ?", payment.ID, payment.TenantID).First(&stored).Error; err != nil {
 			return err
 		}
+		if stored.Purpose == exchangeDifferencePurpose {
+			stored.TransactionID = payment.TransactionID
+			stored.CodeURL = payment.CodeURL
+			return completeExchangeDifferencePaymentTx(tx, &stored)
+		}
 		var order model.Order
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("order_no = ? AND tenant_id = ?", stored.OrderNo, stored.TenantID).First(&order).Error; err != nil {
@@ -503,6 +508,10 @@ func (s *PaymentService) CompleteNotification(tenantID uint, paymentNo, method, 
 		if payment.Status != "pending" {
 			return fmt.Errorf("payment cannot be completed from status %s", payment.Status)
 		}
+		if payment.Purpose == exchangeDifferencePurpose {
+			payment.TransactionID = transactionID
+			return completeExchangeDifferencePaymentTx(tx, &payment)
+		}
 		var order model.Order
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("order_no = ? AND tenant_id = ?", payment.OrderNo, tenantID).First(&order).Error; err != nil {
@@ -537,6 +546,9 @@ func (s *PaymentService) FailNotification(tenantID uint, paymentNo, method, reas
 		}
 		if err := tx.Model(&payment).Updates(map[string]interface{}{"status": "failed", "error_message": reason}).Error; err != nil {
 			return err
+		}
+		if payment.Purpose == exchangeDifferencePurpose {
+			return failExchangeDifferencePaymentTx(tx, &payment, reason)
 		}
 		var order model.Order
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).

@@ -824,6 +824,319 @@ func TestAfterSaleExchangeSupportsSelectedVisitor(t *testing.T) {
 	}
 }
 
+func TestAfterSaleExchangeCollectsCashDifferenceBeforeChangingTicket(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, sourceID := seedSellableProduct(t, "daily", 5)
+	targetID := cloneExchangeTarget(t, sourceID, 119.50, 60)
+	visitDate := startOfDay(time.Now().AddDate(0, 0, 1))
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: sourceID, Quantity: 1, UseDate: &visitDate}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "exchange-cash-difference", TargetProductID: targetID, OperatorID: 7, Reason: "upgrade ticket"}
+	if err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 8, "approved"); err != nil {
+		t.Fatal(err)
+	}
+	waiting, err := (&AfterSaleService{}).Execute(tenantID, request.ID, 7)
+	if err != nil || waiting.Status != "processing" || waiting.DifferenceCents != 2000 || waiting.DifferenceStatus != "payment_required" {
+		t.Fatalf("difference request=%+v err=%v", waiting, err)
+	}
+	var unchanged model.Ticket
+	if err := model.DB.First(&unchanged, ticket.ID).Error; err != nil || unchanged.FulfillmentProductID != sourceID {
+		t.Fatalf("ticket changed before collection: %+v err=%v", unchanged, err)
+	}
+
+	posID := createTestPOS(t, tenantID)
+	shift, err := (&OperationsService{}).OpenShift(tenantID, posID, 7, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{Method: "cash", ShiftID: shift.ID, DeviceID: posID, TenderedCents: 3000, IdempotencyKey: "exchange-difference-payment"}
+	if err := (&AfterSaleService{}).CollectExchangeDifference(tenantID, request.ID, 7, &payment); err != nil {
+		t.Fatal(err)
+	}
+	if payment.Status != "paid" || payment.AmountCents != 2000 || payment.ChangeCents != 1000 || payment.Purpose != exchangeDifferencePurpose {
+		t.Fatalf("difference payment=%+v", payment)
+	}
+	completed, err := (&AfterSaleService{}).Get(tenantID, request.ID)
+	if err != nil || completed.Status != "completed" || completed.DifferenceStatus != "settled" {
+		t.Fatalf("completed difference=%+v err=%v", completed, err)
+	}
+	var changed model.Ticket
+	if err := model.DB.First(&changed, ticket.ID).Error; err != nil || changed.FulfillmentProductID != targetID || changed.Status != "unused" {
+		t.Fatalf("ticket was not exchanged after collection: %+v err=%v", changed, err)
+	}
+	var storedOrder model.Order
+	if err := model.DB.First(&storedOrder, order.ID).Error; err != nil || moneyCents(storedOrder.TotalAmount) != 11950 {
+		t.Fatalf("order total=%v err=%v", storedOrder.TotalAmount, err)
+	}
+}
+
+func TestAfterSaleExchangeDifferenceCompletesFromProviderCallbackOnce(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, sourceID := seedSellableProduct(t, "daily", 5)
+	targetID := cloneExchangeTarget(t, sourceID, 119.50, 60)
+	visitDate := startOfDay(time.Now().AddDate(0, 0, 1))
+	order := model.Order{TenantID: tenantID, Channel: "online", Items: []model.OrderItem{{ProductID: sourceID, Quantity: 1, UseDate: &visitDate}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "exchange-provider-callback", TargetProductID: targetID, OperatorID: 7, Reason: "upgrade online ticket"}
+	if err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 8, "approved"); err != nil {
+		t.Fatal(err)
+	}
+	if waiting, err := (&AfterSaleService{}).Execute(tenantID, request.ID, 7); err != nil || waiting.DifferenceStatus != "payment_required" {
+		t.Fatalf("waiting=%+v err=%v", waiting, err)
+	}
+	payment := model.Payment{
+		TenantID: tenantID, PaymentNo: "PAY-DIFFERENCE-CALLBACK", IdempotencyKey: "provider-callback-payment",
+		OrderNo: order.OrderNo, Purpose: exchangeDifferencePurpose, ReferenceNo: request.RequestNo,
+		Amount: 20, AmountCents: 2000, Method: "alipay", Status: "pending", OperatorID: 7,
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create(&payment).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.AfterSaleRequest{}).Where("id = ?", request.ID).Updates(map[string]interface{}{"difference_payment_id": payment.ID, "difference_status": "payment_pending"}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	payments := &PaymentService{}
+	if err := payments.CompleteNotification(tenantID, payment.PaymentNo, "alipay", "ALIPAY-TX-1", 20); err != nil {
+		t.Fatal(err)
+	}
+	if err := payments.CompleteNotification(tenantID, payment.PaymentNo, "alipay", "ALIPAY-TX-1", 20); err != nil {
+		t.Fatalf("duplicate callback failed: %v", err)
+	}
+	completed, err := (&AfterSaleService{}).Get(tenantID, request.ID)
+	if err != nil || completed.Status != "completed" || completed.DifferenceStatus != "settled" {
+		t.Fatalf("callback completion=%+v err=%v", completed, err)
+	}
+	var items int64
+	if err := model.DB.Model(&model.OrderItem{}).Where("order_id = ? AND product_id = ?", order.ID, targetID).Count(&items).Error; err != nil || items != 1 {
+		t.Fatalf("callback exchanged item count=%d err=%v", items, err)
+	}
+}
+
+func TestAfterSaleExchangeRefundsCashDifferenceWithoutVoidingTicket(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, sourceID := seedSellableProduct(t, "daily", 5)
+	targetID := cloneExchangeTarget(t, sourceID, 79.50, 60)
+	visitDate := startOfDay(time.Now().AddDate(0, 0, 1))
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: sourceID, Quantity: 1, UseDate: &visitDate}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	posID := createTestPOS(t, tenantID)
+	shift, err := (&OperationsService{}).OpenShift(tenantID, posID, 7, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalPayment := model.Payment{OrderNo: order.OrderNo, Method: "cash", ShiftID: shift.ID, DeviceID: posID, OperatorID: 7, IdempotencyKey: "original-cash-payment"}
+	if err := (&PaymentService{}).CreatePayment(tenantID, &originalPayment); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "exchange-refund-difference", TargetProductID: targetID, OperatorID: 7, Reason: "downgrade ticket"}
+	if err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 8, "approved"); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := (&AfterSaleService{}).Execute(tenantID, request.ID, 7)
+	if err != nil || completed.Status != "completed" || completed.DifferenceCents != -2000 || completed.DifferenceStatus != "settled" {
+		t.Fatalf("cash refund exchange=%+v err=%v", completed, err)
+	}
+	var changed model.Ticket
+	if err := model.DB.First(&changed, ticket.ID).Error; err != nil || changed.FulfillmentProductID != targetID || changed.Status != "unused" {
+		t.Fatalf("difference refund invalidated ticket: %+v err=%v", changed, err)
+	}
+	var refundedPayment model.Payment
+	if err := model.DB.First(&refundedPayment, originalPayment.ID).Error; err != nil || refundedPayment.RefundedAmountCents != 2000 {
+		t.Fatalf("original payment refund=%+v err=%v", refundedPayment, err)
+	}
+	var storedOrder model.Order
+	if err := model.DB.First(&storedOrder, order.ID).Error; err != nil || moneyCents(storedOrder.TotalAmount) != 7950 || storedOrder.Status != "paid" {
+		t.Fatalf("order after difference refund=%+v err=%v", storedOrder, err)
+	}
+}
+
+func TestAfterSaleExchangeDifferenceDigitalRefundCompletionKeepsTicketActive(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, sourceID := seedSellableProduct(t, "daily", 5)
+	targetID := cloneExchangeTarget(t, sourceID, 79.50, 60)
+	visitDate := startOfDay(time.Now().AddDate(0, 0, 1))
+	order := model.Order{TenantID: tenantID, Channel: "online", Items: []model.OrderItem{{ProductID: sourceID, Quantity: 1, UseDate: &visitDate}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	originalPayment := model.Payment{
+		TenantID: tenantID, PaymentNo: "PAY-DIFFERENCE-REFUND", IdempotencyKey: "digital-original-payment",
+		OrderNo: order.OrderNo, Purpose: "order", Amount: 99.50, AmountCents: 9950,
+		Method: "wechat", Status: "paid", TransactionID: "WECHAT-TX-1",
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&originalPayment).Error }); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "exchange-digital-refund", TargetProductID: targetID, OperatorID: 7, Reason: "downgrade online ticket"}
+	if err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 8, "approved"); err != nil {
+		t.Fatal(err)
+	}
+	processing, err := (&AfterSaleService{}).Execute(tenantID, request.ID, 7)
+	if err != nil || processing.Status != "processing" || processing.DifferenceStatus != "refund_pending" || processing.DifferenceRefundID == 0 {
+		t.Fatalf("digital refund pending=%+v err=%v", processing, err)
+	}
+	var allocation model.Refund
+	if err := model.DB.Where("parent_refund_id = ?", processing.DifferenceRefundID).First(&allocation).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		var payment model.Payment
+		if err := tx.First(&payment, allocation.PaymentID).Error; err != nil {
+			return err
+		}
+		if err := applyRefundPaymentFactTx(tx, &payment, &allocation); err != nil {
+			return err
+		}
+		if err := tx.Model(&allocation).Updates(map[string]interface{}{"status": "succeeded", "provider_refund_id": "WECHAT-REFUND-1"}).Error; err != nil {
+			return err
+		}
+		return tryCompleteMixedRefundTx(tx, tenantID, processing.DifferenceRefundID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := (&AfterSaleService{}).Get(tenantID, request.ID)
+	if err != nil || completed.Status != "completed" || completed.DifferenceStatus != "settled" {
+		t.Fatalf("digital refund completion=%+v err=%v", completed, err)
+	}
+	var changed model.Ticket
+	if err := model.DB.First(&changed, ticket.ID).Error; err != nil || changed.Status != "unused" || changed.FulfillmentProductID != targetID {
+		t.Fatalf("digital difference refund invalidated ticket: %+v err=%v", changed, err)
+	}
+}
+
+func TestAfterSaleExchangeSettlementDifferenceRequiresExplicitException(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, sourceID := seedSellableProduct(t, "daily", 5)
+	targetID := cloneExchangeTarget(t, sourceID, 99.50, 65)
+	visitDate := startOfDay(time.Now().AddDate(0, 0, 1))
+	createRequest := func(key string) (model.Order, model.AfterSaleRequest) {
+		order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: sourceID, Quantity: 1, UseDate: &visitDate}}}
+		if err := (&OrderService{}).Create(&order); err != nil {
+			t.Fatal(err)
+		}
+		if err := (&OrderService{}).MarkAsPaid(order.OrderNo, tenantID); err != nil {
+			t.Fatal(err)
+		}
+		var ticket model.Ticket
+		if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+			t.Fatal(err)
+		}
+		request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: key, TargetProductID: targetID, OperatorID: 7, Reason: "settlement exception"}
+		if err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode}); err != nil {
+			t.Fatal(err)
+		}
+		return order, request
+	}
+
+	_, rejected := createRequest("settlement-exception-rejected")
+	if _, err := (&AfterSaleService{}).Approve(tenantID, rejected.ID, 8, "ordinary approval"); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := (&AfterSaleService{}).Execute(tenantID, rejected.ID, 7)
+	if err != nil || failed.Status != "failed" {
+		t.Fatalf("settlement difference without exception=%+v err=%v", failed, err)
+	}
+
+	order, approved := createRequest("settlement-exception-approved")
+	if _, err := (&AfterSaleService{}).ApproveWithOptions(tenantID, approved.ID, 8, "approved", true, "supplier agreed to five-yuan adjustment"); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := (&AfterSaleService{}).Execute(tenantID, approved.ID, 7)
+	if err != nil || completed.Status != "completed" || !completed.SettlementExceptionApproved {
+		t.Fatalf("approved settlement exception=%+v err=%v", completed, err)
+	}
+	var fulfillment model.FulfillmentOrder
+	if err := model.DB.Where("sales_order_id = ?", order.ID).First(&fulfillment).Error; err != nil || moneyCents(fulfillment.SettlementAmount) != 6500 {
+		t.Fatalf("fulfillment settlement=%+v err=%v", fulfillment, err)
+	}
+}
+
+func cloneExchangeTarget(t *testing.T, sourceID uint, price, settlementPrice float64) uint {
+	t.Helper()
+	var targetID uint
+	if err := model.Write(func(tx *gorm.DB) error {
+		var source model.Product
+		if err := tx.Preload("Rule").First(&source, sourceID).Error; err != nil {
+			return err
+		}
+		target := source
+		target.Base = model.Base{}
+		target.Name = fmt.Sprintf("Exchange Target %.2f", price)
+		target.Price = price
+		target.SettlementPrice = settlementPrice
+		target.CurrentRevisionID = 0
+		if err := tx.Omit("Rule").Create(&target).Error; err != nil {
+			return err
+		}
+		targetID = target.ID
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return targetID
+}
+
+func createTestPOS(t *testing.T, tenantID uint) uint {
+	t.Helper()
+	var posID uint
+	if err := model.Write(func(tx *gorm.DB) error {
+		pos := model.Device{Name: "POS", SerialNumber: fmt.Sprintf("POS-%d", time.Now().UnixNano()), Type: "pos", Status: "online", TenantID: tenantID, ScenicAreaID: 1}
+		if err := tx.Create(&pos).Error; err != nil {
+			return err
+		}
+		posID = pos.ID
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return posID
+}
+
 func TestHardwareCommandRequiresDeviceAndAckToken(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, _ := seedSellableProduct(t, "unlimited", 0)

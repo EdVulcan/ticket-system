@@ -78,6 +78,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 48, name: "POS split payment idempotency", apply: migratePOSSplitPaymentIdempotency},
 		{version: 49, name: "mixed payment refund allocations", apply: migrateMixedRefundAllocations},
 		{version: 50, name: "append-only settlement adjustments", apply: migrateSettlementAdjustments},
+		{version: 51, name: "after-sale exchange price adjustments", apply: migrateAfterSalePriceAdjustments},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -97,6 +98,18 @@ func runMigrations(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func migrateAfterSalePriceAdjustments(db *gorm.DB) error {
+	if err := db.AutoMigrate(&AfterSaleRequest{}, &Payment{}, &Refund{}); err != nil {
+		return err
+	}
+	if err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_idempotency
+		ON payments(tenant_id, idempotency_key) WHERE idempotency_key <> ''`).Error; err != nil {
+		return err
+	}
+	return db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_refund_allocation_sequence
+		ON refunds(parent_refund_id, allocation_seq) WHERE parent_refund_id != 0`).Error
 }
 
 func migrateDigitalRefundTaskLeases(db *gorm.DB) error {

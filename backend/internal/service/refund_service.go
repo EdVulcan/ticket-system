@@ -973,6 +973,9 @@ func tryCompleteMixedRefundTx(tx *gorm.DB, tenantID, parentRefundID uint) error 
 	if root.Status == "group_succeeded" {
 		return nil
 	}
+	if root.Purpose == exchangeDifferencePurpose {
+		return completeExchangeDifferenceRefundTx(tx, &root)
+	}
 	var order model.Order
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Product").Preload("Items.Tickets").Where("order_no = ? AND tenant_id = ?", root.OrderNo, tenantID).First(&order).Error; err != nil {
 		return err

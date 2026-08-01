@@ -42,9 +42,10 @@
       </el-table-column>
       <el-table-column label="操作" width="220" fixed="right">
         <template #default="{ row }">
-          <el-button v-if="row.status === 'pending' && canApprove" link type="primary" @click="approve(row)">批准</el-button>
+          <el-button v-if="row.status === 'pending' && canApprove" link type="primary" @click="openApprove(row)">批准</el-button>
           <el-button v-if="row.status === 'pending' && canApprove" link type="danger" @click="reject(row)">拒绝</el-button>
           <el-button v-if="row.status === 'approved'" link type="primary" @click="execute(row)">执行</el-button>
+          <el-button v-if="row.status === 'processing' && row.difference_cents > 0 && row.difference_status !== 'settled'" link type="warning" @click="openDifferencePayment(row)">收取差价</el-button>
           <el-button link @click="showDetail(row)">详情</el-button>
         </template>
       </el-table-column>
@@ -77,6 +78,39 @@
       <template #footer><el-button @click="createVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="create">提交申请</el-button></template>
     </el-dialog>
 
+    <el-dialog v-model="approveVisible" title="批准售后" width="520px">
+      <el-form :model="approveForm" label-position="top">
+        <el-form-item label="批准说明"><el-input v-model="approveForm.reason" type="textarea" :rows="2" /></el-form-item>
+        <el-form-item v-if="approveTarget?.type === 'exchange'" label="允许供应结算价例外">
+          <el-switch v-model="approveForm.settlement_exception" />
+        </el-form-item>
+        <el-form-item v-if="approveForm.settlement_exception" label="例外原因" required>
+          <el-input v-model="approveForm.settlement_exception_reason" type="textarea" :rows="2" placeholder="说明与供应商的确认情况" />
+        </el-form-item>
+      </el-form>
+      <template #footer><el-button @click="approveVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="confirmApprove">确认批准</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="differenceVisible" title="收取换票差价" width="520px">
+      <el-alert v-if="differenceTarget" type="warning" :closable="false" class="mb-4" :title="`应收 ¥${((differenceTarget.difference_cents || 0) / 100).toFixed(2)}`" />
+      <el-form :model="differenceForm" label-position="top">
+        <el-form-item label="收款方式"><el-select v-model="differenceForm.method" class="w-full"><el-option label="现金" value="cash" /><el-option label="微信" value="wechat" /><el-option label="支付宝" value="alipay" /></el-select></el-form-item>
+        <template v-if="differenceForm.method === 'cash'">
+          <el-form-item label="顾客实付（分）"><el-input-number v-model="differenceForm.cash_tendered_cents" :min="differenceTarget?.difference_cents || 0" class="w-full" /></el-form-item>
+          <div class="text-sm text-gray-600 mb-4">找零：¥{{ differenceChange }}</div>
+        </template>
+        <template v-else>
+          <el-form-item label="扫码方式"><el-segmented v-model="differenceForm.pay_type" :options="[{ label: '扫顾客付款码', value: 'bscanc' }, { label: '顾客扫码', value: 'cscanb' }]" /></el-form-item>
+          <el-form-item v-if="differenceForm.pay_type === 'bscanc'" label="顾客付款码"><el-input v-model="differenceForm.auth_code" autocomplete="off" /></el-form-item>
+        </template>
+        <div class="grid grid-cols-2 gap-3">
+          <el-form-item label="POS 设备 ID"><el-input-number v-model="differenceForm.device_id" :min="1" class="w-full" /></el-form-item>
+          <el-form-item label="当前班次 ID"><el-input-number v-model="differenceForm.shift_id" :min="1" class="w-full" /></el-form-item>
+        </div>
+      </el-form>
+      <template #footer><el-button @click="differenceVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="collectDifference">确认收款</el-button></template>
+    </el-dialog>
+
     <el-dialog v-model="detailVisible" title="售后详情" width="560px">
       <el-descriptions v-if="selected" :column="2" border>
         <el-descriptions-item label="申请号">{{ selected.request_no }}</el-descriptions-item>
@@ -85,6 +119,9 @@
         <el-descriptions-item label="类型">{{ typeText(selected.type) }}</el-descriptions-item>
         <el-descriptions-item label="票码" :span="2">{{ parseCodes(selected.ticket_codes) || '整单' }}</el-descriptions-item>
         <el-descriptions-item label="原因" :span="2">{{ selected.reason || '-' }}</el-descriptions-item>
+        <el-descriptions-item v-if="selected.difference_cents" label="换票价差">{{ selected.difference_cents > 0 ? '应补' : '应退' }} ¥{{ (Math.abs(selected.difference_cents) / 100).toFixed(2) }}</el-descriptions-item>
+        <el-descriptions-item v-if="selected.difference_cents" label="价差状态">{{ differenceStatusText(selected.difference_status) }}</el-descriptions-item>
+        <el-descriptions-item v-if="selected.settlement_exception_approved" label="结算例外" :span="2">{{ selected.settlement_exception_reason }}</el-descriptions-item>
         <el-descriptions-item label="错误" :span="2">{{ selected.error_message || '-' }}</el-descriptions-item>
       </el-descriptions>
       <div v-if="refundDetail" class="mt-4">
@@ -121,18 +158,25 @@ const user = ref<any>({})
 try { user.value = JSON.parse(localStorage.getItem('user') || '{}') } catch (_) { /* invalid session */ }
 const canApprove = computed(() => user.value.role === 'admin' || user.value.role === 'super_admin')
 const rows = ref<any[]>([]); const loading = ref(false); const saving = ref(false); const total = ref(0); const page = ref(1); const pageSize = ref(20); const status = ref('')
-const createVisible = ref(false); const detailVisible = ref(false); const selected = ref<any>(null)
+const createVisible = ref(false); const detailVisible = ref(false); const approveVisible = ref(false); const differenceVisible = ref(false); const selected = ref<any>(null)
+const approveTarget = ref<any>(null); const differenceTarget = ref<any>(null)
 const refundDetail = ref<any>(null)
 const types = [{ value: 'refund', label: '退票' }, { value: 'reschedule', label: '改期' }, { value: 'exchange', label: '换票' }, { value: 'void', label: '作废' }, { value: 'reissue', label: '补打' }]
 const emptyForm = () => ({ order_no: '', type: 'refund', ticket_codes: '', amount_cents: 0, payment_method: 'auto', target_date: '', target_slot: '', target_product_id: 0, device_id: 0, shift_id: 0, reason: '' })
 const form = reactive(emptyForm())
+const approveForm = reactive({ reason: '', settlement_exception: false, settlement_exception_reason: '' })
+const differenceForm = reactive({ method: 'cash', pay_type: 'cscanb', auth_code: '', shift_id: 0, device_id: 0, cash_tendered_cents: 0 })
+const differenceChange = computed(() => ((Math.max(0, differenceForm.cash_tendered_cents - (differenceTarget.value?.difference_cents || 0))) / 100).toFixed(2))
 
 const load = async () => { loading.value = true; try { const res = await request.get('/after-sales', { params: { page: page.value, page_size: pageSize.value, status: status.value } }); rows.value = res.data.data || []; total.value = res.data.total || 0 } finally { loading.value = false } }
 const openCreate = () => { Object.assign(form, emptyForm()); createVisible.value = true }
 const create = async () => { if (!form.order_no.trim() || !form.reason.trim()) { ElMessage.warning('订单号和原因必填'); return }; saving.value = true; try { await request.post('/after-sales', { ...form, ticket_codes: form.ticket_codes.split(/[,，\s]+/).map(value => value.trim()).filter(Boolean), idempotency_key: `admin-${Date.now()}-${Math.random().toString(36).slice(2)}` }); ElMessage.success('售后申请已提交'); createVisible.value = false; await load() } finally { saving.value = false } }
-const approve = async (row: any) => { const reason = await ElMessageBox.prompt('请输入批准说明', '批准售后', { inputPlaceholder: '可选' }); await request.post(`/after-sales/${row.id}/approve`, { reason: reason.value }); ElMessage.success('已批准'); await load() }
+const openApprove = (row: any) => { approveTarget.value = row; Object.assign(approveForm, { reason: '', settlement_exception: false, settlement_exception_reason: '' }); approveVisible.value = true }
+const confirmApprove = async () => { if (approveForm.settlement_exception && !approveForm.settlement_exception_reason.trim()) { ElMessage.warning('结算价例外必须填写原因'); return }; saving.value = true; try { await request.post(`/after-sales/${approveTarget.value.id}/approve`, approveForm); ElMessage.success('已批准'); approveVisible.value = false; await load() } finally { saving.value = false } }
 const reject = async (row: any) => { const reason = await ElMessageBox.prompt('请输入拒绝原因', '拒绝售后', { inputValidator: value => value.trim() ? true : '拒绝原因必填' }); await request.post(`/after-sales/${row.id}/reject`, { reason: reason.value }); ElMessage.success('已拒绝'); await load() }
-const execute = async (row: any) => { await ElMessageBox.confirm(`确认执行 ${typeText(row.type)} ${row.request_no}？`, '执行售后', { type: 'warning' }); await request.post(`/after-sales/${row.id}/execute`); ElMessage.success('已进入执行流程'); await load() }
+const execute = async (row: any) => { await ElMessageBox.confirm(`确认执行 ${typeText(row.type)} ${row.request_no}？`, '执行售后', { type: 'warning' }); const result = (await request.post(`/after-sales/${row.id}/execute`)).data; ElMessage.success(result.difference_status === 'payment_required' ? '请继续收取换票差价' : '已进入执行流程'); await load() }
+const openDifferencePayment = (row: any) => { differenceTarget.value = row; Object.assign(differenceForm, { method: 'cash', pay_type: 'cscanb', auth_code: '', shift_id: row.shift_id || 0, device_id: row.device_id || 0, cash_tendered_cents: row.difference_cents || 0 }); differenceVisible.value = true }
+const collectDifference = async () => { if (!differenceForm.device_id || !differenceForm.shift_id) { ElMessage.warning('请选择当前 POS 设备和班次'); return }; if (differenceForm.pay_type === 'bscanc' && differenceForm.method !== 'cash' && !differenceForm.auth_code.trim()) { ElMessage.warning('请扫描顾客付款码'); return }; saving.value = true; try { const response = await request.post(`/after-sales/${differenceTarget.value.id}/difference-payment`, { ...differenceForm, idempotency_key: `difference-${differenceTarget.value.request_no}-${Date.now()}` }); differenceVisible.value = false; ElMessage.success(response.data.status === 'paid' ? '差价收取完成，换票已生效' : '支付请求已提交，等待渠道确认'); await load() } finally { saving.value = false } }
 const showDetail = async (row: any) => {
   selected.value = (await request.get(`/after-sales/${row.id}`)).data
   refundDetail.value = null
@@ -150,7 +194,8 @@ const statusType = (value: string) => ({ completed: 'success', rejected: 'info',
 const paymentMethodText = (value: string) => ({ cash: '现金', wechat: '微信', alipay: '支付宝', mixed: '混合支付' } as any)[value] || value
 const refundStatusText = (value: string) => ({ group_pending: '等待全部退款', group_succeeded: '退款完成', pending: '等待渠道', processing: '处理中', submitted: '渠道处理中', succeeded: '已退款', failed: '失败', manual_review: '待人工复核' } as any)[value] || value
 const refundStatusType = (value: string) => ({ group_succeeded: 'success', succeeded: 'success', failed: 'danger', manual_review: 'danger', group_pending: 'warning', pending: 'warning', processing: 'warning', submitted: 'warning' } as any)[value] || 'info'
-const eventActionText = (value: string) => ({ created: '提交申请', approved: '审核批准', rejected: '审核拒绝', execution_started: '开始执行', execution_completed: '执行完成', execution_failed: '执行失败', print_queued: '打印任务已排队', proxy_print_queued: '主管代补打', print_started: '开始打印', print_succeeded: '打印完成', print_failed: '打印失败' } as any)[value] || value
+const differenceStatusText = (value: string) => ({ payment_required: '待收取差价', payment_pending: '等待支付确认', refund_pending: '等待退款完成', settled: '已结清' } as any)[value] || value || '-'
+const eventActionText = (value: string) => ({ created: '提交申请', approved: '审核批准', rejected: '审核拒绝', settlement_exception: '批准结算例外', execution_started: '开始执行', execution_completed: '执行完成', execution_failed: '执行失败', difference_payment_required: '等待补收差价', difference_payment_started: '发起差价收款', difference_payment_completed: '差价收款完成', difference_payment_failed: '差价收款失败', difference_refund_pending: '差价退款处理中', difference_refund_completed: '差价退款完成', print_queued: '打印任务已排队', proxy_print_queued: '主管代补打', print_started: '开始打印', print_succeeded: '打印完成', print_failed: '打印失败' } as any)[value] || value
 const formatTime = (value: string) => value ? new Date(value).toLocaleString() : '-'
 onMounted(load)
 </script>

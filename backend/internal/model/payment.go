@@ -29,6 +29,8 @@ type Payment struct {
 	PaymentNo      string  `gorm:"size:50;uniqueIndex;not null" json:"payment_no"`
 	IdempotencyKey string  `gorm:"size:100;index" json:"idempotency_key,omitempty"`
 	OrderNo        string  `gorm:"size:50;index;not null" json:"order_no"` // 关联订单
+	Purpose        string  `gorm:"size:30;not null;default:'order';index" json:"purpose,omitempty"`
+	ReferenceNo    string  `gorm:"size:60;index" json:"reference_no,omitempty"`
 	Amount         float64 `gorm:"type:decimal(10,2)" json:"amount"`
 	RefundedAmount float64 `gorm:"type:decimal(10,2);default:0" json:"refunded_amount"`
 	// Cent projections are authoritative for new payment and refund state
@@ -58,6 +60,8 @@ type Refund struct {
 	RefundNo         string  `gorm:"size:50;uniqueIndex;not null" json:"refund_no"`
 	IdempotencyKey   string  `gorm:"size:100;uniqueIndex:idx_refund_idempotency,priority:2;not null" json:"idempotency_key"`
 	OrderNo          string  `gorm:"size:50;index;not null" json:"order_no"`
+	Purpose          string  `gorm:"size:30;not null;default:'ticket_refund';index" json:"purpose,omitempty"`
+	ReferenceNo      string  `gorm:"size:60;index" json:"reference_no,omitempty"`
 	PaymentID        uint    `gorm:"index;not null" json:"payment_id"`
 	ParentRefundID   uint    `gorm:"index" json:"parent_refund_id,omitempty"`
 	AllocationSeq    int     `gorm:"not null;default:0" json:"allocation_seq,omitempty"`

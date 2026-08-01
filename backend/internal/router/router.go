@@ -131,6 +131,7 @@ func InitRouter(r *gin.Engine) {
 		afterSaleGroup.POST("/:id/approve", middleware.RequireAnyRole("admin", "super_admin"), afterSaleController.Approve)
 		afterSaleGroup.POST("/:id/reject", middleware.RequireAnyRole("admin", "super_admin"), afterSaleController.Reject)
 		afterSaleGroup.POST("/:id/execute", middleware.RequireAnyRole("seller", "admin", "super_admin"), afterSaleController.Execute)
+		afterSaleGroup.POST("/:id/difference-payment", middleware.RequireAnyRole("seller", "admin", "super_admin"), afterSaleController.CollectDifference)
 	}
 
 	// Ticket Routes

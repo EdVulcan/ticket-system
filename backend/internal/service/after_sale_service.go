@@ -111,7 +111,44 @@ func appendAfterSaleEvent(tx *gorm.DB, req *model.AfterSaleRequest, from, to, ac
 }
 
 func (s *AfterSaleService) Approve(tenantID, requestID, reviewerID uint, reason string) (*model.AfterSaleRequest, error) {
-	return s.transition(tenantID, requestID, reviewerID, "approved", "approved", reason)
+	return s.ApproveWithOptions(tenantID, requestID, reviewerID, reason, false, "")
+}
+
+func (s *AfterSaleService) ApproveWithOptions(tenantID, requestID, reviewerID uint, reason string, settlementException bool, exceptionReason string) (*model.AfterSaleRequest, error) {
+	exceptionReason = strings.TrimSpace(exceptionReason)
+	if settlementException && exceptionReason == "" {
+		return nil, errors.New("settlement exception reason is required")
+	}
+	var req model.AfterSaleRequest
+	err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", requestID, tenantID).First(&req).Error; err != nil {
+			return err
+		}
+		if req.Status != "pending" {
+			return fmt.Errorf("after-sale request cannot transition from %s", req.Status)
+		}
+		now := time.Now()
+		updates := map[string]interface{}{
+			"status": "approved", "reviewer_id": reviewerID, "reviewed_at": now,
+			"settlement_exception_approved": settlementException, "settlement_exception_reason": exceptionReason,
+		}
+		if err := tx.Model(&req).Updates(updates).Error; err != nil {
+			return err
+		}
+		req.Status, req.ReviewerID, req.ReviewedAt = "approved", reviewerID, &now
+		req.SettlementExceptionApproved, req.SettlementExceptionReason = settlementException, exceptionReason
+		if err := appendAfterSaleEvent(tx, &req, "pending", "approved", "approved", reviewerID, reason); err != nil {
+			return err
+		}
+		if settlementException {
+			return appendAfterSaleEvent(tx, &req, "approved", "approved", "settlement_exception", reviewerID, exceptionReason)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &req, nil
 }
 
 func (s *AfterSaleService) Reject(tenantID, requestID, reviewerID uint, reason string) (*model.AfterSaleRequest, error) {
@@ -175,8 +212,46 @@ func (s *AfterSaleService) Execute(tenantID, requestID uint, actor uint, roles .
 			}
 			return completeAfterSaleTx(tx, &req, actor)
 		case "exchange":
+			difference, settlementDifference, err := calculateExchangeDifferencesTx(tx, &req)
+			if err != nil {
+				return failAfterSaleTx(tx, &req, actor, err)
+			}
+			if settlementDifference != 0 && !req.SettlementExceptionApproved {
+				return failAfterSaleTx(tx, &req, actor, errors.New("exchange changes supplier settlement; supervisor exception approval is required"))
+			}
+			req.DifferenceCents = difference
+			if difference > 0 {
+				req.DifferenceStatus = "payment_required"
+				if err := tx.Model(&req).Updates(map[string]interface{}{"difference_cents": difference, "difference_status": req.DifferenceStatus}).Error; err != nil {
+					return err
+				}
+				return appendAfterSaleEvent(tx, &req, "processing", "processing", "difference_payment_required", actor, fmt.Sprintf("collect %d cents before exchange", difference))
+			}
+			if difference < 0 {
+				req.DifferenceStatus = "refund_pending"
+			}
+			if err := tx.Model(&req).Updates(map[string]interface{}{"difference_cents": difference, "difference_status": req.DifferenceStatus}).Error; err != nil {
+				return err
+			}
 			if err := executeExchangeTx(tx, &req); err != nil {
 				return failAfterSaleTx(tx, &req, actor, err)
+			}
+			if difference < 0 {
+				refund, err := createExchangeDifferenceRefundTx(tx, &req, -difference)
+				if err != nil {
+					return failAfterSaleTx(tx, &req, actor, err)
+				}
+				req.DifferenceRefundID = refund.ID
+				if err := tx.Model(&req).Update("difference_refund_id", refund.ID).Error; err != nil {
+					return err
+				}
+				if refund.Status != "group_succeeded" {
+					return appendAfterSaleEvent(tx, &req, "processing", "processing", "difference_refund_pending", actor, fmt.Sprintf("refund %d cents", -difference))
+				}
+				req.DifferenceStatus = "settled"
+				if err := tx.Model(&req).Update("difference_status", "settled").Error; err != nil {
+					return err
+				}
 			}
 			return completeAfterSaleTx(tx, &req, actor)
 		case "reissue":
@@ -215,6 +290,74 @@ func (s *AfterSaleService) Execute(tenantID, requestID uint, actor uint, roles .
 		}
 	}
 	return s.Get(tenantID, requestID)
+}
+
+type exchangeDifferences struct {
+	RetailCents     int64
+	SettlementCents int64
+}
+
+func calculateExchangeDifferencesTx(tx *gorm.DB, req *model.AfterSaleRequest) (int64, int64, error) {
+	if req.TargetProductID == 0 {
+		return 0, 0, errors.New("target product is required")
+	}
+	var order model.Order
+	if err := tx.Preload("Items.Tickets").Where("order_no = ? AND tenant_id = ?", req.OrderNo, req.TenantID).First(&order).Error; err != nil {
+		return 0, 0, err
+	}
+	var codes []string
+	if err := json.Unmarshal([]byte(req.TicketCodesJSON), &codes); err != nil {
+		return 0, 0, err
+	}
+	wanted := codeSet(codes)
+	var targetListing model.Product
+	if err := tx.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Where("id = ? AND tenant_id = ? AND status = ?", req.TargetProductID, req.TenantID, "online").First(&targetListing).Error; err != nil {
+		return 0, 0, errors.New("target product is unavailable")
+	}
+	target, _, err := resolveFulfillmentProduct(tx, &targetListing, req.TenantID, order.Channel)
+	if err != nil {
+		return 0, 0, err
+	}
+	var differences exchangeDifferences
+	matched := 0
+	for itemIndex := range order.Items {
+		item := &order.Items[itemIndex]
+		selected := 0
+		for _, ticket := range item.Tickets {
+			if _, ok := wanted[ticket.TicketCode]; ok {
+				selected++
+			}
+		}
+		if selected == 0 {
+			continue
+		}
+		matched += selected
+		if selected != len(item.Tickets) && len(item.Tickets) != item.Quantity {
+			return 0, 0, errors.New("partial operation requires one ticket code per visitor")
+		}
+		if item.FulfillmentTenantID != 0 && item.FulfillmentTenantID != target.TenantID {
+			return 0, 0, errors.New("exchange must stay with the same supplier")
+		}
+		if item.FulfillmentScenicAreaID != 0 && item.FulfillmentScenicAreaID != target.ScenicAreaID {
+			return 0, 0, errors.New("exchange must stay within the same scenic area")
+		}
+		differences.RetailCents += (moneyCents(targetListing.Price) - moneyCents(item.Price)) * int64(selected)
+		settlementDelta := (moneyCents(target.SettlementPrice) - moneyCents(item.SettlementPrice)) * int64(selected)
+		differences.SettlementCents += settlementDelta
+		if settlementDelta != 0 && item.FulfillmentOrderID > 0 {
+			var statementLines int64
+			if err := tx.Model(&model.SettlementLine{}).Where("fulfillment_order_id = ?", item.FulfillmentOrderID).Count(&statementLines).Error; err != nil {
+				return 0, 0, err
+			}
+			if statementLines > 0 {
+				return 0, 0, errors.New("exchange cannot change a fulfillment already included in a settlement statement")
+			}
+		}
+	}
+	if matched != len(wanted) {
+		return 0, 0, errors.New("one or more exchange tickets do not belong to the order")
+	}
+	return differences.RetailCents, differences.SettlementCents, nil
 }
 
 // executeExchangeTx keeps the seller, supplier, scenic area, retail price and
@@ -277,6 +420,7 @@ func executeExchangeTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 	}
 
 	matched := 0
+	retailDifference := int64(0)
 	for itemIndex := range order.Items {
 		item := &order.Items[itemIndex]
 		selected := 0
@@ -292,9 +436,7 @@ func executeExchangeTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 			continue
 		}
 		matched += selected
-		if moneyCents(item.Price) != moneyCents(targetListing.Price) || moneyCents(item.SettlementPrice) != moneyCents(target.SettlementPrice) {
-			return errors.New("exchange requires equal retail and settlement prices")
-		}
+		retailDifference += (moneyCents(targetListing.Price) - moneyCents(item.Price)) * int64(selected)
 		if item.FulfillmentTenantID != 0 && item.FulfillmentTenantID != target.TenantID {
 			return errors.New("exchange must stay with the same supplier")
 		}
@@ -356,6 +498,12 @@ func executeExchangeTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 		if err := tx.Model(&model.OrderItem{}).Where("id = ?", selectedItem.ID).Updates(updates).Error; err != nil {
 			return err
 		}
+		settlementDelta := (moneyCents(target.SettlementPrice) - moneyCents(selectedItem.SettlementPrice)) * int64(selectedItem.Quantity)
+		if settlementDelta != 0 && selectedItem.FulfillmentOrderID > 0 {
+			if err := tx.Model(&model.FulfillmentOrder{}).Where("id = ?", selectedItem.FulfillmentOrderID).UpdateColumn("settlement_amount", gorm.Expr("settlement_amount + ?", centsMoney(settlementDelta))).Error; err != nil {
+				return err
+			}
+		}
 		for ticketIndex := range selectedItem.Tickets {
 			ticket := &selectedItem.Tickets[ticketIndex]
 			if err := tx.Model(ticket).Updates(map[string]interface{}{
@@ -381,6 +529,18 @@ func executeExchangeTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 	}
 	if matched != len(wanted) {
 		return errors.New("one or more exchange tickets do not belong to the order")
+	}
+	if retailDifference != req.DifferenceCents {
+		return errors.New("exchange price difference changed; review and retry the request")
+	}
+	if retailDifference != 0 {
+		newTotalCents := moneyCents(order.TotalAmount) + retailDifference
+		if newTotalCents < 0 {
+			return errors.New("exchange would make the order total negative")
+		}
+		if err := tx.Model(&order).Update("total_amount", centsMoney(newTotalCents)).Error; err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -89,7 +89,9 @@ func (c *AfterSaleController) transition(ctx *gin.Context, approve bool) {
 		return
 	}
 	var body struct {
-		Reason string `json:"reason"`
+		Reason                    string `json:"reason"`
+		SettlementException       bool   `json:"settlement_exception"`
+		SettlementExceptionReason string `json:"settlement_exception_reason"`
 	}
 	if err := ctx.ShouldBindJSON(&body); err != nil && err.Error() != "EOF" {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -97,7 +99,7 @@ func (c *AfterSaleController) transition(ctx *gin.Context, approve bool) {
 	}
 	var req *model.AfterSaleRequest
 	if approve {
-		req, err = c.Service.Approve(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), body.Reason)
+		req, err = c.Service.ApproveWithOptions(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), body.Reason, body.SettlementException, body.SettlementExceptionReason)
 	} else {
 		req, err = c.Service.Reject(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), body.Reason)
 	}
@@ -124,6 +126,51 @@ func (c *AfterSaleController) Execute(ctx *gin.Context) {
 		status = http.StatusAccepted
 	}
 	ctx.JSON(status, req)
+}
+
+func (c *AfterSaleController) CollectDifference(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid after-sale id"})
+		return
+	}
+	var body struct {
+		Method            string `json:"method" binding:"required"`
+		PayType           string `json:"pay_type"`
+		AuthCode          string `json:"auth_code"`
+		ShiftID           uint   `json:"shift_id"`
+		DeviceID          uint   `json:"device_id"`
+		CashTenderedCents int64  `json:"cash_tendered_cents"`
+		IdempotencyKey    string `json:"idempotency_key" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if body.DeviceID > 0 {
+		if err := service.RequireStaffResource(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), ctx.GetString("role"), "device", body.DeviceID); err != nil {
+			ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	payment := model.Payment{
+		Method: body.Method, PayType: body.PayType, AuthCode: body.AuthCode,
+		ShiftID: body.ShiftID, DeviceID: body.DeviceID, TenderedCents: body.CashTenderedCents,
+		IdempotencyKey: body.IdempotencyKey,
+	}
+	if err := c.Service.CollectExchangeDifference(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), &payment); err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, service.ErrCashTenderInsufficient) {
+			status = http.StatusBadRequest
+		}
+		ctx.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	status := http.StatusCreated
+	if payment.Status == "pending" {
+		status = http.StatusAccepted
+	}
+	ctx.JSON(status, payment)
 }
 
 func (c *AfterSaleController) Get(ctx *gin.Context) {

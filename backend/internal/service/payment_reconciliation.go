@@ -147,6 +147,12 @@ func (s *PaymentService) processPaymentTask(task *model.PaymentReconciliationTas
 		}
 		return completePaymentTask(task.ID, "")
 	case "failed":
+		if payment.Purpose == exchangeDifferencePurpose {
+			if err := model.Write(func(tx *gorm.DB) error { return failExchangeDifferencePaymentTx(tx, &payment, payment.ErrorMessage) }); err != nil {
+				return err
+			}
+			return completePaymentTask(task.ID, payment.ErrorMessage)
+		}
 		if s.OrderService != nil {
 			if err := s.OrderService.Cancel(payment.OrderNo, payment.TenantID); err != nil {
 				return err
