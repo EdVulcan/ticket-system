@@ -93,6 +93,13 @@ func TestSettlementUsesFulfillmentSnapshot(t *testing.T) {
 	if line.GrossCents != 6000 {
 		t.Fatalf("settlement line=%+v", line)
 	}
+	detail, err := (&SettlementService{}).GetStatement(scenario.distributorID, statement.ID)
+	if err != nil || len(detail.Lines) != 1 || detail.Lines[0].FulfillmentOrderID != line.FulfillmentOrderID {
+		t.Fatalf("settlement detail=%+v err=%v", detail, err)
+	}
+	if _, err := (&SettlementService{}).GetStatement(scenario.distributorID+999, statement.ID); err == nil {
+		t.Fatal("unrelated tenant inspected settlement detail")
+	}
 	settlements := &SettlementService{}
 	repeated, err := settlements.GenerateStatement(scenario.supplierID, scenario.supplierID, scenario.distributorID, periodStart, periodEnd)
 	if err != nil {

@@ -289,11 +289,15 @@ func InitRouter(r *gin.Engine) {
 	financeGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
 	{
 		financeGroup.GET("/accounts", financeController.ListAccounts)
+		financeGroup.GET("/managed-accounts", financeController.ListManagedAccounts)
 		financeGroup.GET("/transactions", financeController.ListTransactions)
 		financeGroup.GET("/ledger", financeController.ListLedger)
+		financeGroup.GET("/managed-ledger", financeController.ListManagedLedger)
 		financeGroup.GET("/documents", financeController.ListDocuments)
 		financeGroup.POST("/documents", financeController.CreateDocument)
+		financeGroup.POST("/documents/:id/submit", financeController.SubmitDocument)
 		financeGroup.POST("/documents/:id/approve", financeController.ApproveDocument)
+		financeGroup.POST("/documents/:id/reject", financeController.RejectDocument)
 	}
 
 	settlementController := &api.SettlementController{Service: service.SettlementService{}}
@@ -301,6 +305,7 @@ func InitRouter(r *gin.Engine) {
 	settlementGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
 	{
 		settlementGroup.GET("", settlementController.List)
+		settlementGroup.GET("/:id", settlementController.Get)
 		settlementGroup.POST("/generate", settlementController.Generate)
 		settlementGroup.PATCH("/:id/status", settlementController.SetStatus)
 	}

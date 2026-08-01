@@ -137,3 +137,31 @@ func (s *FinanceService) ListLedger(ownerTenantID uint, page, pageSize int, acco
 	}
 	return entries, total, nil
 }
+
+func (s *FinanceService) ListManagedLedger(managerTenantID uint, page, pageSize int, accountID uint) ([]model.LedgerEntry, int64, error) {
+	if managerTenantID == 0 {
+		return nil, 0, errors.New("tenant is required")
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	query := model.DB.Model(&model.LedgerEntry{}).Where("manager_tenant_id = ?", managerTenantID)
+	if accountID > 0 {
+		query = query.Where("account_id = ?", accountID)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var entries []model.LedgerEntry
+	if err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&entries).Error; err != nil {
+		return nil, 0, err
+	}
+	return entries, total, nil
+}

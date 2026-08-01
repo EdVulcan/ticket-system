@@ -20,8 +20,9 @@ type SettlementStatement struct {
 	ConfirmedAt            *time.Time
 	SupplierConfirmedAt    *time.Time
 	DistributorConfirmedAt *time.Time
-	PaymentProof           string `gorm:"size:255"`
-	DisputeReason          string `gorm:"size:255"`
+	PaymentProof           string           `gorm:"size:255"`
+	DisputeReason          string           `gorm:"size:255"`
+	Lines                  []SettlementLine `gorm:"foreignKey:StatementID" json:"lines,omitempty"`
 }
 
 type SettlementLine struct {

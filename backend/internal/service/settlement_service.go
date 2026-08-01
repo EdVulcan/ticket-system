@@ -148,10 +148,24 @@ func (s *SettlementService) List(tenantID uint, page, pageSize int) ([]model.Set
 		return nil, 0, err
 	}
 	var rows []model.SettlementStatement
-	if err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
+	if err := query.Preload("Lines").Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	return rows, total, nil
+}
+
+// GetStatement returns one settlement with immutable fulfillment lines. Both
+// counterparties may inspect it, but neither can read another relationship's
+// statement by guessing an ID.
+func (s *SettlementService) GetStatement(tenantID, statementID uint) (*model.SettlementStatement, error) {
+	if tenantID == 0 || statementID == 0 {
+		return nil, errors.New("tenant and statement are required")
+	}
+	var statement model.SettlementStatement
+	if err := model.DB.Preload("Lines").Where("id = ? AND (supplier_tenant_id = ? OR distributor_tenant_id = ?)", statementID, tenantID, tenantID).First(&statement).Error; err != nil {
+		return nil, err
+	}
+	return &statement, nil
 }
 
 func (s *SettlementService) SetStatus(tenantID, statementID uint, status, detail string) error {

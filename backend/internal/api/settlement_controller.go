@@ -11,6 +11,20 @@ import (
 
 type SettlementController struct{ Service service.SettlementService }
 
+func (c *SettlementController) Get(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid statement id"})
+		return
+	}
+	statement, err := c.Service.GetStatement(ctx.GetUint("tenant_id"), uint(id))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "settlement statement not found"})
+		return
+	}
+	ctx.JSON(http.StatusOK, statement)
+}
+
 func (c *SettlementController) List(ctx *gin.Context) {
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
