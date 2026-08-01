@@ -40,6 +40,8 @@ build/
 release/
 admin/playwright-report/
 admin/test-results/
+desktop/playwright-report/
+desktop/test-results/
 desktop/out/
 desktop/dist/
 desktop/build/bin/
