@@ -253,10 +253,18 @@ func InitRouter(r *gin.Engine) {
 		teamGroup.POST("/:id/members", teamController.AddMembers)
 		teamGroup.PUT("/:id/members", teamController.ReplaceMembers)
 		teamGroup.POST("/:id/enter-batch", teamController.EnterBatch)
+		teamGroup.GET("/:id/entry-batches", teamController.ListEntryBatches)
+		teamGroup.GET("/:id/confirmations", teamController.ListConfirmations)
+		teamGroup.POST("/:id/confirmations", teamController.SubmitConfirmation)
+		teamGroup.POST("/:id/confirmations/:confirmationId/acknowledge", teamController.AcknowledgeConfirmation)
+		teamGroup.GET("/:id/member-changes", teamController.ListMemberChanges)
+		teamGroup.POST("/:id/member-changes", teamController.ChangeMember)
 		teamGroup.POST("/:id/attach-order", teamController.AttachOrder)
 		teamGroup.GET("/settlements", teamController.ListSettlements)
+		teamGroup.GET("/accounts", teamController.ListAccountSummaries)
 		teamGroup.POST("/:id/settlement", teamController.GenerateSettlement)
 		teamGroup.PATCH("/settlements/:id/status", teamController.SetSettlementStatus)
+		teamGroup.POST("/settlements/:id/adjustments", teamController.AdjustSettlement)
 	}
 
 	operationsController := &api.OperationsController{Service: service.OperationsService{}}

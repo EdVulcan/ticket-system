@@ -14,7 +14,7 @@ import (
 // GenerateTeamSettlement snapshots one confirmed team's contract amount and
 // successful refunds. A retry returns the existing statement for the same
 // group, so a team cannot be paid twice by repeating the request.
-func (s *TeamService) GenerateTeamSettlement(travelTenantID, groupID uint) (*model.TeamSettlementStatement, error) {
+func (s *TeamService) GenerateTeamSettlement(travelTenantID, groupID uint, actorUserIDs ...uint) (*model.TeamSettlementStatement, error) {
 	if travelTenantID == 0 || groupID == 0 {
 		return nil, errors.New("travel tenant and group are required")
 	}
@@ -63,7 +63,12 @@ func (s *TeamService) GenerateTeamSettlement(travelTenantID, groupID uint) (*mod
 		if err := tx.Create(&statement).Error; err != nil {
 			return err
 		}
-		return tx.Model(&group).Update("settlement_status", "statement").Error
+		if err := tx.Model(&group).Update("settlement_status", "statement").Error; err != nil {
+			return err
+		}
+		actorUserID := firstUint(actorUserIDs)
+		return recordAuditTx(tx, actorUserID, travelTenantID, auditRoleTx(tx, actorUserID), "tenant", "team.settlement.generate", "team_settlement_statement", statement.ID,
+			fmt.Sprintf("generated settlement for team %s", group.GroupNo), "", fmt.Sprintf(`{"status":"draft","net_cents":%d}`, statement.NetCents))
 	})
 	if err != nil {
 		return nil, err
@@ -87,13 +92,13 @@ func (s *TeamService) ListTeamSettlements(tenantID uint, page, pageSize int) ([]
 		return nil, 0, err
 	}
 	var rows []model.TeamSettlementStatement
-	if err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
+	if err := query.Preload("Adjustments", func(db *gorm.DB) *gorm.DB { return db.Order("sequence ASC") }).Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	return rows, total, nil
 }
 
-func (s *TeamService) SetTeamSettlementStatus(tenantID, statementID uint, status, detail string) error {
+func (s *TeamService) SetTeamSettlementStatus(tenantID, statementID uint, status, detail string, actorUserIDs ...uint) error {
 	if status != "supplier_confirmed" && status != "confirmed" && status != "disputed" && status != "paid" {
 		return errors.New("invalid team settlement status")
 	}
@@ -102,6 +107,7 @@ func (s *TeamService) SetTeamSettlementStatus(tenantID, statementID uint, status
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND (travel_tenant_id = ? OR supplier_tenant_id = ?)", statementID, tenantID, tenantID).First(&statement).Error; err != nil {
 			return err
 		}
+		beforeStatus := statement.Status
 		updates := map[string]interface{}{"status": status}
 		now := time.Now()
 		switch status {
@@ -126,6 +132,73 @@ func (s *TeamService) SetTeamSettlementStatus(tenantID, statementID uint, status
 			updates["paid_at"] = now
 			updates["payment_proof"] = strings.TrimSpace(detail)
 		}
-		return tx.Model(&statement).Updates(updates).Error
+		if err := tx.Model(&statement).Updates(updates).Error; err != nil {
+			return err
+		}
+		if status == "paid" {
+			if err := tx.Model(&model.TourGroup{}).Where("id = ? AND tenant_id = ?", statement.GroupID, statement.TravelTenantID).Update("settlement_status", "settled").Error; err != nil {
+				return err
+			}
+		}
+		actorUserID := firstUint(actorUserIDs)
+		return recordAuditTx(tx, actorUserID, tenantID, auditRoleTx(tx, actorUserID), "tenant", "team.settlement.status", "team_settlement_statement", statement.ID,
+			strings.TrimSpace(detail), fmt.Sprintf(`{"status":%q}`, beforeStatus), fmt.Sprintf(`{"status":%q}`, status))
 	})
+}
+
+func (s *TeamService) AdjustTeamSettlement(tenantID, statementID, actorUserID uint, amountCents int64, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if tenantID == 0 || statementID == 0 || amountCents == 0 || reason == "" {
+		return errors.New("statement, non-zero adjustment and reason are required")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var statement model.TeamSettlementStatement
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND (travel_tenant_id = ? OR supplier_tenant_id = ?)", statementID, tenantID, tenantID).First(&statement).Error; err != nil {
+			return err
+		}
+		if statement.Status != "disputed" {
+			return errors.New("only a disputed team settlement can be adjusted")
+		}
+		newAdjustment := statement.AdjustmentCents + amountCents
+		if statement.NetCents+newAdjustment < 0 {
+			return errors.New("adjusted team settlement payable cannot be negative")
+		}
+		var count int64
+		if err := tx.Model(&model.TeamSettlementAdjustment{}).Where("statement_id = ?", statement.ID).Count(&count).Error; err != nil {
+			return err
+		}
+		adjustment := model.TeamSettlementAdjustment{
+			StatementID: statement.ID, Sequence: int(count) + 1, ActorTenantID: tenantID, ActorUserID: actorUserID,
+			AmountCents: amountCents, PreviousAdjustmentCents: statement.AdjustmentCents, NewAdjustmentCents: newAdjustment, Reason: reason,
+		}
+		if err := tx.Create(&adjustment).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&statement).Updates(map[string]interface{}{
+			"adjustment_cents": newAdjustment, "status": "draft", "confirmed_at": nil,
+		}).Error; err != nil {
+			return err
+		}
+		return recordAuditTx(tx, actorUserID, tenantID, auditRoleTx(tx, actorUserID), "tenant", "team.settlement.adjust", "team_settlement_statement", statement.ID, reason,
+			fmt.Sprintf(`{"status":%q,"adjustment_cents":%d}`, statement.Status, statement.AdjustmentCents),
+			fmt.Sprintf(`{"status":"draft","adjustment_cents":%d}`, newAdjustment))
+	})
+}
+
+func firstUint(values []uint) uint {
+	if len(values) > 0 {
+		return values[0]
+	}
+	return 0
+}
+
+func auditRoleTx(tx *gorm.DB, userID uint) string {
+	if userID == 0 {
+		return "system"
+	}
+	var user model.User
+	if err := tx.Select("role").First(&user, userID).Error; err == nil && user.Role != "" {
+		return user.Role
+	}
+	return "unknown"
 }

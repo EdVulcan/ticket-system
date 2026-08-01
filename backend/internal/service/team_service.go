@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"ticket-backend/internal/model"
 	"time"
@@ -160,7 +161,7 @@ func (s *TeamService) ListGroups(tenantID uint, page, pageSize int) ([]model.Tou
 	if pageSize > 100 {
 		pageSize = 100
 	}
-	query := model.DB.Model(&model.TourGroup{}).Where("tenant_id = ?", tenantID)
+	query := model.DB.Model(&model.TourGroup{}).Where("tenant_id = ? OR supplier_tenant_id = ?", tenantID, tenantID)
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -268,25 +269,56 @@ func (s *TeamService) ReplaceMembers(tenantID, groupID uint, members []model.Tou
 
 func (s *TeamService) ListMembers(tenantID, groupID uint) ([]model.TourGroupMember, error) {
 	var group model.TourGroup
-	if err := model.DB.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
+	if err := model.DB.Where("id = ? AND (tenant_id = ? OR supplier_tenant_id = ?)", groupID, tenantID, tenantID).First(&group).Error; err != nil {
 		return nil, errors.New("group not found")
 	}
 	var members []model.TourGroupMember
 	return members, model.DB.Where("group_id = ?", groupID).Order("id ASC").Find(&members).Error
 }
 
-func (s *TeamService) EnterBatch(tenantID, groupID, deviceID, operatorID uint, memberIDs []uint) (*model.TourEntryBatch, error) {
+func (s *TeamService) EnterBatch(tenantID, groupID, deviceID, operatorID uint, memberIDs []uint, idempotencyKeys ...string) (*model.TourEntryBatch, error) {
 	if len(memberIDs) == 0 || deviceID == 0 || operatorID == 0 {
 		return nil, errors.New("member ids, supplier device and operator are required")
 	}
+	idempotencyKey := ""
+	if len(idempotencyKeys) > 0 {
+		idempotencyKey = strings.TrimSpace(idempotencyKeys[0])
+	}
+	if idempotencyKey == "" {
+		return nil, errors.New("entry idempotency key is required")
+	}
+	if len(idempotencyKey) > 120 {
+		return nil, errors.New("entry idempotency key is too long")
+	}
+	normalizedMemberIDs := append([]uint(nil), memberIDs...)
+	sort.Slice(normalizedMemberIDs, func(i, j int) bool { return normalizedMemberIDs[i] < normalizedMemberIDs[j] })
+	for i, memberID := range normalizedMemberIDs {
+		if memberID == 0 || i > 0 && normalizedMemberIDs[i-1] == memberID {
+			return nil, errors.New("entry member ids must be unique and non-zero")
+		}
+	}
+	memberIDsJSON, err := json.Marshal(normalizedMemberIDs)
+	if err != nil {
+		return nil, err
+	}
 	var batch model.TourEntryBatch
-	err := model.Write(func(tx *gorm.DB) error {
+	err = model.Write(func(tx *gorm.DB) error {
 		var group model.TourGroup
 		if err := requireActiveTenantCapability(tx, tenantID, "supplier"); err != nil {
 			return err
 		}
 		if err := tx.Where("id = ? AND supplier_tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
 			return errors.New("group not found")
+		}
+		var existing model.TourEntryBatch
+		if err := tx.Where("group_id = ? AND idempotency_key = ?", groupID, idempotencyKey).First(&existing).Error; err == nil {
+			if existing.DeviceID != deviceID || existing.OperatorID != operatorID || existing.MemberIDsJSON != string(memberIDsJSON) {
+				return errors.New("entry idempotency key was used with different data")
+			}
+			batch = existing
+			return nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
 		}
 		if group.SalesOrderID == 0 || (group.Status != "confirmed" && group.Status != "partial_entry") {
 			return errors.New("group has no confirmed sales fulfillment")
@@ -312,12 +344,16 @@ func (s *TeamService) EnterBatch(tenantID, groupID, deviceID, operatorID uint, m
 			return errors.New("entry operator does not belong to supplier tenant")
 		}
 		checkpointID := *device.CheckPointID
-		batch = model.TourEntryBatch{GroupID: groupID, BatchNo: teamNo("BATCH", groupID), DeviceID: deviceID, EnteredCount: 0, OperatorID: operatorID, EnteredAt: time.Now()}
+		batch = model.TourEntryBatch{
+			GroupID: groupID, SupplierTenantID: group.SupplierTenantID, ScenicAreaID: group.ScenicAreaID,
+			BatchNo: teamNo("BATCH", groupID), IdempotencyKey: idempotencyKey, MemberIDsJSON: string(memberIDsJSON),
+			DeviceID: deviceID, EnteredCount: 0, OperatorID: operatorID, EnteredAt: time.Now(),
+		}
 		if err := tx.Create(&batch).Error; err != nil {
 			return err
 		}
 		now := time.Now()
-		for _, memberID := range memberIDs {
+		for _, memberID := range normalizedMemberIDs {
 			var member model.TourGroupMember
 			if err := tx.Where("id = ? AND group_id = ? AND status = ?", memberID, groupID, "ticketed").First(&member).Error; err != nil {
 				return fmt.Errorf("member %d is not ticketed", memberID)
@@ -364,12 +400,25 @@ func (s *TeamService) EnterBatch(tenantID, groupID, deviceID, operatorID uint, m
 		if int(totalEntered) >= group.ExpectedCount && group.ExpectedCount > 0 {
 			status = "entered"
 		}
-		return tx.Model(&group).Update("status", status).Error
+		if err := tx.Model(&group).Update("status", status).Error; err != nil {
+			return err
+		}
+		return recordAuditTx(tx, operatorID, tenantID, "seller", "tenant", "team.entry_batch", "tour_entry_batch", batch.ID,
+			fmt.Sprintf("team %s admitted %d members", group.GroupNo, batch.EnteredCount), "", fmt.Sprintf(`{"group_id":%d,"batch_no":%q,"entered_count":%d}`, group.ID, batch.BatchNo, batch.EnteredCount))
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &batch, nil
+}
+
+func (s *TeamService) ListEntryBatches(tenantID, groupID uint) ([]model.TourEntryBatch, error) {
+	var group model.TourGroup
+	if err := model.DB.Where("id = ? AND (tenant_id = ? OR supplier_tenant_id = ?)", groupID, tenantID, tenantID).First(&group).Error; err != nil {
+		return nil, errors.New("group not found")
+	}
+	var batches []model.TourEntryBatch
+	return batches, model.DB.Where("group_id = ?", groupID).Order("entered_at DESC, id DESC").Find(&batches).Error
 }
 
 func (s *TeamService) AttachOrder(tenantID, groupID, orderID uint) error {

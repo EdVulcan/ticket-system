@@ -1543,19 +1543,95 @@ func TestTeamMultiBatchAdmissionUsesSupplierTicketsAndDevice(t *testing.T) {
 	if err := teamService.AttachOrder(scenario.distributorID, group.ID, order.ID); err != nil {
 		t.Fatal(err)
 	}
+	confirmation, err := teamService.SubmitTeamConfirmation(scenario.distributorID, group.ID, 0, 2, 0, 0, "Two guests confirmed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := teamService.AcknowledgeTeamConfirmation(scenario.supplierID, group.ID, confirmation.ID, 0); err != nil {
+		t.Fatal(err)
+	}
+	supplierConfirmations, err := teamService.ListTeamConfirmations(scenario.supplierID, group.ID)
+	if err != nil || len(supplierConfirmations) != 1 || supplierConfirmations[0].SupplierAcknowledgedAt == nil {
+		t.Fatalf("supplier confirmations=%+v err=%v", supplierConfirmations, err)
+	}
+	addedChange, err := teamService.ChangeTeamMember(scenario.distributorID, group.ID, 0, "add", 0, model.TourGroupMember{Name: "Temporary C"}, "guide added one guest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var temporaryMember model.TourGroupMember
+	if err := model.DB.First(&temporaryMember, addedChange.MemberID).Error; err != nil || temporaryMember.Status != "planned" {
+		t.Fatalf("temporary member=%+v err=%v", temporaryMember, err)
+	}
+	if _, err := teamService.ChangeTeamMember(scenario.distributorID, group.ID, 0, "remove", temporaryMember.ID, model.TourGroupMember{}, "guest cancelled before entry"); err != nil {
+		t.Fatal(err)
+	}
+	memberChanges, err := teamService.ListTeamMemberChanges(scenario.supplierID, group.ID)
+	if err != nil || len(memberChanges) != 2 {
+		t.Fatalf("supplier member changes=%+v err=%v", memberChanges, err)
+	}
 	members, err := teamService.ListMembers(scenario.distributorID, group.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	activeMembers := members[:0]
+	for _, member := range members {
+		if member.Status != "cancelled" {
+			activeMembers = append(activeMembers, member)
+		}
+	}
+	members = activeMembers
 	var operator model.User
 	if err := model.DB.Where("tenant_id = ?", scenario.supplierID).First(&operator).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := teamService.EnterBatch(scenario.supplierID, group.ID, scenario.supplierDeviceID, operator.ID, []uint{members[0].ID}); err != nil {
+	firstBatch, err := teamService.EnterBatch(scenario.supplierID, group.ID, scenario.supplierDeviceID, operator.ID, []uint{members[0].ID}, "entry-batch-1")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := teamService.EnterBatch(scenario.supplierID, group.ID, scenario.supplierDeviceID, operator.ID, []uint{members[1].ID}); err != nil {
+	replayedBatch, err := teamService.EnterBatch(scenario.supplierID, group.ID, scenario.supplierDeviceID, operator.ID, []uint{members[0].ID}, "entry-batch-1")
+	if err != nil || replayedBatch.ID != firstBatch.ID {
+		t.Fatalf("entry replay=%+v err=%v", replayedBatch, err)
+	}
+	if _, err := teamService.EnterBatch(scenario.supplierID, group.ID, scenario.supplierDeviceID, operator.ID, []uint{members[1].ID}, "entry-batch-1"); err == nil {
+		t.Fatal("entry idempotency key accepted different members")
+	}
+	if _, err := teamService.EnterBatch(scenario.supplierID, group.ID, scenario.supplierDeviceID, operator.ID, []uint{members[1].ID}, "entry-batch-2"); err != nil {
 		t.Fatal(err)
+	}
+	supplierGroups, _, err := teamService.ListGroups(scenario.supplierID, 1, 20)
+	if err != nil || len(supplierGroups) != 1 || supplierGroups[0].ID != group.ID {
+		t.Fatalf("supplier groups=%+v err=%v", supplierGroups, err)
+	}
+	supplierMembers, err := teamService.ListMembers(scenario.supplierID, group.ID)
+	if err != nil || len(supplierMembers) != 3 {
+		t.Fatalf("supplier members=%+v err=%v", supplierMembers, err)
+	}
+	batches, err := teamService.ListEntryBatches(scenario.supplierID, group.ID)
+	if err != nil || len(batches) != 2 {
+		t.Fatalf("supplier batches=%+v err=%v", batches, err)
+	}
+	var other model.Tenant
+	if err := model.Write(func(tx *gorm.DB) error {
+		other = model.Tenant{Name: "Other Team Tenant", SystemCode: "OTHER-TEAM-TENANT", SecretKey: "other"}
+		return tx.Create(&other).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	otherGroups, _, err := teamService.ListGroups(other.ID, 1, 20)
+	if err != nil || len(otherGroups) != 0 {
+		t.Fatalf("unrelated groups=%+v err=%v", otherGroups, err)
+	}
+	if _, err := teamService.ListMembers(other.ID, group.ID); err == nil {
+		t.Fatal("unrelated tenant read team members")
+	}
+	if _, err := teamService.ListEntryBatches(other.ID, group.ID); err == nil {
+		t.Fatal("unrelated tenant read team admission batches")
+	}
+	if _, err := teamService.ListTeamConfirmations(other.ID, group.ID); err == nil {
+		t.Fatal("unrelated tenant read team confirmations")
+	}
+	if _, err := teamService.ListTeamMemberChanges(other.ID, group.ID); err == nil {
+		t.Fatal("unrelated tenant read team member changes")
 	}
 	var stored model.TourGroup
 	if err := model.DB.First(&stored, group.ID).Error; err != nil {

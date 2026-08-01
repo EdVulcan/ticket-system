@@ -1373,10 +1373,51 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 	if err := team.SetTeamSettlementStatus(supplier.ID, statement.ID, "supplier_confirmed", ""); err != nil {
 		t.Fatal(err)
 	}
+	if err := team.SetTeamSettlementStatus(travel.ID, statement.ID, "disputed", "游客退款金额需核对"); err != nil {
+		t.Fatal(err)
+	}
+	if err := team.AdjustTeamSettlement(supplier.ID, statement.ID, 0, -900, "补录已确认退款冲减"); err != nil {
+		t.Fatal(err)
+	}
+	var adjusted model.TeamSettlementStatement
+	if err := model.DB.Preload("Adjustments").First(&adjusted, statement.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if adjusted.Status != "draft" || adjusted.AdjustmentCents != -900 || len(adjusted.Adjustments) != 1 {
+		t.Fatalf("adjusted team settlement=%+v adjustments=%+v", adjusted, adjusted.Adjustments)
+	}
+	if err := team.SetTeamSettlementStatus(supplier.ID, statement.ID, "supplier_confirmed", ""); err != nil {
+		t.Fatal(err)
+	}
 	if err := team.SetTeamSettlementStatus(travel.ID, statement.ID, "confirmed", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := team.SetTeamSettlementStatus(travel.ID, statement.ID, "paid", "bank-slip-1"); err != nil {
 		t.Fatal(err)
+	}
+	if err := model.DB.First(&group, group.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if group.SettlementStatus != "settled" {
+		t.Fatalf("group settlement status=%s", group.SettlementStatus)
+	}
+	var auditCount int64
+	if err := model.DB.Model(&model.AuditLog{}).Where("target_type = ? AND target_id = ?", "team_settlement_statement", statement.ID).Count(&auditCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 7 {
+		t.Fatalf("team settlement audit count=%d, want 7", auditCount)
+	}
+	travelAccounts, err := team.ListTeamAccountSummaries(travel.ID)
+	if err != nil || len(travelAccounts) != 1 || travelAccounts[0].PaidCents != 9000 || travelAccounts[0].PendingCents != 0 {
+		t.Fatalf("travel team accounts=%+v err=%v", travelAccounts, err)
+	}
+	supplierAccounts, err := team.ListTeamAccountSummaries(supplier.ID)
+	if err != nil || len(supplierAccounts) != 1 || supplierAccounts[0].TravelTenantID != travel.ID {
+		t.Fatalf("supplier team accounts=%+v err=%v", supplierAccounts, err)
+	}
+	otherAccounts, err := team.ListTeamAccountSummaries(supplier.ID + 999)
+	if err != nil || len(otherAccounts) != 0 {
+		t.Fatalf("unrelated team accounts=%+v err=%v", otherAccounts, err)
 	}
 }

@@ -79,6 +79,9 @@ func runMigrations(db *gorm.DB) error {
 		{version: 49, name: "mixed payment refund allocations", apply: migrateMixedRefundAllocations},
 		{version: 50, name: "append-only settlement adjustments", apply: migrateSettlementAdjustments},
 		{version: 51, name: "after-sale exchange price adjustments", apply: migrateAfterSalePriceAdjustments},
+		{version: 52, name: "idempotent team admission batches", apply: migrateTeamAdmissionBatches},
+		{version: 53, name: "append-only team settlement adjustments", apply: migrateTeamSettlementAdjustments},
+		{version: 54, name: "team confirmations and member changes", apply: migrateTeamConfirmationsAndChanges},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -98,6 +101,30 @@ func runMigrations(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func migrateTeamConfirmationsAndChanges(db *gorm.DB) error {
+	return db.AutoMigrate(&TourGroupConfirmation{}, &TourGroupMemberChange{})
+}
+
+func migrateTeamSettlementAdjustments(db *gorm.DB) error {
+	return db.AutoMigrate(&TeamSettlementStatement{}, &TeamSettlementAdjustment{})
+}
+
+func migrateTeamAdmissionBatches(db *gorm.DB) error {
+	if err := db.AutoMigrate(&TourEntryBatch{}); err != nil {
+		return err
+	}
+	if err := db.Exec(`
+		UPDATE tour_entry_batches
+		SET supplier_tenant_id = COALESCE((SELECT supplier_tenant_id FROM tour_groups WHERE tour_groups.id = tour_entry_batches.group_id), 0),
+		    scenic_area_id = COALESCE((SELECT scenic_area_id FROM tour_groups WHERE tour_groups.id = tour_entry_batches.group_id), 0),
+		    idempotency_key = CASE WHEN idempotency_key = '' THEN 'legacy:' || id ELSE idempotency_key END,
+		    member_ids_json = CASE WHEN member_ids_json = '' THEN '[]' ELSE member_ids_json END
+	`).Error; err != nil {
+		return err
+	}
+	return db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_team_entry_request ON tour_entry_batches(group_id, idempotency_key)`).Error
 }
 
 func migrateAfterSalePriceAdjustments(db *gorm.DB) error {

@@ -39,10 +39,10 @@ func TestMain(m *testing.M) {
 		&model.CheckInRecord{}, &model.DistributorRelationship{}, &model.CapitalAccount{}, &model.TransactionRecord{},
 		&model.LedgerEntry{}, &model.DigitalRefundTask{}, &model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{},
 		&model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{},
-		&model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.TourGroup{}, &model.TourGroupMember{}, &model.TourEntryBatch{},
+		&model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.TourGroup{}, &model.TourGroupMember{}, &model.TourEntryBatch{}, &model.TourGroupConfirmation{}, &model.TourGroupMemberChange{},
 		&model.POSShift{}, &model.POSShiftCorrection{}, &model.PrintJob{}, &model.DeviceAlert{}, &model.POSHold{},
 		&model.ProductRevision{}, &model.SettlementStatement{}, &model.SettlementLine{}, &model.SettlementAdjustment{}, &model.StaffResourceScope{},
-		&model.AfterSaleRequest{}, &model.AfterSaleEvent{}, &model.HardwareCommand{}, &model.HardwareEvent{}, &model.ChannelReservation{}, &model.FinancialDocument{}, &model.TeamSettlementStatement{},
+		&model.AfterSaleRequest{}, &model.AfterSaleEvent{}, &model.HardwareCommand{}, &model.HardwareEvent{}, &model.ChannelReservation{}, &model.FinancialDocument{}, &model.TeamSettlementStatement{}, &model.TeamSettlementAdjustment{},
 		&model.ChannelBillRecord{}, &model.ChannelReconciliation{},
 	); err != nil {
 		panic(err)
@@ -67,8 +67,8 @@ func resetBusinessData(t *testing.T) {
 		for _, table := range []interface{}{
 			&model.StaffResourceScope{}, &model.User{}, &model.Staff{},
 			&model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{}, &model.LedgerEntry{}, &model.DigitalRefundTask{},
-			&model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{}, &model.ChannelReservation{}, &model.TourGroupMember{}, &model.TourGroup{}, &model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.TourEntryBatch{}, &model.POSShiftCorrection{}, &model.POSShift{}, &model.PrintJob{}, &model.DeviceAlert{}, &model.POSHold{},
-			&model.AfterSaleEvent{}, &model.AfterSaleRequest{}, &model.HardwareEvent{}, &model.HardwareCommand{}, &model.FinancialDocument{}, &model.TeamSettlementStatement{},
+			&model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{}, &model.ChannelReservation{}, &model.TourGroupConfirmation{}, &model.TourGroupMemberChange{}, &model.TourGroupMember{}, &model.TourEntryBatch{}, &model.TourGroup{}, &model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.POSShiftCorrection{}, &model.POSShift{}, &model.PrintJob{}, &model.DeviceAlert{}, &model.POSHold{},
+			&model.AfterSaleEvent{}, &model.AfterSaleRequest{}, &model.HardwareEvent{}, &model.HardwareCommand{}, &model.FinancialDocument{}, &model.TeamSettlementAdjustment{}, &model.TeamSettlementStatement{},
 			&model.ChannelBillRecord{}, &model.ChannelReconciliation{},
 			&model.ProductRevision{}, &model.SettlementLine{}, &model.SettlementAdjustment{}, &model.SettlementStatement{},
 			&model.CheckInRecord{}, &model.OrderVisitor{}, &model.Ticket{}, &model.OrderItem{}, &model.Order{}, &model.ProductInventory{},
