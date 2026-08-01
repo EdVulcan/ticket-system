@@ -1,0 +1,13 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "ticket-pos",
+  "outputfilename": "ticket-pos",
+  "frontend:dir": ".",
+  "frontend:install": "npm ci",
+  "frontend:build": "npm run build:wails:web",
+  "frontend:dev:watcher": "npm run dev:wails:web",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Ticket System"
+  }
+}

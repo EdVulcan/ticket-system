@@ -1,315 +1,211 @@
 <template>
-  <div class="h-screen flex bg-[#141414] text-white font-sans overflow-hidden">
-    <!-- Sidebar -->
-    <div class="w-[80px] bg-[#001529] flex flex-col items-center pt-5 border-r border-[#333] z-20">
-      <div class="mb-6 w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center font-bold text-xl">P</div>
-      
-      <div 
-        class="w-[50px] h-[50px] mb-5 rounded-xl flex flex-col items-center justify-center text-[#8c8c8c] cursor-pointer transition-all hover:text-white hover:bg-white/10"
-        :class="{ 'bg-[#1890ff] text-white shadow-lg shadow-blue-500/40': currentView === 'pos' }"
-        @click="currentView = 'pos'"
-      >
-        <el-icon :size="24"><Monitor /></el-icon>
-        <span class="text-[10px] mt-0.5">收银</span>
+  <div class="pos-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="brand-mark"><el-icon :size="22"><Tickets /></el-icon></div>
+        <div>
+          <div class="brand-title">窗口售票</div>
+          <div class="brand-subtitle">{{ getPageTitle }}</div>
+        </div>
       </div>
 
-      <div 
-        class="w-[50px] h-[50px] mb-5 rounded-xl flex flex-col items-center justify-center text-[#8c8c8c] cursor-pointer transition-all hover:text-white hover:bg-white/10"
-        :class="{ 'bg-[#1890ff] text-white shadow-lg shadow-blue-500/40': currentView === 'orders' }"
-        @click="currentView = 'orders'"
-      >
-        <el-icon :size="24"><List /></el-icon>
-        <span class="text-[10px] mt-0.5">订单</span>
-      </div>
+      <nav class="workspace-tabs" aria-label="窗口工作区">
+        <button class="workspace-tab" :class="{ active: currentView === 'pos' }" @click="currentView = 'pos'">
+          <el-icon><Monitor /></el-icon><span>售票</span>
+        </button>
+        <button class="workspace-tab" :class="{ active: currentView === 'orders' }" @click="currentView = 'orders'">
+          <el-icon><List /></el-icon><span>订单</span>
+        </button>
+        <button class="workspace-tab" :class="{ active: currentView === 'verify' }" @click="currentView = 'verify'">
+          <el-icon><Checked /></el-icon><span>核销</span>
+        </button>
+        <button class="workspace-tab" :class="{ active: currentView === 'settings' }" @click="currentView = 'settings'">
+          <el-icon><Setting /></el-icon><span>终端</span>
+        </button>
+      </nav>
 
-      <div 
-        class="w-[50px] h-[50px] mb-5 rounded-xl flex flex-col items-center justify-center text-[#8c8c8c] cursor-pointer transition-all hover:text-white hover:bg-white/10"
-        :class="{ 'bg-[#1890ff] text-white shadow-lg shadow-blue-500/40': currentView === 'verify' }"
-        @click="currentView = 'verify'"
-      >
-        <el-icon :size="24"><Checked /></el-icon>
-        <span class="text-[10px] mt-0.5">核销</span>
+      <div class="operator-block">
+        <div class="operator-meta">
+          <span class="clock">{{ currentTime }}</span>
+          <span>{{ currentStaff.name }} · {{ currentStaff.job_number }}</span>
+        </div>
+        <button class="shift-chip" :class="{ open: shiftState.isOpen }" @click="handleShiftAction">
+          <span class="status-dot"></span>{{ shiftState.isOpen ? '当班中' : '未开班' }}
+        </button>
+        <el-tooltip content="退出登录" placement="bottom">
+          <button class="icon-button danger" aria-label="退出登录" @click="handleLogout"><el-icon><SwitchButton /></el-icon></button>
+        </el-tooltip>
       </div>
+    </header>
 
-      <div 
-        class="w-[50px] h-[50px] mb-5 rounded-xl flex flex-col items-center justify-center text-[#8c8c8c] cursor-pointer transition-all hover:text-white hover:bg-white/10"
-        :class="{ 'bg-[#1890ff] text-white shadow-lg shadow-blue-500/40': currentView === 'settings' }"
-        @click="currentView = 'settings'"
-      >
-        <el-icon :size="24"><Setting /></el-icon>
-        <span class="text-[10px] mt-0.5">设置</span>
-      </div>
-
-      <div class="mt-auto mb-6 w-[50px] h-[50px] rounded-xl flex flex-col items-center justify-center text-red-400 cursor-pointer hover:bg-red-900/20" @click="handleLogout">
-        <el-icon :size="24"><SwitchButton /></el-icon>
-      </div>
-    </div>
-
-    <!-- Main Content -->
-    <div class="flex-1 flex flex-col overflow-hidden relative">
-      <!-- Status Bar -->
-      <div class="h-10 bg-[#1f1f1f] border-b border-[#303030] flex items-center justify-between px-4 text-xs text-gray-500">
-        <div>当前位置: {{ getPageTitle }}</div>
-        <div>{{ currentTime }} | 操作员: {{ currentStaff.name }} ({{ currentStaff.job_number }})</div>
-      </div>
-
-      <!-- View A: POS -->
-      <div v-if="currentView === 'pos'" class="flex h-full">
-        <!-- Left Panel -->
-        <div class="w-[65%] p-4 border-r border-[#303030] flex flex-col bg-[#141414]">
-          <!-- Search -->
-          <div class="flex gap-2 mb-3">
-            <el-input v-model="searchQuery" placeholder="输入拼音/名称搜索... (F2)" prefix-icon="Search" class="flex-1 dark-input" ref="searchInput" />
-            <el-select v-model="filterCategory" placeholder="分类" style="width: 120px" class="dark-select">
-              <el-option label="全部" value="all" />
-              <el-option label="门票" value="ticket" />
-              <el-option label="套票" value="package" />
-            </el-select>
+    <main class="workspace">
+      <section v-if="currentView === 'pos'" class="sales-workspace">
+        <div class="catalog-pane">
+          <div v-if="!shiftState.isOpen || !posDeviceId" class="readiness-banner">
+            <el-icon><Warning /></el-icon>
+            <span v-if="!posDeviceId">尚未配置 POS 设备，请先进入终端设置。</span>
+            <span v-else>当前未开班，开班后才能创建窗口订单。</span>
+            <button @click="!posDeviceId ? (currentView = 'settings') : handleShiftAction()">立即处理</button>
           </div>
 
-          <!-- Product List -->
-          <div class="flex-1 flex flex-col gap-2 overflow-y-auto pr-1 custom-scrollbar">
-            <div 
-              v-for="p in filteredProducts" 
-              :key="p.id" 
-              class="flex justify-between items-center p-3 bg-[#1f1f1f] rounded-md cursor-pointer border border-transparent hover:bg-[#333] hover:border-[#444] active:bg-[#444] active:border-[#1890ff] transition-all"
-              @click="addToCart(p)"
-            >
-              <div>
-                <div class="text-white font-medium text-base">{{ p.name }}</div>
-                <div class="flex gap-2 mt-1">
-                  <span class="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-400">门票</span>
-                  <span v-for="tag in p.parsedTags" :key="tag" class="text-xs px-1.5 py-0.5 rounded bg-blue-900 text-blue-300">{{ tag }}</span>
-                  <span class="text-xs px-1.5 py-0.5 rounded bg-gray-800 text-gray-500">库存: {{ p.stock_type === 'unlimited' ? '∞' : p.daily_stock }}</span>
+          <div class="catalog-toolbar">
+            <el-input ref="searchInput" v-model="searchQuery" size="large" clearable placeholder="搜索票种名称或标签" :prefix-icon="Search" />
+            <div class="catalog-count">可售 {{ filteredProducts.length }} 种</div>
+            <el-tooltip content="刷新商品与库存" placement="bottom">
+              <el-button :icon="Refresh" circle aria-label="刷新商品与库存" @click="fetchProducts" />
+            </el-tooltip>
+          </div>
+
+          <div class="product-grid custom-scrollbar">
+            <button v-for="p in filteredProducts" :key="p.id" class="product-tile" @click="addToCart(p)">
+              <div class="product-main">
+                <div class="product-name">{{ p.name }}</div>
+                <div class="product-tags">
+                  <span v-for="tag in p.parsedTags?.slice(0, 2)" :key="tag">{{ tag }}</span>
+                  <span class="stock-tag">库存 {{ p.stock_type === 'unlimited' ? '充足' : p.daily_stock }}</span>
                 </div>
               </div>
-              <div class="text-xl font-bold text-[#faad14] font-mono">¥{{ p.price }}</div>
+              <div class="product-action">
+                <strong>¥{{ Number(p.price).toFixed(2) }}</strong>
+                <span class="add-icon"><el-icon><Plus /></el-icon></span>
+              </div>
+            </button>
+            <div v-if="filteredProducts.length === 0" class="empty-state">
+              <el-icon :size="36"><Search /></el-icon>
+              <strong>没有匹配的票种</strong>
+              <span>调整搜索内容后再试</span>
             </div>
           </div>
 
-          <!-- Toolbar -->
-          <div class="mt-3 pt-3 border-t border-[#333] grid grid-cols-5 gap-2.5">
-            <el-tooltip content="查询优惠政策/入园规则 (Ctrl+F)" placement="top" :show-after="500">
-              <div class="bg-[#2b2b2b] border border-[#3d3d3d] rounded-md h-[60px] flex flex-col items-center justify-center text-[#ccc] cursor-pointer hover:bg-[#3d3d3d] hover:text-white hover:border-[#555] hover:-translate-y-0.5 transition-all active:translate-y-0 active:bg-[#222]" @click="showPolicy = true">
-                <el-icon class="text-xl mb-1 text-blue-400"><Reading /></el-icon>
-                <span class="text-xs">政策查询</span>
-              </div>
-            </el-tooltip>
-            <el-tooltip content="打开简易计算器" placement="top" :show-after="500">
-              <div class="bg-[#2b2b2b] border border-[#3d3d3d] rounded-md h-[60px] flex flex-col items-center justify-center text-[#ccc] cursor-pointer hover:bg-[#3d3d3d] hover:text-white hover:border-[#555] hover:-translate-y-0.5 transition-all active:translate-y-0 active:bg-[#222]" @click="showCalc = true">
-                <el-icon class="text-xl mb-1"><Grid /></el-icon>
-                <span class="text-xs">计算器</span>
-              </div>
-            </el-tooltip>
-            <el-tooltip content="重新打印上一笔订单" placement="top" :show-after="500">
-              <div class="bg-[#2b2b2b] border border-[#3d3d3d] rounded-md h-[60px] flex flex-col items-center justify-center text-[#ccc] cursor-pointer hover:bg-[#3d3d3d] hover:text-white hover:border-[#555] hover:-translate-y-0.5 transition-all active:translate-y-0 active:bg-[#222]" @click="handleReprint">
-                <el-icon class="text-xl mb-1"><Printer /></el-icon>
-                <span class="text-xs">重打</span>
-              </div>
-            </el-tooltip>
-            <el-tooltip content="交班注意事项记录" placement="top" :show-after="500">
-              <div class="bg-[#2b2b2b] border border-[#3d3d3d] rounded-md h-[60px] flex flex-col items-center justify-center text-[#ccc] cursor-pointer hover:bg-[#3d3d3d] hover:text-white hover:border-[#555] hover:-translate-y-0.5 transition-all active:translate-y-0 active:bg-[#222]" @click="showNote = true">
-                <el-icon class="text-xl mb-1"><Notebook /></el-icon>
-                <span class="text-xs">便签</span>
-              </div>
-            </el-tooltip>
-            <el-tooltip content="刷新商品与库存 (F5)" placement="top" :show-after="500">
-              <div class="bg-[#2b2b2b] border border-[#3d3d3d] rounded-md h-[60px] flex flex-col items-center justify-center text-[#ccc] cursor-pointer hover:bg-[#3d3d3d] hover:text-white hover:border-[#555] hover:-translate-y-0.5 transition-all active:translate-y-0 active:bg-[#222]" @click="fetchProducts">
-                <el-icon class="text-xl mb-1"><Refresh /></el-icon>
-                <span class="text-xs">刷新</span>
-              </div>
-            </el-tooltip>
+          <div class="quick-tools">
+            <button @click="showPolicy = true"><el-icon><Reading /></el-icon><span>政策</span></button>
+            <button @click="showCalc = true"><el-icon><Grid /></el-icon><span>计算器</span></button>
+            <button @click="openHolds"><el-icon><Notebook /></el-icon><span>挂单列表</span></button>
+            <button @click="handleReprint"><el-icon><Printer /></el-icon><span>失败重打</span></button>
+            <button @click="showNote = true"><el-icon><EditPen /></el-icon><span>交班便签</span></button>
           </div>
         </div>
 
-        <!-- Right Panel (Cart) -->
-        <div class="w-[35%] bg-[#1f1f1f] flex flex-col shadow-[-4px_0_10px_rgba(0,0,0,0.2)]">
-          <div class="p-3 border-b border-[#303030] flex justify-between font-bold">
-            <span>购物清单</span>
-            <span class="cursor-pointer text-gray-500 hover:text-red-500" @click="clearCart">清空</span>
-          </div>
-          
-          <div class="flex-1 overflow-y-auto p-2 custom-scrollbar">
-            <div v-if="cart.length===0" class="h-full flex flex-col items-center justify-center text-gray-600">
-              <el-icon :size="40" class="mb-2 opacity-30"><ShoppingCart /></el-icon>
-              <span class="text-sm">暂无商品</span>
+        <aside class="cart-pane">
+          <div class="cart-heading">
+            <div>
+              <span class="eyebrow">本次交易</span>
+              <h2>购票清单 <em>{{ cartItemCount }}</em></h2>
             </div>
-            <div v-for="(item, idx) in cart" :key="idx" class="bg-[#2b2b2b] p-3 mb-2 rounded flex justify-between items-center border border-transparent hover:border-gray-600">
-              <div>
-                <div class="font-medium">{{ item.name }}</div>
-                <div class="text-xs text-gray-500">单价: {{ item.price }}</div>
+            <el-button text type="danger" :disabled="cart.length === 0" @click="clearCart">清空</el-button>
+          </div>
+
+          <div class="cart-list custom-scrollbar">
+            <div v-if="cart.length === 0" class="empty-cart">
+              <div class="empty-cart-icon"><el-icon :size="32"><ShoppingCart /></el-icon></div>
+              <strong>还没有选择票种</strong>
+              <span>点击左侧票种即可加入</span>
+            </div>
+            <div v-for="(item, idx) in cart" :key="item.id" class="cart-item">
+              <div class="cart-item-top">
+                <div class="cart-item-name">{{ item.name }}</div>
+                <strong>¥{{ (item.price * item.quantity).toFixed(2) }}</strong>
               </div>
-              <div class="flex items-center gap-3">
-                <div class="text-lg font-bold font-mono text-[#faad14]">¥{{ (item.price * item.quantity).toFixed(2) }}</div>
-                <div class="flex bg-[#333] rounded overflow-hidden border border-[#444]">
-                  <button class="w-7 h-7 text-white hover:bg-[#444] flex items-center justify-center" @click="updateQty(idx, -1)">-</button>
-                  <span class="w-8 text-center text-sm leading-7 bg-[#262626]">{{ item.quantity }}</span>
-                  <button class="w-7 h-7 text-white hover:bg-[#444] flex items-center justify-center" @click="updateQty(idx, 1)">+</button>
+              <div class="cart-item-bottom">
+                <span>¥{{ Number(item.price).toFixed(2) }} / 张</span>
+                <div class="quantity-stepper">
+                  <button aria-label="减少数量" @click="updateQty(idx, -1)"><el-icon><Minus /></el-icon></button>
+                  <span>{{ item.quantity }}</span>
+                  <button aria-label="增加数量" @click="updateQty(idx, 1)"><el-icon><Plus /></el-icon></button>
                 </div>
               </div>
             </div>
           </div>
 
-          <div class="p-4 bg-[#141414] border-t border-[#303030]">
-            <div class="flex justify-between text-2xl font-bold mb-4 text-[#faad14] font-mono">
-              <span>合计</span>
-              <span>¥{{ totalAmount.toFixed(2) }}</span>
-            </div>
-            <div class="flex gap-2">
-              <el-button class="w-1/3" color="#333" size="large" @click="handleHold">挂单 (F4)</el-button>
-              <el-button type="primary" class="flex-1 !font-bold" size="large" @click="handleCheckout" :disabled="cart.length===0">结账 (Space)</el-button>
+          <div class="checkout-panel">
+            <div class="total-line"><span>共 {{ cartItemCount }} 张</span><strong>¥{{ totalAmount.toFixed(2) }}</strong></div>
+            <div class="checkout-actions">
+              <el-button size="large" :disabled="cart.length === 0" @click="handleHold"><el-icon><Notebook /></el-icon>挂单</el-button>
+              <el-button type="success" size="large" :disabled="cart.length === 0 || !shiftState.isOpen || !posDeviceId" @click="handleCheckout">
+                <el-icon><Wallet /></el-icon>收款
+              </el-button>
             </div>
           </div>
-        </div>
-      </div>
+        </aside>
+      </section>
 
-      <!-- View B: Orders -->
-      <div v-if="currentView === 'orders'" class="p-6 h-full flex flex-col">
-        <div class="bg-[#1f1f1f] p-4 rounded-lg mb-4 flex gap-3">
-          <el-input v-model="orderSearchQuery" placeholder="输入订单号" style="width: 200px" prefix-icon="Search" class="dark-input" @keyup.enter="fetchOrders" />
-          <el-date-picker
-            v-model="orderDateRange"
-            type="daterange"
-            range-separator="至"
-            start-placeholder="开始日期"
-            end-placeholder="结束日期"
-            value-format="YYYY-MM-DD"
-            style="width: 240px"
-            class="dark-input"
-            @change="fetchOrders"
-          />
-          <el-select v-model="orderStatus" placeholder="状态" style="width: 120px" class="dark-select" @change="fetchOrders">
-            <el-option label="全部" value="" />
+      <section v-if="currentView === 'orders'" class="page-workspace">
+        <div class="page-heading"><div><h1>窗口订单</h1><p>查询售票记录并处理后续操作</p></div></div>
+        <div class="filter-bar">
+          <el-input v-model="orderSearchQuery" placeholder="订单号或联系人" clearable :prefix-icon="Search" @keyup.enter="fetchOrders" />
+          <el-date-picker v-model="orderDateRange" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" value-format="YYYY-MM-DD" @change="fetchOrders" />
+          <el-select v-model="orderStatus" placeholder="全部状态" clearable @change="fetchOrders">
             <el-option label="已支付" value="paid" />
             <el-option label="已退款" value="refund" />
           </el-select>
-          <el-button type="primary" @click="fetchOrders">查询</el-button>
+          <el-button type="primary" :icon="Search" @click="fetchOrders">查询</el-button>
         </div>
-        <div class="bg-[#1f1f1f] rounded-lg p-4 flex-1 overflow-hidden flex flex-col">
-           <div class="flex justify-between text-gray-400 text-xs px-4 py-2 border-b border-[#333]">
-             <span class="w-[180px]">订单号</span>
-             <span class="w-[100px]">联系人</span>
-             <span class="w-[80px]">金额</span>
-             <span class="w-[80px]">状态</span>
-             <span class="w-[150px]">时间</span>
-             <span class="flex-1">商品</span>
-           </div>
-           <div class="flex-1 overflow-y-auto custom-scrollbar">
-             <div v-if="orders.length === 0" class="flex justify-center items-center h-full text-gray-500">暂无数据</div>
-             <div v-for="order in orders" :key="order.id" class="flex justify-between items-center px-4 py-3 border-b border-[#333] hover:bg-[#2b2b2b] text-sm">
-               <span class="w-[180px] font-mono text-[#1890ff]">{{ order.order_no }}</span>
-               <span class="w-[100px]">{{ order.contact_name || '-' }}</span>
-               <span class="w-[80px] font-bold text-[#faad14]">¥{{ order.total_amount }}</span>
-               <span class="w-[80px]">
-                 <span v-if="order.status==='paid'" class="text-green-500">已支付</span>
-                 <span v-else-if="order.status==='refund'" class="text-red-500">已退款</span>
-                 <span v-else>{{ order.status }}</span>
-               </span>
-               <span class="w-[150px] text-gray-400 text-xs">{{ new Date(order.created_at).toLocaleString() }}</span>
-               <span class="flex-1 text-gray-400 truncate">
-                 <span v-for="item in order.items" :key="item.id" class="mr-2">{{ item.product_name }} x{{ item.quantity }}</span>
-               </span>
-             </div>
-           </div>
+        <div class="data-panel">
+          <el-table v-loading="ordersLoading" :data="orders" height="100%" stripe>
+            <el-table-column prop="order_no" label="订单号" min-width="205" />
+            <el-table-column prop="contact_name" label="联系人" width="120" />
+            <el-table-column label="商品" min-width="240">
+              <template #default="{ row }"><span v-for="item in row.items" :key="item.id" class="order-item-text">{{ item.product_name }} × {{ item.quantity }}</span></template>
+            </el-table-column>
+            <el-table-column label="金额" width="110"><template #default="{ row }"><strong class="money">¥{{ row.total_amount }}</strong></template></el-table-column>
+            <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="row.status === 'paid' ? 'success' : row.status === 'refund' ? 'danger' : 'info'">{{ orderStatusLabel(row.status) }}</el-tag></template></el-table-column>
+            <el-table-column label="下单时间" width="180"><template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template></el-table-column>
+          </el-table>
         </div>
-      </div>
+      </section>
 
-      <!-- View C: Verify -->
-      <div v-if="currentView === 'verify'" class="h-full flex gap-6 bg-[radial-gradient(circle_at_50%_30%,#1f2a36_0%,#141414_70%)]">
-         <div class="flex-1 flex flex-col items-center justify-center">
-            <div class="text-2xl font-bold text-gray-400 mb-8">请扫描票据二维码或输入票号</div>
-            <div class="w-[80%] max-w-[600px] relative flex gap-2">
-               <div class="relative flex-1">
-                 <input 
-                   v-model="verifyInput"
-                   ref="verifyInputRef"
-                   class="w-full h-[80px] text-[32px] text-center tracking-[4px] bg-black/30 border-2 border-[#303030] text-[#1890ff] rounded-xl outline-none focus:border-[#1890ff] focus:shadow-[0_0_20px_rgba(24,144,255,0.2)] transition-all" 
-                   placeholder="Waiting for scan..." 
-                   autofocus 
-                   @keyup.enter="handleVerify"
-                 />
-                 <el-icon class="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500" :size="30"><FullScreen /></el-icon>
-               </div>
-               <button 
-                 class="w-[100px] h-[80px] bg-[#1890ff] rounded-xl text-white font-bold text-xl hover:bg-[#40a9ff] active:scale-95 transition-all shadow-lg shadow-blue-500/30"
-                 @click="handleVerify"
-               >
-                 核销
-               </button>
+      <section v-if="currentView === 'verify'" class="verify-workspace">
+        <div class="verify-main">
+          <div class="verify-heading"><div class="verify-icon"><el-icon><FullScreen /></el-icon></div><h1>票券核销</h1><p>扫描二维码，或输入完整票码</p></div>
+          <div class="verify-entry">
+            <el-input ref="verifyInputRef" v-model="verifyInput" size="large" clearable placeholder="等待扫码或输入票码" @keyup.enter="handleVerify" />
+            <el-button type="success" size="large" :disabled="!verifyInput.trim() || !currentCheckPointId || !posDeviceId" @click="handleVerify">确认核销</el-button>
+          </div>
+          <div class="verify-context">
+            <span><el-icon><Place /></el-icon>{{ currentCheckpointName }}</span>
+            <span><el-icon><Monitor /></el-icon>设备 {{ posDeviceId || '未配置' }}</span>
+          </div>
+        </div>
+        <aside class="history-pane">
+          <div class="history-heading"><h2>最近核销</h2><span>{{ verifyHistory.length }} 条</span></div>
+          <div class="history-list custom-scrollbar">
+            <div v-if="verifyHistory.length === 0" class="history-empty">暂无核销记录</div>
+            <div v-for="entry in verifyHistory" :key="`${entry.code}-${entry.time}`" class="history-item" :class="entry.status">
+              <el-icon><CircleCheck v-if="entry.status === 'success'" /><CircleClose v-else /></el-icon>
+              <div><strong>{{ entry.msg }}</strong><span>{{ entry.code }}</span><small>{{ entry.time }}</small></div>
             </div>
-         </div>
-         <div class="w-[350px] bg-[#1f1f1f] border-l border-[#303030] p-5 flex flex-col">
-            <h3 class="text-lg font-bold mb-4 border-b border-[#333] pb-2">最近核销</h3>
-            <div class="overflow-y-auto flex-1 space-y-3">
-               <!-- History Items Placeholder -->
-            </div>
-         </div>
-      </div>
+          </div>
+        </aside>
+      </section>
 
-      <!-- View D: Settings -->
-      <div v-if="currentView === 'settings'" class="p-6 h-full">
-         <div class="grid grid-cols-3 gap-5">
-            <div class="bg-[#1f1f1f] rounded-lg p-6 border border-[#303030]">
-               <div class="flex items-center gap-2 mb-5 text-lg font-bold text-[#ddd]"><el-icon><Printer /></el-icon> 设备管理</div>
-               <el-form label-position="top">
-                  <el-form-item label="小票打印机">
-                    <el-select v-model="selectedPrinter" class="w-full" @change="saveSettings">
-                      <el-option label="EPSON TM-T88V" value="EPSON TM-T88V"/>
-                      <el-option label="Microsoft Print to PDF" value="Microsoft Print to PDF"/>
-                    </el-select>
-                  </el-form-item>
-                  <el-button class="w-full">打印测试页</el-button>
-               </el-form>
-            </div>
-            
-            <div class="bg-[#1f1f1f] rounded-lg p-6 border border-[#303030]">
-               <div class="flex items-center gap-2 mb-5 text-lg font-bold text-[#ddd]"><el-icon><Place /></el-icon> 终端设置</div>
-               <el-form label-position="top">
-                  <el-form-item label="当前检票点">
-                    <el-select v-model="currentCheckPointId" placeholder="请选择检票点" class="w-full" @change="saveSettings">
-                      <el-option v-for="cp in checkpoints" :key="cp.id" :label="cp.name" :value="cp.id" />
-                    </el-select>
-                  </el-form-item>
-                  <el-form-item label="POS 设备编号">
-                    <el-input-number v-model="posDeviceId" :min="1" class="w-full" controls-position="right" @change="saveSettings" />
-                  </el-form-item>
-                  <div class="text-xs text-gray-500 mt-2">设置后将用于核销验证记录</div>
-               </el-form>
-            </div>
+      <section v-if="currentView === 'settings'" class="page-workspace">
+        <div class="page-heading"><div><h1>终端与班次</h1><p>配置当前窗口的设备归属和交接班状态</p></div></div>
+        <div class="settings-grid">
+          <section class="settings-section">
+            <div class="section-heading"><el-icon><Place /></el-icon><div><h2>窗口归属</h2><p>核销与售票操作将记录到所选设备</p></div></div>
+            <el-form label-position="top">
+              <el-form-item label="当前检票点"><el-select v-model="currentCheckPointId" placeholder="请选择检票点" class="w-full" @change="saveSettings"><el-option v-for="cp in checkpoints" :key="cp.id" :label="cp.name" :value="cp.id" /></el-select></el-form-item>
+              <el-form-item label="POS 设备编号"><el-input-number v-model="posDeviceId" :min="1" class="w-full" controls-position="right" @change="saveSettings" /></el-form-item>
+            </el-form>
+          </section>
+          <section class="settings-section">
+            <div class="section-heading"><el-icon><Printer /></el-icon><div><h2>本机硬件</h2><p>硬件适配器未配置时不会伪报成功</p></div></div>
+            <div class="hardware-row"><span>小票打印机</span><el-tag type="warning">待配置</el-tag></div>
+            <div class="hardware-row"><span>证件阅读器</span><el-tag type="info">待配置</el-tag></div>
+          </section>
+          <section class="settings-section">
+            <div class="section-heading"><el-icon><Notebook /></el-icon><div><h2>当前班次</h2><p>{{ shiftState.isOpen ? `开始于 ${new Date(shiftState.startTime!).toLocaleString()}` : '开班后才能进行窗口收款' }}</p></div></div>
+            <div class="shift-summary"><span>状态</span><el-tag :type="shiftState.isOpen ? 'success' : 'info'">{{ shiftState.isOpen ? '当班中' : '未开班' }}</el-tag></div>
+            <el-button :type="shiftState.isOpen ? 'danger' : 'success'" size="large" class="w-full" @click="handleShiftAction">{{ shiftState.isOpen ? '结束当班并交班' : '开始当班' }}</el-button>
+          </section>
+        </div>
+      </section>
 
-            <div class="bg-[#1f1f1f] rounded-lg p-6 border border-[#303030]">
-               <div class="flex items-center gap-2 mb-5 text-lg font-bold text-[#ddd]"><el-icon><Notebook /></el-icon> 交接班管理</div>
-               <div class="flex flex-col gap-4">
-                 <div class="flex justify-between items-center bg-[#2b2b2b] p-3 rounded">
-                   <span class="text-gray-400">当前状态</span>
-                   <el-tag :type="shiftState.isOpen ? 'success' : 'info'">{{ shiftState.isOpen ? '当班中' : '未当班' }}</el-tag>
-                 </div>
-                 <div v-if="shiftState.isOpen" class="text-sm text-gray-500">
-                   <div>开始时间: {{ new Date(shiftState.startTime!).toLocaleString() }}</div>
-                   <div>操作员: {{ shiftState.operator }}</div>
-                 </div>
-                 <el-button 
-                   :type="shiftState.isOpen ? 'danger' : 'primary'" 
-                   class="w-full !h-[40px]" 
-                   @click="handleShiftAction"
-                 >
-                   {{ shiftState.isOpen ? '结束当班 / 交班' : '开始当班' }}
-                 </el-button>
-               </div>
-            </div>
-         </div>
-      </div>
-
-      <!-- Modals -->
-      <el-dialog v-model="showCalc" title="计算器" width="300px" :modal="false" draggable align-center class="dark-dialog">
-        <Calculator />
-      </el-dialog>
-
-      <el-dialog v-model="showPayment" title="收银台" width="500px" align-center class="dark-dialog" :close-on-click-modal="false">
+      <el-dialog v-model="showCalc" title="计算器" width="320px" :modal="false" draggable align-center><Calculator /></el-dialog>
+      <el-dialog v-model="showPayment" title="收款" width="500px" align-center :close-on-click-modal="false">
         <PaymentModal v-if="showPayment" :amount="currentOrder?.total_amount || 0" :order-no="currentOrder?.order_no || ''" :shift-id="shiftState.shiftId || 0" :device-id="posDeviceId || 0" @success="handlePaymentSuccess" />
       </el-dialog>
-
-      <el-dialog v-model="showHolds" title="挂单" width="760px" align-center class="dark-dialog">
+      <el-dialog v-model="showHolds" title="挂单列表" width="760px" align-center>
         <div class="flex justify-between items-center mb-3">
           <span class="text-sm text-gray-400">挂单只保存商品选择，恢复时会重新校验价格、上下架和库存。</span>
           <el-button :icon="Refresh" circle title="刷新挂单" @click="loadHolds" />
@@ -333,11 +229,11 @@
         <template #footer><el-button @click="showHolds = false">关闭</el-button></template>
       </el-dialog>
 
-      <el-dialog v-model="showPolicy" title="百事通 (F3)" width="600px" align-center class="dark-dialog">
+      <el-dialog v-model="showPolicy" title="票务政策" width="600px" align-center>
         <PolicyModal />
       </el-dialog>
 
-      <el-dialog v-model="showNote" title="交班便签" width="400px" align-center class="dark-dialog">
+      <el-dialog v-model="showNote" title="交班便签" width="400px" align-center>
         <el-input v-model="noteContent" type="textarea" rows="5" placeholder="请记录需要传达给下一班次的事项..." />
         <template #footer>
           <el-button @click="showNote = false">取消</el-button>
@@ -345,7 +241,7 @@
         </template>
       </el-dialog>
 
-    </div>
+    </main>
   </div>
 </template>
 
@@ -354,7 +250,9 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { 
   Monitor, List, Checked, Setting, SwitchButton, 
   Reading, Grid, Printer, Notebook, Refresh,
-  ShoppingCart, FullScreen 
+  ShoppingCart, FullScreen, Search, Plus, Minus,
+  Tickets, Wallet, Warning, EditPen, Place,
+  CircleCheck, CircleClose
 } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -383,11 +281,11 @@ axios.interceptors.response.use(res => res, err => {
 import Calculator from '../components/Calculator.vue'
 import PolicyModal from '../components/PolicyModal.vue'
 import PaymentModal from '../components/PaymentModal.vue'
+import { printTicket } from '../services/hardwareBridge'
 
 // --- State ---
 const currentView = ref('pos')
 const searchQuery = ref('')
-const filterCategory = ref('all')
 const products = ref<any[]>([])
 const cart = ref<any[]>([])
 const searchInput = ref()
@@ -422,12 +320,11 @@ const currentCheckPointId = ref<number | null>(null)
 const posDeviceId = ref<number | null>(null)
 
 // --- Settings Logic ---
-const selectedPrinter = ref('EPSON TM-T88V')
 const shiftState = ref({
   isOpen: false,
   shiftId: null as number | null,
   startTime: null as string | null,
-  operator: '李明 (007)'
+  operator: '未登录员工'
 })
 
 const fetchCheckPoints = async () => {
@@ -446,7 +343,6 @@ const saveSettings = () => {
   if (posDeviceId.value) {
     localStorage.setItem('pos_device_id', posDeviceId.value.toString())
   }
-  localStorage.setItem('pos_printer', selectedPrinter.value)
   ElMessage.success('设置已保存')
 }
 
@@ -457,11 +353,6 @@ const loadSettings = () => {
   }
   const savedDeviceId = localStorage.getItem('pos_device_id')
   if (savedDeviceId) posDeviceId.value = parseInt(savedDeviceId)
-  const savedPrinter = localStorage.getItem('pos_printer')
-  if (savedPrinter) {
-    selectedPrinter.value = savedPrinter
-  }
-  
   const savedShift = localStorage.getItem('pos_shift_state')
   if (savedShift) {
     try {
@@ -529,11 +420,11 @@ const restoreOpenShift = async () => {
   if (!deviceId) return
   try {
     const { data: shift } = await axios.get('/operations/shifts/open', { params: { device_id: deviceId } })
-    shiftState.value = { isOpen: true, shiftId: shift.id, startTime: shift.opened_at, operator: currentStaff.value.name || 'Current operator' }
+    shiftState.value = { isOpen: true, shiftId: shift.id, startTime: shift.opened_at, operator: currentStaff.value.name || '当前员工' }
     localStorage.setItem('pos_shift_state', JSON.stringify(shiftState.value))
   } catch (error: any) {
     if (error.response?.status === 404) {
-      shiftState.value = { isOpen: false, shiftId: null, startTime: null, operator: currentStaff.value.name || 'Current operator' }
+      shiftState.value = { isOpen: false, shiftId: null, startTime: null, operator: currentStaff.value.name || '当前员工' }
       localStorage.removeItem('pos_shift_state')
     }
   }
@@ -548,24 +439,23 @@ const saveNote = () => {
 
 const handleReprint = async () => {
   if (!posDeviceId.value) {
-    ElMessage.warning('Please configure the POS device first')
+    ElMessage.warning('请先配置当前 POS 设备')
     return
   }
   try {
     const { data } = await axios.get('/operations/print-jobs', { params: { device_id: posDeviceId.value, status: 'failed' } })
     const job = data.data?.[0]
     if (!job) {
-      ElMessage.info('No failed print job is waiting')
+      ElMessage.info('当前没有等待重打的失败任务')
       return
     }
     await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printing' })
-    // @ts-ignore
-    const result = window.api?.printTicket ? await window.api.printTicket({ order_no: job.order_no, ticket_code: job.ticket_code }) : { success: false, message: 'printer bridge is unavailable' }
-    if (!result?.success) throw new Error(result?.message || 'printer failed')
+    const result = await printTicket({ order_no: job.order_no, ticket_code: job.ticket_code })
+    if (!result?.success) throw new Error(result?.message || '打印失败')
     await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printed' })
-    ElMessage.success('Reprint completed')
+    ElMessage.success('重打完成')
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.error || error.message || 'Reprint failed')
+    ElMessage.error(error.response?.data?.error || error.message || '重打失败')
   }
 }
 
@@ -591,6 +481,11 @@ const handleHold = async () => {
   } catch (error: any) {
     ElMessage.error(error.response?.data?.error || '挂单失败')
   }
+}
+
+const openHolds = async () => {
+  await loadHolds()
+  showHolds.value = true
 }
 
 const loadHolds = async () => {
@@ -655,11 +550,20 @@ const getPageTitle = computed(() => {
   return map[currentView.value]
 })
 
+const cartItemCount = computed(() => cart.value.reduce((sum, item) => sum + item.quantity, 0))
+
+const currentCheckpointName = computed(() => {
+  if (!currentCheckPointId.value) return '未配置检票点'
+  return checkpoints.value.find(item => item.id === currentCheckPointId.value)?.name || `检票点 ${currentCheckPointId.value}`
+})
+
+const orderStatusLabel = (status: string) => {
+  const labels: Record<string, string> = { unpaid: '待支付', paid: '已支付', cancelled: '已取消', refund: '已退款', refunded: '已退款' }
+  return labels[status] || status
+}
+
 const filteredProducts = computed(() => {
   let res = products.value
-  if (filterCategory.value !== 'all') {
-    // res = res.filter(p => p.category === filterCategory.value) // Mock category
-  }
   if (searchQuery.value) {
     const query = searchQuery.value.toLowerCase()
     res = res.filter(p => {
@@ -725,7 +629,7 @@ const clearCart = () => {
 const handleCheckout = async () => {
   if (cart.value.length === 0) return
   if (!shiftState.value.isOpen || !shiftState.value.shiftId || !posDeviceId.value) {
-    ElMessage.warning('Please open a shift on this POS terminal before selling tickets')
+    ElMessage.warning('请先在当前 POS 设备上开班')
     return
   }
   try {
@@ -737,8 +641,6 @@ const handleCheckout = async () => {
       items: cart.value.map(item => ({ product_id: item.id, quantity: item.quantity }))
     }
     const res = await axios.post('/orders', orderData)
-    // ElMessage.success('下单成功！正在打印...') 
-    // OLD: Direct Success. NEW: Open Payment.
     currentOrder.value = res.data
     showPayment.value = true
   } catch (e) {
@@ -755,17 +657,16 @@ const handlePaymentSuccess = async () => {
       const queued = await axios.post('/operations/print-jobs', { device_id: posDeviceId.value, shift_id: shiftState.value.shiftId, order_no: currentOrder.value.order_no })
       job = queued.data
       await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printing' })
-      // @ts-ignore
-      const result = window.api?.printTicket ? await window.api.printTicket(currentOrder.value) : { success: false, message: 'printer bridge is unavailable' }
-      if (!result?.success) throw new Error(result?.message || 'printer failed')
+      const result = await printTicket(currentOrder.value)
+      if (!result?.success) throw new Error(result?.message || '打印失败')
       await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printed' })
       cart.value = []
       currentOrder.value = null
     } catch (error: any) {
       if (job) {
-        await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'failed', error: error.message || 'printer failed' }).catch(() => undefined)
+        await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'failed', error: error.message || '打印失败' }).catch(() => undefined)
       }
-      ElMessage.error('Payment succeeded but printing failed. The order and print task were retained for retry.')
+      ElMessage.error('支付已成功，但打印失败。订单和打印任务已保留，可稍后重打。')
     }
 }
 
@@ -785,7 +686,8 @@ const handleVerify = async () => {
     
     await axios.post('/tickets/verify', {
       code: code,
-      check_point_id: checkPointId
+      check_point_id: checkPointId,
+      device_id: posDeviceId.value
     })
     
     ElMessage.success('核销成功')
@@ -869,14 +771,188 @@ onUnmounted(() => clearInterval(timer))
 </script>
 
 <style scoped>
-/* Custom Scrollbar */
+.pos-shell {
+  --ink: #20231f;
+  --muted: #697168;
+  --line: #dfe3dc;
+  --surface: #ffffff;
+  --canvas: #f2f4f0;
+  --green: #16784a;
+  --green-dark: #0d5d38;
+  --amber: #b96212;
+  height: 100vh;
+  min-width: 1024px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--canvas);
+}
+
+.topbar {
+  height: 64px;
+  flex: 0 0 64px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 18px;
+  background: #232925;
+  color: #fff;
+  border-bottom: 1px solid #131713;
+}
+
+.brand-block, .operator-block, .workspace-tabs, .workspace-tab, .shift-chip,
+.catalog-toolbar, .product-tile, .product-action, .quick-tools, .cart-heading,
+.cart-item-top, .cart-item-bottom, .quantity-stepper, .total-line, .checkout-actions,
+.filter-bar, .verify-entry, .verify-context, .history-heading, .history-item,
+.section-heading, .hardware-row, .shift-summary {
+  display: flex;
+  align-items: center;
+}
+
+.brand-block { width: 176px; gap: 10px; flex: 0 0 176px; }
+.brand-mark { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 6px; background: #e7b84a; color: #232925; }
+.brand-title { font-size: 16px; line-height: 20px; font-weight: 700; }
+.brand-subtitle { margin-top: 1px; font-size: 11px; line-height: 14px; color: #aeb7ae; }
+
+.workspace-tabs { height: 40px; padding: 3px; gap: 2px; border: 1px solid #424a43; border-radius: 7px; background: #1a1f1b; }
+.workspace-tab { height: 32px; min-width: 74px; justify-content: center; gap: 6px; border: 0; border-radius: 5px; background: transparent; color: #bcc4bd; cursor: pointer; font-size: 14px; }
+.workspace-tab:hover { color: #fff; background: #303732; }
+.workspace-tab.active { color: #20231f; background: #fff; font-weight: 700; }
+
+.operator-block { min-width: 0; margin-left: auto; justify-content: flex-end; gap: 10px; }
+.operator-meta { text-align: right; font-size: 12px; line-height: 17px; color: #d5dbd5; white-space: nowrap; }
+.operator-meta .clock { display: block; color: #96a097; font-variant-numeric: tabular-nums; }
+.shift-chip { height: 32px; gap: 7px; padding: 0 10px; border: 1px solid #59615a; border-radius: 6px; background: #303632; color: #d7ddd7; cursor: pointer; }
+.shift-chip.open { border-color: #48a374; background: #163d2a; color: #dff5e8; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #9da49e; }
+.shift-chip.open .status-dot { background: #57d28e; }
+.icon-button { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid #4a514b; border-radius: 6px; background: transparent; color: #d7ddd7; cursor: pointer; }
+.icon-button:hover { background: #363d37; color: #fff; }
+.icon-button.danger:hover { border-color: #a84949; background: #582525; }
+
+.workspace { flex: 1; min-height: 0; overflow: hidden; }
+.sales-workspace { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) minmax(370px, 38%); }
+.catalog-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 14px 16px 0; border-right: 1px solid var(--line); }
+.readiness-banner { min-height: 40px; display: flex; align-items: center; gap: 8px; margin-bottom: 10px; padding: 8px 10px; border: 1px solid #e8c787; border-radius: 6px; background: #fff8e9; color: #7a4a0b; font-size: 13px; }
+.readiness-banner span { min-width: 0; flex: 1; }
+.readiness-banner button { border: 0; background: transparent; color: #8e4b08; font-weight: 700; cursor: pointer; }
+.catalog-toolbar { gap: 10px; margin-bottom: 12px; }
+.catalog-toolbar :deep(.el-input) { flex: 1; }
+.catalog-toolbar :deep(.el-input__wrapper) { min-height: 42px; border-radius: 7px; box-shadow: 0 0 0 1px #ccd2ca inset; }
+.catalog-toolbar :deep(.el-input__wrapper.is-focus) { box-shadow: 0 0 0 2px #278157 inset; }
+.catalog-count { white-space: nowrap; color: var(--muted); font-size: 13px; }
+
+.product-grid { min-height: 0; flex: 1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 10px; overflow-y: auto; padding: 1px 5px 12px 1px; }
+.product-tile { width: 100%; min-height: 88px; justify-content: space-between; gap: 12px; padding: 13px 14px; text-align: left; border: 1px solid #d9ded7; border-radius: 7px; background: var(--surface); color: var(--ink); cursor: pointer; }
+.product-tile:hover { border-color: #74a98b; background: #f9fffb; }
+.product-tile:active { border-color: var(--green); background: #eef9f2; }
+.product-main { min-width: 0; }
+.product-name { min-width: 0; font-size: 15px; line-height: 21px; font-weight: 700; word-break: break-word; }
+.product-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.product-tags span { max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 6px; border-radius: 4px; background: #edf0eb; color: #667066; font-size: 11px; }
+.product-tags .stock-tag { background: #fff4dc; color: #8a570f; }
+.product-action { flex: 0 0 auto; align-self: stretch; flex-direction: column; justify-content: space-between; align-items: flex-end; }
+.product-action strong { color: var(--amber); font-size: 18px; font-variant-numeric: tabular-nums; }
+.add-icon { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 5px; background: #e8f4ed; color: var(--green); }
+.empty-state { grid-column: 1 / -1; min-height: 260px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: #9aa199; }
+.empty-state strong { color: #5e665e; }
+.empty-state span { font-size: 13px; }
+
+.quick-tools { height: 54px; flex: 0 0 54px; gap: 4px; border-top: 1px solid var(--line); }
+.quick-tools button { height: 34px; display: flex; align-items: center; gap: 5px; padding: 0 10px; border: 0; border-radius: 5px; background: transparent; color: #596159; cursor: pointer; }
+.quick-tools button:hover { background: #e4e8e2; color: var(--ink); }
+
+.cart-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #fff; }
+.cart-heading { height: 72px; flex: 0 0 72px; justify-content: space-between; padding: 0 18px; border-bottom: 1px solid var(--line); }
+.eyebrow { color: var(--muted); font-size: 11px; }
+.cart-heading h2 { margin: 2px 0 0; font-size: 18px; line-height: 24px; }
+.cart-heading h2 em { display: inline-flex; min-width: 22px; height: 22px; align-items: center; justify-content: center; margin-left: 5px; border-radius: 5px; background: #edf0eb; color: #586058; font-size: 12px; font-style: normal; }
+.cart-list { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 14px; background: #f8f9f7; }
+.empty-cart { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: #8b938b; }
+.empty-cart-icon { width: 58px; height: 58px; display: grid; place-items: center; margin-bottom: 4px; border-radius: 8px; background: #edf0eb; color: #8a928a; }
+.empty-cart strong { color: #586058; }
+.empty-cart span { font-size: 13px; }
+.cart-item { margin-bottom: 9px; padding: 12px; border: 1px solid #dfe3dc; border-radius: 7px; background: #fff; }
+.cart-item-top { justify-content: space-between; gap: 12px; }
+.cart-item-name { min-width: 0; font-size: 14px; line-height: 20px; font-weight: 700; word-break: break-word; }
+.cart-item-top strong { flex: 0 0 auto; color: var(--amber); font-size: 16px; }
+.cart-item-bottom { justify-content: space-between; margin-top: 10px; color: var(--muted); font-size: 12px; }
+.quantity-stepper { height: 30px; overflow: hidden; border: 1px solid #cfd5cd; border-radius: 6px; background: #fff; }
+.quantity-stepper button { width: 30px; height: 28px; display: grid; place-items: center; border: 0; background: #f0f2ee; color: #3d453e; cursor: pointer; }
+.quantity-stepper button:hover { background: #dfe5dd; }
+.quantity-stepper span { width: 34px; text-align: center; color: var(--ink); font-size: 14px; font-weight: 700; }
+.checkout-panel { flex: 0 0 auto; padding: 16px 18px 18px; border-top: 1px solid var(--line); background: #fff; }
+.total-line { justify-content: space-between; margin-bottom: 14px; color: var(--muted); }
+.total-line strong { color: var(--ink); font-size: 30px; line-height: 36px; font-variant-numeric: tabular-nums; }
+.checkout-actions { gap: 10px; }
+.checkout-actions :deep(.el-button) { height: 46px; margin: 0; border-radius: 7px; font-weight: 700; }
+.checkout-actions :deep(.el-button:first-child) { width: 110px; }
+.checkout-actions :deep(.el-button:last-child) { flex: 1; }
+
+.page-workspace { height: 100%; min-height: 0; display: flex; flex-direction: column; padding: 20px; }
+.page-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.page-heading h1 { margin: 0; font-size: 22px; line-height: 28px; }
+.page-heading p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
+.filter-bar { gap: 10px; margin-bottom: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+.filter-bar :deep(.el-input) { width: 240px; }
+.filter-bar :deep(.el-date-editor) { width: 260px; }
+.filter-bar :deep(.el-select) { width: 140px; }
+.data-panel { min-height: 0; flex: 1; overflow: hidden; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+.order-item-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.money { color: var(--amber); font-variant-numeric: tabular-nums; }
+
+.verify-workspace { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 360px; background: #f7f8f5; }
+.verify-main { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px; }
+.verify-heading { text-align: center; }
+.verify-icon { width: 54px; height: 54px; display: grid; place-items: center; margin: 0 auto 14px; border-radius: 8px; background: #e2f1e8; color: var(--green); font-size: 27px; }
+.verify-heading h1 { margin: 0; font-size: 26px; }
+.verify-heading p { margin: 7px 0 0; color: var(--muted); }
+.verify-entry { width: min(680px, 92%); gap: 10px; margin-top: 28px; }
+.verify-entry :deep(.el-input__wrapper) { min-height: 58px; border-radius: 7px; box-shadow: 0 0 0 2px #cbd2c9 inset; }
+.verify-entry :deep(.el-input__inner) { text-align: center; font-size: 21px; font-variant-numeric: tabular-nums; }
+.verify-entry :deep(.el-button) { height: 58px; min-width: 120px; border-radius: 7px; font-weight: 700; }
+.verify-context { gap: 18px; margin-top: 16px; color: var(--muted); font-size: 13px; }
+.verify-context span { display: flex; align-items: center; gap: 5px; }
+.history-pane { min-height: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: #fff; }
+.history-heading { height: 62px; justify-content: space-between; padding: 0 18px; border-bottom: 1px solid var(--line); }
+.history-heading h2 { margin: 0; font-size: 17px; }
+.history-heading span { color: var(--muted); font-size: 12px; }
+.history-list { min-height: 0; flex: 1; overflow-y: auto; padding: 12px; }
+.history-empty { padding-top: 80px; text-align: center; color: #9aa19a; }
+.history-item { align-items: flex-start; gap: 10px; margin-bottom: 8px; padding: 12px; border: 1px solid #dfe3dc; border-left: 4px solid #23915b; border-radius: 6px; }
+.history-item.fail { border-left-color: #c74646; }
+.history-item > .el-icon { margin-top: 2px; color: #23915b; }
+.history-item.fail > .el-icon { color: #c74646; }
+.history-item div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.history-item strong { font-size: 14px; }
+.history-item span { overflow: hidden; text-overflow: ellipsis; color: #596159; font-size: 12px; white-space: nowrap; }
+.history-item small { color: #969d96; }
+
+.settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.settings-section { padding: 18px; border: 1px solid var(--line); border-radius: 7px; background: #fff; }
+.section-heading { align-items: flex-start; gap: 10px; margin-bottom: 18px; }
+.section-heading > .el-icon { margin-top: 2px; color: var(--green); font-size: 20px; }
+.section-heading h2 { margin: 0; font-size: 17px; }
+.section-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 18px; }
+.hardware-row, .shift-summary { justify-content: space-between; min-height: 46px; border-top: 1px solid #ecefeb; }
+.hardware-row:last-child { border-bottom: 1px solid #ecefeb; }
+.shift-summary { margin-bottom: 16px; }
+
 .custom-scrollbar::-webkit-scrollbar { width: 6px; }
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-.custom-scrollbar::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
-.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #555; }
+.custom-scrollbar::-webkit-scrollbar-thumb { border-radius: 3px; background: #c4cbc3; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #a8b0a7; }
 
-/* Element Plus Dark Overrides */
-:deep(.dark-input .el-input__wrapper) { background-color: #333; box-shadow: none; border: 1px solid #444; }
-:deep(.dark-input .el-input__inner) { color: #fff; }
-:deep(.dark-select .el-input__wrapper) { background-color: #333; box-shadow: none; border: 1px solid #444; }
+:deep(.el-dialog) { border-radius: 8px; }
+:deep(.el-button--success) { --el-button-bg-color: var(--green); --el-button-border-color: var(--green); --el-button-hover-bg-color: var(--green-dark); --el-button-hover-border-color: var(--green-dark); }
+
+@media (max-width: 1120px) {
+  .topbar { gap: 12px; padding: 0 12px; }
+  .brand-block { width: 150px; flex-basis: 150px; }
+  .workspace-tab { min-width: 66px; }
+  .operator-meta .clock { display: none; }
+  .product-grid { grid-template-columns: 1fr; }
+  .quick-tools button { padding: 0 7px; }
+}
 </style>

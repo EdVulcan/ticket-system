@@ -57,3 +57,25 @@ jobs:
           cache-dependency-path: ${{ matrix.app }}/package-lock.json
       - run: npm ci
       - run: npm run build
+
+  desktop-wails:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop/go.mod
+          cache-dependency-path: desktop/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - name: Install pinned Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
+      - name: Build Windows POS
+        run: wails build -clean -webview2 embed

@@ -13,6 +13,10 @@
         "start": "electron-vite preview",
         "dev": "electron-vite dev",
         "build": "npm run typecheck && electron-vite build",
+        "dev:wails:web": "vite --config vite.config.ts",
+        "build:wails:web": "npm run typecheck:web && vite build --config vite.config.ts",
+        "dev:wails": "wails dev",
+        "build:wails": "wails build -clean -webview2 embed",
         "postinstall": "electron-builder install-app-deps"
     },
     "dependencies": {

@@ -39,3 +39,7 @@ logs/
 build/
 release/
 desktop/out/
+desktop/dist/
+desktop/build/bin/
+desktop/package.json.md5
+desktop/wailsjs/
