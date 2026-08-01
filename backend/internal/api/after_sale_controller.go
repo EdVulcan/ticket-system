@@ -114,7 +114,7 @@ func (c *AfterSaleController) Execute(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid after-sale id"})
 		return
 	}
-	req, err := c.Service.Execute(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"))
+	req, err := c.Service.Execute(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), ctx.GetString("role"))
 	if err != nil {
 		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return

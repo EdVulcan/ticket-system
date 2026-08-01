@@ -143,7 +143,7 @@ func (s *AfterSaleService) transition(tenantID, requestID, actor uint, target, a
 	return &req, nil
 }
 
-func (s *AfterSaleService) Execute(tenantID, requestID uint, actor uint) (*model.AfterSaleRequest, error) {
+func (s *AfterSaleService) Execute(tenantID, requestID uint, actor uint, roles ...string) (*model.AfterSaleRequest, error) {
 	var req model.AfterSaleRequest
 	var refund *model.Refund
 	err := model.Write(func(tx *gorm.DB) error {
@@ -180,7 +180,7 @@ func (s *AfterSaleService) Execute(tenantID, requestID uint, actor uint) (*model
 			}
 			return completeAfterSaleTx(tx, &req, actor)
 		case "reissue":
-			return executeReissueTx(tx, &req, actor)
+			return executeReissueTx(tx, &req, actor, firstRole(roles))
 		case "refund":
 			// Refund provider calls happen after this transaction. Keep the request
 			// in processing and link the resulting durable refund below.
@@ -217,11 +217,9 @@ func (s *AfterSaleService) Execute(tenantID, requestID uint, actor uint) (*model
 	return s.Get(tenantID, requestID)
 }
 
-// executeExchangeTx performs the first production-safe exchange variant. The
-// replacement keeps the same seller, supplier, scenic area, retail price and
-// settlement price, so the original payment and settlement facts remain
-// balanced. A whole order item must be exchanged; partial item exchanges use
-// the refund + new order workflow until per-ticket price allocation exists.
+// executeExchangeTx keeps the seller, supplier, scenic area, retail price and
+// settlement price unchanged, so the original payment and settlement facts
+// remain balanced. Ticket-level items may be split for a partial exchange.
 func executeExchangeTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 	if req.TargetProductID == 0 {
 		return errors.New("target product is required")
@@ -294,9 +292,6 @@ func executeExchangeTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 			continue
 		}
 		matched += selected
-		if selected != len(item.Tickets) {
-			return errors.New("partial item exchange is not supported; exchange all tickets in the item")
-		}
 		if moneyCents(item.Price) != moneyCents(targetListing.Price) || moneyCents(item.SettlementPrice) != moneyCents(target.SettlementPrice) {
 			return errors.New("exchange requires equal retail and settlement prices")
 		}
@@ -317,18 +312,28 @@ func executeExchangeTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 		if err := validateTimeSlot(target.TimeSlotConfig, probe); err != nil {
 			return err
 		}
-		var oldListing model.Product
-		if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", item.ProductID, req.TenantID).First(&oldListing).Error; err != nil {
-			return err
-		}
-		oldProduct, _, err := loadStoredFulfillmentProduct(tx, &oldListing, item, req.TenantID)
+		selectedItem, err := splitOrderItemForTicketsTx(tx, item, wanted)
 		if err != nil {
 			return err
 		}
-		if err := releaseStock(tx, oldProduct, item.UseDate, item.StockSlot, item.Quantity); err != nil {
+		var oldListing model.Product
+		if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", selectedItem.ProductID, req.TenantID).First(&oldListing).Error; err != nil {
 			return err
 		}
-		if err := reserveStock(tx, target, targetDate, stockSlot, item.Quantity); err != nil {
+		oldProduct, _, err := loadStoredFulfillmentProduct(tx, &oldListing, selectedItem, req.TenantID)
+		if err != nil {
+			return err
+		}
+		if err := releaseStock(tx, oldProduct, selectedItem.UseDate, selectedItem.StockSlot, selectedItem.Quantity); err != nil {
+			return err
+		}
+		if err := reserveStock(tx, target, targetDate, stockSlot, selectedItem.Quantity); err != nil {
+			return err
+		}
+		if err := releaseOfferQuotaTx(tx, selectedItem.ProductOfferID, selectedItem.OfferReservedQuantity); err != nil {
+			return err
+		}
+		if err := reserveOfferQuotaTx(tx, targetListing.ProductOfferID, selectedItem.Quantity); err != nil {
 			return err
 		}
 		ruleSnapshot, err := json.Marshal(target.Rule)
@@ -343,12 +348,16 @@ func executeExchangeTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 			"validity_end": target.ValidityEndDate, "fulfillment_product_id": target.ID,
 			"fulfillment_tenant_id": target.TenantID, "fulfillment_scenic_area_id": target.ScenicAreaID,
 			"product_offer_id": targetListing.ProductOfferID, "product_revision_id": target.CurrentRevisionID,
+			"offer_reserved_quantity": selectedItem.Quantity,
 		}
-		if err := tx.Model(&model.OrderItem{}).Where("id = ?", item.ID).Updates(updates).Error; err != nil {
+		if targetListing.ProductOfferID == 0 {
+			updates["offer_reserved_quantity"] = 0
+		}
+		if err := tx.Model(&model.OrderItem{}).Where("id = ?", selectedItem.ID).Updates(updates).Error; err != nil {
 			return err
 		}
-		for ticketIndex := range item.Tickets {
-			ticket := &item.Tickets[ticketIndex]
+		for ticketIndex := range selectedItem.Tickets {
+			ticket := &selectedItem.Tickets[ticketIndex]
 			if err := tx.Model(ticket).Updates(map[string]interface{}{
 				"fulfillment_product_id": target.ID, "fulfillment_tenant_id": target.TenantID,
 				"scenic_area_id": target.ScenicAreaID, "fulfillment_scenic_area_id": target.ScenicAreaID,
@@ -358,13 +367,13 @@ func executeExchangeTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 				return err
 			}
 		}
-		if item.FulfillmentOrderID > 0 {
+		if selectedItem.FulfillmentOrderID > 0 {
 			var itemCount int64
-			if err := tx.Model(&model.OrderItem{}).Where("fulfillment_order_id = ?", item.FulfillmentOrderID).Count(&itemCount).Error; err != nil {
+			if err := tx.Model(&model.OrderItem{}).Where("fulfillment_order_id = ?", selectedItem.FulfillmentOrderID).Count(&itemCount).Error; err != nil {
 				return err
 			}
 			if itemCount == 1 {
-				if err := tx.Model(&model.FulfillmentOrder{}).Where("id = ?", item.FulfillmentOrderID).Updates(map[string]interface{}{"product_revision_id": target.CurrentRevisionID, "scenic_area_id": target.ScenicAreaID}).Error; err != nil {
+				if err := tx.Model(&model.FulfillmentOrder{}).Where("id = ?", selectedItem.FulfillmentOrderID).Updates(map[string]interface{}{"product_revision_id": target.CurrentRevisionID, "scenic_area_id": target.ScenicAreaID}).Error; err != nil {
 					return err
 				}
 			}
@@ -425,39 +434,109 @@ func executeRescheduleTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 		if selected == 0 {
 			continue
 		}
-		// Inventory is reserved at order-item granularity. Moving an item when
-		// only some of its ticket entitlements were selected would release and
-		// re-reserve the wrong quantity. Until item splitting is implemented,
-		// reject the request before mutating any stock.
-		if selected != len(item.Tickets) || selected != item.Quantity {
-			return errors.New("partial item reschedule is not supported; reschedule all tickets in the item")
+		selectedItem, err := splitOrderItemForTicketsTx(tx, item, wanted)
+		if err != nil {
+			return err
 		}
 		var product model.Product
-		if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", item.FulfillmentProductID, item.FulfillmentTenantID).First(&product).Error; err != nil {
+		if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", selectedItem.FulfillmentProductID, selectedItem.FulfillmentTenantID).First(&product).Error; err != nil {
 			return err
 		}
 		if !isVisitDateValid(req.TargetDate, product.ValidityStartDate, product.ValidityEndDate) {
 			return errors.New("target date is outside product validity")
 		}
-		if err := validateTimeSlot(product.TimeSlotConfig, &model.OrderItem{UseDate: req.TargetDate, StockSlot: req.TargetSlot}); err != nil {
+		stockSlot := req.TargetSlot
+		if strings.TrimSpace(stockSlot) == "" {
+			stockSlot = selectedItem.StockSlot
+		}
+		if err := validateTimeSlot(product.TimeSlotConfig, &model.OrderItem{UseDate: req.TargetDate, StockSlot: stockSlot}); err != nil {
 			return err
 		}
-		if err := releaseStock(tx, &product, item.UseDate, item.StockSlot, item.Quantity); err != nil {
+		if err := releaseStock(tx, &product, selectedItem.UseDate, selectedItem.StockSlot, selectedItem.Quantity); err != nil {
 			return err
 		}
-		item.UseDate = req.TargetDate
-		item.StockSlot = req.TargetSlot
-		if err := reserveStock(tx, &product, item.UseDate, item.StockSlot, item.Quantity); err != nil {
+		selectedItem.UseDate = req.TargetDate
+		selectedItem.StockSlot = stockSlot
+		if err := reserveStock(tx, &product, selectedItem.UseDate, selectedItem.StockSlot, selectedItem.Quantity); err != nil {
 			return err
 		}
-		if err := tx.Model(item).Updates(map[string]interface{}{"use_date": item.UseDate, "stock_slot": item.StockSlot}).Error; err != nil {
+		if err := tx.Model(selectedItem).Updates(map[string]interface{}{"use_date": selectedItem.UseDate, "stock_slot": selectedItem.StockSlot}).Error; err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func executeReissueTx(tx *gorm.DB, req *model.AfterSaleRequest, actor uint) error {
+// splitOrderItemForTicketsTx creates a ticket-scoped item while preserving the
+// exact money and quota totals of the original item. Aggregated order-code
+// tickets cannot be split because there is no reliable per-visitor allocation.
+func splitOrderItemForTicketsTx(tx *gorm.DB, item *model.OrderItem, wanted map[string]struct{}) (*model.OrderItem, error) {
+	selectedTickets := make([]model.Ticket, 0, len(item.Tickets))
+	for _, ticket := range item.Tickets {
+		if _, ok := wanted[ticket.TicketCode]; !ok {
+			continue
+		}
+		if ticket.Status != "unused" || ticket.CheckInCount != 0 {
+			return nil, fmt.Errorf("ticket %s is already used", ticket.TicketCode)
+		}
+		selectedTickets = append(selectedTickets, ticket)
+	}
+	selectedQuantity := len(selectedTickets)
+	if selectedQuantity == 0 {
+		return nil, errors.New("no tickets selected for item split")
+	}
+	if selectedQuantity == len(item.Tickets) {
+		return item, nil
+	}
+	if len(item.Tickets) != item.Quantity {
+		return nil, errors.New("partial operation requires one ticket code per visitor")
+	}
+
+	originalQuantity := item.Quantity
+	selectedCash := item.CashCostCents * int64(selectedQuantity) / int64(originalQuantity)
+	selectedCredit := item.CreditCostCents * int64(selectedQuantity) / int64(originalQuantity)
+	selectedOffer := item.OfferReservedQuantity * selectedQuantity / originalQuantity
+
+	selectedItem := *item
+	selectedItem.Base = model.Base{}
+	selectedItem.Product = model.Product{}
+	selectedItem.Quantity = selectedQuantity
+	selectedItem.CashCostCents = selectedCash
+	selectedItem.CreditCostCents = selectedCredit
+	selectedItem.OfferReservedQuantity = selectedOffer
+	selectedItem.Tickets = nil
+	selectedItem.Visitors = nil
+	selectedItem.VisitorRecords = nil
+	if err := tx.Omit(clause.Associations).Create(&selectedItem).Error; err != nil {
+		return nil, err
+	}
+
+	remaining := map[string]interface{}{
+		"quantity":                originalQuantity - selectedQuantity,
+		"cash_cost_cents":         item.CashCostCents - selectedCash,
+		"credit_cost_cents":       item.CreditCostCents - selectedCredit,
+		"offer_reserved_quantity": item.OfferReservedQuantity - selectedOffer,
+	}
+	if err := tx.Model(&model.OrderItem{}).Where("id = ?", item.ID).Updates(remaining).Error; err != nil {
+		return nil, err
+	}
+
+	ticketIDs := make([]uint, 0, selectedQuantity)
+	for index := range selectedTickets {
+		ticketIDs = append(ticketIDs, selectedTickets[index].ID)
+		selectedTickets[index].OrderItemID = selectedItem.ID
+	}
+	if err := tx.Model(&model.Ticket{}).Where("id IN ?", ticketIDs).Update("order_item_id", selectedItem.ID).Error; err != nil {
+		return nil, err
+	}
+	if err := tx.Model(&model.OrderVisitor{}).Where("ticket_id IN ?", ticketIDs).Update("order_item_id", selectedItem.ID).Error; err != nil {
+		return nil, err
+	}
+	selectedItem.Tickets = selectedTickets
+	return &selectedItem, nil
+}
+
+func executeReissueTx(tx *gorm.DB, req *model.AfterSaleRequest, actor uint, role string) error {
 	if req.DeviceID == 0 || req.ShiftID == 0 {
 		return errors.New("reissue requires an active POS device and shift")
 	}
@@ -466,8 +545,15 @@ func executeReissueTx(tx *gorm.DB, req *model.AfterSaleRequest, actor uint) erro
 		return errors.New("reissue device is unavailable")
 	}
 	var shift model.POSShift
-	if err := tx.Where("id = ? AND tenant_id = ? AND device_id = ? AND operator_id = ? AND status = ?", req.ShiftID, req.TenantID, req.DeviceID, actor, "open").First(&shift).Error; err != nil {
+	if err := tx.Where("id = ? AND tenant_id = ? AND device_id = ? AND status = ?", req.ShiftID, req.TenantID, req.DeviceID, "open").First(&shift).Error; err != nil {
+		return errors.New("reissue shift is not open for this device")
+	}
+	isSupervisor := role == "admin" || role == "super_admin"
+	if shift.OperatorID != actor && !isSupervisor {
 		return errors.New("reissue shift is not open for this operator and device")
+	}
+	if shift.OperatorID != actor && strings.TrimSpace(req.Reason) == "" {
+		return errors.New("supervisor proxy reissue requires a reason")
 	}
 	var order model.Order
 	if err := tx.Where("order_no = ? AND tenant_id = ?", req.OrderNo, req.TenantID).First(&order).Error; err != nil {
@@ -481,11 +567,23 @@ func executeReissueTx(tx *gorm.DB, req *model.AfterSaleRequest, actor uint) erro
 		return err
 	}
 	for _, code := range codes {
-		if err := tx.Create(&model.PrintJob{TenantID: req.TenantID, DeviceID: req.DeviceID, OperatorID: actor, ShiftID: req.ShiftID, OrderNo: req.OrderNo, TicketCode: code, AfterSaleRequestNo: req.RequestNo, Status: "queued"}).Error; err != nil {
+		if err := tx.Create(&model.PrintJob{TenantID: req.TenantID, DeviceID: req.DeviceID, OperatorID: shift.OperatorID, ShiftID: req.ShiftID, OrderNo: req.OrderNo, TicketCode: code, AfterSaleRequestNo: req.RequestNo, Status: "queued"}).Error; err != nil {
+			return err
+		}
+	}
+	if shift.OperatorID != actor {
+		if err := appendAfterSaleEvent(tx, req, "processing", "processing", "proxy_print_queued", actor, fmt.Sprintf("%s; shift operator=%d", strings.TrimSpace(req.Reason), shift.OperatorID)); err != nil {
 			return err
 		}
 	}
 	return appendAfterSaleEvent(tx, req, "processing", "processing", "print_queued", actor, req.Reason)
+}
+
+func firstRole(roles []string) string {
+	if len(roles) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(roles[0])
 }
 
 func completeAfterSaleTx(tx *gorm.DB, req *model.AfterSaleRequest, actor uint) error {
@@ -508,7 +606,7 @@ func failAfterSaleTx(tx *gorm.DB, req *model.AfterSaleRequest, actor uint, cause
 
 func (s *AfterSaleService) Get(tenantID, requestID uint) (*model.AfterSaleRequest, error) {
 	var req model.AfterSaleRequest
-	err := model.DB.Where("id = ? AND tenant_id = ?", requestID, tenantID).First(&req).Error
+	err := model.DB.Preload("Events", func(db *gorm.DB) *gorm.DB { return db.Order("id ASC") }).Where("id = ? AND tenant_id = ?", requestID, tenantID).First(&req).Error
 	return &req, err
 }
 

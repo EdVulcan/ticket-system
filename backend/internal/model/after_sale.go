@@ -8,27 +8,28 @@ import "time"
 // external provider without losing the original sales fact.
 type AfterSaleRequest struct {
 	Base
-	TenantID        uint       `gorm:"uniqueIndex:idx_after_sale_idempotency,priority:1;not null;index" json:"tenant_id"`
-	RequestNo       string     `gorm:"size:50;uniqueIndex;not null" json:"request_no"`
-	IdempotencyKey  string     `gorm:"size:100;uniqueIndex:idx_after_sale_idempotency,priority:2;not null" json:"idempotency_key"`
-	OrderNo         string     `gorm:"size:50;index;not null" json:"order_no"`
-	Type            string     `gorm:"size:20;not null;index" json:"type"`                     // refund, reschedule, exchange, void, reissue
-	Status          string     `gorm:"size:20;not null;default:'pending';index" json:"status"` // pending, approved, rejected, processing, completed, failed
-	Reason          string     `gorm:"size:255" json:"reason"`
-	TicketCodesJSON string     `gorm:"type:text" json:"ticket_codes,omitempty"`
-	TargetDate      *time.Time `gorm:"type:date" json:"target_date,omitempty"`
-	TargetSlot      string     `gorm:"size:50" json:"target_slot,omitempty"`
-	TargetProductID uint       `json:"target_product_id,omitempty"`
-	AmountCents     int64      `json:"amount_cents"`
-	PaymentMethod   string     `gorm:"size:20" json:"payment_method,omitempty"`
-	RefundID        uint       `gorm:"index" json:"refund_id,omitempty"`
-	DeviceID        uint       `json:"device_id,omitempty"`
-	ShiftID         uint       `json:"shift_id,omitempty"`
-	OperatorID      uint       `json:"operator_id"`
-	ReviewerID      uint       `json:"reviewer_id,omitempty"`
-	ReviewedAt      *time.Time `json:"reviewed_at,omitempty"`
-	CompletedAt     *time.Time `json:"completed_at,omitempty"`
-	ErrorMessage    string     `gorm:"size:500" json:"error_message,omitempty"`
+	TenantID        uint             `gorm:"uniqueIndex:idx_after_sale_idempotency,priority:1;not null;index" json:"tenant_id"`
+	RequestNo       string           `gorm:"size:50;uniqueIndex;not null" json:"request_no"`
+	IdempotencyKey  string           `gorm:"size:100;uniqueIndex:idx_after_sale_idempotency,priority:2;not null" json:"idempotency_key"`
+	OrderNo         string           `gorm:"size:50;index;not null" json:"order_no"`
+	Type            string           `gorm:"size:20;not null;index" json:"type"`                     // refund, reschedule, exchange, void, reissue
+	Status          string           `gorm:"size:20;not null;default:'pending';index" json:"status"` // pending, approved, rejected, processing, completed, failed
+	Reason          string           `gorm:"size:255" json:"reason"`
+	TicketCodesJSON string           `gorm:"type:text" json:"ticket_codes,omitempty"`
+	TargetDate      *time.Time       `gorm:"type:date" json:"target_date,omitempty"`
+	TargetSlot      string           `gorm:"size:50" json:"target_slot,omitempty"`
+	TargetProductID uint             `json:"target_product_id,omitempty"`
+	AmountCents     int64            `json:"amount_cents"`
+	PaymentMethod   string           `gorm:"size:20" json:"payment_method,omitempty"`
+	RefundID        uint             `gorm:"index" json:"refund_id,omitempty"`
+	DeviceID        uint             `json:"device_id,omitempty"`
+	ShiftID         uint             `json:"shift_id,omitempty"`
+	OperatorID      uint             `json:"operator_id"`
+	ReviewerID      uint             `json:"reviewer_id,omitempty"`
+	ReviewedAt      *time.Time       `json:"reviewed_at,omitempty"`
+	CompletedAt     *time.Time       `json:"completed_at,omitempty"`
+	ErrorMessage    string           `gorm:"size:500" json:"error_message,omitempty"`
+	Events          []AfterSaleEvent `gorm:"foreignKey:RequestNo;references:RequestNo" json:"events,omitempty"`
 }
 
 // AfterSaleEvent is an append-only operational timeline for customer service

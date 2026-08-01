@@ -446,13 +446,19 @@ func TestAfterSaleRescheduleMovesInventoryAndVoidReleasesOnce(t *testing.T) {
 	}
 }
 
-func TestAfterSaleRejectsPartialRescheduleAndVoid(t *testing.T) {
+func TestAfterSaleSupportsPartialRescheduleAndRejectsPartialVoid(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "daily", 5)
 	firstDate := startOfDay(time.Now().AddDate(0, 0, 1))
 	secondDate := startOfDay(time.Now().AddDate(0, 0, 2))
-	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 2, UseDate: &firstDate}}}
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{
+		ProductID: productID, Quantity: 2, UseDate: &firstDate,
+		Visitors: []model.VisitorInput{{Name: "Visitor A", IdentityNo: "ID-A"}, {Name: "Visitor B", IdentityNo: "ID-B"}},
+	}}}
 	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&model.OrderItem{}).Where("order_id = ?", order.ID).Updates(map[string]interface{}{"cash_cost_cents": 101, "credit_cost_cents": 99}).Error; err != nil {
 		t.Fatal(err)
 	}
 	var tickets []model.Ticket
@@ -474,19 +480,46 @@ func TestAfterSaleRejectsPartialRescheduleAndVoid(t *testing.T) {
 		t.Fatalf("unexpected order ticket shape: items=%d tickets=%d", len(before.Items), len(before.Items[0].Tickets))
 	}
 	completed, executeErr := (&AfterSaleService{}).Execute(tenantID, request.ID, 2)
-	if executeErr != nil || completed == nil || completed.Status != "failed" {
-		t.Fatal("partial reschedule unexpectedly succeeded")
+	if executeErr != nil || completed == nil || completed.Status != "completed" {
+		t.Fatalf("partial reschedule=%+v err=%v", completed, executeErr)
 	}
 	var stored model.AfterSaleRequest
-	if err := model.DB.First(&stored, request.ID).Error; err != nil || stored.Status != "failed" {
+	if err := model.DB.First(&stored, request.ID).Error; err != nil || stored.Status != "completed" {
 		t.Fatalf("partial reschedule status=%q err=%v", stored.Status, err)
 	}
-	var firstInventory model.ProductInventory
+	var firstInventory, secondInventory model.ProductInventory
 	if err := model.DB.Where("tenant_id = ? AND product_id = ? AND stock_date = ?", tenantID, productID, firstDate).First(&firstInventory).Error; err != nil {
 		t.Fatal(err)
 	}
-	if firstInventory.Sold != 2 {
-		t.Fatalf("partial reschedule changed source inventory: %d", firstInventory.Sold)
+	if err := model.DB.Where("tenant_id = ? AND product_id = ? AND stock_date = ?", tenantID, productID, secondDate).First(&secondInventory).Error; err != nil {
+		t.Fatal(err)
+	}
+	if firstInventory.Sold != 1 || secondInventory.Sold != 1 {
+		t.Fatalf("partial reschedule inventory=%d/%d", firstInventory.Sold, secondInventory.Sold)
+	}
+	var items []model.OrderItem
+	if err := model.DB.Preload("Tickets").Where("order_id = ?", order.ID).Order("id").Find(&items).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].Quantity != 1 || items[1].Quantity != 1 {
+		t.Fatalf("partial reschedule item split=%+v", items)
+	}
+	if items[0].CashCostCents+items[1].CashCostCents != 101 || items[0].CreditCostCents+items[1].CreditCostCents != 99 {
+		t.Fatalf("split money was not preserved: %+v", items)
+	}
+	var movedTicket model.Ticket
+	if err := model.DB.First(&movedTicket, tickets[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if movedTicket.OrderItemID == before.Items[0].ID {
+		t.Fatal("selected ticket remained on the source item")
+	}
+	var movedVisitor model.OrderVisitor
+	if err := model.DB.Where("ticket_id = ?", tickets[0].ID).First(&movedVisitor).Error; err != nil {
+		t.Fatal(err)
+	}
+	if movedVisitor.OrderItemID != movedTicket.OrderItemID || movedVisitor.Name != "Visitor A" {
+		t.Fatalf("visitor did not follow selected ticket: %+v ticket=%+v", movedVisitor, movedTicket)
 	}
 	void := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "void", IdempotencyKey: "partial-void", OperatorID: 1}
 	if err := (&AfterSaleService{}).Create(&void, []string{tickets[0].TicketCode}); err == nil {
@@ -549,6 +582,71 @@ func TestAfterSaleReissuePrintFailureFailsRequest(t *testing.T) {
 	}
 	if failed.Status != "failed" || !strings.Contains(failed.ErrorMessage, "paper jam") {
 		t.Fatalf("reissue failure was not propagated: %+v", failed)
+	}
+}
+
+func TestAfterSaleAllowsAuditedSupervisorProxyReissue(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	var posID uint
+	if err := model.Write(func(tx *gorm.DB) error {
+		pos := model.Device{Name: "POS", SerialNumber: fmt.Sprintf("POS-%d", time.Now().UnixNano()), Type: "pos", Status: "online", TenantID: tenantID, ScenicAreaID: 1}
+		if err := tx.Create(&pos).Error; err != nil {
+			return err
+		}
+		posID = pos.ID
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	shift, err := (&OperationsService{}).OpenShift(tenantID, posID, 7, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := model.AfterSaleRequest{
+		TenantID: tenantID, OrderNo: order.OrderNo, Type: "reissue", IdempotencyKey: "supervisor-proxy-reissue",
+		DeviceID: posID, ShiftID: shift.ID, OperatorID: 8, Reason: "cashier terminal assistance",
+	}
+	if err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 8, "approved by supervisor"); err != nil {
+		t.Fatal(err)
+	}
+	processing, err := (&AfterSaleService{}).Execute(tenantID, request.ID, 8, "admin")
+	if err != nil || processing.Status != "processing" {
+		t.Fatalf("proxy reissue=%+v err=%v", processing, err)
+	}
+	var job model.PrintJob
+	if err := model.DB.Where("after_sale_request_no = ?", request.RequestNo).First(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	if job.OperatorID != shift.OperatorID || job.ShiftID != shift.ID {
+		t.Fatalf("proxy print escaped cashier shift: %+v", job)
+	}
+	detail, err := (&AfterSaleService{}).Get(tenantID, request.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundProxyEvent := false
+	for _, event := range detail.Events {
+		if event.Action == "proxy_print_queued" && event.ActorID == 8 && strings.Contains(event.Reason, "shift operator=7") {
+			foundProxyEvent = true
+		}
+	}
+	if !foundProxyEvent {
+		t.Fatalf("proxy reissue audit event missing: %+v", detail.Events)
 	}
 }
 
@@ -621,6 +719,108 @@ func TestAfterSaleExchangeReplacesWholeItemWithoutChangingMoney(t *testing.T) {
 		if row.ProductID == targetID && row.Sold != 1 {
 			t.Fatalf("target inventory not reserved: %+v", row)
 		}
+	}
+}
+
+func TestAfterSaleExchangeSupportsSelectedVisitor(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, sourceID := seedSellableProduct(t, "daily", 5)
+	var targetID uint
+	if err := model.Write(func(tx *gorm.DB) error {
+		var source model.Product
+		if err := tx.Preload("Rule").First(&source, sourceID).Error; err != nil {
+			return err
+		}
+		target := source
+		target.Base = model.Base{}
+		target.Name = "Partial Exchange Target"
+		target.CurrentRevisionID = 0
+		if err := tx.Omit("Rule").Create(&target).Error; err != nil {
+			return err
+		}
+		targetID = target.ID
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	visitDate := startOfDay(time.Now().AddDate(0, 0, 1))
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{
+		ProductID: sourceID, Quantity: 2, UseDate: &visitDate,
+		Visitors: []model.VisitorInput{{Name: "Visitor A", IdentityNo: "ID-A"}, {Name: "Visitor B", IdentityNo: "ID-B"}},
+	}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&model.OrderItem{}).Where("order_id = ?", order.ID).Updates(map[string]interface{}{"cash_cost_cents": 101, "credit_cost_cents": 99}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var tickets []model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).Order("id").Find(&tickets).Error; err != nil || len(tickets) != 2 {
+		t.Fatalf("tickets=%d err=%v", len(tickets), err)
+	}
+	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "partial-exchange", TargetProductID: targetID, OperatorID: 1}
+	if err := (&AfterSaleService{}).Create(&request, []string{tickets[0].TicketCode}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 2, "visitor requested exchange"); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := (&AfterSaleService{}).Execute(tenantID, request.ID, 2)
+	if err != nil || completed.Status != "completed" {
+		t.Fatalf("partial exchange=%+v err=%v", completed, err)
+	}
+
+	var items []model.OrderItem
+	if err := model.DB.Where("order_id = ?", order.ID).Order("id").Find(&items).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].Quantity != 1 || items[1].Quantity != 1 {
+		t.Fatalf("partial exchange item split=%+v", items)
+	}
+	if items[0].CashCostCents+items[1].CashCostCents != 101 || items[0].CreditCostCents+items[1].CreditCostCents != 99 {
+		t.Fatalf("partial exchange changed money facts: %+v", items)
+	}
+	productQuantities := map[uint]int{}
+	for _, item := range items {
+		productQuantities[item.ProductID] += item.Quantity
+	}
+	if productQuantities[sourceID] != 1 || productQuantities[targetID] != 1 {
+		t.Fatalf("partial exchange products=%+v", productQuantities)
+	}
+	var movedTicket model.Ticket
+	if err := model.DB.First(&movedTicket, tickets[0].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if movedTicket.FulfillmentProductID != targetID {
+		t.Fatalf("selected ticket was not exchanged: %+v", movedTicket)
+	}
+	var unmovedTicket model.Ticket
+	if err := model.DB.First(&unmovedTicket, tickets[1].ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if unmovedTicket.FulfillmentProductID != sourceID {
+		t.Fatalf("unselected ticket was exchanged: %+v", unmovedTicket)
+	}
+	var visitor model.OrderVisitor
+	if err := model.DB.Where("ticket_id = ?", movedTicket.ID).First(&visitor).Error; err != nil {
+		t.Fatal(err)
+	}
+	if visitor.OrderItemID != movedTicket.OrderItemID || visitor.Name != "Visitor A" {
+		t.Fatalf("selected visitor did not follow ticket: %+v", visitor)
+	}
+	var rows []model.ProductInventory
+	if err := model.DB.Where("tenant_id = ? AND product_id IN ?", tenantID, []uint{sourceID, targetID}).Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	stocks := map[uint]int{}
+	for _, row := range rows {
+		stocks[row.ProductID] = row.Sold
+	}
+	if stocks[sourceID] != 1 || stocks[targetID] != 1 {
+		t.Fatalf("partial exchange inventory=%+v", stocks)
 	}
 }
 

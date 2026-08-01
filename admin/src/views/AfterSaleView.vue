@@ -57,14 +57,20 @@
         <div class="grid grid-cols-2 gap-3">
           <el-form-item label="订单号"><el-input v-model="form.order_no" /></el-form-item>
           <el-form-item label="类型"><el-select v-model="form.type" class="w-full"><el-option v-for="item in types" :key="item.value" :label="item.label" :value="item.value" /></el-select></el-form-item>
-          <el-form-item class="col-span-2" label="票码（逗号分隔，作废可留空）"><el-input v-model="form.ticket_codes" type="textarea" :rows="2" /></el-form-item>
-          <el-form-item label="退款金额（分）"><el-input-number v-model="form.amount_cents" :min="0" class="w-full" /></el-form-item>
-          <el-form-item label="退款方式"><el-select v-model="form.payment_method" class="w-full"><el-option label="按原支付方式自动分摊" value="auto" /><el-option label="现金" value="cash" /><el-option label="微信" value="wechat" /><el-option label="支付宝" value="alipay" /></el-select></el-form-item>
-          <el-form-item label="目标日期"><el-date-picker v-model="form.target_date" value-format="YYYY-MM-DD" class="w-full" /></el-form-item>
-          <el-form-item label="目标时段"><el-input v-model="form.target_slot" placeholder="可选" /></el-form-item>
-          <el-form-item label="目标商品 ID"><el-input-number v-model="form.target_product_id" :min="0" class="w-full" /></el-form-item>
-          <el-form-item label="POS 设备 ID（补打）"><el-input-number v-model="form.device_id" :min="0" class="w-full" /></el-form-item>
-          <el-form-item label="POS 班次 ID（补打）"><el-input-number v-model="form.shift_id" :min="0" class="w-full" /></el-form-item>
+          <el-form-item class="col-span-2" :label="form.type === 'void' ? '票码（整单作废可留空）' : '票码（可填写一个或多个游客票码）'"><el-input v-model="form.ticket_codes" type="textarea" :rows="2" /></el-form-item>
+          <template v-if="form.type === 'refund'">
+            <el-form-item label="退款金额（分）"><el-input-number v-model="form.amount_cents" :min="0" class="w-full" /></el-form-item>
+            <el-form-item label="退款方式"><el-select v-model="form.payment_method" class="w-full"><el-option label="按原支付方式自动分摊" value="auto" /><el-option label="现金" value="cash" /><el-option label="微信" value="wechat" /><el-option label="支付宝" value="alipay" /></el-select></el-form-item>
+          </template>
+          <template v-if="form.type === 'reschedule' || form.type === 'exchange'">
+            <el-form-item label="目标日期"><el-date-picker v-model="form.target_date" value-format="YYYY-MM-DD" class="w-full" /></el-form-item>
+            <el-form-item label="目标时段"><el-input v-model="form.target_slot" placeholder="不填则保留原时段" /></el-form-item>
+          </template>
+          <el-form-item v-if="form.type === 'exchange'" label="目标商品 ID"><el-input-number v-model="form.target_product_id" :min="1" class="w-full" /></el-form-item>
+          <template v-if="form.type === 'reissue'">
+            <el-form-item label="POS 设备 ID"><el-input-number v-model="form.device_id" :min="1" class="w-full" /></el-form-item>
+            <el-form-item label="POS 班次 ID"><el-input-number v-model="form.shift_id" :min="1" class="w-full" /></el-form-item>
+          </template>
           <el-form-item class="col-span-2" label="原因"><el-input v-model="form.reason" type="textarea" :rows="2" /></el-form-item>
         </div>
       </el-form>
@@ -88,6 +94,18 @@
           <el-table-column label="退款金额" width="120"><template #default="{ row }">¥{{ ((row.amount_cents || 0) / 100).toFixed(2) }}</template></el-table-column>
           <el-table-column label="状态"><template #default="{ row }"><el-tag :type="refundStatusType(allocationStatus(row))">{{ refundStatusText(allocationStatus(row)) }}</el-tag></template></el-table-column>
         </el-table>
+      </div>
+      <div v-if="selected?.events?.length" class="mt-5">
+        <div class="font-medium text-gray-900 mb-3">处理记录</div>
+        <el-timeline>
+          <el-timeline-item v-for="event in selected.events" :key="event.id" :timestamp="formatTime(event.created_at)" placement="top">
+            <div class="flex items-center gap-2">
+              <span class="font-medium">{{ eventActionText(event.action) }}</span>
+              <el-tag v-if="event.to_status" size="small" :type="statusType(event.to_status)">{{ statusText(event.to_status) }}</el-tag>
+            </div>
+            <div class="text-xs text-gray-500 mt-1">操作人 #{{ event.actor_id || '-' }}<span v-if="event.reason"> · {{ event.reason }}</span></div>
+          </el-timeline-item>
+        </el-timeline>
       </div>
     </el-dialog>
   </section>
@@ -132,5 +150,7 @@ const statusType = (value: string) => ({ completed: 'success', rejected: 'info',
 const paymentMethodText = (value: string) => ({ cash: '现金', wechat: '微信', alipay: '支付宝', mixed: '混合支付' } as any)[value] || value
 const refundStatusText = (value: string) => ({ group_pending: '等待全部退款', group_succeeded: '退款完成', pending: '等待渠道', processing: '处理中', submitted: '渠道处理中', succeeded: '已退款', failed: '失败', manual_review: '待人工复核' } as any)[value] || value
 const refundStatusType = (value: string) => ({ group_succeeded: 'success', succeeded: 'success', failed: 'danger', manual_review: 'danger', group_pending: 'warning', pending: 'warning', processing: 'warning', submitted: 'warning' } as any)[value] || 'info'
+const eventActionText = (value: string) => ({ created: '提交申请', approved: '审核批准', rejected: '审核拒绝', execution_started: '开始执行', execution_completed: '执行完成', execution_failed: '执行失败', print_queued: '打印任务已排队', proxy_print_queued: '主管代补打', print_started: '开始打印', print_succeeded: '打印完成', print_failed: '打印失败' } as any)[value] || value
+const formatTime = (value: string) => value ? new Date(value).toLocaleString() : '-'
 onMounted(load)
 </script>
