@@ -1,6 +1,8 @@
 package service
 
 import (
+	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -168,6 +170,83 @@ func (s *SettlementService) GetStatement(tenantID, statementID uint) (*model.Set
 		return nil, err
 	}
 	return &statement, nil
+}
+
+func (s *SettlementService) ExportStatementCSV(tenantID, statementID uint) ([]byte, string, error) {
+	statement, err := s.GetStatement(tenantID, statementID)
+	if err != nil {
+		return nil, "", err
+	}
+	var supplier, distributor model.Tenant
+	if err := model.DB.Select("id", "name").First(&supplier, statement.SupplierTenantID).Error; err != nil {
+		return nil, "", err
+	}
+	if err := model.DB.Select("id", "name").First(&distributor, statement.DistributorTenantID).Error; err != nil {
+		return nil, "", err
+	}
+	fulfillmentIDs := make([]uint, 0, len(statement.Lines))
+	for i := range statement.Lines {
+		fulfillmentIDs = append(fulfillmentIDs, statement.Lines[i].FulfillmentOrderID)
+	}
+	var fulfillments []model.FulfillmentOrder
+	if len(fulfillmentIDs) > 0 {
+		if err := model.DB.Where(
+			"id IN ? AND supplier_tenant_id = ? AND sales_tenant_id = ?",
+			fulfillmentIDs, statement.SupplierTenantID, statement.DistributorTenantID,
+		).Find(&fulfillments).Error; err != nil {
+			return nil, "", err
+		}
+	}
+	fulfillmentByID := make(map[uint]model.FulfillmentOrder, len(fulfillments))
+	for i := range fulfillments {
+		fulfillmentByID[fulfillments[i].ID] = fulfillments[i]
+	}
+	var output bytes.Buffer
+	output.Write([]byte{0xEF, 0xBB, 0xBF})
+	records := [][]string{
+		{"结算单号", statement.StatementNo},
+		{"供应商", csvSafeCell(supplier.Name)},
+		{"分销商", csvSafeCell(distributor.Name)},
+		{"结算周期", statement.PeriodStart.Format("2006-01-02"), statement.PeriodEnd.Format("2006-01-02")},
+		{"状态", statement.Status},
+		{"履约总额", formatCents(statement.GrossCents), "退款冲减", formatCents(statement.RefundCents), "佣金", formatCents(statement.CommissionCents)},
+		{"追加调整", formatCents(statement.AdjustmentCents), "最终应结", formatCents(statement.NetCents + statement.AdjustmentCents)},
+		{},
+		{"履约单号", "销售订单号", "履约总额", "退款冲减", "佣金", "应结净额", "状态"},
+	}
+	for i := range statement.Lines {
+		line := statement.Lines[i]
+		fulfillment, ok := fulfillmentByID[line.FulfillmentOrderID]
+		if !ok {
+			return nil, "", errors.New("settlement fulfillment is unavailable")
+		}
+		records = append(records, []string{fulfillment.FulfillmentNo, fulfillment.SalesOrderNo, formatCents(line.GrossCents), formatCents(line.RefundCents), formatCents(line.CommissionCents), formatCents(line.NetCents), line.Status})
+	}
+	if len(statement.Adjustments) > 0 {
+		records = append(records, []string{}, []string{"调整序号", "调整金额", "调整后累计", "原因", "时间"})
+		for i := range statement.Adjustments {
+			adjustment := statement.Adjustments[i]
+			records = append(records, []string{fmt.Sprint(adjustment.Sequence), formatCents(adjustment.AmountCents), formatCents(adjustment.NewAdjustmentCents), csvSafeCell(adjustment.Reason), adjustment.CreatedAt.Format("2006-01-02 15:04:05")})
+		}
+	}
+	writer := csv.NewWriter(&output)
+	writer.WriteAll(records)
+	if err := writer.Error(); err != nil {
+		return nil, "", err
+	}
+	return output.Bytes(), statement.StatementNo + ".csv", nil
+}
+
+func formatCents(value int64) string {
+	return fmt.Sprintf("%.2f", float64(value)/100)
+}
+
+func csvSafeCell(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed != "" && strings.ContainsRune("=+-@", rune(trimmed[0])) {
+		return "'" + value
+	}
+	return value
 }
 
 func (s *SettlementService) AdjustDisputed(tenantID, statementID, actorUserID uint, amountCents int64, reason string) error {

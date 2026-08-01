@@ -156,6 +156,7 @@
         </section>
 
         <div v-if="settlementDetail" class="flex justify-end gap-2">
+          <el-button icon="Download" @click="exportSettlement">导出对账单</el-button>
           <el-button v-if="canSupplierConfirm" type="primary" :loading="settlementActionLoading" @click="updateSettlementStatus('supplier_confirmed')">供应商确认</el-button>
           <el-button v-if="canDistributorConfirm" type="success" :loading="settlementActionLoading" @click="updateSettlementStatus('confirmed')">分销商确认</el-button>
           <el-button v-if="canDispute" type="warning" :loading="settlementActionLoading" @click="disputeSettlement">提出争议</el-button>
@@ -307,6 +308,19 @@ const loadSettlementDetail = async (id: number) => {
 const openSettlement = async (row: any) => {
   settlementDialog.value = true
   await loadSettlementDetail(row.id)
+}
+
+const exportSettlement = async () => {
+  if (!settlementDetail.value?.id) return
+  const response = await request.get(`/settlements/${settlementDetail.value.id}/export`, { responseType: 'blob' })
+  const url = URL.createObjectURL(response.data)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${settlementDetail.value.statement_no}.csv`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
 }
 
 const openGenerateSettlement = () => {

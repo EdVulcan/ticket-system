@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 	"ticket-backend/internal/service"
@@ -23,6 +24,21 @@ func (c *SettlementController) Get(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, statement)
+}
+
+func (c *SettlementController) Export(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid statement id"})
+		return
+	}
+	data, filename, err := c.Service.ExportStatementCSV(ctx.GetUint("tenant_id"), uint(id))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "settlement statement not found"})
+		return
+	}
+	ctx.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	ctx.Data(http.StatusOK, "text/csv; charset=utf-8", data)
 }
 
 func (c *SettlementController) List(ctx *gin.Context) {

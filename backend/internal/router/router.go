@@ -321,6 +321,7 @@ func InitRouter(r *gin.Engine) {
 	{
 		settlementGroup.GET("", settlementController.List)
 		settlementGroup.GET("/:id", settlementController.Get)
+		settlementGroup.GET("/:id/export", settlementController.Export)
 		settlementGroup.POST("/generate", settlementController.Generate)
 		settlementGroup.PATCH("/:id/status", settlementController.SetStatus)
 		settlementGroup.POST("/:id/adjustments", settlementController.Adjust)

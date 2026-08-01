@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -132,6 +133,20 @@ func TestSettlementUsesFulfillmentSnapshot(t *testing.T) {
 	detail, err = settlements.GetStatement(scenario.distributorID, statement.ID)
 	if err != nil || detail.Status != "draft" || detail.AdjustmentCents != 100 || len(detail.Adjustments) != 1 || detail.Adjustments[0].NewAdjustmentCents != 100 {
 		t.Fatalf("adjusted settlement detail=%+v err=%v", detail, err)
+	}
+	exported, filename, err := settlements.ExportStatementCSV(scenario.distributorID, statement.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exportedText := string(exported)
+	if filename != statement.StatementNo+".csv" || !strings.HasPrefix(exportedText, "\ufeff") || !strings.Contains(exportedText, "履约单号") || !strings.Contains(exportedText, order.OrderNo) || !strings.Contains(exportedText, "agreed service fee correction") {
+		t.Fatalf("unexpected settlement export filename=%q body=%q", filename, exportedText)
+	}
+	if _, _, err := settlements.ExportStatementCSV(scenario.distributorID+999, statement.ID); err == nil {
+		t.Fatal("unrelated tenant exported settlement")
+	}
+	if csvSafeCell("=SUM(A1:A2)") != "'=SUM(A1:A2)" {
+		t.Fatal("spreadsheet formula was not escaped")
 	}
 	if err := settlements.SetStatus(scenario.supplierID, statement.ID, "supplier_confirmed", ""); err != nil {
 		t.Fatal(err)
