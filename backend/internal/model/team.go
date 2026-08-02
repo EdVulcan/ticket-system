@@ -138,7 +138,9 @@ type TeamSettlementStatement struct {
 	Base
 	TravelTenantID   uint                       `gorm:"index;not null" json:"travel_tenant_id"`
 	SupplierTenantID uint                       `gorm:"index;not null" json:"supplier_tenant_id"`
-	GroupID          uint                       `gorm:"uniqueIndex;not null" json:"group_id"`
+	GroupID          uint                       `gorm:"uniqueIndex:idx_team_settlement_group_sequence,priority:1;not null" json:"group_id"`
+	Sequence         int                        `gorm:"uniqueIndex:idx_team_settlement_group_sequence,priority:2;not null;default:1" json:"sequence"`
+	Kind             string                     `gorm:"size:30;not null;default:'original'" json:"kind"` // original, refund_correction
 	StatementNo      string                     `gorm:"size:80;uniqueIndex;not null" json:"statement_no"`
 	IdempotencyKey   string                     `gorm:"size:120;uniqueIndex;not null" json:"idempotency_key"`
 	GrossCents       int64                      `gorm:"not null" json:"gross_cents"`

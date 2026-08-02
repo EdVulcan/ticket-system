@@ -929,7 +929,7 @@ func (s *OrderService) GetDetail(orderNo string, tenantID uint) (*SalesOrderDeta
 		view.GrossCents, view.RefundCents, view.CommissionCents = gross, refunded, commission
 		view.NetCents = gross - refunded - commission
 		var line model.SettlementLine
-		if err := model.DB.Where("fulfillment_order_id = ?", fulfillment.ID).First(&line).Error; err == nil {
+		if err := model.DB.Where("fulfillment_order_id = ?", fulfillment.ID).Order("created_at DESC, id DESC").First(&line).Error; err == nil {
 			view.StatementID = line.StatementID
 			var statement model.SettlementStatement
 			if err := model.DB.Where(

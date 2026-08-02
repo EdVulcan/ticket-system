@@ -327,16 +327,17 @@ type FulfillmentOrderView struct {
 }
 
 type FulfillmentTicketView struct {
-	ID             uint                  `json:"id"`
-	TicketCode     string                `json:"ticket_code"`
-	Status         string                `json:"status"`
-	Entitlement    string                `json:"entitlement_status"`
-	VisitorName    string                `json:"visitor_name"`
-	VisitorPhone   string                `json:"visitor_phone"`
-	VisitorID      string                `json:"visitor_id"`
-	VisitorRegion  string                `json:"visitor_region"`
-	CheckInCount   int                   `json:"check_in_count"`
-	CheckInRecords []model.CheckInRecord `json:"check_in_records"`
+	ID               uint                  `json:"id"`
+	TicketCode       string                `json:"ticket_code"`
+	Status           string                `json:"status"`
+	Entitlement      string                `json:"entitlement_status"`
+	VisitorName      string                `json:"visitor_name"`
+	VisitorPhone     string                `json:"visitor_phone"`
+	VisitorID        string                `json:"visitor_id"`
+	VisitorRegion    string                `json:"visitor_region"`
+	CheckInCount     int                   `json:"check_in_count"`
+	RefundValueCents int64                 `json:"refund_value_cents"`
+	CheckInRecords   []model.CheckInRecord `json:"check_in_records"`
 }
 
 type FulfillmentItemView struct {
@@ -346,6 +347,7 @@ type FulfillmentItemView struct {
 	UseDate              *time.Time              `json:"use_date,omitempty"`
 	StockSlot            string                  `json:"stock_slot,omitempty"`
 	SettlementPriceCents int64                   `json:"settlement_price_cents"`
+	RetailPriceCents     int64                   `json:"retail_price_cents"`
 	CommissionBPS        int64                   `json:"commission_bps"`
 	Tickets              []FulfillmentTicketView `json:"tickets"`
 }
@@ -364,6 +366,7 @@ type FulfillmentDetailView struct {
 	Fulfillment FulfillmentOrderView      `json:"fulfillment"`
 	Items       []FulfillmentItemView     `json:"items"`
 	AfterSales  []model.AfterSaleRequest  `json:"after_sales"`
+	Refunds     []model.Refund            `json:"refunds"`
 	Settlement  FulfillmentSettlementView `json:"settlement"`
 }
 
@@ -492,6 +495,10 @@ func (s *DistributionService) GetFulfillmentOrder(supplierTenantID, fulfillmentI
 	for i := range checkIns {
 		checkInsByTicket[checkIns[i].TicketID] = append(checkInsByTicket[checkIns[i].TicketID], checkIns[i])
 	}
+	itemByID := make(map[uint]model.OrderItem, len(items))
+	for i := range items {
+		itemByID[items[i].ID] = items[i]
+	}
 	ticketsByItem := make(map[uint][]FulfillmentTicketView)
 	for i := range tickets {
 		ticket := &tickets[i]
@@ -500,10 +507,14 @@ func (s *DistributionService) GetFulfillmentOrder(supplierTenantID, fulfillmentI
 		if visitor.ID != 0 {
 			name, phone, identity, region = visitor.Name, visitor.Phone, visitor.IdentityNo, visitor.Region
 		}
+		refundValueCents := moneyCents(itemByID[ticket.OrderItemID].Price)
+		if ticket.CodeMode == "order" {
+			refundValueCents *= int64(itemByID[ticket.OrderItemID].Quantity)
+		}
 		ticketsByItem[ticket.OrderItemID] = append(ticketsByItem[ticket.OrderItemID], FulfillmentTicketView{
 			ID: ticket.ID, TicketCode: ticket.TicketCode, Status: ticket.Status, Entitlement: entitlementByTicket[ticket.ID],
 			VisitorName: name, VisitorPhone: phone, VisitorID: identity, VisitorRegion: region,
-			CheckInCount: ticket.CheckInCount, CheckInRecords: checkInsByTicket[ticket.ID],
+			CheckInCount: ticket.CheckInCount, RefundValueCents: refundValueCents, CheckInRecords: checkInsByTicket[ticket.ID],
 		})
 	}
 	itemViews := make([]FulfillmentItemView, 0, len(items))
@@ -511,7 +522,7 @@ func (s *DistributionService) GetFulfillmentOrder(supplierTenantID, fulfillmentI
 		item := &items[i]
 		itemViews = append(itemViews, FulfillmentItemView{
 			ID: item.ID, ProductName: item.ProductName, Quantity: item.Quantity, UseDate: item.UseDate, StockSlot: item.StockSlot,
-			SettlementPriceCents: moneyCents(item.SettlementPrice), CommissionBPS: item.CommissionBPS, Tickets: ticketsByItem[item.ID],
+			SettlementPriceCents: moneyCents(item.SettlementPrice), RetailPriceCents: moneyCents(item.Price), CommissionBPS: item.CommissionBPS, Tickets: ticketsByItem[item.ID],
 		})
 	}
 	var afterSales []model.AfterSaleRequest
@@ -530,13 +541,29 @@ func (s *DistributionService) GetFulfillmentOrder(supplierTenantID, fulfillmentI
 			visibleAfterSales = append(visibleAfterSales, afterSales[i])
 		}
 	}
+	var refunds []model.Refund
+	if err := model.DB.Where("tenant_id = ? AND order_no = ? AND parent_refund_id = 0", fulfillment.SalesTenantID, fulfillment.SalesOrderNo).Order("created_at DESC").Find(&refunds).Error; err != nil {
+		return nil, err
+	}
+	visibleRefunds := make([]model.Refund, 0, len(refunds))
+	for i := range refunds {
+		var codes []string
+		if strings.TrimSpace(refunds[i].TicketCodesJSON) != "" {
+			if err := json.Unmarshal([]byte(refunds[i].TicketCodesJSON), &codes); err != nil {
+				return nil, fmt.Errorf("invalid refund ticket allocation: %w", err)
+			}
+		}
+		if codeListIntersects(codes, ticketCodes) {
+			visibleRefunds = append(visibleRefunds, refunds[i])
+		}
+	}
 	gross, refundCents, commission, err := settlementAmountsForFulfillment(model.DB, &fulfillment)
 	if err != nil {
 		return nil, err
 	}
 	settlement := FulfillmentSettlementView{GrossCents: gross, RefundCents: refundCents, CommissionCents: commission, NetCents: gross - refundCents - commission}
 	var line model.SettlementLine
-	if err := model.DB.Where("fulfillment_order_id = ?", fulfillment.ID).First(&line).Error; err == nil {
+	if err := model.DB.Where("fulfillment_order_id = ?", fulfillment.ID).Order("created_at DESC, id DESC").First(&line).Error; err == nil {
 		settlement.StatementID = line.StatementID
 		var statement model.SettlementStatement
 		if err := model.DB.Where("id = ? AND supplier_tenant_id = ?", line.StatementID, supplierTenantID).First(&statement).Error; err != nil {
@@ -556,7 +583,7 @@ func (s *DistributionService) GetFulfillmentOrder(supplierTenantID, fulfillmentI
 	}
 	return &FulfillmentDetailView{
 		Fulfillment: FulfillmentOrderView{FulfillmentOrder: fulfillment, SalesTenantName: salesTenant.Name, ScenicAreaName: scenicArea.Name},
-		Items:       itemViews, AfterSales: visibleAfterSales, Settlement: settlement,
+		Items:       itemViews, AfterSales: visibleAfterSales, Refunds: visibleRefunds, Settlement: settlement,
 	}, nil
 }
 

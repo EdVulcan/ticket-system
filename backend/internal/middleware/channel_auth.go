@@ -233,10 +233,41 @@ func requestRemoteIP(req *http.Request) string {
 		return ""
 	}
 	host, _, err := net.SplitHostPort(strings.TrimSpace(req.RemoteAddr))
-	if err == nil {
+	if err != nil {
+		host = strings.TrimSpace(req.RemoteAddr)
+	}
+	peer := net.ParseIP(host)
+	if peer == nil || !trustedProxyIP(peer) {
 		return host
 	}
-	return strings.TrimSpace(req.RemoteAddr)
+	forwarded := strings.Split(req.Header.Get("X-Forwarded-For"), ",")
+	for i := len(forwarded) - 1; i >= 0; i-- {
+		candidate := net.ParseIP(strings.TrimSpace(forwarded[i]))
+		if candidate == nil || trustedProxyIP(candidate) {
+			continue
+		}
+		return candidate.String()
+	}
+	return host
+}
+
+func trustedProxyIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	for _, raw := range strings.Split(config.GlobalConfig.Server.TrustedProxyCIDRs, ",") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if candidate := net.ParseIP(raw); candidate != nil && candidate.Equal(ip) {
+			return true
+		}
+		if _, network, err := net.ParseCIDR(raw); err == nil && network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 func channelIPAllowed(raw, ip string) bool {

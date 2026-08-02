@@ -181,6 +181,22 @@ func TestChannelPermissionCoversRefundEndpoint(t *testing.T) {
 	}
 }
 
+func TestRequestRemoteIPOnlyTrustsConfiguredProxy(t *testing.T) {
+	previous := config.GlobalConfig.Server.TrustedProxyCIDRs
+	config.GlobalConfig.Server.TrustedProxyCIDRs = "127.0.0.1/32"
+	t.Cleanup(func() { config.GlobalConfig.Server.TrustedProxyCIDRs = previous })
+
+	proxied := &http.Request{RemoteAddr: "127.0.0.1:4321", Header: http.Header{"X-Forwarded-For": []string{"198.51.100.9, 203.0.113.7"}}}
+	if got := requestRemoteIP(proxied); got != "203.0.113.7" {
+		t.Fatalf("proxied client IP=%q", got)
+	}
+
+	direct := &http.Request{RemoteAddr: "192.0.2.10:4321", Header: http.Header{"X-Forwarded-For": []string{"203.0.113.7"}}}
+	if got := requestRemoteIP(direct); got != "192.0.2.10" {
+		t.Fatalf("untrusted peer spoofed client IP=%q", got)
+	}
+}
+
 func channelSignature(secret, timestamp, nonce, method, path string, body []byte) string {
 	hash := sha256.Sum256(body)
 	canonical := strings.Join([]string{timestamp, nonce, method, path, hex.EncodeToString(hash[:])}, "\n")

@@ -62,7 +62,9 @@ func (s *TeamService) ListTeamAccountSummaries(tenantID uint) ([]TeamAccountSumm
 		row.GroupCount++
 		row.ContractAmountCents += group.ContractAmountCents
 		row.DepositCents += group.DepositCents
-		row.CreditUsedCents += group.CreditUsedCents
+		if group.SettlementStatus != "settled" {
+			row.CreditUsedCents += group.CreditUsedCents
+		}
 	}
 
 	var statements []model.TeamSettlementStatement

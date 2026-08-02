@@ -63,13 +63,14 @@
       <el-tab-pane label="双方结算" name="settlements">
         <el-table :data="settlements" v-loading="settlementsLoading" stripe empty-text="暂无团队结算单">
           <el-table-column prop="statement_no" label="结算单" min-width="200" />
+          <el-table-column label="类型" width="110"><template #default="{ row }">{{ settlementKindText(row.kind) }}</template></el-table-column>
           <el-table-column label="团队" width="100"><template #default="{ row }">#{{ row.group_id }}</template></el-table-column>
           <el-table-column label="旅行社" width="110"><template #default="{ row }">租户 {{ row.travel_tenant_id }}</template></el-table-column>
           <el-table-column label="供应商" width="110"><template #default="{ row }">租户 {{ row.supplier_tenant_id }}</template></el-table-column>
           <el-table-column label="总额" width="120"><template #default="{ row }">¥{{ cents(row.gross_cents) }}</template></el-table-column>
           <el-table-column label="退款" width="120"><template #default="{ row }">¥{{ cents(row.refund_cents) }}</template></el-table-column>
-          <el-table-column label="应付" width="120"><template #default="{ row }"><strong>¥{{ cents(row.net_cents) }}</strong></template></el-table-column>
-          <el-table-column label="状态" width="130"><template #default="{ row }"><el-tag :type="settlementStatusType(row.status)">{{ settlementStatusText(row.status) }}</el-tag></template></el-table-column>
+          <el-table-column label="应付/冲减" width="130"><template #default="{ row }"><strong>{{ signedCents(Number(row.net_cents || 0) + Number(row.adjustment_cents || 0)) }}</strong></template></el-table-column>
+          <el-table-column label="状态" width="130"><template #default="{ row }"><el-tag :type="settlementStatusType(row.status)">{{ teamSettlementStatusText(row) }}</el-tag></template></el-table-column>
           <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openSettlement(row)">处理</el-button></template></el-table-column>
         </el-table>
       </el-tab-pane>
@@ -108,6 +109,7 @@
             </el-select>
           </el-form-item>
           <el-form-item label="计划人数" required><el-input-number v-model="groupForm.expected_count" :min="1" class="w-full" /></el-form-item>
+		  <el-form-item label="已付预款（元）"><el-input-number v-model="groupForm.deposit_yuan" :min="0" :precision="2" :step="100" class="w-full" /></el-form-item>
         </div>
         <el-form-item label="游玩日期" required><el-date-picker v-model="groupForm.visit_date" type="date" value-format="YYYY-MM-DD" class="w-full" /></el-form-item>
       </el-form>
@@ -298,12 +300,13 @@
     <el-dialog v-model="settlementDialog" title="团队结算处理" width="720px" :close-on-click-modal="false">
       <el-descriptions v-if="selectedSettlement" :column="2" border>
         <el-descriptions-item label="结算单" :span="2">{{ selectedSettlement.statement_no }}</el-descriptions-item>
+        <el-descriptions-item label="单据类型" :span="2">{{ settlementKindText(selectedSettlement.kind) }}</el-descriptions-item>
         <el-descriptions-item label="履约总额">¥{{ cents(selectedSettlement.gross_cents) }}</el-descriptions-item>
         <el-descriptions-item label="退款冲减">¥{{ cents(selectedSettlement.refund_cents) }}</el-descriptions-item>
         <el-descriptions-item label="已付预款">¥{{ cents(selectedSettlement.deposit_cents) }}</el-descriptions-item>
         <el-descriptions-item label="争议调整">{{ signedCents(selectedSettlement.adjustment_cents) }}</el-descriptions-item>
-        <el-descriptions-item label="最终应付"><strong>¥{{ cents(Number(selectedSettlement.net_cents || 0) + Number(selectedSettlement.adjustment_cents || 0)) }}</strong></el-descriptions-item>
-        <el-descriptions-item label="状态" :span="2">{{ settlementStatusText(selectedSettlement.status) }}</el-descriptions-item>
+        <el-descriptions-item label="最终应付/冲减"><strong>{{ signedCents(Number(selectedSettlement.net_cents || 0) + Number(selectedSettlement.adjustment_cents || 0)) }}</strong></el-descriptions-item>
+        <el-descriptions-item label="状态" :span="2">{{ teamSettlementStatusText(selectedSettlement) }}</el-descriptions-item>
         <el-descriptions-item v-if="selectedSettlement.dispute_reason" label="争议原因" :span="2">{{ selectedSettlement.dispute_reason }}</el-descriptions-item>
         <el-descriptions-item v-if="selectedSettlement.payment_proof" label="付款凭证" :span="2">{{ selectedSettlement.payment_proof }}</el-descriptions-item>
       </el-descriptions>
@@ -378,6 +381,8 @@ const groupStatusType = (status: string) => status === 'entered' ? 'success' : s
 const memberStatusText = (status: string) => ({ planned: '待出票', ticketed: '可入园', entered: '已入园', cancelled: '已取消' } as Record<string, string>)[status] || '未知状态'
 const memberStatusType = (status: string) => status === 'entered' ? 'success' : status === 'ticketed' ? 'primary' : status === 'cancelled' ? 'danger' : 'info'
 const settlementStatusText = (status: string) => ({ open: '未生成', statement: '已生成', settled: '已结清', draft: '待供应商确认', supplier_confirmed: '待旅行社确认', confirmed: '待付款', disputed: '有争议', paid: '已付款' } as Record<string, string>)[status] || '未知状态'
+const settlementKindText = (kind: string) => kind === 'refund_correction' ? '退款冲减' : '团队结算'
+const teamSettlementStatusText = (row: any) => row?.kind === 'refund_correction' && row?.status === 'paid' ? '已完成冲减' : settlementStatusText(row?.status)
 const settlementStatusType = (status: string) => status === 'paid' ? 'success' : status === 'disputed' ? 'danger' : status === 'confirmed' ? 'warning' : status === 'supplier_confirmed' ? 'primary' : 'info'
 
 const openTeamAfterSales = () => {
@@ -452,7 +457,7 @@ const refreshActiveTab = () => activeTab.value === 'contracts' ? loadContracts()
 
 const saving = ref(false)
 const groupDialog = ref(false)
-const groupForm = reactive({ name: '', supplier_tenant_id: 0, scenic_area_id: 0, contract_id: 0, visit_date: '', expected_count: 1 })
+const groupForm = reactive({ name: '', supplier_tenant_id: 0, scenic_area_id: 0, contract_id: 0, visit_date: '', expected_count: 1, deposit_yuan: 0 })
 const selectedGroupContract = computed(() => contracts.value.find((contract: any) => Number(contract.id) === Number(groupForm.contract_id)))
 const groupScenicOptions = computed(() => {
   const seen = new Set<number>()
@@ -469,13 +474,13 @@ const applyGroupContract = () => {
 }
 const openGroupDialog = async () => {
   if (!contracts.value.length) await loadContracts()
-  Object.assign(groupForm, { name: '', supplier_tenant_id: 0, scenic_area_id: 0, contract_id: 0, visit_date: '', expected_count: 1 })
+  Object.assign(groupForm, { name: '', supplier_tenant_id: 0, scenic_area_id: 0, contract_id: 0, visit_date: '', expected_count: 1, deposit_yuan: 0 })
   groupDialog.value = true
 }
 const createGroup = async () => {
   if (!groupForm.name.trim() || !groupForm.supplier_tenant_id || !groupForm.scenic_area_id || !groupForm.contract_id || !groupForm.visit_date) { ElMessage.warning('团队名称、供应商、景区、合同和日期均必填'); return }
   saving.value = true
-  try { await request.post('/teams', { ...groupForm }); groupDialog.value = false; ElMessage.success('团队已创建'); await loadGroups() }
+  try { await request.post('/teams', { ...groupForm, deposit_cents: Math.round(groupForm.deposit_yuan * 100) }); groupDialog.value = false; ElMessage.success('团队已创建'); await loadGroups() }
   catch (e: any) { ElMessage.error(e.response?.data?.error || '团队创建失败') }
   finally { saving.value = false }
 }

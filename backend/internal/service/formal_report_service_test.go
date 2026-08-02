@@ -39,6 +39,15 @@ func TestUsedTicketRefundRequiresInitialSupplierAdminAndRemovesVerificationFact(
 	if err := (&TicketService{}).Verify(ticket.TicketCode, checkpoint.ID, verificationDeviceID(t, tenantID, checkpoint.ID), tenantID); err != nil {
 		t.Fatal(err)
 	}
+	group := model.TourGroup{
+		TenantID: tenantID, SupplierTenantID: tenantID, ScenicAreaID: checkpoint.ScenicAreaID,
+		SalesOrderID: order.ID, GroupNo: "REFUND-CREDIT-GROUP", Name: "Refund credit group",
+		VisitDate: time.Now(), ExpectedCount: 1, Status: "entered", ContractAmountCents: 9950,
+		CreditUsedCents: 9950, SettlementStatus: "open",
+	}
+	if err := model.DB.Create(&group).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	today := time.Now().Format("2006-01-02")
 	filter := FormalReportFilter{StartDate: today, EndDate: today}
@@ -86,6 +95,9 @@ func TestUsedTicketRefundRequiresInitialSupplierAdminAndRemovesVerificationFact(
 	}
 	if checkIn.ReversedAt == nil || checkIn.ReversedBy != initialAdmin.ID || checkIn.ReversalRefundID != refund.ID {
 		t.Fatalf("check-in reversal audit = %+v", checkIn)
+	}
+	if err := model.DB.First(&group, group.ID).Error; err != nil || group.CreditUsedCents != 0 {
+		t.Fatalf("team credit was not released immediately: %+v err=%v", group, err)
 	}
 
 	summary, err = (&ReportService{}).GetVerificationSummary(tenantID, filter)

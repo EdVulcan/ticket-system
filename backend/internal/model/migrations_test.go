@@ -29,11 +29,14 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if err := db.Order("version DESC").First(&latest).Error; err != nil {
 		t.Fatal(err)
 	}
-	if latest.Version != 59 {
-		t.Fatalf("latest migration=%d, want 59", latest.Version)
+	if latest.Version != 61 {
+		t.Fatalf("latest migration=%d, want 61", latest.Version)
 	}
 	if !db.Migrator().HasIndex(&TourEntryBatch{}, "idx_team_entry_request") {
 		t.Fatal("team admission idempotency index was not created")
+	}
+	if !db.Migrator().HasIndex(&TeamSettlementStatement{}, "idx_team_settlement_group_sequence") {
+		t.Fatal("team settlement correction sequence index was not created")
 	}
 	if !db.Migrator().HasIndex(&PlatformUser{}, "idx_platform_users_initial_admin") {
 		t.Fatal("initial platform administrator index was not created")

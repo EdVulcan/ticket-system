@@ -184,7 +184,7 @@ func InitRouter(r *gin.Engine) {
 	}
 
 	// Distribution Routes (B2B)
-	distController := &api.DistributionController{Service: service.DistributionService{}, BundleService: service.BundleService{}}
+	distController := &api.DistributionController{Service: service.DistributionService{}, BundleService: service.BundleService{}, RefundService: service.RefundService{}}
 	distGroup := protected.Group("/distribution")
 	distGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
 	{
@@ -203,6 +203,7 @@ func InitRouter(r *gin.Engine) {
 		distGroup.PATCH("/offers/:id/status", distController.SetOfferStatus)
 		distGroup.GET("/fulfillments", distController.ListFulfillmentOrders)
 		distGroup.GET("/fulfillments/:id", distController.GetFulfillmentOrder)
+		distGroup.POST("/fulfillments/:id/used-refunds", distController.RefundUsedFulfillmentTicket)
 		distGroup.GET("/products", distController.ListDistributableProducts)
 		distGroup.POST("/products/import", distController.ImportProduct)
 		distGroup.POST("/listings/:id/sync", distController.SyncListing)

@@ -171,7 +171,7 @@ func (s *DeviceService) PollHardwareCommand(systemCode, serialNumber, deviceKey 
 		return nil, err
 	}
 	if command.ID == 0 {
-		return nil, gorm.ErrRecordNotFound
+		return nil, nil
 	}
 	return &command, nil
 }

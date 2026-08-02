@@ -183,14 +183,14 @@ const differenceChange = computed(() => ((Math.max(0, differenceForm.cash_tender
 const load = async () => { loading.value = true; try { const res = await request.get('/after-sales', { params: { page: page.value, page_size: pageSize.value, status: status.value, order_no: orderNo.value.trim() } }); rows.value = res.data.data || []; total.value = res.data.total || 0 } finally { loading.value = false } }
 const applyFilters = () => { page.value = 1; load() }
 const loadOperationOptions = async () => {
-  const [productResponse, deviceResponse, shiftResponse] = await Promise.all([
-    request.get('/products', { params: { page: 1, page_size: 100 } }),
-    request.get('/devices', { params: { page: 1, page_size: 100 } }),
-    request.get('/operations/shifts', { params: { page: 1, page_size: 100 } }),
-  ])
-  availableProducts.value = (productResponse.data.data || []).filter((product: any) => product.status === 'online')
-  devices.value = deviceResponse.data.data || []
-  openShifts.value = shiftResponse.data.data || []
+	const [productResult, deviceResult, shiftResult] = await Promise.allSettled([
+		request.get('/products', { params: { page: 1, page_size: 100 } }),
+		request.get('/devices', { params: { page: 1, page_size: 100 } }),
+		request.get('/operations/shifts', { params: { page: 1, page_size: 100 } }),
+	])
+	availableProducts.value = productResult.status === 'fulfilled' ? (productResult.value.data.data || []).filter((product: any) => product.status === 'online') : []
+	devices.value = deviceResult.status === 'fulfilled' ? deviceResult.value.data.data || [] : []
+	openShifts.value = shiftResult.status === 'fulfilled' ? shiftResult.value.data.data || [] : []
 }
 const applyFormDevice = () => { form.shift_id = shiftsForDevice(form.device_id)[0]?.id || 0 }
 const applyDifferenceDevice = () => { differenceForm.shift_id = shiftsForDevice(differenceForm.device_id)[0]?.id || 0 }

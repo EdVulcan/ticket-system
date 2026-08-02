@@ -43,8 +43,9 @@ type SettlementAdjustment struct {
 
 type SettlementLine struct {
 	Base
-	StatementID        uint   `gorm:"index;not null" json:"statement_id"`
-	FulfillmentOrderID uint   `gorm:"uniqueIndex;not null" json:"fulfillment_order_id"`
+	StatementID        uint   `gorm:"uniqueIndex:idx_settlement_statement_fulfillment,priority:1;not null" json:"statement_id"`
+	FulfillmentOrderID uint   `gorm:"uniqueIndex:idx_settlement_statement_fulfillment,priority:2;not null" json:"fulfillment_order_id"`
+	Source             string `gorm:"size:30;not null;default:'verification'" json:"source"`
 	GrossCents         int64  `gorm:"not null" json:"gross_cents"`
 	RefundCents        int64  `gorm:"not null" json:"refund_cents"`
 	CommissionCents    int64  `gorm:"not null" json:"commission_cents"`

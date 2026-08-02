@@ -64,8 +64,8 @@ func (s *TeamService) ExportTeamSettlementCSV(tenantID, statementID uint) ([]byt
 	return output.Bytes(), statement.StatementNo + ".csv", nil
 }
 
-// GenerateTeamSettlement snapshots one confirmed team's contract amount and
-// successful refunds. A retry returns the existing statement for the same
+// GenerateTeamSettlement snapshots one fully admitted team's effective
+// verification amount. A retry returns the existing statement for the same
 // group, so a team cannot be paid twice by repeating the request.
 func (s *TeamService) GenerateTeamSettlement(travelTenantID, groupID uint, actorUserIDs ...uint) (*model.TeamSettlementStatement, error) {
 	if travelTenantID == 0 || groupID == 0 {
@@ -77,8 +77,8 @@ func (s *TeamService) GenerateTeamSettlement(travelTenantID, groupID uint, actor
 		if err := tx.Where("id = ? AND tenant_id = ?", groupID, travelTenantID).First(&group).Error; err != nil {
 			return errors.New("team group not found")
 		}
-		if group.SalesOrderID == 0 || group.Status == "cancelled" {
-			return errors.New("team has no settled sales order")
+		if group.SalesOrderID == 0 || group.Status != "entered" {
+			return errors.New("team must complete admission before settlement")
 		}
 		key := fmt.Sprintf("team-settlement:%d", group.ID)
 		if err := tx.Where("idempotency_key = ?", key).First(&statement).Error; err == nil {
@@ -90,16 +90,12 @@ func (s *TeamService) GenerateTeamSettlement(travelTenantID, groupID uint, actor
 		if err := tx.Where("id = ? AND tenant_id = ? AND status IN ?", group.SalesOrderID, travelTenantID, []string{"paid", "completed", "partial_refunded", "refunded"}).First(&order).Error; err != nil {
 			return errors.New("team sales order is not settled")
 		}
-		gross := group.ContractAmountCents
-		if gross <= 0 {
-			gross = moneyCents(order.TotalAmount)
-		}
-		var refundCents int64
-		if err := tx.Model(&model.Refund{}).Where("tenant_id = ? AND order_no = ? AND status = ?", travelTenantID, order.OrderNo, "succeeded").Select("COALESCE(SUM(CASE WHEN amount_cents != 0 THEN amount_cents ELSE CAST(ROUND(amount * 100.0) AS INTEGER) END), 0)").Scan(&refundCents).Error; err != nil {
+		gross, refundCents, err := teamVerifiedSettlementAmounts(tx, &group)
+		if err != nil {
 			return err
 		}
-		if refundCents > gross {
-			refundCents = gross
+		if gross <= 0 {
+			return errors.New("team has no verified admission amount")
 		}
 		deposit := group.DepositCents
 		available := gross - refundCents
@@ -109,7 +105,7 @@ func (s *TeamService) GenerateTeamSettlement(travelTenantID, groupID uint, actor
 		net := available - deposit
 		statement = model.TeamSettlementStatement{
 			TravelTenantID: travelTenantID, SupplierTenantID: group.SupplierTenantID,
-			GroupID: group.ID, StatementNo: fmt.Sprintf("TST-%d-%d", time.Now().UnixNano(), group.ID),
+			GroupID: group.ID, Sequence: 1, Kind: "original", StatementNo: fmt.Sprintf("TST-%d-%d", time.Now().UnixNano(), group.ID),
 			IdempotencyKey: key, GrossCents: gross, RefundCents: refundCents,
 			DepositCents: deposit, NetCents: net, Status: "draft",
 		}
@@ -127,6 +123,114 @@ func (s *TeamService) GenerateTeamSettlement(travelTenantID, groupID uint, actor
 		return nil, err
 	}
 	return &statement, nil
+}
+
+// reconcileTeamSettlementsAfterRefundTx keeps team settlement projections in
+// step with a successful ticket refund. Before final payment the open statement
+// is refreshed and sent back for confirmation. After payment, a separate
+// negative statement records the reconciliation correction; funds or credit
+// were already restored by the refund transaction and are not moved again.
+func reconcileTeamSettlementsAfterRefundTx(tx *gorm.DB, order *model.Order, refund *model.Refund) error {
+	var groups []model.TourGroup
+	if err := tx.Where("sales_order_id = ? AND status != ?", order.ID, "cancelled").Find(&groups).Error; err != nil {
+		return err
+	}
+	for i := range groups {
+		group := &groups[i]
+		var statements []model.TeamSettlementStatement
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("group_id = ?", group.ID).Order("sequence ASC, id ASC").Find(&statements).Error; err != nil {
+			return err
+		}
+		if len(statements) == 0 {
+			continue
+		}
+		_, currentRefundCents, err := teamVerifiedSettlementAmounts(tx, group)
+		if err != nil {
+			return err
+		}
+		var accountedRefundCents int64
+		paid := false
+		maxSequence := 0
+		for j := range statements {
+			accountedRefundCents += statements[j].RefundCents
+			paid = paid || statements[j].Status == "paid"
+			if statements[j].Sequence > maxSequence {
+				maxSequence = statements[j].Sequence
+			}
+		}
+		delta := currentRefundCents - accountedRefundCents
+		if delta <= 0 {
+			continue
+		}
+		if !paid {
+			statement := &statements[len(statements)-1]
+			available := statement.GrossCents - (statement.RefundCents + delta)
+			deposit := group.DepositCents
+			if deposit > available {
+				deposit = available
+			}
+			if deposit < 0 {
+				deposit = 0
+			}
+			updates := map[string]interface{}{
+				"refund_cents":  statement.RefundCents + delta,
+				"deposit_cents": deposit,
+				"net_cents":     available - deposit,
+				"status":        "draft", "confirmed_at": nil,
+				"dispute_reason": "", "payment_proof": "", "paid_at": nil,
+			}
+			if err := tx.Model(statement).Updates(updates).Error; err != nil {
+				return err
+			}
+			if err := recordAuditTx(tx, refund.AuthorizedBy, group.SupplierTenantID, "super_admin", "tenant", "team.settlement.refund.refresh", "team_settlement_statement", statement.ID,
+				refund.Reason, fmt.Sprintf(`{"refund_cents":%d,"status":%q}`, statement.RefundCents, statement.Status),
+				fmt.Sprintf(`{"refund_cents":%d,"status":"draft"}`, statement.RefundCents+delta)); err != nil {
+				return err
+			}
+			continue
+		}
+
+		key := fmt.Sprintf("team-settlement:%d:refund:%d", group.ID, refund.ID)
+		var existing model.TeamSettlementStatement
+		if err := tx.Where("idempotency_key = ?", key).First(&existing).Error; err == nil {
+			continue
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		now := time.Now()
+		correction := model.TeamSettlementStatement{
+			TravelTenantID: group.TenantID, SupplierTenantID: group.SupplierTenantID,
+			GroupID: group.ID, Sequence: maxSequence + 1, Kind: "refund_correction",
+			StatementNo: fmt.Sprintf("TST-R-%d-%d", time.Now().UnixNano(), group.ID), IdempotencyKey: key,
+			GrossCents: 0, RefundCents: delta, DepositCents: 0, NetCents: -delta,
+			Status: "paid", PaymentProof: "退款已原路恢复账户余额", ConfirmedAt: &now, PaidAt: &now,
+		}
+		if err := tx.Create(&correction).Error; err != nil {
+			return err
+		}
+		if err := recordAuditTx(tx, refund.AuthorizedBy, group.SupplierTenantID, "super_admin", "tenant", "team.settlement.refund.correction", "team_settlement_statement", correction.ID,
+			refund.Reason, "", fmt.Sprintf(`{"refund_cents":%d,"net_cents":%d,"status":"paid"}`, delta, -delta)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func teamVerifiedSettlementAmounts(tx *gorm.DB, group *model.TourGroup) (int64, int64, error) {
+	var fulfillments []model.FulfillmentOrder
+	if err := tx.Where("sales_order_id = ? AND supplier_tenant_id = ? AND scenic_area_id = ?", group.SalesOrderID, group.SupplierTenantID, group.ScenicAreaID).Find(&fulfillments).Error; err != nil {
+		return 0, 0, err
+	}
+	var gross, refund int64
+	for i := range fulfillments {
+		fulfillmentGross, fulfillmentRefund, _, err := verifiedSettlementAmountsForFulfillment(tx, &fulfillments[i])
+		if err != nil {
+			return 0, 0, err
+		}
+		gross += fulfillmentGross
+		refund += fulfillmentRefund
+	}
+	return gross, refund, nil
 }
 
 func (s *TeamService) ListTeamSettlements(tenantID uint, page, pageSize int) ([]model.TeamSettlementStatement, int64, error) {

@@ -393,6 +393,9 @@ func (s *TeamService) CreateGroup(tenantID uint, group *model.TourGroup) error {
 	if tenantID == 0 || strings.TrimSpace(group.Name) == "" || group.SupplierTenantID == 0 || group.ScenicAreaID == 0 || group.VisitDate.IsZero() {
 		return errors.New("group name, supplier, scenic area and visit date are required")
 	}
+	if group.DepositCents < 0 {
+		return errors.New("team deposit cannot be negative")
+	}
 	return model.Write(func(tx *gorm.DB) error {
 		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
 			return err
@@ -414,7 +417,6 @@ func (s *TeamService) CreateGroup(tenantID uint, group *model.TourGroup) error {
 		group.TenantID = tenantID
 		group.SalesOrderID = 0
 		group.ContractAmountCents = 0
-		group.DepositCents = 0
 		group.CreditUsedCents = 0
 		group.SettlementStatus = "open"
 		group.Status = "draft"
@@ -766,22 +768,46 @@ func (s *TeamService) AttachOrder(tenantID, groupID, orderID uint) error {
 				return err
 			}
 		}
-		amountCents := moneyCents(order.TotalAmount)
+		amountCents := teamOrderSettlementCents(&order, group.SupplierTenantID, group.ScenicAreaID)
+		if amountCents <= 0 {
+			return errors.New("order has no settlement amount for the team supplier and scenic area")
+		}
 		creditUsed := amountCents - group.DepositCents
 		if creditUsed < 0 {
 			creditUsed = 0
 		}
 		if group.ContractID != 0 {
 			var contract model.TravelContract
-			if err := tx.First(&contract, group.ContractID).Error; err != nil {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&contract, group.ContractID).Error; err != nil {
 				return err
 			}
-			if contract.CreditLimitCents > 0 && creditUsed > contract.CreditLimitCents {
+			var occupied int64
+			if err := tx.Model(&model.TourGroup{}).
+				Where("contract_id = ? AND id != ? AND status != ? AND settlement_status != ?", contract.ID, group.ID, "cancelled", "settled").
+				Select("COALESCE(SUM(credit_used_cents), 0)").Scan(&occupied).Error; err != nil {
+				return err
+			}
+			if contract.CreditLimitCents > 0 && occupied+creditUsed > contract.CreditLimitCents {
 				return errors.New("team order exceeds contract credit limit")
 			}
 		}
 		return tx.Model(&group).Updates(map[string]interface{}{"sales_order_id": order.ID, "status": "confirmed", "contract_amount_cents": amountCents, "credit_used_cents": creditUsed, "settlement_status": "open"}).Error
 	})
+}
+
+func teamOrderSettlementCents(order *model.Order, supplierTenantID, scenicAreaID uint) int64 {
+	if order == nil {
+		return 0
+	}
+	var total int64
+	for i := range order.Items {
+		item := order.Items[i]
+		if item.FulfillmentTenantID != supplierTenantID || item.FulfillmentScenicAreaID != scenicAreaID {
+			continue
+		}
+		total += moneyCents(item.SettlementPrice) * int64(item.Quantity)
+	}
+	return total
 }
 
 func sameTeamDate(left, right time.Time) bool {
@@ -831,7 +857,11 @@ func validateTeamOrderAgainstContract(contract *model.TravelContract, order *mod
 		}
 		byProduct[rule.ProductID] = rule
 	}
+	quantities := make(map[uint]int)
 	for _, item := range order.Items {
+		if item.FulfillmentTenantID != 0 && item.FulfillmentTenantID != contract.SupplierTenantID {
+			continue
+		}
 		rule, ok := byProduct[item.FulfillmentProductID]
 		if !ok {
 			return fmt.Errorf("supplier product %d is not authorized by team contract", item.FulfillmentProductID)
@@ -839,8 +869,11 @@ func validateTeamOrderAgainstContract(contract *model.TravelContract, order *mod
 		if moneyCents(item.SettlementPrice) != rule.PriceCents {
 			return fmt.Errorf("supplier product %d settlement price does not match team contract", item.FulfillmentProductID)
 		}
-		if rule.MaxQuantity > 0 && item.Quantity > rule.MaxQuantity {
-			return fmt.Errorf("supplier product %d exceeds team contract quantity", item.FulfillmentProductID)
+		quantities[item.FulfillmentProductID] += item.Quantity
+	}
+	for productID, quantity := range quantities {
+		if rule := byProduct[productID]; rule.MaxQuantity > 0 && quantity > rule.MaxQuantity {
+			return fmt.Errorf("supplier product %d exceeds team contract quantity", productID)
 		}
 	}
 	return nil

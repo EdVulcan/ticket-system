@@ -90,6 +90,8 @@ func runMigrations(db *gorm.DB) error {
 		{version: 57, name: "cross supplier bundle products", apply: migrateBundleProducts},
 		{version: 58, name: "initial administrator and reversible check-in facts", apply: migrateInitialAdministratorAndCheckInReversal},
 		{version: 59, name: "platform account hierarchy", apply: migratePlatformAccountHierarchy},
+		{version: 60, name: "verification based settlement facts", apply: migrateVerificationSettlementFacts},
+		{version: 61, name: "team refund correction statements", apply: migrateTeamRefundCorrectionStatements},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -109,6 +111,23 @@ func runMigrations(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func migrateTeamRefundCorrectionStatements(db *gorm.DB) error {
+	for _, index := range []string{"idx_team_settlement_statements_group_id", "idx_team_settlement_group_id"} {
+		if db.Migrator().HasIndex(&TeamSettlementStatement{}, index) {
+			if err := db.Migrator().DropIndex(&TeamSettlementStatement{}, index); err != nil {
+				return err
+			}
+		}
+	}
+	if err := db.AutoMigrate(&TeamSettlementStatement{}); err != nil {
+		return err
+	}
+	if err := db.Model(&TeamSettlementStatement{}).Where("sequence IS NULL OR sequence = 0").Updates(map[string]interface{}{"sequence": 1, "kind": "original"}).Error; err != nil {
+		return err
+	}
+	return db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_team_settlement_group_sequence ON team_settlement_statements(group_id, sequence)`).Error
 }
 
 func migratePlatformAccountHierarchy(db *gorm.DB) error {
@@ -1086,6 +1105,24 @@ func migrateProductRevisions(db *gorm.DB) error {
 
 func migrateSettlements(db *gorm.DB) error {
 	return db.AutoMigrate(&SettlementStatement{}, &SettlementLine{}, &FulfillmentOrder{})
+}
+
+func migrateVerificationSettlementFacts(db *gorm.DB) error {
+	hadSource := db.Migrator().HasColumn(&SettlementLine{}, "Source")
+	if err := db.AutoMigrate(&CheckInRecord{}, &SettlementLine{}); err != nil {
+		return err
+	}
+	if !hadSource {
+		if err := db.Model(&SettlementLine{}).Where("source = ?", "verification").Update("source", "legacy_sale").Error; err != nil {
+			return err
+		}
+	}
+	for _, index := range []string{"idx_settlement_fulfillment_unique", "idx_settlement_lines_fulfillment_order_id"} {
+		if err := db.Exec("DROP INDEX IF EXISTS " + index).Error; err != nil {
+			return err
+		}
+	}
+	return db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_settlement_statement_fulfillment ON settlement_lines(statement_id, fulfillment_order_id)").Error
 }
 
 func migratePhaseZeroHardening(db *gorm.DB) error {

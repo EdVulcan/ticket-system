@@ -184,7 +184,9 @@ func (s *ReportService) GetOperationsReport(tenantID uint, startDate, endDate st
 	if report.InventoryRemaining < 0 {
 		report.InventoryRemaining = 0
 	}
-	if err := model.DB.Table("fulfillment_orders").Joins("LEFT JOIN settlement_lines ON settlement_lines.fulfillment_order_id = fulfillment_orders.id").Joins("LEFT JOIN settlement_statements ON settlement_statements.id = settlement_lines.statement_id").Where("fulfillment_orders.supplier_tenant_id = ? AND fulfillment_orders.status IN ? AND fulfillment_orders.created_at BETWEEN ? AND ? AND (settlement_lines.id IS NULL OR settlement_statements.status != ?)", tenantID, []string{"paid", "fulfilled"}, start, end, "paid").Select("COALESCE(SUM(CAST(ROUND(fulfillment_orders.settlement_amount * 100.0) AS INTEGER)), 0)").Scan(&report.SupplierReceivableCents).Error; err != nil {
+	if err := model.DB.Table("settlement_statements").
+		Where("supplier_tenant_id = ? AND status != ? AND created_at BETWEEN ? AND ?", tenantID, "paid", start, end).
+		Select("COALESCE(SUM(net_cents + adjustment_cents), 0)").Scan(&report.SupplierReceivableCents).Error; err != nil {
 		return nil, err
 	}
 	return report, nil

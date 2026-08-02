@@ -274,6 +274,10 @@ type CheckInRecord struct {
 	ReversedAt       *time.Time `gorm:"index" json:"-"`
 	ReversedBy       uint       `gorm:"index" json:"-"`
 	ReversalRefundID uint       `gorm:"index" json:"-"`
+	// Settlement links make each successful admission and its later reversal
+	// claimable exactly once without introducing a general-purpose ledger.
+	SettlementLineID         uint `gorm:"index" json:"-"`
+	ReversalSettlementLineID uint `gorm:"index" json:"-"`
 }
 
 // ProductInventory tracks daily capacity independently for each visit date.

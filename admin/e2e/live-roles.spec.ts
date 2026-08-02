@@ -5,17 +5,21 @@ async function tenantLogin(page: import('@playwright/test').Page, systemCode: st
   await page.getByPlaceholder('商户系统编号').fill(systemCode)
   await page.getByPlaceholder('用户名').fill('admin')
   await page.getByPlaceholder('密码').fill(password)
+	const loginResponse = page.waitForResponse(response => response.url().endsWith('/api/v1/auth/login') && response.request().method() === 'POST', { timeout: 15_000 })
   await page.getByRole('button', { name: '登 录' }).click()
-  await expect(page.getByRole('heading', { name: '经营控制台' })).toBeVisible()
+	await loginResponse
+	await expect(page.getByRole('heading', { name: '经营控制台' })).toBeVisible({ timeout: 15_000 })
 }
 
 test('真实平台账号登录并读取治理总览', async ({ page }) => {
   await page.goto('/platform/login')
   await page.getByPlaceholder('平台用户名').fill('platform-e2e')
   await page.getByPlaceholder('密码').fill('Platform-E2E-Password-2')
+  const loginResponse = page.waitForResponse(response => response.url().endsWith('/api/v1/auth/platform/login') && response.request().method() === 'POST', { timeout: 15_000 })
   await page.getByRole('button', { name: '登 录' }).click()
+  await loginResponse
 
-  await expect(page.getByRole('heading', { name: '平台运行总览' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '平台运行总览' })).toBeVisible({ timeout: 15_000 })
   await expect(page.getByText('租户总数').locator('..').getByText('3', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: '租户治理' }).click()
   await expect(page.getByRole('heading', { name: '商户开户管理' })).toBeVisible()

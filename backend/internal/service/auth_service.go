@@ -12,6 +12,8 @@ import (
 
 type AuthService struct{}
 
+const passwordHashCost = 12
+
 type Claims struct {
 	UserID         uint   `json:"user_id"`
 	Username       string `json:"username"`
@@ -56,11 +58,11 @@ func (s *AuthService) Login(systemCode, username, password string) (string, *mod
 func (s *AuthService) GenerateToken(user *model.User) (string, error) {
 	expirationTime := time.Now().Add(24 * time.Hour)
 	claims := &Claims{
-		UserID:   user.ID,
-		Username: user.Username,
-		Role:     user.Role,
-		TenantID: user.TenantID,
-		Scope:    "tenant",
+		UserID:       user.ID,
+		Username:     user.Username,
+		Role:         user.Role,
+		TenantID:     user.TenantID,
+		Scope:        "tenant",
 		TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
@@ -108,11 +110,11 @@ func (s *AuthService) StaffLogin(systemCode, jobNumber, password string) (string
 func (s *AuthService) GenerateStaffToken(staff *model.Staff) (string, error) {
 	expirationTime := time.Now().Add(24 * time.Hour)
 	claims := &Claims{
-		UserID:   staff.ID,
-		Username: staff.Name, // Use Name as Username for claims
-		Role:     staff.Roles,
-		TenantID: staff.TenantID,
-		Scope:    "tenant",
+		UserID:       staff.ID,
+		Username:     staff.Name, // Use Name as Username for claims
+		Role:         staff.Roles,
+		TenantID:     staff.TenantID,
+		Scope:        "tenant",
 		TokenVersion: staff.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
@@ -156,6 +158,6 @@ func (s *AuthService) GeneratePlatformToken(user *model.PlatformUser) (string, e
 
 // Helper to hash password (used for seeding or creating users)
 func HashPassword(password string) (string, error) {
-	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), passwordHashCost)
 	return string(bytes), err
 }

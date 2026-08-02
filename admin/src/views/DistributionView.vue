@@ -194,7 +194,8 @@
             <el-table-column label="游客" min-width="160"><template #default="{ row }"><div>{{ row.visitor_name || '-' }}</div><div class="text-xs text-gray-400">{{ row.visitor_phone || '-' }}</div></template></el-table-column>
             <el-table-column prop="visitor_id" label="证件号" min-width="180" show-overflow-tooltip />
             <el-table-column label="票状态" width="110"><template #default="{ row }">{{ ticketStatusText(row.entitlement_status || row.status) }}</template></el-table-column>
-            <el-table-column label="核销记录" min-width="240"><template #default="{ row }"><span v-if="!row.check_in_records?.length">暂无</span><div v-for="record in row.check_in_records || []" :key="record.id" class="text-xs">{{ formatDateTime(record.check_in_time) }} · {{ record.check_point?.name || `检票点 ${record.check_point_id}` }} · {{ record.result === 'success' ? '成功' : '失败' }}</div></template></el-table-column>
+            <el-table-column label="核销记录" min-width="240"><template #default="{ row }"><span v-if="!row.check_in_records?.length">暂无</span><div v-for="record in row.check_in_records || []" :key="record.id" class="text-xs">{{ formatDateTime(record.check_in_time) }} · {{ record.check_point?.name || `检票点 ${record.check_point_id}` }} · {{ record.reversed_at ? '已随退票撤销' : (record.result === 'success' ? '成功' : '失败') }}</div></template></el-table-column>
+            <el-table-column v-if="currentUser.is_initial_admin" label="操作" width="90" fixed="right"><template #default="{ row }"><el-button v-if="row.check_in_count > 0 && row.status !== 'refunded'" link type="danger" @click="openUsedRefund(item, row)">退票</el-button></template></el-table-column>
           </el-table>
         </section>
 
@@ -207,9 +208,30 @@
             <el-table-column label="退款金额" width="120"><template #default="{ row }">¥{{ centsToYuan(row.amount_cents) }}</template></el-table-column>
             <el-table-column prop="reason" label="原因" min-width="220" />
           </el-table>
+          <el-table v-if="fulfillmentDetail.refunds?.length" :data="fulfillmentDetail.refunds" size="small" class="mt-3">
+            <el-table-column prop="refund_no" label="退款单" min-width="190" />
+            <el-table-column label="票码" min-width="190"><template #default="{ row }">{{ refundTicketCodes(row.ticket_codes) }}</template></el-table-column>
+            <el-table-column label="金额" width="120"><template #default="{ row }">¥{{ centsToYuan(row.amount_cents) }}</template></el-table-column>
+            <el-table-column label="状态" width="120"><template #default="{ row }">{{ refundStatusText(row.status) }}</template></el-table-column>
+            <el-table-column prop="reason" label="原因" min-width="200" />
+          </el-table>
         </section>
       </div>
     </el-drawer>
+
+    <el-dialog v-model="usedRefundDialog" title="已核销票退票" width="500px" append-to-body>
+      <el-alert title="退款将按原订单支付方式处理，已恢复的预付款或授信不会在结算冲减时重复变动。" type="warning" :closable="false" class="mb-4" />
+      <el-descriptions v-if="usedRefundTarget.ticket" :column="1" border>
+        <el-descriptions-item label="销售订单">{{ fulfillmentDetail?.fulfillment?.sales_order_no }}</el-descriptions-item>
+        <el-descriptions-item label="票种">{{ usedRefundTarget.item?.product_name }}</el-descriptions-item>
+        <el-descriptions-item label="票码">{{ usedRefundTarget.ticket?.ticket_code }}</el-descriptions-item>
+        <el-descriptions-item label="退款金额">¥{{ centsToYuan(usedRefundTarget.ticket?.refund_value_cents) }}</el-descriptions-item>
+      </el-descriptions>
+      <el-form label-position="top" class="mt-4">
+        <el-form-item label="退票原因" required><el-input v-model="usedRefundReason" type="textarea" :rows="3" maxlength="255" show-word-limit /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="usedRefundDialog = false">取消</el-button><el-button type="danger" :loading="usedRefundSaving" @click="submitUsedRefund">确认退票</el-button></template>
+    </el-dialog>
 
     <!-- Apply Dialog -->
     <el-dialog v-model="dialogVisible" title="申请代理权益" width="500px">
@@ -441,6 +463,10 @@ const fulfillmentDistributorId = ref<number | undefined>()
 const fulfillmentDrawer = ref(false)
 const loadingFulfillmentDetail = ref(false)
 const fulfillmentDetail = ref<any>(null)
+const usedRefundDialog = ref(false)
+const usedRefundSaving = ref(false)
+const usedRefundReason = ref('')
+const usedRefundTarget = reactive<any>({ item: null, ticket: null })
 
 // Apply Dialog State
 const dialogVisible = ref(false)
@@ -635,6 +661,33 @@ const openFulfillment = async (row: any) => {
     }
 }
 
+const openUsedRefund = (item: any, ticket: any) => {
+    usedRefundTarget.item = item
+    usedRefundTarget.ticket = ticket
+    usedRefundReason.value = ''
+    usedRefundDialog.value = true
+}
+
+const submitUsedRefund = async () => {
+    if (!usedRefundReason.value.trim()) { ElMessage.warning('请填写退票原因'); return }
+    usedRefundSaving.value = true
+    try {
+        const fulfillmentID = Number(fulfillmentDetail.value?.fulfillment?.id || 0)
+        const response = await request.post(`/distribution/fulfillments/${fulfillmentID}/used-refunds`, {
+            idempotency_key: `supplier-used-refund-${fulfillmentID}-${usedRefundTarget.ticket.ticket_code}-${Date.now()}`,
+            ticket_codes: [usedRefundTarget.ticket.ticket_code],
+            reason: usedRefundReason.value.trim(),
+        })
+        usedRefundDialog.value = false
+        ElMessage.success(['pending', 'group_pending'].includes(response.data.status) ? '退票已提交，等待原支付渠道确认' : '退票已完成')
+        await Promise.all([openFulfillment({ id: fulfillmentID }), fetchFulfillments()])
+    } catch (e: any) {
+        ElMessage.error(e.response?.data?.error || '已核销票退票失败')
+    } finally {
+        usedRefundSaving.value = false
+    }
+}
+
 const centsToYuan = (value: number) => (Number(value || 0) / 100).toFixed(2)
 const formatDate = (value: string) => value ? new Date(value).toLocaleDateString('zh-CN') : '未指定日期'
 const formatDateTime = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
@@ -643,6 +696,8 @@ const settlementStatusText = (value: string) => ({ draft: '草稿', supplier_con
 const ticketStatusText = (value: string) => ({ issued: '已出票', active: '可使用', unused: '未使用', used: '已核销', refunded: '已退款', void: '已作废', expired: '已过期' } as any)[value] || '未知状态'
 const afterSaleTypeText = (value: string) => ({ refund: '退票', reschedule: '改期', exchange: '换票', void: '作废', reissue: '补打' } as any)[value] || '其他售后'
 const afterSaleStatusText = (value: string) => ({ pending: '待审核', approved: '已批准', processing: '处理中', completed: '已完成', rejected: '已拒绝', failed: '失败' } as any)[value] || '未知状态'
+const refundStatusText = (value: string) => ({ group_pending: '等待原支付渠道', group_succeeded: '已退款', pending: '等待原支付渠道', processing: '处理中', submitted: '渠道处理中', succeeded: '已退款', failed: '失败', manual_review: '待人工复核' } as any)[value] || '未知状态'
+const refundTicketCodes = (value: string) => { try { return (JSON.parse(value || '[]') || []).join('、') || '-' } catch { return value || '-' } }
 const offerStatusText = (value: string) => ({ active: '生效中', suspended: '已暂停', expired: '已终止' } as Record<string, string>)[value] || '未知状态'
 const channelText = (value: string) => String(value || '').split(',').map(item => ({ window: '售票窗口', online: '线上商城', ota: '外部渠道' } as Record<string, string>)[item.trim()] || '其他渠道').join('、')
 

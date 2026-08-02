@@ -80,12 +80,27 @@ func TestSettlementUsesFulfillmentSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	periodStart, periodEnd := time.Now().Add(-time.Hour).Truncate(time.Second), time.Now().Add(time.Hour).Truncate(time.Second)
+	if _, err := (&SettlementService{}).GenerateStatement(scenario.supplierID, scenario.supplierID, scenario.distributorID, periodStart, periodEnd); err == nil {
+		t.Fatal("unverified sale was included in supplier settlement")
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := (&TicketService{}).Verify(ticket.TicketCode, scenario.supplierCheckpointID, scenario.supplierDeviceID, scenario.supplierID); err != nil {
+		t.Fatal(err)
+	}
 	statement, err := (&SettlementService{}).GenerateStatement(scenario.supplierID, scenario.supplierID, scenario.distributorID, periodStart, periodEnd)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if statement.GrossCents != 6000 || statement.NetCents != 6000 {
 		t.Fatalf("statement=%+v", statement)
+	}
+	today := time.Now().Format("2006-01-02")
+	operations, err := (&ReportService{}).GetOperationsReport(scenario.supplierID, today, today)
+	if err != nil || operations.SupplierReceivableCents != 6000 {
+		t.Fatalf("supplier receivable=%+v err=%v", operations, err)
 	}
 	var line model.SettlementLine
 	if err := model.DB.Where("statement_id = ?", statement.ID).First(&line).Error; err != nil {
@@ -170,9 +185,45 @@ func TestSettlementUsesFulfillmentSnapshot(t *testing.T) {
 	if err := model.DB.First(&fulfillment, line.FulfillmentOrderID).Error; err != nil || fulfillment.SettlementStatus != "paid" {
 		t.Fatalf("paid fulfillment=%+v err=%v", fulfillment, err)
 	}
+	operations, err = (&ReportService{}).GetOperationsReport(scenario.supplierID, today, today)
+	if err != nil || operations.SupplierReceivableCents != 0 {
+		t.Fatalf("paid statement remained supplier receivable=%+v err=%v", operations, err)
+	}
 	var settlementAudits int64
 	if err := model.DB.Model(&model.AuditLog{}).Where("tenant_id IN ? AND target_type = ? AND target_id = ? AND action IN ?", []uint{scenario.supplierID, scenario.distributorID}, "settlement_statement", statement.ID, []string{"settlement.status", "settlement.adjust"}).Count(&settlementAudits).Error; err != nil || settlementAudits < 6 {
 		t.Fatalf("settlement audits=%d err=%v", settlementAudits, err)
+	}
+
+	// A refund after settlement must not rewrite the paid statement. Its
+	// reversed admission is carried into the next period exactly once.
+	var checkIn model.CheckInRecord
+	if err := model.DB.Where("ticket_id = ? AND result = ?", ticket.ID, "success").First(&checkIn).Error; err != nil {
+		t.Fatal(err)
+	}
+	reversedAt := periodEnd.Add(2 * time.Hour)
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&checkIn).Update("reversed_at", reversedAt).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	correction, err := settlements.GenerateStatement(scenario.supplierID, scenario.supplierID, scenario.distributorID, periodEnd.Add(time.Hour), periodEnd.Add(3*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if correction.GrossCents != 0 || correction.RefundCents != 6000 || correction.NetCents != -6000 {
+		t.Fatalf("late refund correction=%+v", correction)
+	}
+	if err := settlements.SetStatus(scenario.supplierID, correction.ID, "supplier_confirmed", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := settlements.SetStatus(scenario.distributorID, correction.ID, "confirmed", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.First(&correction, correction.ID).Error; err != nil || correction.Status != "paid" || correction.PaymentProof != "退款已原路恢复账户余额" {
+		t.Fatalf("refund-only reconciliation was not closed automatically: %+v err=%v", correction, err)
+	}
+	if _, err := settlements.GenerateStatement(scenario.supplierID, scenario.supplierID, scenario.distributorID, periodEnd.Add(3*time.Hour), periodEnd.Add(4*time.Hour)); err == nil {
+		t.Fatal("reversed admission was settled more than once")
 	}
 }
 

@@ -8,13 +8,14 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const currentPostgresSchemaVersion = 59
+const currentPostgresSchemaVersion = 61
 
 // PostgreSQL starts from the current domain schema. The historical migrations
 // contain SQLite trigger syntax and legacy backfills, so replaying them on a
 // fresh PostgreSQL database would be incorrect. SQLite remains available for
 // regression tests and any future, separately verified legacy import work.
 func runPostgresMigrations(db *gorm.DB) error {
+	hadSettlementSource := db.Migrator().HasColumn(&SettlementLine{}, "Source")
 	models := []interface{}{
 		&SchemaMigration{},
 		&Tenant{}, &TenantCapability{}, &ScenicArea{}, &PlatformUser{}, &User{}, &Staff{},
@@ -35,6 +36,14 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
+	}
+	if err := db.Model(&TeamSettlementStatement{}).Where("sequence IS NULL OR sequence = 0").Updates(map[string]interface{}{"sequence": 1, "kind": "original"}).Error; err != nil {
+		return fmt.Errorf("backfill team settlement sequence: %w", err)
+	}
+	if !hadSettlementSource {
+		if err := db.Model(&SettlementLine{}).Where("source = ?", "verification").Update("source", "legacy_sale").Error; err != nil {
+			return fmt.Errorf("mark legacy sale-based settlement lines: %w", err)
+		}
 	}
 	if err := db.Exec(`
 		UPDATE platform_users
@@ -66,12 +75,18 @@ func runPostgresMigrations(db *gorm.DB) error {
 }
 
 func applyPostgresIndexes(db *gorm.DB) error {
+	for _, index := range []string{"idx_settlement_fulfillment_unique", "idx_settlement_lines_fulfillment_order_id", "idx_team_settlement_statements_group_id", "idx_team_settlement_group_id"} {
+		if err := db.Exec("DROP INDEX IF EXISTS " + index).Error; err != nil {
+			return fmt.Errorf("drop obsolete PostgreSQL index: %w", err)
+		}
+	}
 	statements := []string{
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_initial_admin ON users(tenant_id) WHERE is_initial_admin`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_users_initial_admin ON platform_users(is_initial_admin) WHERE is_initial_admin`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_refund_allocation_sequence ON refunds(parent_refund_id, allocation_seq) WHERE parent_refund_id != 0`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_bundle_component_product ON bundle_components(bundle_version_id, seller_product_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_team_entry_request ON tour_entry_batches(group_id, idempotency_key)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_team_settlement_group_sequence ON team_settlement_statements(group_id, sequence)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_idempotency ON payments(tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_product_stock_slot ON product_inventories(tenant_id, product_id, stock_date, stock_slot)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_reservation_external ON channel_reservations(channel_account_id, external_no)`,
@@ -80,7 +95,7 @@ func applyPostgresIndexes(db *gorm.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_distribution_pair ON distributor_relationships(agent_tenant_id, supplier_tenant_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_capital_account_pair ON capital_accounts(owner_tenant_id, manager_tenant_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_accounts_code_global ON channel_accounts(code)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_settlement_fulfillment_unique ON settlement_lines(fulfillment_order_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_settlement_statement_fulfillment ON settlement_lines(statement_id, fulfillment_order_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_product_revision_unique ON product_revisions(product_id, version)`,
 	}
 	for _, statement := range statements {

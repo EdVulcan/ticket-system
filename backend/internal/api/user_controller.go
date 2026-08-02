@@ -64,6 +64,7 @@ func (c *UserController) Create(ctx *gin.Context) {
 			}
 			if err := tx.Unscoped().Model(&existing).Updates(map[string]interface{}{
 				"password": hashedPwd, "role": req.Role, "deleted_at": nil,
+				"token_version": gorm.Expr("token_version + 1"),
 			}).Error; err != nil {
 				return err
 			}

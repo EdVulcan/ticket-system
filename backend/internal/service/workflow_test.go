@@ -1214,6 +1214,10 @@ func TestHardwareCommandRequiresDeviceAndAckToken(t *testing.T) {
 	if err := model.DB.First(&stored, command.ID).Error; err != nil || stored.Status != "acknowledged" {
 		t.Fatalf("stored command=%+v err=%v", stored, err)
 	}
+	idle, err := service.PollHardwareCommand(tenant.SystemCode, device.SerialNumber, "test-device-key")
+	if err != nil || idle != nil {
+		t.Fatalf("idle hardware poll=%+v err=%v, want no command", idle, err)
+	}
 }
 
 func TestChannelReservationConvertsWithoutDoubleBookingStock(t *testing.T) {
@@ -1465,6 +1469,10 @@ func TestSupplierControlsTravelContractProductPrices(t *testing.T) {
 func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 	resetBusinessData(t)
 	var travel, supplier model.Tenant
+	var product model.Product
+	var area model.ScenicArea
+	var checkpoint model.CheckPoint
+	var device model.Device
 	if err := model.Write(func(tx *gorm.DB) error {
 		travel = model.Tenant{Name: "Travel", SystemCode: "TEAM-FIN-T", SecretKey: "t"}
 		supplier = model.Tenant{Name: "Supplier", SystemCode: "TEAM-FIN-S", SecretKey: "s"}
@@ -1474,7 +1482,29 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 		if err := tx.Create(&supplier).Error; err != nil {
 			return err
 		}
-		return tx.Create(&model.TravelContract{TravelTenantID: travel.ID, SupplierTenantID: supplier.ID, ContractNo: "TEAM-CONTRACT-1", Status: "active", PriceRulesJSON: `[{"product_id":42,"price_cents":9900,"max_quantity":2}]`, CreditLimitCents: 20000}).Error
+		area = model.ScenicArea{TenantID: supplier.ID, Code: "TEAM-FIN-AREA", Name: "Team Area", Status: "active"}
+		if err := tx.Create(&area).Error; err != nil {
+			return err
+		}
+		checkpoint = model.CheckPoint{TenantID: supplier.ID, ScenicAreaID: area.ID, Name: "Team Gate"}
+		if err := tx.Create(&checkpoint).Error; err != nil {
+			return err
+		}
+		checkpointID := checkpoint.ID
+		device = model.Device{TenantID: supplier.ID, ScenicAreaID: area.ID, CheckPointID: &checkpointID, Name: "Team Device", SerialNumber: "TEAM-FIN-DEVICE", Type: "gate", Status: "online"}
+		if err := tx.Create(&device).Error; err != nil {
+			return err
+		}
+		rule := model.TicketRule{TenantID: supplier.ID, Name: "Team Rule", ValidityType: "date"}
+		if err := tx.Create(&rule).Error; err != nil {
+			return err
+		}
+		product = model.Product{TenantID: supplier.ID, ScenicAreaID: area.ID, RuleID: rule.ID, Name: "Team Product", Status: "online", IsDistributable: true, Price: 120, SettlementPrice: 99}
+		if err := tx.Omit("Rule").Create(&product).Error; err != nil {
+			return err
+		}
+		priceRules := fmt.Sprintf(`[{"product_id":%d,"price_cents":9900,"max_quantity":2}]`, product.ID)
+		return tx.Create(&model.TravelContract{TravelTenantID: travel.ID, SupplierTenantID: supplier.ID, ContractNo: "TEAM-CONTRACT-1", Status: "active", PriceRulesJSON: priceRules, CreditLimitCents: 20000}).Error
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1482,22 +1512,44 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 	if err := model.DB.First(&contract).Error; err != nil {
 		t.Fatal(err)
 	}
-	validOrder := model.Order{Items: []model.OrderItem{{FulfillmentProductID: 42, SettlementPrice: 99, Quantity: 1}}}
+	validOrder := model.Order{Items: []model.OrderItem{{FulfillmentProductID: product.ID, SettlementPrice: 99, Quantity: 1}}}
 	if err := validateTeamOrderAgainstContract(&contract, &validOrder); err != nil {
 		t.Fatal(err)
 	}
 	invalidOrder := validOrder
-	invalidOrder.Items = []model.OrderItem{{FulfillmentProductID: 42, SettlementPrice: 100, Quantity: 1}}
+	invalidOrder.Items = []model.OrderItem{{FulfillmentProductID: product.ID, SettlementPrice: 100, Quantity: 1}}
 	if err := validateTeamOrderAgainstContract(&contract, &invalidOrder); err == nil {
 		t.Fatal("contract accepted a non-contract price")
 	}
+	overLimit := model.Order{Items: []model.OrderItem{
+		{FulfillmentProductID: product.ID, SettlementPrice: 99, Quantity: 2},
+		{FulfillmentProductID: product.ID, SettlementPrice: 99, Quantity: 1},
+	}}
+	if err := validateTeamOrderAgainstContract(&contract, &overLimit); err == nil {
+		t.Fatal("contract quantity limit was bypassed by duplicate order items")
+	}
 	var group model.TourGroup
 	if err := model.Write(func(tx *gorm.DB) error {
-		order := model.Order{OrderNo: "TEAM-ORDER-1", TenantID: travel.ID, TotalAmount: 99, Status: "paid", Channel: "online"}
+		order := model.Order{OrderNo: "TEAM-ORDER-1", TenantID: travel.ID, TotalAmount: 120, Status: "completed", Channel: "online"}
 		if err := tx.Create(&order).Error; err != nil {
 			return err
 		}
-		group = model.TourGroup{TenantID: travel.ID, SupplierTenantID: supplier.ID, ContractID: contract.ID, GroupNo: "TEAM-1", Name: "Team", VisitDate: time.Now(), ExpectedCount: 1, Status: "confirmed", SalesOrderID: order.ID, ContractAmountCents: 9900, SettlementStatus: "open"}
+		fulfillment := model.FulfillmentOrder{SalesOrderID: order.ID, SalesOrderNo: order.OrderNo, SalesTenantID: travel.ID, SupplierTenantID: supplier.ID, ScenicAreaID: area.ID, FulfillmentNo: "TEAM-FULFILLMENT-1", Status: "fulfilled"}
+		if err := tx.Create(&fulfillment).Error; err != nil {
+			return err
+		}
+		item := model.OrderItem{OrderID: order.ID, ProductID: product.ID, FulfillmentProductID: product.ID, FulfillmentTenantID: supplier.ID, FulfillmentScenicAreaID: area.ID, FulfillmentOrderID: fulfillment.ID, Price: 120, SettlementPrice: 99, Quantity: 1}
+		if err := tx.Create(&item).Error; err != nil {
+			return err
+		}
+		ticket := model.Ticket{OrderID: order.ID, OrderItemID: item.ID, TenantID: travel.ID, ScenicAreaID: area.ID, FulfillmentProductID: product.ID, FulfillmentTenantID: supplier.ID, FulfillmentScenicAreaID: area.ID, FulfillmentOrderID: fulfillment.ID, TicketCode: "TEAM-TICKET-1", CodeMode: "ticket", Status: "used", CheckInCount: 1}
+		if err := tx.Create(&ticket).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&model.CheckInRecord{TenantID: supplier.ID, ScenicAreaID: area.ID, TicketID: ticket.ID, TicketCode: ticket.TicketCode, CheckPointID: checkpoint.ID, DeviceID: device.ID, CheckInTime: time.Now(), Result: "success"}).Error; err != nil {
+			return err
+		}
+		group = model.TourGroup{TenantID: travel.ID, SupplierTenantID: supplier.ID, ScenicAreaID: area.ID, ContractID: contract.ID, GroupNo: "TEAM-1", Name: "Team", VisitDate: time.Now(), ExpectedCount: 1, Status: "confirmed", SalesOrderID: order.ID, ContractAmountCents: 9900, DepositCents: 1000, CreditUsedCents: 8900, SettlementStatus: "open"}
 		return tx.Create(&group).Error
 	}); err != nil {
 		t.Fatal(err)
@@ -1507,8 +1559,14 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 	if err != nil || total != 1 || len(supplierGroups) != 1 || supplierGroups[0].SalesOrderNo != "TEAM-ORDER-1" {
 		t.Fatalf("supplier group order context=%+v total=%d err=%v", supplierGroups, total, err)
 	}
+	if _, err := team.GenerateTeamSettlement(travel.ID, group.ID); err == nil {
+		t.Fatal("team settlement was generated before admission completed")
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Model(&group).Update("status", "entered").Error }); err != nil {
+		t.Fatal(err)
+	}
 	statement, err := team.GenerateTeamSettlement(travel.ID, group.ID)
-	if err != nil || statement.NetCents != 9900 {
+	if err != nil || statement.GrossCents != 9900 || statement.DepositCents != 1000 || statement.NetCents != 8900 {
 		t.Fatalf("statement=%+v err=%v", statement, err)
 	}
 	retry, err := team.GenerateTeamSettlement(travel.ID, group.ID)
@@ -1557,7 +1615,7 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 		t.Fatalf("team settlement audit count=%d, want 7", auditCount)
 	}
 	travelAccounts, err := team.ListTeamAccountSummaries(travel.ID)
-	if err != nil || len(travelAccounts) != 1 || travelAccounts[0].PaidCents != 9000 || travelAccounts[0].PendingCents != 0 {
+	if err != nil || len(travelAccounts) != 1 || travelAccounts[0].PaidCents != 8000 || travelAccounts[0].PendingCents != 0 || travelAccounts[0].CreditUsedCents != 0 {
 		t.Fatalf("travel team accounts=%+v err=%v", travelAccounts, err)
 	}
 	supplierAccounts, err := team.ListTeamAccountSummaries(supplier.ID)
@@ -1579,6 +1637,90 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 	}
 	if _, _, err := team.ExportTeamSettlementCSV(supplier.ID+999, statement.ID); err == nil {
 		t.Fatal("unrelated tenant exported team settlement")
+	}
+}
+
+func TestSupplierUsedRefundOnDistributedTeamOrderCreatesOneCorrection(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+	initial := model.User{TenantID: scenario.supplierID, Username: "supplier-initial", Password: "test", Role: "super_admin", IsInitialAdmin: true}
+	ordinary := model.User{TenantID: scenario.supplierID, Username: "supplier-admin", Password: "test", Role: "admin"}
+	if err := model.DB.Create(&initial).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Create(&ordinary).Error; err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{TenantID: scenario.distributorID, Channel: "online", ContactName: "Team Visitor", Items: []model.OrderItem{{ProductID: scenario.listingID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, scenario.distributorID); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{TenantID: scenario.distributorID, PaymentNo: "TEAM-DIST-PAY-1", OrderNo: order.OrderNo, Amount: order.TotalAmount, AmountCents: moneyCents(order.TotalAmount), Method: "cash", Status: "paid"}
+	if err := model.DB.Create(&payment).Error; err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	var fulfillment model.FulfillmentOrder
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Where("sales_order_id = ? AND supplier_tenant_id = ?", order.ID, scenario.supplierID).First(&fulfillment).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := (&TicketService{}).Verify(ticket.TicketCode, scenario.supplierCheckpointID, scenario.supplierDeviceID, scenario.supplierID); err != nil {
+		t.Fatal(err)
+	}
+	group := model.TourGroup{
+		TenantID: scenario.distributorID, SupplierTenantID: scenario.supplierID, ScenicAreaID: fulfillment.ScenicAreaID,
+		SalesOrderID: order.ID, GroupNo: "TEAM-DIST-REFUND", Name: "Distributed team", VisitDate: time.Now(),
+		ExpectedCount: 1, Status: "entered", ContractAmountCents: 6000, CreditUsedCents: 6000, SettlementStatus: "open",
+	}
+	if err := model.DB.Create(&group).Error; err != nil {
+		t.Fatal(err)
+	}
+	team := &TeamService{}
+	statement, err := team.GenerateTeamSettlement(scenario.distributorID, group.ID)
+	if err != nil || statement.GrossCents != 6000 || statement.Sequence != 1 || statement.Kind != "original" {
+		t.Fatalf("initial team statement=%+v err=%v", statement, err)
+	}
+	if err := team.SetTeamSettlementStatus(scenario.supplierID, statement.ID, "supplier_confirmed", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := team.SetTeamSettlementStatus(scenario.distributorID, statement.ID, "confirmed", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := team.SetTeamSettlementStatus(scenario.distributorID, statement.ID, "paid", "bank-slip"); err != nil {
+		t.Fatal(err)
+	}
+
+	refunds := &RefundService{}
+	if _, err := refunds.CreateSupplierUsedRefund(RefundActor{TenantID: scenario.supplierID, UserID: ordinary.ID}, fulfillment.ID, "supplier-used-denied", []string{ticket.TicketCode}, "现场核实后退票"); err == nil {
+		t.Fatal("ordinary supplier administrator refunded a used distributed ticket")
+	}
+	refund, err := refunds.CreateSupplierUsedRefund(RefundActor{TenantID: scenario.supplierID, UserID: initial.ID}, fulfillment.ID, "supplier-used-approved", []string{ticket.TicketCode}, "现场核实后退票")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refund.TenantID != scenario.distributorID || refund.Status != "group_succeeded" || refund.AmountCents != 8000 || !refund.AuthorizedUsedRefund {
+		t.Fatalf("cross-tenant used refund=%+v", refund)
+	}
+	replay, err := refunds.CreateSupplierUsedRefund(RefundActor{TenantID: scenario.supplierID, UserID: initial.ID}, fulfillment.ID, "supplier-used-approved", []string{ticket.TicketCode}, "现场核实后退票")
+	if err != nil || replay.ID != refund.ID {
+		t.Fatalf("refund replay=%+v err=%v", replay, err)
+	}
+	var statements []model.TeamSettlementStatement
+	if err := model.DB.Where("group_id = ?", group.ID).Order("sequence ASC").Find(&statements).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(statements) != 2 || statements[1].Kind != "refund_correction" || statements[1].RefundCents != 6000 || statements[1].NetCents != -6000 || statements[1].Status != "paid" {
+		t.Fatalf("team refund corrections=%+v", statements)
+	}
+	accounts, err := team.ListTeamAccountSummaries(scenario.distributorID)
+	if err != nil || len(accounts) != 1 || accounts[0].PaidCents != 0 || accounts[0].CreditUsedCents != 0 {
+		t.Fatalf("team account after refund=%+v err=%v", accounts, err)
 	}
 }
 

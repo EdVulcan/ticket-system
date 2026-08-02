@@ -43,33 +43,28 @@ func (s *SettlementService) GenerateStatement(actorTenantID, supplierTenantID, d
 		if err := tx.Where("supplier_tenant_id = ? AND agent_tenant_id = ? AND status IN ?", supplierTenantID, distributorTenantID, []string{"active", "suspended"}).First(&relationship).Error; err != nil {
 			return errors.New("distribution relationship not found")
 		}
-		var fulfillments []model.FulfillmentOrder
-		if err := tx.Where("supplier_tenant_id = ? AND sales_tenant_id = ? AND status IN ? AND created_at BETWEEN ? AND ?", supplierTenantID, distributorTenantID, []string{"paid", "fulfilled"}, start, end).
-			Where("NOT EXISTS (SELECT 1 FROM settlement_lines WHERE settlement_lines.fulfillment_order_id = fulfillment_orders.id)").Find(&fulfillments).Error; err != nil {
+		facts, err := loadSettlementAdmissionFacts(tx, supplierTenantID, distributorTenantID, start, end)
+		if err != nil {
 			return err
 		}
-		if len(fulfillments) == 0 {
-			return errors.New("no fulfillment facts in settlement period")
+		if len(facts) == 0 {
+			return errors.New("no verified admission facts in settlement period")
 		}
 		statement = model.SettlementStatement{SupplierTenantID: supplierTenantID, DistributorTenantID: distributorTenantID, IdempotencyKey: periodKey, StatementNo: fmt.Sprintf("STL-%d-%d", time.Now().UnixNano(), supplierTenantID), PeriodStart: start, PeriodEnd: end, Status: "draft"}
 		if err := tx.Create(&statement).Error; err != nil {
 			return err
 		}
-		for i := range fulfillments {
-			fulfillment := &fulfillments[i]
-			gross, refundCents, commission, err := settlementAmountsForFulfillment(tx, fulfillment)
-			if err != nil {
-				return err
-			}
+		for fulfillmentID, fact := range facts {
+			gross, refundCents, commission := settlementAmountsForAdmissionFacts(fact)
 			net := gross - refundCents - commission
-			if net < 0 {
-				return errors.New("settlement line would be negative")
-			}
-			line := model.SettlementLine{StatementID: statement.ID, FulfillmentOrderID: fulfillment.ID, GrossCents: gross, RefundCents: refundCents, CommissionCents: commission, NetCents: net, Status: "open"}
+			line := model.SettlementLine{StatementID: statement.ID, FulfillmentOrderID: fulfillmentID, Source: "verification", GrossCents: gross, RefundCents: refundCents, CommissionCents: commission, NetCents: net, Status: "open"}
 			if err := tx.Create(&line).Error; err != nil {
 				return err
 			}
-			if err := tx.Model(fulfillment).Update("settlement_status", "statement").Error; err != nil {
+			if err := claimSettlementAdmissionFacts(tx, &line, fact); err != nil {
+				return err
+			}
+			if err := tx.Model(&model.FulfillmentOrder{}).Where("id = ?", fulfillmentID).Update("settlement_status", "statement").Error; err != nil {
 				return err
 			}
 			statement.GrossCents += gross
@@ -85,6 +80,184 @@ func (s *SettlementService) GenerateStatement(actorTenantID, supplierTenantID, d
 	return &statement, nil
 }
 
+type settlementAdmissionFact struct {
+	Record model.CheckInRecord
+	Ticket model.Ticket
+	Item   model.OrderItem
+}
+
+type settlementAdmissionGroup struct {
+	Admissions []settlementAdmissionFact
+	Reversals  []settlementAdmissionFact
+}
+
+func loadSettlementAdmissionFacts(tx *gorm.DB, supplierTenantID, distributorTenantID uint, start, end time.Time) (map[uint]settlementAdmissionGroup, error) {
+	// Old statements were sale-based. Link their successful admissions to the
+	// legacy line so later refunds can still be carried into a new statement,
+	// while preventing those sales from being settled a second time.
+	if err := tx.Exec(`UPDATE check_in_records SET settlement_line_id = (
+		SELECT settlement_lines.id FROM settlement_lines
+		JOIN fulfillment_orders ON fulfillment_orders.id = settlement_lines.fulfillment_order_id
+		JOIN tickets ON tickets.fulfillment_order_id = fulfillment_orders.id
+		WHERE settlement_lines.source = 'legacy_sale' AND tickets.id = check_in_records.ticket_id
+		ORDER BY settlement_lines.id LIMIT 1
+	) WHERE result = 'success' AND settlement_line_id = 0 AND EXISTS (
+		SELECT 1 FROM settlement_lines
+		JOIN fulfillment_orders ON fulfillment_orders.id = settlement_lines.fulfillment_order_id
+		JOIN tickets ON tickets.fulfillment_order_id = fulfillment_orders.id
+		WHERE settlement_lines.source = 'legacy_sale' AND tickets.id = check_in_records.ticket_id
+	)`).Error; err != nil {
+		return nil, err
+	}
+	base := tx.Model(&model.CheckInRecord{}).
+		Joins("JOIN tickets ON tickets.id = check_in_records.ticket_id").
+		Joins("JOIN fulfillment_orders ON fulfillment_orders.id = tickets.fulfillment_order_id").
+		Where("check_in_records.result = ? AND fulfillment_orders.supplier_tenant_id = ? AND fulfillment_orders.sales_tenant_id = ?", "success", supplierTenantID, distributorTenantID).
+		Where("NOT EXISTS (SELECT 1 FROM check_in_records earlier WHERE earlier.ticket_id = check_in_records.ticket_id AND earlier.result = 'success' AND earlier.id < check_in_records.id)").
+		Where("NOT EXISTS (SELECT 1 FROM tour_groups WHERE tour_groups.sales_order_id = fulfillment_orders.sales_order_id)")
+	var admissions, reversals []model.CheckInRecord
+	if err := base.Session(&gorm.Session{}).
+		Where("check_in_records.settlement_line_id = 0 AND check_in_records.reversed_at IS NULL AND check_in_records.check_in_time BETWEEN ? AND ?", start, end).
+		Find(&admissions).Error; err != nil {
+		return nil, err
+	}
+	if err := base.Session(&gorm.Session{}).
+		Where("check_in_records.settlement_line_id != 0 AND check_in_records.reversal_settlement_line_id = 0 AND check_in_records.reversed_at BETWEEN ? AND ?", start, end).
+		Find(&reversals).Error; err != nil {
+		return nil, err
+	}
+	all := append(append([]model.CheckInRecord{}, admissions...), reversals...)
+	if len(all) == 0 {
+		return map[uint]settlementAdmissionGroup{}, nil
+	}
+	ticketIDs := make([]uint, 0, len(all))
+	for i := range all {
+		ticketIDs = append(ticketIDs, all[i].TicketID)
+	}
+	var tickets []model.Ticket
+	if err := tx.Preload("OrderItem").Where("id IN ?", ticketIDs).Find(&tickets).Error; err != nil {
+		return nil, err
+	}
+	ticketByID := make(map[uint]model.Ticket, len(tickets))
+	for i := range tickets {
+		ticketByID[tickets[i].ID] = tickets[i]
+	}
+	groups := make(map[uint]settlementAdmissionGroup)
+	appendFacts := func(records []model.CheckInRecord, reversal bool) error {
+		for i := range records {
+			ticket, ok := ticketByID[records[i].TicketID]
+			if !ok || ticket.FulfillmentOrderID == 0 || ticket.OrderItem.ID == 0 {
+				return errors.New("verified ticket has no immutable fulfillment snapshot")
+			}
+			group := groups[ticket.FulfillmentOrderID]
+			fact := settlementAdmissionFact{Record: records[i], Ticket: ticket, Item: ticket.OrderItem}
+			if reversal {
+				group.Reversals = append(group.Reversals, fact)
+			} else {
+				group.Admissions = append(group.Admissions, fact)
+			}
+			groups[ticket.FulfillmentOrderID] = group
+		}
+		return nil
+	}
+	if err := appendFacts(admissions, false); err != nil {
+		return nil, err
+	}
+	if err := appendFacts(reversals, true); err != nil {
+		return nil, err
+	}
+	return groups, nil
+}
+
+func settlementAmountForAdmission(fact settlementAdmissionFact) (int64, int64) {
+	amount := moneyCents(fact.Item.SettlementPrice)
+	if fact.Ticket.CodeMode == "order" {
+		amount *= int64(fact.Item.Quantity)
+	}
+	return amount, amount * fact.Item.CommissionBPS / 10000
+}
+
+func settlementAmountsForAdmissionFacts(group settlementAdmissionGroup) (gross, refund, commission int64) {
+	for i := range group.Admissions {
+		amount, fee := settlementAmountForAdmission(group.Admissions[i])
+		gross += amount
+		commission += fee
+	}
+	for i := range group.Reversals {
+		amount, fee := settlementAmountForAdmission(group.Reversals[i])
+		refund += amount
+		commission -= fee
+	}
+	return gross, refund, commission
+}
+
+func claimSettlementAdmissionFacts(tx *gorm.DB, line *model.SettlementLine, group settlementAdmissionGroup) error {
+	claim := func(facts []settlementAdmissionFact, column string) error {
+		if len(facts) == 0 {
+			return nil
+		}
+		ids := make([]uint, 0, len(facts))
+		for i := range facts {
+			ids = append(ids, facts[i].Record.ID)
+		}
+		result := tx.Model(&model.CheckInRecord{}).Where("id IN ? AND "+column+" = 0", ids).Update(column, line.ID)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != int64(len(ids)) {
+			return errors.New("settlement admission fact was already claimed")
+		}
+		return nil
+	}
+	if err := claim(group.Admissions, "settlement_line_id"); err != nil {
+		return err
+	}
+	return claim(group.Reversals, "reversal_settlement_line_id")
+}
+
+func verifiedSettlementAmountsForFulfillment(tx *gorm.DB, fulfillment *model.FulfillmentOrder) (int64, int64, int64, error) {
+	var records []model.CheckInRecord
+	if err := tx.Model(&model.CheckInRecord{}).
+		Joins("JOIN tickets ON tickets.id = check_in_records.ticket_id").
+		Where("tickets.fulfillment_order_id = ? AND check_in_records.result = ?", fulfillment.ID, "success").
+		Where("NOT EXISTS (SELECT 1 FROM check_in_records earlier WHERE earlier.ticket_id = check_in_records.ticket_id AND earlier.result = 'success' AND earlier.id < check_in_records.id)").
+		Find(&records).Error; err != nil {
+		return 0, 0, 0, err
+	}
+	if len(records) == 0 {
+		return 0, 0, 0, nil
+	}
+	ticketIDs := make([]uint, 0, len(records))
+	for i := range records {
+		ticketIDs = append(ticketIDs, records[i].TicketID)
+	}
+	var tickets []model.Ticket
+	if err := tx.Preload("OrderItem").Where("id IN ?", ticketIDs).Find(&tickets).Error; err != nil {
+		return 0, 0, 0, err
+	}
+	ticketByID := make(map[uint]model.Ticket, len(tickets))
+	for i := range tickets {
+		ticketByID[tickets[i].ID] = tickets[i]
+	}
+	group := settlementAdmissionGroup{}
+	for i := range records {
+		ticket, ok := ticketByID[records[i].TicketID]
+		if !ok {
+			return 0, 0, 0, errors.New("verified ticket snapshot is unavailable")
+		}
+		fact := settlementAdmissionFact{Record: records[i], Ticket: ticket, Item: ticket.OrderItem}
+		group.Admissions = append(group.Admissions, fact)
+		if records[i].ReversedAt != nil {
+			group.Reversals = append(group.Reversals, fact)
+		}
+	}
+	gross, refund, commission := settlementAmountsForAdmissionFacts(group)
+	return gross, refund, commission, nil
+}
+
+// settlementAmountsForFulfillment is the sale-time responsibility projection
+// shown on order and fulfillment details. It is deliberately separate from
+// verifiedSettlementAmountsForFulfillment, which is the supplier income basis.
 func settlementAmountsForFulfillment(tx *gorm.DB, fulfillment *model.FulfillmentOrder) (int64, int64, int64, error) {
 	var items []model.OrderItem
 	if err := tx.Preload("Tickets").Where("fulfillment_order_id = ?", fulfillment.ID).Find(&items).Error; err != nil {
@@ -302,6 +475,7 @@ func (s *SettlementService) SetStatus(tenantID, statementID uint, status, detail
 		now := time.Now()
 		beforeStatus := statement.Status
 		values := map[string]interface{}{"status": status}
+		finalStatus := status
 		switch status {
 		case "supplier_confirmed":
 			if tenantID != statement.SupplierTenantID || statement.Status != "draft" {
@@ -314,6 +488,15 @@ func (s *SettlementService) SetStatus(tenantID, statementID uint, status, detail
 			}
 			values["distributor_confirmed_at"] = now
 			values["confirmed_at"] = now
+			// Refund allocations restore prepaid cash or credit immediately. A
+			// non-positive statement is therefore reconciliation-only and needs
+			// no second payment operation after both parties confirm it.
+			if statement.NetCents+statement.AdjustmentCents <= 0 {
+				finalStatus = "paid"
+				values["status"] = finalStatus
+				values["paid_at"] = now
+				values["payment_proof"] = "退款已原路恢复账户余额"
+			}
 		case "disputed":
 			if statement.Status != "supplier_confirmed" && statement.Status != "confirmed" {
 				return errors.New("only a reviewable statement can be disputed")
@@ -335,7 +518,7 @@ func (s *SettlementService) SetStatus(tenantID, statementID uint, status, detail
 		if err := tx.Model(&statement).Updates(values).Error; err != nil {
 			return err
 		}
-		if status == "paid" {
+		if finalStatus == "paid" {
 			if err := tx.Model(&model.SettlementLine{}).Where("statement_id = ?", statement.ID).Update("status", "paid").Error; err != nil {
 				return err
 			}
@@ -349,9 +532,9 @@ func (s *SettlementService) SetStatus(tenantID, statementID uint, status, detail
 		}
 		reason := strings.TrimSpace(detail)
 		if reason == "" {
-			reason = "settlement status changed to " + status
+			reason = "settlement status changed to " + finalStatus
 		}
 		return recordAuditTx(tx, actorUserID, tenantID, "admin", "tenant", "settlement.status", "settlement_statement", statement.ID, reason,
-			fmt.Sprintf(`{"status":%q}`, beforeStatus), fmt.Sprintf(`{"status":%q}`, status))
+			fmt.Sprintf(`{"status":%q}`, beforeStatus), fmt.Sprintf(`{"status":%q}`, finalStatus))
 	})
 }

@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 type DistributionController struct {
 	Service       service.DistributionService
 	BundleService service.BundleService
+	RefundService service.RefundService
 }
 
 func (c *DistributionController) CreateBundle(ctx *gin.Context) {
@@ -205,6 +207,39 @@ func (c *DistributionController) GetFulfillmentOrder(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, detail)
+}
+
+func (c *DistributionController) RefundUsedFulfillmentTicket(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid fulfillment id"})
+		return
+	}
+	var body struct {
+		IdempotencyKey string   `json:"idempotency_key" binding:"required"`
+		TicketCodes    []string `json:"ticket_codes" binding:"required"`
+		Reason         string   `json:"reason" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	refund, err := c.RefundService.CreateSupplierUsedRefund(service.RefundActor{
+		TenantID: ctx.GetUint("tenant_id"), UserID: ctx.GetUint("user_id"),
+	}, uint(id), body.IdempotencyKey, body.TicketCodes, body.Reason)
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	if err := service.RecordAudit(ctx.GetUint("user_id"), ctx.GetUint("tenant_id"), ctx.GetString("role"), "tenant", "distribution.fulfillment.used_refund", "fulfillment_order", uint(id), body.Reason, "", fmt.Sprintf(`{"refund_no":%q,"amount_cents":%d}`, refund.RefundNo, refund.AmountCents)); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "refund completed but audit logging failed"})
+		return
+	}
+	status := http.StatusCreated
+	if refund.Status == "group_pending" || refund.Status == "pending" {
+		status = http.StatusAccepted
+	}
+	ctx.JSON(status, refund)
 }
 
 func (c *DistributionController) Search(ctx *gin.Context) {
