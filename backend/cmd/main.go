@@ -56,9 +56,12 @@ func main() {
 	backupContext, stopBackups := context.WithCancel(context.Background())
 	defer stopBackups()
 	backupConfig := config.GlobalConfig.Backup
-	backup.Start(backupContext, model.DB, backupConfig.Directory, config.GlobalConfig.Security.KeyFile, time.Duration(backupConfig.IntervalHours)*time.Hour, backupConfig.Retention, func(err error) {
-		logger.Log.Error(fmt.Sprintf("Database backup failed: %v", err))
-	})
+	backupReporter := func(err error) { logger.Log.Error(fmt.Sprintf("Database backup failed: %v", err)) }
+	if strings.EqualFold(config.GlobalConfig.Database.Driver, "sqlite") {
+		backup.Start(backupContext, model.DB, backupConfig.Directory, config.GlobalConfig.Security.KeyFile, time.Duration(backupConfig.IntervalHours)*time.Hour, backupConfig.Retention, backupReporter)
+	} else {
+		backup.StartPostgres(backupContext, config.GlobalConfig.Database, backupConfig.Directory, config.GlobalConfig.Security.KeyFile, backupConfig.PostgresBinDir, time.Duration(backupConfig.IntervalHours)*time.Hour, backupConfig.Retention, backupReporter)
+	}
 
 	orderExpiryContext, stopOrderExpiry := context.WithCancel(context.Background())
 	defer stopOrderExpiry()
@@ -320,7 +323,7 @@ func seedAdminUser() error {
 			if err != nil {
 				return err
 			}
-			if err := tx.Create(&model.User{Username: bootstrap.AdminUsername, Password: string(hashedPwd), Role: "super_admin", TenantID: tenant.ID}).Error; err != nil {
+			if err := tx.Create(&model.User{Username: bootstrap.AdminUsername, Password: string(hashedPwd), Role: "super_admin", TenantID: tenant.ID, IsInitialAdmin: true}).Error; err != nil {
 				return err
 			}
 			fmt.Printf("Seeded bootstrap administrator %q for tenant %q\n", bootstrap.AdminUsername, bootstrap.SystemCode)

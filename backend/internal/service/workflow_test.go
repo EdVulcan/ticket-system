@@ -82,7 +82,10 @@ func TestChannelOrderWorkbenchKeepsAccountAndTenantBoundaries(t *testing.T) {
 		if err := tx.Create(&order).Error; err != nil {
 			return err
 		}
-		item := model.OrderItem{OrderID: order.ID, ProductID: productID, ProductName: "成人票", Price: 80, Quantity: 1}
+		item := model.OrderItem{
+			OrderID: order.ID, ProductID: productID, ProductName: "成人票", Price: 80, Quantity: 1,
+			FulfillmentProductID: productID, FulfillmentTenantID: tenantID, FulfillmentScenicAreaID: checkpoint.ScenicAreaID,
+		}
 		if err := tx.Create(&item).Error; err != nil {
 			return err
 		}
@@ -588,17 +591,7 @@ func TestAfterSaleSupportsPartialRescheduleAndRejectsPartialVoid(t *testing.T) {
 func TestAfterSaleReissuePrintFailureFailsRequest(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
-	var posID uint
-	if err := model.Write(func(tx *gorm.DB) error {
-		pos := model.Device{Name: "POS", SerialNumber: fmt.Sprintf("POS-%d", time.Now().UnixNano()), Type: "pos", Status: "online", TenantID: tenantID, ScenicAreaID: 1}
-		if err := tx.Create(&pos).Error; err != nil {
-			return err
-		}
-		posID = pos.ID
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	posID := createTestPOS(t, tenantID)
 	shift, err := (&OperationsService{}).OpenShift(tenantID, posID, 7, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -646,17 +639,7 @@ func TestAfterSaleReissuePrintFailureFailsRequest(t *testing.T) {
 func TestAfterSaleAllowsAuditedSupervisorProxyReissue(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
-	var posID uint
-	if err := model.Write(func(tx *gorm.DB) error {
-		pos := model.Device{Name: "POS", SerialNumber: fmt.Sprintf("POS-%d", time.Now().UnixNano()), Type: "pos", Status: "online", TenantID: tenantID, ScenicAreaID: 1}
-		if err := tx.Create(&pos).Error; err != nil {
-			return err
-		}
-		posID = pos.ID
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
+	posID := createTestPOS(t, tenantID)
 	shift, err := (&OperationsService{}).OpenShift(tenantID, posID, 7, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -1183,7 +1166,11 @@ func createTestPOS(t *testing.T, tenantID uint) uint {
 	t.Helper()
 	var posID uint
 	if err := model.Write(func(tx *gorm.DB) error {
-		pos := model.Device{Name: "POS", SerialNumber: fmt.Sprintf("POS-%d", time.Now().UnixNano()), Type: "pos", Status: "online", TenantID: tenantID, ScenicAreaID: 1}
+		var area model.ScenicArea
+		if err := tx.Where("tenant_id = ?", tenantID).First(&area).Error; err != nil {
+			return err
+		}
+		pos := model.Device{Name: "POS", SerialNumber: fmt.Sprintf("POS-%d", time.Now().UnixNano()), Type: "pos", Status: "online", TenantID: tenantID, ScenicAreaID: area.ID}
 		if err := tx.Create(&pos).Error; err != nil {
 			return err
 		}

@@ -547,7 +547,8 @@ func reserveStock(tx *gorm.DB, product *model.Product, useDate *time.Time, stock
 			return err
 		}
 		inventory := model.ProductInventory{
-			TenantID: product.TenantID, ProductID: product.ID, StockDate: stockDate, StockSlot: stockSlot, Capacity: capacity,
+			TenantID: product.TenantID, ProductID: product.ID, ScenicAreaID: product.ScenicAreaID,
+			StockDate: stockDate, StockSlot: stockSlot, Capacity: capacity,
 		}
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&inventory).Error; err != nil {
 			return err

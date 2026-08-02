@@ -153,12 +153,16 @@ func (s *ReportService) GetBusinessDetails(tenantID uint, filter FormalReportFil
 	}
 	page, pageSize = reportPage(page, pageSize)
 	orderLike := likeReportValue(filter.OrderNo)
-	base := `
+	productNamesExpression := `GROUP_CONCAT(DISTINCT oi.product_name)`
+	if model.DB.Dialector.Name() == "postgres" {
+		productNamesExpression = `STRING_AGG(DISTINCT oi.product_name, ',')`
+	}
+	base := fmt.Sprintf(`
 		WITH details AS (
 			SELECT p.id AS record_id, COALESCE(p.paid_at, p.created_at) AS occurred_at, 'payment' AS fact_type,
 			       o.order_no, p.payment_no AS transaction_no, o.channel, p.method,
 			       CASE WHEN p.amount_cents != 0 THEN p.amount_cents ELSE CAST(ROUND(p.amount * 100.0) AS INTEGER) END AS amount_cents,
-			       (SELECT GROUP_CONCAT(DISTINCT oi.product_name) FROM order_items oi WHERE oi.order_id = o.id) AS product_names,
+			       (SELECT %s FROM order_items oi WHERE oi.order_id = o.id) AS product_names,
 			       o.contact_name, o.contact_phone, p.operator_id, '' AS reason
 			FROM payments p JOIN orders o ON o.tenant_id = p.tenant_id AND o.order_no = p.order_no
 			WHERE p.tenant_id = ? AND p.status IN ('paid', 'partial_refunded', 'refunded')
@@ -168,13 +172,13 @@ func (s *ReportService) GetBusinessDetails(tenantID uint, filter FormalReportFil
 			SELECT r.id AS record_id, COALESCE(r.updated_at, r.created_at) AS occurred_at, 'refund' AS fact_type,
 			       o.order_no, r.refund_no AS transaction_no, o.channel, r.method,
 			       CASE WHEN r.amount_cents != 0 THEN r.amount_cents ELSE CAST(ROUND(r.amount * 100.0) AS INTEGER) END AS amount_cents,
-			       (SELECT GROUP_CONCAT(DISTINCT oi.product_name) FROM order_items oi WHERE oi.order_id = o.id) AS product_names,
+			       (SELECT %s FROM order_items oi WHERE oi.order_id = o.id) AS product_names,
 			       o.contact_name, o.contact_phone, r.authorized_by AS operator_id, r.reason
 			FROM refunds r JOIN orders o ON o.tenant_id = r.tenant_id AND o.order_no = r.order_no
 			WHERE r.tenant_id = ? AND r.parent_refund_id = 0 AND r.status IN ('succeeded', 'group_succeeded')
 			  AND COALESCE(r.updated_at, r.created_at) BETWEEN ? AND ?
 			  AND (? = '' OR o.channel = ?) AND (? = '' OR r.method = ?) AND (? = '' OR o.order_no LIKE ?)
-		)`
+		)`, productNamesExpression, productNamesExpression)
 	args := []interface{}{tenantID, start, end, filter.Channel, filter.Channel, filter.Method, filter.Method, orderLike, orderLike,
 		tenantID, start, end, filter.Channel, filter.Channel, filter.Method, filter.Method, orderLike, orderLike}
 	var total int64

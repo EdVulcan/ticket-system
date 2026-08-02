@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"time"
 
@@ -20,6 +21,27 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("TICKET_TEST_POSTGRES") == "1" {
+		config.GlobalConfig.Database = config.DatabaseConfig{
+			Driver: "postgres", Host: "127.0.0.1", Port: 5432, Name: "ticket_system_test", User: "postgres",
+			Password: os.Getenv("PGPASSWORD"), SSLMode: "disable", TimeZone: "Asia/Shanghai",
+			MaxOpenConnections: 30, MaxIdleConnections: 5, ConnMaxLifetimeMinutes: 5,
+			WriteQueueSize: 256, WriteTimeoutSeconds: 10, EnqueueTimeoutSeconds: 2,
+		}
+		if err := model.InitDB(); err != nil {
+			panic(err)
+		}
+		model.DB.Logger = logger.Default.LogMode(logger.Silent)
+		code := m.Run()
+		closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = model.CloseWriter(closeContext)
+		cancel()
+		if sqlDB, dbErr := model.DB.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		os.Exit(code)
+	}
+
 	databasePath, err := os.CreateTemp("", "ticket-service-test-*.db")
 	if err != nil {
 		panic(err)
@@ -1334,13 +1356,20 @@ func TestVerificationRequiresOwnedDeviceAndNonzeroScenicArea(t *testing.T) {
 	if err := (&TicketService{}).Verify(ticket.TicketCode, checkpoint.ID, deviceID+999999, tenantID); !errors.Is(err, ErrAccessDenied) {
 		t.Fatalf("foreign device error=%v", err)
 	}
-	if err := model.Write(func(tx *gorm.DB) error {
+	corruptionErr := model.Write(func(tx *gorm.DB) error {
 		if err := tx.Model(&model.Ticket{}).Where("id = ?", ticket.ID).Updates(map[string]interface{}{"scenic_area_id": 0, "fulfillment_scenic_area_id": 0}).Error; err != nil {
 			return err
 		}
 		return tx.Model(&model.OrderItem{}).Where("id = ?", ticket.OrderItemID).Update("fulfillment_scenic_area_id", 0).Error
-	}); err != nil {
-		t.Fatal(err)
+	})
+	if model.DB.Dialector.Name() == "postgres" {
+		if corruptionErr == nil {
+			t.Fatal("PostgreSQL ownership guard accepted a zero-scenic ticket")
+		}
+		return
+	}
+	if corruptionErr != nil {
+		t.Fatal(corruptionErr)
 	}
 	if err := (&TicketService{}).Verify(ticket.TicketCode, checkpoint.ID, deviceID, tenantID); !errors.Is(err, ErrInvalidTicket) {
 		t.Fatalf("zero scenic ticket error=%v", err)

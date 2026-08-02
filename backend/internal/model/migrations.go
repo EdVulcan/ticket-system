@@ -24,6 +24,9 @@ type migration struct {
 }
 
 func runMigrations(db *gorm.DB) error {
+	if db.Dialector.Name() == "postgres" {
+		return runPostgresMigrations(db)
+	}
 	if err := db.AutoMigrate(&SchemaMigration{}); err != nil {
 		return err
 	}

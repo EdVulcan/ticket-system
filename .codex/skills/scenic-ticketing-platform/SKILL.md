@@ -9,7 +9,7 @@ description: Project-specific guardrails for the multi-tenant scenic ticketing p
 
 Before changing domain code, read [the development baseline](../../../docs/platform-multitenancy-development-guide.md) completely for the affected area, then read [the current goal-alignment audit](../../../docs/current-stage-goal-alignment-audit-2026-07-31.md). Treat the baseline as the target design, the audit as the current blocker list, and the code as an evolving legacy state. Keep detailed rules in those documents; do not duplicate them here.
 
-The product is a platform for supplier scenic areas, distributors, and travel agencies. It is not a reproduction of Zhiyoubao. The current implementation is a modular Go monolith with SQLite, a Vue admin app, and a Wails v2 + Vue POS; Electron remains only as a migration fallback. Read `docs/current-development-roadmap-2026-08-01.md` for the active six-level delivery order and `docs/field-integration-readiness-checklist.md` before work involving real payments, devices, vendor channels, legacy data, or production capacity. Do not add channels or storefronts ahead of the current production-closure work.
+The product is a platform for supplier scenic areas, distributors, and travel agencies. It is not a reproduction of Zhiyoubao. The current implementation is a modular Go monolith with PostgreSQL in production, a Vue admin app, and a Wails v2 + Vue POS; SQLite remains only for regression tests and separately verified legacy import work, while Electron remains only as a migration fallback. Read `docs/current-development-roadmap-2026-08-01.md` for the active six-level delivery order and `docs/field-integration-readiness-checklist.md` before work involving real payments, devices, vendor channels, legacy data, or production capacity. Do not add channels or storefronts ahead of the current production-closure work.
 
 ## Non-negotiable invariants
 
@@ -31,7 +31,7 @@ The product is a platform for supplier scenic areas, distributors, and travel ag
 1. Map the change to its owner, seller, supplier, fulfillment scenic area, channel, payment, and settlement scopes before editing code.
 2. Identify whether the change belongs to platform, identity, catalog, distribution, inventory, ordering, ticketing, channel, payment, finance, team, or audit. Keep writes inside that module's service boundary.
 3. Make server-side ownership authoritative. Validate agreement status, product offer, product revision, scenic area, inventory date/slot, and channel permissions inside the transaction.
-4. Define normal, retry, timeout, cancellation, refund, and process-restart behavior. Persist work that must survive a restart; SQLite task/outbox tables are preferred before adding Redis or a message broker.
+4. Define normal, retry, timeout, cancellation, refund, and process-restart behavior. Persist work that must survive a restart in PostgreSQL task/outbox tables before adding Redis or a message broker.
 5. Add negative tenant tests before positive happy-path tests. At minimum test scenic A, scenic B, distributor D, travel agency T, and platform scope.
 6. Run relevant Go tests, race tests where concurrency is affected, frontend builds, and business-flow E2E tests. Do not call mock printing, mock card reading, or a UI success toast a production feature.
 7. Update the development baseline when a domain decision, invariant, phase, or acceptance rule changes. Record migrations and compatibility behavior for existing orders, tickets, inventory, and money.
@@ -53,7 +53,7 @@ Do not mark production-ready or start storefront/channel expansion until these a
 - Payment notifications, active queries, client polling, retries, and process restarts converge idempotently.
 - Completed/verified orders remain in sales facts and reports; refunds and settlements adjust immutable ledger facts.
 - Travel-team admission requires a valid supplier fulfillment right and supplier-controlled device/operator action; roster state cannot manufacture admission facts.
-- Real legacy-database fixtures prove migration price, fulfillment, inventory, ticket, scenic-area, and ledger invariants before release.
+- If legacy import is explicitly requested later, use real sanitized fixtures and prove price, fulfillment, inventory, ticket, scenic-area, and ledger invariants before importing; legacy import is not a release gate for a new deployment.
 
 ## Forbidden shortcuts
 

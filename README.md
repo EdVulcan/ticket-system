@@ -1,96 +1,99 @@
 # 景区票务系统
 
-这是一个可独立运行的景区票务服务。管理端静态页面、Go API、SQLite 数据库和定时备份由同一个服务承载，运行时不需要 MySQL、Redis 或单独的 Web 服务器。
+这是一个面向平台方、景区供应商、分销商和旅行社的多租户票务系统。当前技术形态为 Go 模块化单体、Vue 管理端和 Wails v2 窗口端。生产数据库使用 PostgreSQL；不依赖 Redis、MySQL、消息队列或独立 Web 服务器。
 
-## 开发基线文档
+## 开发基线
 
-涉及租户、商品、订单、库存、核销、分销、渠道、支付或资金的开发前，请先阅读：
+涉及租户、商品、订单、库存、核销、分销、渠道、支付或结算的开发前，请先阅读：
 
 - [多租户景区票务平台开发基线与演进指南](docs/platform-multitenancy-development-guide.md)
-- [景区票务经营系统产品研究与当前项目差距](docs/scenic-ticketing-product-research.md)
+- [当前开发推进路线](docs/current-development-roadmap-2026-08-01.md)
+- [PostgreSQL 运维说明](docs/postgresql-operations.md)
 
-## 快速启动
+## 运行条件
 
-从发布目录启动时，只需运行一个进程：
+- PostgreSQL 16 或更高版本。
+- 应用数据库和专用数据库账号。账号只需拥有该数据库及其 `public` schema，不应使用 PostgreSQL 超级用户运行应用。
+- `pg_dump` 和 `pg_restore`。将其加入 `PATH`，或设置 `TICKET_BACKUP_POSTGRES_BIN_DIR`。
+
+默认配置连接 `127.0.0.1:5432/ticket_system`，数据库用户为 `ticket_app`。密码不写入仓库，通过环境变量提供：
 
 ```powershell
-cd release/backend
-$env:TICKET_BOOTSTRAP_ADMIN_PASSWORD = '请设置一个强密码'
-$env:TICKET_BOOTSTRAP_PLATFORM_USERNAME = 'platform_admin'
-$env:TICKET_BOOTSTRAP_PLATFORM_PASSWORD = '请设置另一个不同的强密码'
-.\ticket-system.exe
+$env:TICKET_DATABASE_PASSWORD = '数据库账号密码'
 ```
 
-首次启动且数据库中没有用户时，服务会创建以下管理员：
+也可以用完整连接地址覆盖各连接字段：
 
-- 商户系统编号：`SYS001`
-- 用户名：`admin`
-- 密码：环境变量 `TICKET_BOOTSTRAP_ADMIN_PASSWORD` 的值
+```powershell
+$env:TICKET_DATABASE_URL = 'postgres://ticket_app:密码@127.0.0.1:5432/ticket_system?sslmode=disable'
+```
 
-平台治理账号与租户管理员完全独立：
+首次运行前初始化当前数据库结构：
 
-- 用户名：环境变量 `TICKET_BOOTSTRAP_PLATFORM_USERNAME` 的值
-- 密码：环境变量 `TICKET_BOOTSTRAP_PLATFORM_PASSWORD` 的值，且不能与租户管理员密码相同
+```powershell
+cd backend
+go run ./cmd/db-migrate
+```
 
-平台账号只用于平台登录模式和租户治理；租户业务能力默认按实际历史数据迁移，新租户的供应商、分销商和旅行社能力必须由平台明确开通。
+## 首次启动
 
-随后访问 `http://127.0.0.1:8080/`。管理员创建成功后，后续启动不再需要保留该环境变量。
+数据库为空时，必须为租户初始管理员和平台管理员提供两个不同的强密码：
+
+```powershell
+cd backend
+$env:TICKET_DATABASE_PASSWORD = '数据库账号密码'
+$env:TICKET_BOOTSTRAP_ADMIN_PASSWORD = '租户初始管理员密码'
+$env:TICKET_BOOTSTRAP_PLATFORM_USERNAME = 'platform_admin'
+$env:TICKET_BOOTSTRAP_PLATFORM_PASSWORD = '平台管理员密码'
+go run ./cmd
+```
+
+默认租户系统编号为 `SYS001`，租户管理员用户名为 `admin`。平台账号与租户账号相互独立。初始化成功后访问 `http://127.0.0.1:8080/`；后续启动不再需要保留两个初始化密码。
 
 ## 构建发布包
 
-构建环境需要 Go、Node.js 22，以及启用 CGO 的 GCC。Windows 推荐安装 MSYS2 UCRT64 GCC：
+构建环境需要 Go、Node.js 22，以及用于 SQLite 兼容测试的 CGO/GCC。Windows 推荐 MSYS2 UCRT64 GCC：
 
 ```powershell
 pacman -S --needed mingw-w64-ucrt-x86_64-gcc
-```
-
-在仓库根目录执行：
-
-```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
 ```
 
-脚本会重新安装前端锁定依赖、构建管理端，并生成：
+发布目录中的 `ticket-system.exe` 仍是唯一的应用进程，但 PostgreSQL 是独立的基础服务。
 
-```text
-release/
-  admin/dist/                  管理端静态文件
-  backend/config/config.yaml  服务配置
-  backend/ticket-system.exe   唯一需要运行的服务
+## 备份与恢复
+
+服务启动后立即执行一次 PostgreSQL 自定义格式备份，此后默认每 24 小时备份一次，保留最近 14 组。每组由同一时间戳的 `.dump` 和 `.key.json` 组成，默认保存在 `data/backups/`。
+
+恢复前停止应用服务，并使用同组数据库和实例密钥：
+
+```powershell
+cd backend
+go run ./cmd/restore --driver postgres `
+  --source-dump data/backups/ticket-system-pg-时间戳.dump `
+  --source-key data/backups/ticket-system-pg-时间戳.key.json `
+  --target-key data/instance-key.json
 ```
 
-## 数据与备份
-
-以 `release/backend` 为工作目录启动时：
-
-- 主数据库：`data/ticket-system.db`
-- 实例密钥：`data/instance-key.json`
-- 自动备份：`data/backups/`
-- 日志：`app.log`
-
-服务启动时立即备份，此后默认每 24 小时备份一次，保留最近 14 组。每组由同一时间戳的 `.db` 和 `.key.json` 两个文件组成。
-
-恢复前必须停止服务，并成对恢复数据库和实例密钥：将选定的 `.db` 放回 `data/ticket-system.db`，将同名的 `.key.json` 放回 `data/instance-key.json`。不要混用不同时间戳的文件。
-
-端口、并发参数、备份周期和保留数量可在 `release/backend/config/config.yaml` 中调整，也可以用 `TICKET_` 前缀的环境变量覆盖。
+恢复工具会先保存当前数据库的回滚 dump，再使用单事务恢复。完整步骤见 [PostgreSQL 运维说明](docs/postgresql-operations.md)。
 
 ## 开发验证
 
-后端使用 CGO。在 PowerShell 中可执行：
+SQLite 继续用于快速回归和历史兼容测试；核心业务还必须在真实 PostgreSQL 测试库运行：
 
 ```powershell
 $env:Path = 'C:\msys64\ucrt64\bin;' + $env:Path
 $env:CGO_ENABLED = '1'
 cd backend
 go test ./... -count=1
-go test -race ./... -count=1
+go test -race ./... -count=1 -timeout 10m
 go vet ./...
+
+$env:PGPASSWORD = 'PostgreSQL测试账号密码'
+$env:TICKET_TEST_POSTGRES = '1'
+$env:TICKET_TEST_POSTGRES_BIN = 'F:\PGSQL\bin'
+go test ./internal/service -count=1
+go test ./internal/backup -run TestPostgresBackupAndRestore -count=1
 ```
 
-前端分别在 `admin` 和 `desktop` 目录执行：
-
-```powershell
-npm ci
-npm audit
-npm run build
-```
+管理端和窗口端构建、Playwright E2E 已接入 CI；只有前端代码或依赖变化时才需要在本地重复构建。

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
@@ -29,12 +30,56 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
+	Driver                 string `mapstructure:"driver"`
+	URL                    string `mapstructure:"url"`
+	Host                   string `mapstructure:"host"`
+	Port                   int    `mapstructure:"port"`
+	Name                   string `mapstructure:"name"`
+	User                   string `mapstructure:"user"`
+	Password               string `mapstructure:"password"`
+	SSLMode                string `mapstructure:"sslmode"`
+	TimeZone               string `mapstructure:"time_zone"`
+	MaxOpenConnections     int    `mapstructure:"max_open_connections"`
+	MaxIdleConnections     int    `mapstructure:"max_idle_connections"`
+	ConnMaxLifetimeMinutes int    `mapstructure:"conn_max_lifetime_minutes"`
+
+	// SQLite remains supported for regression tests and separately verified legacy import work.
 	Path                  string `mapstructure:"path"`
 	BusyTimeoutMS         int    `mapstructure:"busy_timeout_ms"`
 	MaxReadConnections    int    `mapstructure:"max_read_connections"`
 	WriteQueueSize        int    `mapstructure:"write_queue_size"`
 	WriteTimeoutSeconds   int    `mapstructure:"write_timeout_seconds"`
 	EnqueueTimeoutSeconds int    `mapstructure:"enqueue_timeout_seconds"`
+}
+
+func (c DatabaseConfig) PostgresDSN() (string, error) {
+	if value := strings.TrimSpace(c.URL); value != "" {
+		return value, nil
+	}
+	if strings.TrimSpace(c.Host) == "" || c.Port <= 0 || strings.TrimSpace(c.Name) == "" || strings.TrimSpace(c.User) == "" {
+		return "", fmt.Errorf("PostgreSQL host, port, name and user are required")
+	}
+	parts := []string{
+		"host=" + postgresDSNValue(c.Host),
+		fmt.Sprintf("port=%d", c.Port),
+		"user=" + postgresDSNValue(c.User),
+		"password=" + postgresDSNValue(c.Password),
+		"dbname=" + postgresDSNValue(c.Name),
+		"sslmode=" + postgresDSNValue(c.SSLMode),
+	}
+	if strings.TrimSpace(c.TimeZone) != "" {
+		if _, err := time.LoadLocation(c.TimeZone); err != nil {
+			return "", fmt.Errorf("invalid PostgreSQL time zone %q: %w", c.TimeZone, err)
+		}
+		parts = append(parts, "TimeZone="+c.TimeZone)
+	}
+	return strings.Join(parts, " "), nil
+}
+
+func postgresDSNValue(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `'`, `\'`)
+	return `'` + value + `'`
 }
 
 type SecurityConfig struct {
@@ -54,9 +99,10 @@ type BootstrapConfig struct {
 }
 
 type BackupConfig struct {
-	Directory     string `mapstructure:"directory"`
-	IntervalHours int    `mapstructure:"interval_hours"`
-	Retention     int    `mapstructure:"retention"`
+	Directory      string `mapstructure:"directory"`
+	IntervalHours  int    `mapstructure:"interval_hours"`
+	Retention      int    `mapstructure:"retention"`
+	PostgresBinDir string `mapstructure:"postgres_bin_dir"`
 }
 
 type LogConfig struct {
@@ -78,6 +124,18 @@ func InitConfig() error {
 	viper.SetDefault("server.mode", "release")
 	viper.SetDefault("server.cors_allowed_origins", "http://127.0.0.1:5173,http://localhost:5173")
 	viper.SetDefault("server.admin_static_dir", "../admin/dist")
+	viper.SetDefault("database.driver", "postgres")
+	viper.SetDefault("database.url", "")
+	viper.SetDefault("database.host", "127.0.0.1")
+	viper.SetDefault("database.port", 5432)
+	viper.SetDefault("database.name", "ticket_system")
+	viper.SetDefault("database.user", "postgres")
+	viper.SetDefault("database.password", "")
+	viper.SetDefault("database.sslmode", "disable")
+	viper.SetDefault("database.time_zone", "Asia/Shanghai")
+	viper.SetDefault("database.max_open_connections", 50)
+	viper.SetDefault("database.max_idle_connections", 10)
+	viper.SetDefault("database.conn_max_lifetime_minutes", 30)
 	viper.SetDefault("database.path", "data/ticket-system.db")
 	viper.SetDefault("database.busy_timeout_ms", 5000)
 	viper.SetDefault("database.max_read_connections", 8)
@@ -93,6 +151,7 @@ func InitConfig() error {
 	viper.SetDefault("backup.directory", "data/backups")
 	viper.SetDefault("backup.interval_hours", 24)
 	viper.SetDefault("backup.retention", 14)
+	viper.SetDefault("backup.postgres_bin_dir", "")
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
@@ -161,8 +220,27 @@ func (c *Config) resolveSecrets() error {
 }
 
 func (c Config) Validate() error {
-	if strings.TrimSpace(c.Database.Path) == "" {
-		return fmt.Errorf("database path is required")
+	driver := strings.ToLower(strings.TrimSpace(c.Database.Driver))
+	switch driver {
+	case "postgres", "postgresql":
+		if strings.TrimSpace(c.Database.URL) == "" && (strings.TrimSpace(c.Database.Host) == "" || c.Database.Port <= 0 || strings.TrimSpace(c.Database.Name) == "" || strings.TrimSpace(c.Database.User) == "") {
+			return fmt.Errorf("PostgreSQL URL or host, port, name and user are required")
+		}
+		if c.Database.MaxOpenConnections <= 0 || c.Database.MaxIdleConnections < 0 || c.Database.MaxIdleConnections > c.Database.MaxOpenConnections || c.Database.ConnMaxLifetimeMinutes <= 0 {
+			return fmt.Errorf("invalid PostgreSQL connection pool settings")
+		}
+	case "sqlite":
+		if strings.TrimSpace(c.Database.Path) == "" {
+			return fmt.Errorf("database path is required")
+		}
+		if c.Database.BusyTimeoutMS <= 0 {
+			return fmt.Errorf("database busy timeout must be greater than zero")
+		}
+		if c.Database.MaxReadConnections < 2 || c.Database.WriteQueueSize <= 0 || c.Database.WriteTimeoutSeconds <= 0 || c.Database.EnqueueTimeoutSeconds <= 0 {
+			return fmt.Errorf("invalid SQLite concurrency settings")
+		}
+	default:
+		return fmt.Errorf("unsupported database driver %q", c.Database.Driver)
 	}
 	if len(c.Security.JWTSecret) < 32 {
 		return fmt.Errorf("JWT secret must be at least 32 characters (set TICKET_SECURITY_JWT_SECRET)")
@@ -172,12 +250,6 @@ func (c Config) Validate() error {
 	}
 	if c.Security.OTAMaxClockSkewSeconds <= 0 {
 		return fmt.Errorf("OTA clock skew must be greater than zero")
-	}
-	if c.Database.BusyTimeoutMS <= 0 {
-		return fmt.Errorf("database busy timeout must be greater than zero")
-	}
-	if c.Database.MaxReadConnections < 2 || c.Database.WriteQueueSize <= 0 || c.Database.WriteTimeoutSeconds <= 0 || c.Database.EnqueueTimeoutSeconds <= 0 {
-		return fmt.Errorf("invalid database concurrency settings")
 	}
 	if c.Backup.IntervalHours <= 0 || c.Backup.Retention <= 0 {
 		return fmt.Errorf("backup interval and retention must be greater than zero")

@@ -9,6 +9,18 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: backend
@@ -18,8 +30,8 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache: true
-      - name: Install SQLite build dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcc libc6-dev
+      - name: Install database test dependencies
+        run: sudo apt-get update && sudo apt-get install -y gcc libc6-dev postgresql-client
       - name: Require CGO for core tests
         shell: bash
         run: |
@@ -35,6 +47,16 @@ jobs:
         run: go test -race ./... -count=1 -timeout 10m
         env:
           CGO_ENABLED: "1"
+      - name: PostgreSQL integration
+        shell: bash
+        run: |
+          createdb -h 127.0.0.1 -U postgres ticket_system_test
+          createdb -h 127.0.0.1 -U postgres ticket_system_restore_test
+          TICKET_TEST_POSTGRES=1 go test ./internal/service -count=1
+          TICKET_TEST_POSTGRES=1 go test ./internal/backup -run TestPostgresBackupAndRestore -count=1
+        env:
+          CGO_ENABLED: "1"
+          PGPASSWORD: postgres
       - name: Vet
         run: go vet ./...
         env:

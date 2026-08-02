@@ -1147,13 +1147,18 @@ func TestTeamRosterReplaceIsIdempotentAndStopsAfterConfirmation(t *testing.T) {
 func TestDeviceOfflineCreatesOneAlert(t *testing.T) {
 	resetBusinessData(t)
 	var tenant model.Tenant
+	var area model.ScenicArea
 	if err := model.Write(func(tx *gorm.DB) error {
 		tenant = model.Tenant{Name: "Device Tenant", SystemCode: "DEV-T", SecretKey: "d"}
-		return tx.Create(&tenant).Error
+		if err := tx.Create(&tenant).Error; err != nil {
+			return err
+		}
+		area = model.ScenicArea{TenantID: tenant.ID, Code: "DEVICE-AREA", Name: "Device Park", Status: "active"}
+		return tx.Create(&area).Error
 	}); err != nil {
 		t.Fatal(err)
 	}
-	device := model.Device{Name: "Gate", SerialNumber: "G-1", Type: "gate", TenantID: tenant.ID, Status: "online"}
+	device := model.Device{Name: "Gate", SerialNumber: "G-1", Type: "gate", TenantID: tenant.ID, ScenicAreaID: area.ID, Status: "online"}
 	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&device).Error }); err != nil {
 		t.Fatal(err)
 	}
