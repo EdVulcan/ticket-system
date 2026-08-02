@@ -19,6 +19,26 @@ async function mockJSON(page: Page, pattern: string, body: unknown) {
   }))
 }
 
+test('未登录访问时不会短暂显示后台界面', async ({ page }) => {
+  await page.addInitScript(() => {
+    const state = window as Window & { __authenticatedShellSeen?: boolean }
+    state.__authenticatedShellSeen = false
+    const observer = new MutationObserver(() => {
+      const sidebar = document.querySelector('aside')
+      if (sidebar?.textContent?.includes('景区票务平台')) {
+        state.__authenticatedShellSeen = true
+      }
+    })
+    observer.observe(document, { childList: true, subtree: true })
+  })
+
+  await page.goto('/login')
+  await expect(page.getByRole('heading', { name: '景区票务管理系统' })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => (
+    window as Window & { __authenticatedShellSeen?: boolean }
+  ).__authenticatedShellSeen)).toBe(false)
+})
+
 test('景区租户登录后只显示已授权工作区', async ({ page }) => {
   await mockJSON(page, '**/api/v1/auth/login', { token: 'tenant-token', user: tenantUser })
   await page.goto('/login')
