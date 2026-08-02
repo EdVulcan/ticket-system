@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const currentPostgresSchemaVersion = 61
+const CurrentPostgresSchemaVersion = 61
 
 // PostgreSQL starts from the current domain schema. The historical migrations
 // contain SQLite trigger syntax and legacy backfills, so replaying them on a
@@ -68,7 +68,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		return err
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
-		Version:   currentPostgresSchemaVersion,
+		Version:   CurrentPostgresSchemaVersion,
 		Name:      "PostgreSQL current schema baseline",
 		AppliedAt: time.Now(),
 	}).Error

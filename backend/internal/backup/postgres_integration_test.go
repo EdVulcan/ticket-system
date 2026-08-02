@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"ticket-backend/internal/config"
+	"ticket-backend/internal/model"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -69,8 +70,8 @@ func TestPostgresBackupAndRestore(t *testing.T) {
 	if err := db.Raw("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&version).Error; err != nil {
 		t.Fatal(err)
 	}
-	if version != 59 {
-		t.Fatalf("restored schema version=%d, want 59", version)
+	if version != model.CurrentPostgresSchemaVersion {
+		t.Fatalf("restored schema version=%d, want %d", version, model.CurrentPostgresSchemaVersion)
 	}
 }
 
