@@ -21,16 +21,43 @@ func (c *TeamController) ListContracts(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"data": rows})
 }
 func (c *TeamController) CreateContract(ctx *gin.Context) {
-	var row model.TravelContract
-	if err := ctx.ShouldBindJSON(&row); err != nil {
+	var input service.TravelContractInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := c.Service.CreateContract(ctx.GetUint("tenant_id"), &row); err != nil {
+	row, err := c.Service.CreateContract(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), input)
+	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	ctx.JSON(http.StatusCreated, row)
+}
+func (c *TeamController) UpdateContract(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid contract id"})
+		return
+	}
+	var input service.TravelContractInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	row, err := c.Service.UpdateContract(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), input)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, row)
+}
+func (c *TeamController) ListContractPartners(ctx *gin.Context) {
+	rows, err := c.Service.ListContractPartners(ctx.GetUint("tenant_id"))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": rows})
 }
 func (c *TeamController) ListAgents(ctx *gin.Context) {
 	rows, err := c.Service.ListAgents(ctx.GetUint("tenant_id"))

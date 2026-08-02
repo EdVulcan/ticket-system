@@ -1390,6 +1390,78 @@ func TestRechargeIsIdempotentAndLeavesCentLedgerEvidence(t *testing.T) {
 	}
 }
 
+func TestSupplierControlsTravelContractProductPrices(t *testing.T) {
+	resetBusinessData(t)
+	var supplier, otherSupplier, travel model.Tenant
+	var product model.Product
+	if err := model.Write(func(tx *gorm.DB) error {
+		supplier = model.Tenant{Name: "Supplier A", SystemCode: "CONTRACT-S-A", SecretKey: "a", Status: "active"}
+		otherSupplier = model.Tenant{Name: "Supplier B", SystemCode: "CONTRACT-S-B", SecretKey: "b", Status: "active"}
+		travel = model.Tenant{Name: "Travel A", SystemCode: "CONTRACT-T-A", SecretKey: "t", Status: "active"}
+		for _, tenant := range []*model.Tenant{&supplier, &otherSupplier, &travel} {
+			if err := tx.Create(tenant).Error; err != nil {
+				return err
+			}
+		}
+		for _, capability := range []model.TenantCapability{
+			{TenantID: supplier.ID, Capability: "supplier", Status: "active"},
+			{TenantID: otherSupplier.ID, Capability: "supplier", Status: "active"},
+			{TenantID: travel.ID, Capability: "travel_agency", Status: "active"},
+			{TenantID: travel.ID, Capability: "distributor", Status: "active"},
+		} {
+			if err := tx.Create(&capability).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Create(&model.DistributorRelationship{AgentTenantID: travel.ID, SupplierTenantID: supplier.ID, Status: "active"}).Error; err != nil {
+			return err
+		}
+		area := model.ScenicArea{TenantID: supplier.ID, Code: "CONTRACT-AREA", Name: "Main", Status: "active"}
+		if err := tx.Create(&area).Error; err != nil {
+			return err
+		}
+		rule := model.TicketRule{TenantID: supplier.ID, Name: "Team Rule", ValidityType: "date"}
+		if err := tx.Create(&rule).Error; err != nil {
+			return err
+		}
+		product = model.Product{TenantID: supplier.ID, ScenicAreaID: area.ID, RuleID: rule.ID, Name: "Team Ticket", Status: "online", IsDistributable: true, Price: 120}
+		return tx.Create(&product).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	team := &TeamService{}
+	input := TravelContractInput{
+		TravelTenantID: travel.ID, ContractNo: "SUPPLIER-PRICED-1", Status: "active", SettlementDays: 30,
+		CreditLimitCents: 500000, PriceRules: []TeamPriceRule{{ProductID: product.ID, PriceCents: 8800, MaxQuantity: 100}},
+	}
+	contract, err := team.CreateContract(supplier.ID, 11, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contract.SupplierTenantID != supplier.ID || contract.TravelTenantID != travel.ID || len(contract.PriceRules) != 1 || contract.PriceRules[0].ProductName != product.Name {
+		t.Fatalf("unexpected contract: %+v", contract)
+	}
+	var offer model.ProductOffer
+	if err := model.DB.Where("supplier_tenant_id = ? AND distributor_tenant_id = ? AND source_product_id = ?", supplier.ID, travel.ID, product.ID).First(&offer).Error; err != nil || moneyCents(offer.SettlementPrice) != 8800 || offer.Status != "active" {
+		t.Fatalf("contract supply offer=%+v err=%v", offer, err)
+	}
+	if _, err := team.CreateContract(travel.ID, 12, input); err == nil {
+		t.Fatal("travel agency set its own contract price")
+	}
+	input.PriceRules[0].PriceCents = 8500
+	if _, err := team.UpdateContract(otherSupplier.ID, contract.ID, 13, input); err == nil {
+		t.Fatal("another supplier changed the contract")
+	}
+	updated, err := team.UpdateContract(supplier.ID, contract.ID, 11, input)
+	if err != nil || updated.PriceRules[0].PriceCents != 8500 {
+		t.Fatalf("updated contract=%+v err=%v", updated, err)
+	}
+	if err := model.DB.First(&offer, offer.ID).Error; err != nil || moneyCents(offer.SettlementPrice) != 8500 {
+		t.Fatalf("updated contract supply offer=%+v err=%v", offer, err)
+	}
+}
+
 func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 	resetBusinessData(t)
 	var travel, supplier model.Tenant
@@ -1410,12 +1482,12 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 	if err := model.DB.First(&contract).Error; err != nil {
 		t.Fatal(err)
 	}
-	validOrder := model.Order{Items: []model.OrderItem{{ProductID: 42, Price: 99, Quantity: 1}}}
+	validOrder := model.Order{Items: []model.OrderItem{{FulfillmentProductID: 42, SettlementPrice: 99, Quantity: 1}}}
 	if err := validateTeamOrderAgainstContract(&contract, &validOrder); err != nil {
 		t.Fatal(err)
 	}
 	invalidOrder := validOrder
-	invalidOrder.Items = []model.OrderItem{{ProductID: 42, Price: 100, Quantity: 1}}
+	invalidOrder.Items = []model.OrderItem{{FulfillmentProductID: 42, SettlementPrice: 100, Quantity: 1}}
 	if err := validateTeamOrderAgainstContract(&contract, &invalidOrder); err == nil {
 		t.Fatal("contract accepted a non-contract price")
 	}

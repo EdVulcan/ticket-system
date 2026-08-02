@@ -320,8 +320,10 @@ func (s *DistributionService) SetOfferStatus(supplierTenantID, offerID, operator
 // supplier can see only the fulfilment facts and ticket counts it owns.
 type FulfillmentOrderView struct {
 	model.FulfillmentOrder
-	TicketCount int64 `json:"ticket_count"`
-	UsedCount   int64 `json:"used_count"`
+	SalesTenantName string `json:"sales_tenant_name"`
+	ScenicAreaName  string `json:"scenic_area_name"`
+	TicketCount     int64  `json:"ticket_count"`
+	UsedCount       int64  `json:"used_count"`
 }
 
 type FulfillmentTicketView struct {
@@ -359,7 +361,7 @@ type FulfillmentSettlementView struct {
 }
 
 type FulfillmentDetailView struct {
-	Fulfillment model.FulfillmentOrder    `json:"fulfillment"`
+	Fulfillment FulfillmentOrderView      `json:"fulfillment"`
 	Items       []FulfillmentItemView     `json:"items"`
 	AfterSales  []model.AfterSaleRequest  `json:"after_sales"`
 	Settlement  FulfillmentSettlementView `json:"settlement"`
@@ -393,6 +395,32 @@ func (s *DistributionService) ListFulfillmentOrders(supplierTenantID, distributo
 	if err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&orders).Error; err != nil {
 		return nil, 0, err
 	}
+	salesTenantIDs := make([]uint, 0, len(orders))
+	scenicAreaIDs := make([]uint, 0, len(orders))
+	for i := range orders {
+		salesTenantIDs = append(salesTenantIDs, orders[i].SalesTenantID)
+		scenicAreaIDs = append(scenicAreaIDs, orders[i].ScenicAreaID)
+	}
+	var salesTenants []model.Tenant
+	if len(salesTenantIDs) > 0 {
+		if err := model.DB.Select("id", "name").Where("id IN ?", salesTenantIDs).Find(&salesTenants).Error; err != nil {
+			return nil, 0, err
+		}
+	}
+	var scenicAreas []model.ScenicArea
+	if len(scenicAreaIDs) > 0 {
+		if err := model.DB.Select("id", "name").Where("tenant_id = ? AND id IN ?", supplierTenantID, scenicAreaIDs).Find(&scenicAreas).Error; err != nil {
+			return nil, 0, err
+		}
+	}
+	tenantNames := make(map[uint]string, len(salesTenants))
+	for i := range salesTenants {
+		tenantNames[salesTenants[i].ID] = salesTenants[i].Name
+	}
+	areaNames := make(map[uint]string, len(scenicAreas))
+	for i := range scenicAreas {
+		areaNames[scenicAreas[i].ID] = scenicAreas[i].Name
+	}
 	views := make([]FulfillmentOrderView, 0, len(orders))
 	for i := range orders {
 		var ticketCount, usedCount int64
@@ -402,7 +430,10 @@ func (s *DistributionService) ListFulfillmentOrders(supplierTenantID, distributo
 		if err := model.DB.Model(&model.TicketEntitlement{}).Where("fulfillment_order_id = ? AND supplier_tenant_id = ? AND status = ?", orders[i].ID, supplierTenantID, "used").Count(&usedCount).Error; err != nil {
 			return nil, 0, err
 		}
-		views = append(views, FulfillmentOrderView{FulfillmentOrder: orders[i], TicketCount: ticketCount, UsedCount: usedCount})
+		views = append(views, FulfillmentOrderView{
+			FulfillmentOrder: orders[i], SalesTenantName: tenantNames[orders[i].SalesTenantID], ScenicAreaName: areaNames[orders[i].ScenicAreaID],
+			TicketCount: ticketCount, UsedCount: usedCount,
+		})
 	}
 	return views, total, nil
 }
@@ -515,7 +546,18 @@ func (s *DistributionService) GetFulfillmentOrder(supplierTenantID, fulfillmentI
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
-	return &FulfillmentDetailView{Fulfillment: fulfillment, Items: itemViews, AfterSales: visibleAfterSales, Settlement: settlement}, nil
+	var salesTenant model.Tenant
+	if err := model.DB.Select("id", "name").Where("id = ?", fulfillment.SalesTenantID).First(&salesTenant).Error; err != nil {
+		return nil, err
+	}
+	var scenicArea model.ScenicArea
+	if err := model.DB.Select("id", "name").Where("id = ? AND tenant_id = ?", fulfillment.ScenicAreaID, supplierTenantID).First(&scenicArea).Error; err != nil {
+		return nil, err
+	}
+	return &FulfillmentDetailView{
+		Fulfillment: FulfillmentOrderView{FulfillmentOrder: fulfillment, SalesTenantName: salesTenant.Name, ScenicAreaName: scenicArea.Name},
+		Items:       itemViews, AfterSales: visibleAfterSales, Settlement: settlement,
+	}, nil
 }
 
 func codeListIntersects(codes []string, wanted map[string]struct{}) bool {

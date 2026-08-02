@@ -68,10 +68,10 @@
             <el-form-item label="目标日期"><el-date-picker v-model="form.target_date" value-format="YYYY-MM-DD" class="w-full" /></el-form-item>
             <el-form-item label="目标时段"><el-input v-model="form.target_slot" placeholder="不填则保留原时段" /></el-form-item>
           </template>
-          <el-form-item v-if="form.type === 'exchange'" label="目标商品编号"><el-input-number v-model="form.target_product_id" :min="1" class="w-full" /></el-form-item>
+          <el-form-item v-if="form.type === 'exchange'" label="目标产品"><el-select v-model="form.target_product_id" filterable class="w-full" placeholder="选择换票后的产品"><el-option v-for="product in availableProducts" :key="product.id" :label="product.name" :value="product.id" /></el-select></el-form-item>
           <template v-if="form.type === 'reissue'">
-            <el-form-item label="售票终端编号"><el-input-number v-model="form.device_id" :min="1" class="w-full" /></el-form-item>
-            <el-form-item label="当前班次编号"><el-input-number v-model="form.shift_id" :min="1" class="w-full" /></el-form-item>
+            <el-form-item label="售票终端"><el-select v-model="form.device_id" filterable class="w-full" placeholder="选择售票终端" @change="applyFormDevice"><el-option v-for="device in posDevices" :key="device.id" :label="deviceLabel(device)" :value="device.id" /></el-select></el-form-item>
+            <el-form-item label="当前班次"><el-select v-model="form.shift_id" class="w-full" placeholder="选择当班班次"><el-option v-for="shift in shiftsForDevice(form.device_id)" :key="shift.id" :label="shiftLabel(shift)" :value="shift.id" /></el-select></el-form-item>
           </template>
           <el-form-item class="col-span-2" label="原因"><el-input v-model="form.reason" type="textarea" :rows="2" /></el-form-item>
         </div>
@@ -105,8 +105,8 @@
           <el-form-item v-if="differenceForm.pay_type === 'bscanc'" label="顾客付款码"><el-input v-model="differenceForm.auth_code" autocomplete="off" /></el-form-item>
         </template>
         <div class="grid grid-cols-2 gap-3">
-          <el-form-item label="售票终端编号"><el-input-number v-model="differenceForm.device_id" :min="1" class="w-full" /></el-form-item>
-          <el-form-item label="当前班次编号"><el-input-number v-model="differenceForm.shift_id" :min="1" class="w-full" /></el-form-item>
+          <el-form-item label="售票终端"><el-select v-model="differenceForm.device_id" filterable class="w-full" placeholder="选择售票终端" @change="applyDifferenceDevice"><el-option v-for="device in posDevices" :key="device.id" :label="deviceLabel(device)" :value="device.id" /></el-select></el-form-item>
+          <el-form-item label="当前班次"><el-select v-model="differenceForm.shift_id" class="w-full" placeholder="选择当班班次"><el-option v-for="shift in shiftsForDevice(differenceForm.device_id)" :key="shift.id" :label="shiftLabel(shift)" :value="shift.id" /></el-select></el-form-item>
         </div>
       </el-form>
       <template #footer><el-button @click="differenceVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="collectDifference">确认收款</el-button></template>
@@ -166,6 +166,13 @@ const rows = ref<any[]>([]); const loading = ref(false); const saving = ref(fals
 const createVisible = ref(false); const detailVisible = ref(false); const approveVisible = ref(false); const differenceVisible = ref(false); const selected = ref<any>(null)
 const approveTarget = ref<any>(null); const differenceTarget = ref<any>(null)
 const refundDetail = ref<any>(null)
+const availableProducts = ref<any[]>([])
+const devices = ref<any[]>([])
+const openShifts = ref<any[]>([])
+const posDevices = computed(() => devices.value.filter((device: any) => device.type === 'pos' && device.status === 'online'))
+const shiftsForDevice = (deviceID: number) => openShifts.value.filter((shift: any) => shift.status === 'open' && Number(shift.device_id) === Number(deviceID))
+const deviceLabel = (device: any) => `${device.name}${device.serial_number ? `（${device.serial_number}）` : ''}`
+const shiftLabel = (shift: any) => `${shift.shift_no || `班次 ${shift.id}`} · ${shift.operator_name || '当前收银员'}`
 const types = [{ value: 'refund', label: '退票' }, { value: 'reschedule', label: '改期' }, { value: 'exchange', label: '换票' }, { value: 'void', label: '作废' }, { value: 'reissue', label: '补打' }]
 const emptyForm = () => ({ order_no: '', type: 'refund', ticket_codes: '', amount_cents: 0, payment_method: 'auto', target_date: '', target_slot: '', target_product_id: 0, device_id: 0, shift_id: 0, reason: '' })
 const form = reactive(emptyForm())
@@ -175,13 +182,38 @@ const differenceChange = computed(() => ((Math.max(0, differenceForm.cash_tender
 
 const load = async () => { loading.value = true; try { const res = await request.get('/after-sales', { params: { page: page.value, page_size: pageSize.value, status: status.value, order_no: orderNo.value.trim() } }); rows.value = res.data.data || []; total.value = res.data.total || 0 } finally { loading.value = false } }
 const applyFilters = () => { page.value = 1; load() }
-const openCreate = () => { Object.assign(form, { ...emptyForm(), order_no: orderNo.value.trim() }); createVisible.value = true }
+const loadOperationOptions = async () => {
+  const [productResponse, deviceResponse, shiftResponse] = await Promise.all([
+    request.get('/products', { params: { page: 1, page_size: 100 } }),
+    request.get('/devices', { params: { page: 1, page_size: 100 } }),
+    request.get('/operations/shifts', { params: { page: 1, page_size: 100 } }),
+  ])
+  availableProducts.value = (productResponse.data.data || []).filter((product: any) => product.status === 'online')
+  devices.value = deviceResponse.data.data || []
+  openShifts.value = shiftResponse.data.data || []
+}
+const applyFormDevice = () => { form.shift_id = shiftsForDevice(form.device_id)[0]?.id || 0 }
+const applyDifferenceDevice = () => { differenceForm.shift_id = shiftsForDevice(differenceForm.device_id)[0]?.id || 0 }
+const openCreate = async () => {
+  Object.assign(form, { ...emptyForm(), order_no: orderNo.value.trim() })
+  createVisible.value = true
+  try { await loadOperationOptions() } catch (e: any) { ElMessage.error(e.response?.data?.error || '售后可选项加载失败') }
+}
 const create = async () => { if (!form.order_no.trim() || !form.reason.trim()) { ElMessage.warning('订单号和原因必填'); return }; saving.value = true; try { await request.post('/after-sales', { ...form, ticket_codes: form.ticket_codes.split(/[,，\s]+/).map(value => value.trim()).filter(Boolean), idempotency_key: `admin-${Date.now()}-${Math.random().toString(36).slice(2)}` }); ElMessage.success('售后申请已提交'); createVisible.value = false; await load() } finally { saving.value = false } }
 const openApprove = (row: any) => { approveTarget.value = row; Object.assign(approveForm, { reason: '', settlement_exception: false, settlement_exception_reason: '' }); approveVisible.value = true }
 const confirmApprove = async () => { if (approveForm.settlement_exception && !approveForm.settlement_exception_reason.trim()) { ElMessage.warning('结算价例外必须填写原因'); return }; saving.value = true; try { await request.post(`/after-sales/${approveTarget.value.id}/approve`, approveForm); ElMessage.success('已批准'); approveVisible.value = false; await load() } finally { saving.value = false } }
 const reject = async (row: any) => { const reason = await ElMessageBox.prompt('请输入拒绝原因', '拒绝售后', { inputValidator: value => value.trim() ? true : '拒绝原因必填' }); await request.post(`/after-sales/${row.id}/reject`, { reason: reason.value }); ElMessage.success('已拒绝'); await load() }
 const execute = async (row: any) => { await ElMessageBox.confirm(`确认执行 ${typeText(row.type)} ${row.request_no}？`, '执行售后', { type: 'warning' }); const result = (await request.post(`/after-sales/${row.id}/execute`)).data; ElMessage.success(result.difference_status === 'payment_required' ? '请继续收取换票差价' : '已进入执行流程'); await load() }
-const openDifferencePayment = (row: any) => { differenceTarget.value = row; Object.assign(differenceForm, { method: 'cash', pay_type: 'cscanb', auth_code: '', shift_id: row.shift_id || 0, device_id: row.device_id || 0, cash_tendered_cents: row.difference_cents || 0 }); differenceVisible.value = true }
+const openDifferencePayment = async (row: any) => {
+  differenceTarget.value = row
+  Object.assign(differenceForm, { method: 'cash', pay_type: 'cscanb', auth_code: '', shift_id: row.shift_id || 0, device_id: row.device_id || 0, cash_tendered_cents: row.difference_cents || 0 })
+  differenceVisible.value = true
+  try {
+    await loadOperationOptions()
+    if (!differenceForm.device_id) differenceForm.device_id = posDevices.value[0]?.id || 0
+    if (!differenceForm.shift_id) applyDifferenceDevice()
+  } catch (e: any) { ElMessage.error(e.response?.data?.error || '收银上下文加载失败') }
+}
 const collectDifference = async () => { if (!differenceForm.device_id || !differenceForm.shift_id) { ElMessage.warning('请选择当前售票终端和班次'); return }; if (differenceForm.pay_type === 'bscanc' && differenceForm.method !== 'cash' && !differenceForm.auth_code.trim()) { ElMessage.warning('请扫描顾客付款码'); return }; saving.value = true; try { const response = await request.post(`/after-sales/${differenceTarget.value.id}/difference-payment`, { ...differenceForm, idempotency_key: `difference-${differenceTarget.value.request_no}-${Date.now()}` }); differenceVisible.value = false; ElMessage.success(response.data.status === 'paid' ? '差价收取完成，换票已生效' : '支付请求已提交，等待渠道确认'); await load() } finally { saving.value = false } }
 const showDetail = async (row: any) => {
   selected.value = (await request.get(`/after-sales/${row.id}`)).data

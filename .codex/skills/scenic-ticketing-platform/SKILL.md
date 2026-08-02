@@ -25,16 +25,18 @@ The product is a platform for supplier scenic areas, distributors, and travel ag
 - Separate payment, fulfillment, entitlement, refund, and settlement states. Use idempotent reservations, callbacks, retries, and releases.
 - Use integer cents or a safe fixed-point amount for money and immutable ledger entries for balances, credit, freezes, refunds, and settlements.
 - Platform cross-tenant operations require a dedicated platform scope, explicit target tenant, reason, and audit record; ordinary tenant APIs stay tenant-scoped.
+- Tenant-facing workflows use business names, order numbers, ticket codes, device names, and current work context. Never require staff to remember database IDs when the system can present a scoped selector. One business fact should have one clear maintenance entry; related projections may synchronize transactionally instead of forcing duplicate configuration.
 
 ## Development workflow
 
 1. Map the change to its owner, seller, supplier, fulfillment scenic area, channel, payment, and settlement scopes before editing code.
 2. Identify whether the change belongs to platform, identity, catalog, distribution, inventory, ordering, ticketing, channel, payment, finance, team, or audit. Keep writes inside that module's service boundary.
 3. Make server-side ownership authoritative. Validate agreement status, product offer, product revision, scenic area, inventory date/slot, and channel permissions inside the transaction.
-4. Define normal, retry, timeout, cancellation, refund, and process-restart behavior. Persist work that must survive a restart in PostgreSQL task/outbox tables before adding Redis or a message broker.
-5. Add negative tenant tests before positive happy-path tests. At minimum test scenic A, scenic B, distributor D, travel agency T, and platform scope.
-6. Run relevant Go tests, race tests where concurrency is affected, frontend builds, and business-flow E2E tests. Do not call mock printing, mock card reading, or a UI success toast a production feature.
-7. Update the development baseline when a domain decision, invariant, phase, or acceptance rule changes. Record migrations and compatibility behavior for existing orders, tickets, inventory, and money.
+4. Walk the affected task from the operator's point of view. Prefer name-based selectors, useful defaults, inline context, and a single clear primary action; keep internal IDs and redundant configuration out of visible forms.
+5. Define normal, retry, timeout, cancellation, refund, and process-restart behavior. Persist work that must survive a restart in PostgreSQL task/outbox tables before adding Redis or a message broker.
+6. Add negative tenant tests before positive happy-path tests. At minimum test scenic A, scenic B, distributor D, travel agency T, and platform scope.
+7. Run relevant Go tests, race tests where concurrency is affected, frontend builds, and business-flow E2E tests. Do not call mock printing, mock card reading, or a UI success toast a production feature.
+8. Update the development baseline when a domain decision, invariant, phase, or acceptance rule changes. Record migrations and compatibility behavior for existing orders, tickets, inventory, and money.
 
 ## Current P0 gates
 

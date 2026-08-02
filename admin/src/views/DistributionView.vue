@@ -126,7 +126,7 @@
                         <el-button type="danger" size="small" @click="handleAudit(row, 'rejected')">拒绝</el-button>
                     </div>
                     <div v-else>
-                         <el-button type="primary" size="small" @click="handleOffers(row)">供货报价</el-button>
+                         <el-button type="primary" size="small" @click="handleOffers(row)">产品结算价</el-button>
                          <el-button type="warning" size="small" @click="handleRecharge(row)">充值</el-button>
                     </div>
                 </template>
@@ -143,15 +143,17 @@
                         <el-option label="已履约" value="fulfilled" />
                         <el-option label="已取消" value="cancelled" />
                     </el-select>
-                    <el-input v-model="fulfillmentDistributorId" placeholder="分销商租户编号" style="width: 180px" @keyup.enter="fetchFulfillments" />
+                    <el-select v-model="fulfillmentDistributorId" clearable filterable placeholder="全部分销商" style="width: 220px" @change="fetchFulfillments">
+                        <el-option v-for="agent in activeAgents" :key="agent.agent_tenant_id" :label="agent.agent_name" :value="agent.agent_tenant_id" />
+                    </el-select>
                 </div>
                 <el-button link type="primary" @click="fetchFulfillments"><el-icon><Refresh /></el-icon></el-button>
             </div>
             <el-table :data="fulfillments" style="width: 100%" v-loading="loadingFulfillments" stripe>
                 <el-table-column prop="fulfillment_no" label="履约单" min-width="190" />
                 <el-table-column prop="sales_order_no" label="销售订单" min-width="190" />
-                <el-table-column prop="sales_tenant_id" label="分销商" width="100" />
-                <el-table-column prop="scenic_area_id" label="景区" width="90" />
+                <el-table-column prop="sales_tenant_name" label="分销商" min-width="150" />
+                <el-table-column prop="scenic_area_name" label="景区" min-width="140" />
                 <el-table-column label="应结" width="110"><template #default="{ row }">¥{{ Number(row.settlement_amount || 0).toFixed(2) }}</template></el-table-column>
                 <el-table-column label="状态" width="110"><template #default="{ row }">{{ fulfillmentStatusText(row.status) }}</template></el-table-column>
                 <el-table-column label="票数" width="120">
@@ -170,8 +172,8 @@
           <el-descriptions-item label="履约单">{{ fulfillmentDetail.fulfillment.fulfillment_no }}</el-descriptions-item>
           <el-descriptions-item label="销售订单">{{ fulfillmentDetail.fulfillment.sales_order_no }}</el-descriptions-item>
           <el-descriptions-item label="履约状态">{{ fulfillmentStatusText(fulfillmentDetail.fulfillment.status) }}</el-descriptions-item>
-          <el-descriptions-item label="分销商租户">{{ fulfillmentDetail.fulfillment.sales_tenant_id }}</el-descriptions-item>
-          <el-descriptions-item label="履约景区">{{ fulfillmentDetail.fulfillment.scenic_area_id }}</el-descriptions-item>
+          <el-descriptions-item label="分销商">{{ fulfillmentDetail.fulfillment.sales_tenant_name }}</el-descriptions-item>
+          <el-descriptions-item label="履约景区">{{ fulfillmentDetail.fulfillment.scenic_area_name }}</el-descriptions-item>
           <el-descriptions-item label="结算状态">{{ fulfillmentDetail.settlement.statement_status ? settlementStatusText(fulfillmentDetail.settlement.statement_status) : '尚未生成结算单' }}</el-descriptions-item>
         </el-descriptions>
 
@@ -309,24 +311,24 @@
         </template>
     </el-dialog>
 
-    <el-dialog v-model="offersDialogVisible" title="供应商供货报价" width="980px">
+    <el-dialog v-model="offersDialogVisible" :title="`${selectedDistributor?.agent_name || '分销商'} · 产品结算价`" width="980px">
         <div class="flex justify-between items-center mb-3">
-            <span class="text-sm text-gray-500">管理授权产品版本、结算价、最低售价、额度和销售渠道。</span>
+            <span class="text-sm text-gray-500">这里的每一行同时决定该分销商可以销售的产品和对应结算价。</span>
             <div class="flex gap-2">
                 <el-button size="small" @click="loadOffers">刷新</el-button>
-                <el-button type="primary" size="small" @click="openOfferForm">新建报价</el-button>
+                <el-button type="primary" size="small" @click="openOfferForm()">添加产品价格</el-button>
             </div>
         </div>
         <el-table :data="offers" v-loading="loadingOffers" height="360" stripe>
-            <el-table-column prop="source_product_id" label="产品编号" width="100" />
-            <el-table-column prop="product_revision_id" label="版本编号" width="100" />
-            <el-table-column prop="settlement_price" label="结算价" width="110" />
+            <el-table-column label="产品" min-width="190"><template #default="{ row }"><div class="font-medium">{{ sourceProductName(row.source_product_id) }}</div><div class="text-xs text-gray-400">产品编号 {{ row.source_product_id }}</div></template></el-table-column>
+            <el-table-column prop="settlement_price" label="该分销商结算价" width="150"><template #default="{ row }"><strong>¥{{ Number(row.settlement_price || 0).toFixed(2) }}</strong></template></el-table-column>
             <el-table-column label="最低售价" width="120"><template #default="{ row }">¥{{ centsToYuan(row.minimum_retail_price_cents) }}</template></el-table-column>
             <el-table-column label="额度" width="90"><template #default="{ row }">{{ row.quota ? row.quota : '不限' }}</template></el-table-column>
             <el-table-column label="销售渠道" min-width="150"><template #default="{ row }">{{ channelText(row.allowed_channels) }}</template></el-table-column>
             <el-table-column label="状态" width="100"><template #default="{ row }">{{ offerStatusText(row.status) }}</template></el-table-column>
-            <el-table-column label="操作" width="180" fixed="right">
+            <el-table-column label="操作" width="220" fixed="right">
                 <template #default="{ row }">
+                    <el-button link type="primary" @click="openOfferForm(row)">修改价格</el-button>
                     <el-button v-if="row.status === 'active'" link type="warning" @click="handleOfferStatus(row, 'suspended')">暂停</el-button>
                     <el-button v-else-if="row.status === 'suspended'" link type="success" @click="handleOfferStatus(row, 'active')">恢复</el-button>
                     <el-button v-if="row.status !== 'expired'" link type="danger" @click="handleOfferStatus(row, 'expired')">终止</el-button>
@@ -335,11 +337,11 @@
         </el-table>
     </el-dialog>
 
-    <el-dialog v-model="offerFormVisible" title="新建供货报价" width="560px">
+    <el-dialog v-model="offerFormVisible" :title="offerForm.source_product_id ? '设置产品结算价' : '添加产品结算价'" width="560px">
         <el-form :model="offerForm" label-position="top">
             <el-form-item label="供货产品">
-                <el-select v-model="offerForm.source_product_id" filterable class="w-full" placeholder="选择已上架且允许分销的产品">
-                    <el-option v-for="product in sourceProducts" :key="product.id" :label="`${product.name} (#${product.id})`" :value="product.id" />
+                <el-select v-model="offerForm.source_product_id" :disabled="editingOffer" filterable class="w-full" placeholder="选择已上架且允许分销的产品">
+                    <el-option v-for="product in sourceProducts" :key="product.id" :label="product.name" :value="product.id" />
                 </el-select>
             </el-form-item>
             <div class="grid grid-cols-2 gap-3">
@@ -435,7 +437,7 @@ const agents = ref<any[]>([])
 const loadingFulfillments = ref(false)
 const fulfillments = ref<any[]>([])
 const fulfillmentStatus = ref('')
-const fulfillmentDistributorId = ref('')
+const fulfillmentDistributorId = ref<number | undefined>()
 const fulfillmentDrawer = ref(false)
 const loadingFulfillmentDetail = ref(false)
 const fulfillmentDetail = ref<any>(null)
@@ -471,6 +473,9 @@ const savingOffer = ref(false)
 const offers = ref<any[]>([])
 const sourceProducts = ref<any[]>([])
 const selectedDistributorId = ref(0)
+const selectedDistributor = ref<any>(null)
+const activeAgents = computed(() => agents.value.filter((agent: any) => agent.status === 'active'))
+const editingOffer = ref(false)
 const offerForm = reactive({
     source_product_id: 0,
     settlement_price: 0,
@@ -480,6 +485,7 @@ const offerForm = reactive({
     allowed_channels: 'window,online,ota'
 })
 const offerChannels = ref(['window', 'online', 'ota'])
+const sourceProductName = (productID: number) => sourceProducts.value.find((product: any) => Number(product.id) === Number(productID))?.name || `产品 ${productID}`
 
 const loadingBundles = ref(false)
 const savingBundle = ref(false)
@@ -521,7 +527,7 @@ const handleTabChange = (tabName: string) => {
     } else if (tabName === 'agents') {
         fetchAgents()
 	} else if (tabName === 'fulfillments') {
-		fetchFulfillments()
+		Promise.all([fetchAgents(), fetchFulfillments()])
 	} else if (tabName === 'bundles') {
 		fetchBundles()
 	}
@@ -606,7 +612,7 @@ const fetchFulfillments = async () => {
     try {
         const params: Record<string, string | number> = { page: 1, page_size: 100 }
         if (fulfillmentStatus.value) params.status = fulfillmentStatus.value
-        if (fulfillmentDistributorId.value.trim()) params.distributor_tenant_id = Number(fulfillmentDistributorId.value)
+        if (fulfillmentDistributorId.value) params.distributor_tenant_id = fulfillmentDistributorId.value
         const res = await request.get('/distribution/fulfillments', { params })
         fulfillments.value = res.data.data || []
     } catch (e: any) {
@@ -713,6 +719,7 @@ const confirmRecharge = async () => {
 
 const handleOffers = async (row: any) => {
     selectedDistributorId.value = row.agent_tenant_id
+    selectedDistributor.value = row
     offersDialogVisible.value = true
     await Promise.all([loadOffers(), loadSourceProducts()])
 }
@@ -739,14 +746,15 @@ const loadSourceProducts = async () => {
     }
 }
 
-const openOfferForm = () => {
-    offerForm.source_product_id = sourceProducts.value[0]?.id || 0
-    offerForm.settlement_price = 0
-    offerForm.minimum_retail_price = 0
-    offerForm.quota = 0
-    offerForm.commission_bps = 0
-    offerForm.allowed_channels = 'window,online,ota'
-    offerChannels.value = ['window', 'online', 'ota']
+const openOfferForm = (row?: any) => {
+    editingOffer.value = Boolean(row)
+    offerForm.source_product_id = row?.source_product_id || sourceProducts.value[0]?.id || 0
+    offerForm.settlement_price = Number(row?.settlement_price || 0)
+    offerForm.minimum_retail_price = Number(row?.minimum_retail_price_cents || 0) / 100
+    offerForm.quota = Number(row?.quota || 0)
+    offerForm.commission_bps = Number(row?.commission_bps || 0)
+    offerForm.allowed_channels = row?.allowed_channels || 'window,online,ota'
+    offerChannels.value = offerForm.allowed_channels.split(',').filter(Boolean)
     offerFormVisible.value = true
 }
 

@@ -262,8 +262,10 @@ func InitRouter(r *gin.Engine) {
 	teamGroup := protected.Group("/teams")
 	teamGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"))
 	{
+		teamGroup.GET("/contract-partners", teamController.ListContractPartners)
 		teamGroup.GET("/contracts", teamController.ListContracts)
 		teamGroup.POST("/contracts", teamController.CreateContract)
+		teamGroup.PUT("/contracts/:id", teamController.UpdateContract)
 		teamGroup.GET("/agents", teamController.ListAgents)
 		teamGroup.POST("/agents", teamController.CreateAgent)
 		teamGroup.GET("/guides", teamController.ListGuides)

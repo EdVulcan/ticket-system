@@ -8,9 +8,9 @@
       <el-button :icon="Refresh" circle title="刷新当前页面" @click="refreshActiveTab" />
     </div>
 
-    <div class="flex flex-wrap gap-2" v-if="isTravelAgency">
-      <el-button type="primary" :icon="Plus" @click="openGroupDialog">新建团队</el-button>
-      <el-button :icon="DocumentAdd" @click="openContractDialog">新建合同</el-button>
+    <div class="flex flex-wrap gap-2">
+      <el-button v-if="isTravelAgency" type="primary" :icon="Plus" @click="openGroupDialog">新建团队</el-button>
+      <el-button v-if="isSupplier" type="primary" :icon="DocumentAdd" @click="openContractDialog()">新增旅行社合同</el-button>
     </div>
 
     <el-tabs v-model="activeTab" @tab-change="handleTabChange">
@@ -40,14 +40,23 @@
         </el-table>
       </el-tab-pane>
 
-      <el-tab-pane label="合同" name="contracts">
+      <el-tab-pane label="旅行社合同" name="contracts">
         <el-table :data="contracts" v-loading="contractsLoading" stripe empty-text="暂无团队合同">
           <el-table-column prop="contract_no" label="合同号" min-width="180" />
-          <el-table-column label="旅行社" width="110"><template #default="{ row }">租户 {{ row.travel_tenant_id }}</template></el-table-column>
-          <el-table-column label="供应商" width="110"><template #default="{ row }">租户 {{ row.supplier_tenant_id }}</template></el-table-column>
+          <el-table-column prop="travel_tenant_name" label="旅行社" min-width="150" />
+          <el-table-column prop="supplier_tenant_name" label="景区供应商" min-width="150" />
+          <el-table-column label="产品结算价" min-width="220">
+            <template #default="{ row }">
+              <div v-for="rule in row.price_rules || []" :key="rule.product_id" class="leading-6">
+                <span>{{ rule.product_name }}</span><strong class="ml-2">¥{{ cents(rule.price_cents) }}</strong>
+                <span v-if="rule.max_quantity" class="ml-2 text-xs text-gray-400">最多 {{ rule.max_quantity }} 张/单</span>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column label="授信额度" width="130"><template #default="{ row }">¥{{ cents(row.credit_limit_cents) }}</template></el-table-column>
           <el-table-column label="账期" width="100"><template #default="{ row }">{{ row.settlement_days }} 天</template></el-table-column>
-          <el-table-column prop="status" label="状态" width="110" />
+          <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'warning'">{{ row.status === 'active' ? '有效' : '已暂停' }}</el-tag></template></el-table-column>
+          <el-table-column v-if="isSupplier" label="操作" width="90" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openContractDialog(row)">编辑</el-button></template></el-table-column>
         </el-table>
       </el-tab-pane>
 
@@ -88,9 +97,16 @@
       <el-form :model="groupForm" label-position="top">
         <el-form-item label="团队名称" required><el-input v-model="groupForm.name" maxlength="100" /></el-form-item>
         <div class="grid grid-cols-2 gap-3">
-          <el-form-item label="供应商租户编号" required><el-input-number v-model="groupForm.supplier_tenant_id" :min="1" class="w-full" /></el-form-item>
-          <el-form-item label="供应商景区编号" required><el-input-number v-model="groupForm.scenic_area_id" :min="1" class="w-full" /></el-form-item>
-          <el-form-item label="合同编号" required><el-input-number v-model="groupForm.contract_id" :min="1" class="w-full" /></el-form-item>
+          <el-form-item label="合作合同" required>
+            <el-select v-model="groupForm.contract_id" filterable class="w-full" placeholder="选择景区供应商合同" @change="applyGroupContract">
+              <el-option v-for="contract in activeTravelContracts" :key="contract.id" :label="`${contract.supplier_tenant_name} · ${contract.contract_no}`" :value="contract.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="入园景区" required>
+            <el-select v-model="groupForm.scenic_area_id" class="w-full" placeholder="选择合同产品所属景区">
+              <el-option v-for="area in groupScenicOptions" :key="area.id" :label="area.name" :value="area.id" />
+            </el-select>
+          </el-form-item>
           <el-form-item label="计划人数" required><el-input-number v-model="groupForm.expected_count" :min="1" class="w-full" /></el-form-item>
         </div>
         <el-form-item label="游玩日期" required><el-date-picker v-model="groupForm.visit_date" type="date" value-format="YYYY-MM-DD" class="w-full" /></el-form-item>
@@ -98,16 +114,33 @@
       <template #footer><el-button @click="groupDialog = false">取消</el-button><el-button type="primary" :loading="saving" @click="createGroup">创建</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="contractDialog" title="新建旅行社合同" width="560px">
+    <el-dialog v-model="contractDialog" :title="contractForm.id ? '编辑旅行社合同' : '新增旅行社合同'" width="760px" :close-on-click-modal="false">
       <el-form :model="contractForm" label-position="top">
-        <el-form-item label="供应商租户编号" required><el-input-number v-model="contractForm.supplier_tenant_id" :min="1" class="w-full" /></el-form-item>
-        <el-form-item label="合同号" required><el-input v-model="contractForm.contract_no" maxlength="100" /></el-form-item>
+        <div class="grid grid-cols-2 gap-3">
+          <el-form-item label="旅行社" required>
+            <el-select v-model="contractForm.travel_tenant_id" :disabled="Boolean(contractForm.id)" filterable class="w-full" placeholder="选择已合作旅行社">
+              <el-option v-for="partner in contractPartners" :key="partner.tenant_id" :label="`${partner.name}（${partner.system_code}）`" :value="partner.tenant_id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="合同号" required><el-input v-model="contractForm.contract_no" :disabled="Boolean(contractForm.id)" maxlength="100" /></el-form-item>
+        </div>
         <div class="grid grid-cols-2 gap-3">
           <el-form-item label="账期（天）"><el-input-number v-model="contractForm.settlement_days" :min="0" class="w-full" /></el-form-item>
           <el-form-item label="授信额度（元）"><el-input-number v-model="contractCreditYuan" :min="0" :precision="2" class="w-full" /></el-form-item>
         </div>
+        <el-form-item label="合同状态"><el-radio-group v-model="contractForm.status"><el-radio-button label="active">有效</el-radio-button><el-radio-button label="suspended">暂停</el-radio-button></el-radio-group></el-form-item>
+        <div class="mb-2 flex items-center justify-between">
+          <div><div class="font-medium text-gray-900">产品结算价</div><div class="text-xs text-gray-500">保存后同时作为该旅行社的供货结算价；已产生订单仍保留原价格快照。</div></div>
+          <el-button size="small" :icon="Plus" @click="addContractPriceRule">添加产品</el-button>
+        </div>
+        <div v-for="(rule, index) in contractPriceRules" :key="index" class="mb-3 grid grid-cols-[1fr_150px_150px_40px] items-end gap-3 rounded border border-gray-200 p-3">
+          <el-form-item label="产品" class="mb-0"><el-select v-model="rule.product_id" filterable class="w-full" placeholder="选择产品"><el-option v-for="product in contractProducts" :key="product.id" :label="product.name" :value="product.id" /></el-select></el-form-item>
+          <el-form-item label="结算价（元）" class="mb-0"><el-input-number v-model="rule.price_yuan" :min="0.01" :precision="2" :controls="false" class="w-full" /></el-form-item>
+          <el-form-item label="每单上限（0不限）" class="mb-0"><el-input-number v-model="rule.max_quantity" :min="0" :precision="0" class="w-full" /></el-form-item>
+          <el-button :icon="Delete" circle title="删除这项产品价格" @click="contractPriceRules.splice(index, 1)" />
+        </div>
       </el-form>
-      <template #footer><el-button @click="contractDialog = false">取消</el-button><el-button type="primary" :loading="savingContract" @click="createContract">创建</el-button></template>
+      <template #footer><el-button @click="contractDialog = false">取消</el-button><el-button type="primary" :loading="savingContract" @click="saveContract">保存</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="detailDialog" :title="`团队履约：${selectedGroup?.name || ''}`" width="1040px" :close-on-click-modal="false">
@@ -250,8 +283,15 @@
       <template #footer><el-button @click="temporaryMemberDialog = false">取消</el-button><el-button type="primary" :loading="memberChangeSaving" @click="addTemporaryMember">确认加员</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="attachOrderDialog" title="绑定已支付团队订单" width="440px">
-      <el-form label-position="top"><el-form-item label="订单编号" required><el-input-number v-model="attachOrderId" :min="1" class="w-full" /></el-form-item></el-form>
+    <el-dialog v-model="attachOrderDialog" title="绑定已支付团队订单" width="560px">
+      <el-form label-position="top">
+        <el-form-item label="选择订单" required>
+          <el-select v-model="attachOrderId" filterable class="w-full" placeholder="按订单号、联系人或手机号搜索" :loading="attachOrdersLoading">
+            <el-option v-for="order in attachOrderCandidates" :key="order.id" :value="order.id" :label="`${order.order_no} · ${order.contact_name || order.contact_phone || '未填写联系人'} · ¥${Number(order.total_amount || 0).toFixed(2)}`" />
+          </el-select>
+          <div class="mt-1 text-xs text-gray-500">仅显示游玩日期、供应商和景区与当前团队一致的可绑定订单。</div>
+        </el-form-item>
+      </el-form>
       <template #footer><el-button @click="attachOrderDialog = false">取消</el-button><el-button type="primary" :loading="attachingOrder" @click="attachOrder">绑定</el-button></template>
     </el-dialog>
 
@@ -304,7 +344,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { DocumentAdd, Download, Plus, Printer, Refresh } from '@element-plus/icons-vue'
+import { Delete, DocumentAdd, Download, Plus, Printer, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 
@@ -314,6 +354,7 @@ const user = computed<any>(() => { try { return JSON.parse(localStorage.getItem(
 const currentTenantID = computed(() => Number(user.value.tenant_id || 0))
 const capabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability)))
 const isTravelAgency = computed(() => capabilities.value.has('travel_agency'))
+const isSupplier = computed(() => capabilities.value.has('supplier'))
 
 const activeTab = ref('groups')
 const groups = ref<any[]>([])
@@ -326,6 +367,7 @@ const settlementsLoading = ref(false)
 const accountsLoading = ref(false)
 const isGroupOwner = (row: any) => currentTenantID.value > 0 && Number(row?.tenant_id) === currentTenantID.value
 const isGroupSupplier = (row: any) => currentTenantID.value > 0 && Number(row?.supplier_tenant_id) === currentTenantID.value && !isGroupOwner(row)
+const activeTravelContracts = computed(() => contracts.value.filter((contract: any) => Number(contract.travel_tenant_id) === currentTenantID.value && contract.status === 'active'))
 
 const cents = (value: number) => (Number(value || 0) / 100).toFixed(2)
 const signedCents = (value: number) => `${Number(value || 0) > 0 ? '+' : Number(value || 0) < 0 ? '-' : ''}¥${cents(Math.abs(Number(value || 0)))}`
@@ -411,7 +453,25 @@ const refreshActiveTab = () => activeTab.value === 'contracts' ? loadContracts()
 const saving = ref(false)
 const groupDialog = ref(false)
 const groupForm = reactive({ name: '', supplier_tenant_id: 0, scenic_area_id: 0, contract_id: 0, visit_date: '', expected_count: 1 })
-const openGroupDialog = () => { Object.assign(groupForm, { name: '', supplier_tenant_id: 0, scenic_area_id: 0, contract_id: 0, visit_date: '', expected_count: 1 }); groupDialog.value = true }
+const selectedGroupContract = computed(() => contracts.value.find((contract: any) => Number(contract.id) === Number(groupForm.contract_id)))
+const groupScenicOptions = computed(() => {
+  const seen = new Set<number>()
+  return (selectedGroupContract.value?.price_rules || []).flatMap((rule: any) => {
+    const id = Number(rule.scenic_area_id || 0)
+    if (!id || seen.has(id)) return []
+    seen.add(id)
+    return [{ id, name: rule.scenic_area_name || `景区 ${id}` }]
+  })
+})
+const applyGroupContract = () => {
+  groupForm.supplier_tenant_id = Number(selectedGroupContract.value?.supplier_tenant_id || 0)
+  groupForm.scenic_area_id = groupScenicOptions.value[0]?.id || 0
+}
+const openGroupDialog = async () => {
+  if (!contracts.value.length) await loadContracts()
+  Object.assign(groupForm, { name: '', supplier_tenant_id: 0, scenic_area_id: 0, contract_id: 0, visit_date: '', expected_count: 1 })
+  groupDialog.value = true
+}
 const createGroup = async () => {
   if (!groupForm.name.trim() || !groupForm.supplier_tenant_id || !groupForm.scenic_area_id || !groupForm.contract_id || !groupForm.visit_date) { ElMessage.warning('团队名称、供应商、景区、合同和日期均必填'); return }
   saving.value = true
@@ -423,13 +483,49 @@ const createGroup = async () => {
 const contractDialog = ref(false)
 const savingContract = ref(false)
 const contractCreditYuan = ref(0)
-const contractForm = reactive({ supplier_tenant_id: 0, contract_no: '', settlement_days: 0, status: 'active' })
-const openContractDialog = () => { Object.assign(contractForm, { supplier_tenant_id: 0, contract_no: '', settlement_days: 0, status: 'active' }); contractCreditYuan.value = 0; contractDialog.value = true }
-const createContract = async () => {
-  if (!contractForm.supplier_tenant_id || !contractForm.contract_no.trim()) { ElMessage.warning('供应商和合同号必填'); return }
+const contractPartners = ref<any[]>([])
+const contractProducts = ref<any[]>([])
+const contractPriceRules = ref<any[]>([])
+const contractForm = reactive({ id: 0, travel_tenant_id: 0, contract_no: '', settlement_days: 0, status: 'active' })
+const loadContractFormOptions = async () => {
+  const [partnersResponse, productsResponse] = await Promise.all([
+    request.get('/teams/contract-partners'),
+    request.get('/products', { params: { page: 1, page_size: 100 } }),
+  ])
+  contractPartners.value = partnersResponse.data.data || []
+  contractProducts.value = (productsResponse.data.data || []).filter((product: any) => product.status === 'online' && product.is_distributable)
+}
+const addContractPriceRule = () => contractPriceRules.value.push({ product_id: 0, price_yuan: 0, max_quantity: 0 })
+const openContractDialog = async (row?: any) => {
+  try {
+    await loadContractFormOptions()
+    Object.assign(contractForm, {
+      id: Number(row?.id || 0), travel_tenant_id: Number(row?.travel_tenant_id || contractPartners.value[0]?.tenant_id || 0),
+      contract_no: row?.contract_no || '', settlement_days: Number(row?.settlement_days || 0), status: row?.status || 'active',
+    })
+    contractCreditYuan.value = Number(row?.credit_limit_cents || 0) / 100
+    contractPriceRules.value = (row?.price_rules || []).map((rule: any) => ({ product_id: rule.product_id, price_yuan: Number(rule.price_cents || 0) / 100, max_quantity: Number(rule.max_quantity || 0) }))
+    if (!contractPriceRules.value.length) addContractPriceRule()
+    contractDialog.value = true
+  } catch (e: any) { ElMessage.error(e.response?.data?.error || '合同可选项加载失败') }
+}
+const saveContract = async () => {
+  if (!contractForm.travel_tenant_id || !contractForm.contract_no.trim() || !contractPriceRules.value.length || contractPriceRules.value.some(rule => !rule.product_id || rule.price_yuan <= 0)) { ElMessage.warning('请选择旅行社，并完整填写至少一个产品结算价'); return }
+  if (new Set(contractPriceRules.value.map(rule => rule.product_id)).size !== contractPriceRules.value.length) { ElMessage.warning('同一个产品不能重复添加'); return }
   savingContract.value = true
-  try { await request.post('/teams/contracts', { ...contractForm, credit_limit_cents: Math.round(contractCreditYuan.value * 100) }); contractDialog.value = false; ElMessage.success('合同已创建'); await loadContracts() }
-  catch (e: any) { ElMessage.error(e.response?.data?.error || '合同创建失败') }
+  try {
+    const payload = {
+      travel_tenant_id: contractForm.travel_tenant_id, contract_no: contractForm.contract_no.trim(), status: contractForm.status,
+      settlement_days: contractForm.settlement_days, credit_limit_cents: Math.round(contractCreditYuan.value * 100),
+      price_rules: contractPriceRules.value.map(rule => ({ product_id: rule.product_id, price_cents: Math.round(rule.price_yuan * 100), max_quantity: rule.max_quantity })),
+    }
+    if (contractForm.id) await request.put(`/teams/contracts/${contractForm.id}`, payload)
+    else await request.post('/teams/contracts', payload)
+    contractDialog.value = false
+    ElMessage.success(contractForm.id ? '合同价格已更新' : '旅行社合同已创建')
+    await loadContracts()
+  }
+  catch (e: any) { ElMessage.error(e.response?.data?.error || '合同保存失败') }
   finally { savingContract.value = false }
 }
 
@@ -600,9 +696,26 @@ const removeTemporaryMember = async (row: any) => {
 const attachOrderDialog = ref(false)
 const attachOrderId = ref(0)
 const attachingOrder = ref(false)
-const openAttachOrder = (row: any) => { selectedGroup.value = row; attachOrderId.value = 0; attachOrderDialog.value = true }
+const attachOrdersLoading = ref(false)
+const attachOrders = ref<any[]>([])
+const attachOrderCandidates = computed(() => {
+  if (!selectedGroup.value) return []
+  const visitDate = dateOnly(selectedGroup.value.visit_date)
+  return attachOrders.value.filter((order: any) => ['paid', 'completed', 'partial_refunded'].includes(order.status) &&
+    (order.items || []).some((item: any) => Number(item.fulfillment_tenant_id) === Number(selectedGroup.value.supplier_tenant_id) &&
+      Number(item.fulfillment_scenic_area_id) === Number(selectedGroup.value.scenic_area_id) && dateOnly(item.use_date) === visitDate))
+})
+const openAttachOrder = async (row: any) => {
+  selectedGroup.value = row
+  attachOrderId.value = 0
+  attachOrderDialog.value = true
+  attachOrdersLoading.value = true
+  try { attachOrders.value = (await request.get('/orders', { params: { page: 1, page_size: 100 } })).data.data || [] }
+  catch (e: any) { ElMessage.error(e.response?.data?.error || '可绑定订单加载失败') }
+  finally { attachOrdersLoading.value = false }
+}
 const attachOrder = async () => {
-  if (!selectedGroup.value || !attachOrderId.value) { ElMessage.warning('请输入订单编号'); return }
+  if (!selectedGroup.value || !attachOrderId.value) { ElMessage.warning('请选择要绑定的订单'); return }
   attachingOrder.value = true
   try { await request.post(`/teams/${selectedGroup.value.id}/attach-order`, { order_id: attachOrderId.value }); attachOrderDialog.value = false; ElMessage.success('订单已绑定，成员票权益已匹配'); await loadGroups() }
   catch (e: any) { ElMessage.error(e.response?.data?.error || '订单绑定失败') }

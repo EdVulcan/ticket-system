@@ -15,36 +15,308 @@ import (
 
 type TeamService struct{}
 
-func (s *TeamService) CreateContract(tenantID uint, contract *model.TravelContract) error {
-	if tenantID == 0 || contract.SupplierTenantID == 0 || strings.TrimSpace(contract.ContractNo) == "" {
-		return errors.New("supplier and contract number are required")
-	}
-	return model.Write(func(tx *gorm.DB) error {
-		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
-			return err
-		}
-		if err := requireActiveTenantCapability(tx, contract.SupplierTenantID, "supplier"); err != nil {
-			return err
-		}
-		if contract.TravelTenantID != 0 && contract.TravelTenantID != tenantID {
-			return errors.New("contract tenant cannot be changed")
-		}
-		contract.Base = model.Base{}
-		contract.TravelTenantID = tenantID
-		if contract.Status == "" {
-			contract.Status = "active"
-		}
-		var relationship model.DistributorRelationship
-		if err := tx.Where("agent_tenant_id = ? AND supplier_tenant_id = ? AND status IN ?", tenantID, contract.SupplierTenantID, []string{"active", "suspended"}).First(&relationship).Error; err != nil {
-			return errors.New("active supplier relationship not found")
-		}
-		return tx.Create(contract).Error
-	})
+type TeamPriceRule struct {
+	ProductID      uint   `json:"product_id"`
+	ProductName    string `json:"product_name,omitempty"`
+	ScenicAreaID   uint   `json:"scenic_area_id,omitempty"`
+	ScenicAreaName string `json:"scenic_area_name,omitempty"`
+	PriceCents     int64  `json:"price_cents"`
+	MaxQuantity    int    `json:"max_quantity"`
 }
 
-func (s *TeamService) ListContracts(tenantID uint) ([]model.TravelContract, error) {
-	var rows []model.TravelContract
-	return rows, model.DB.Where("travel_tenant_id = ? OR supplier_tenant_id = ?", tenantID, tenantID).Order("created_at DESC").Find(&rows).Error
+type TravelContractInput struct {
+	TravelTenantID   uint            `json:"travel_tenant_id"`
+	ContractNo       string          `json:"contract_no"`
+	Status           string          `json:"status"`
+	SettlementDays   int             `json:"settlement_days"`
+	CreditLimitCents int64           `json:"credit_limit_cents"`
+	StartsAt         *time.Time      `json:"starts_at"`
+	EndsAt           *time.Time      `json:"ends_at"`
+	PriceRules       []TeamPriceRule `json:"price_rules"`
+}
+
+type TravelContractView struct {
+	model.TravelContract
+	TravelTenantName   string          `json:"travel_tenant_name"`
+	SupplierTenantName string          `json:"supplier_tenant_name"`
+	PriceRules         []TeamPriceRule `json:"price_rules"`
+}
+
+type TravelContractPartner struct {
+	TenantID       uint   `json:"tenant_id"`
+	Name           string `json:"name"`
+	SystemCode     string `json:"system_code"`
+	RelationshipID uint   `json:"relationship_id"`
+}
+
+func normalizeTeamPriceRulesTx(tx *gorm.DB, supplierTenantID uint, rules []TeamPriceRule) ([]TeamPriceRule, string, error) {
+	if len(rules) == 0 {
+		return nil, "", errors.New("at least one contract product price is required")
+	}
+	seen := make(map[uint]struct{}, len(rules))
+	normalized := make([]TeamPriceRule, 0, len(rules))
+	for _, rule := range rules {
+		if rule.ProductID == 0 || rule.PriceCents <= 0 || rule.MaxQuantity < 0 {
+			return nil, "", errors.New("invalid contract product price")
+		}
+		if _, ok := seen[rule.ProductID]; ok {
+			return nil, "", errors.New("contract product cannot be repeated")
+		}
+		var product model.Product
+		if err := tx.Select("id", "name", "scenic_area_id").Where("id = ? AND tenant_id = ? AND status = ? AND is_distributable = ?", rule.ProductID, supplierTenantID, "online", true).First(&product).Error; err != nil {
+			return nil, "", fmt.Errorf("contract product %d is unavailable", rule.ProductID)
+		}
+		seen[rule.ProductID] = struct{}{}
+		var area model.ScenicArea
+		_ = tx.Select("id", "name").Where("id = ? AND tenant_id = ?", product.ScenicAreaID, supplierTenantID).First(&area).Error
+		normalized = append(normalized, TeamPriceRule{ProductID: product.ID, ProductName: product.Name, ScenicAreaID: product.ScenicAreaID, ScenicAreaName: area.Name, PriceCents: rule.PriceCents, MaxQuantity: rule.MaxQuantity})
+	}
+	sort.Slice(normalized, func(i, j int) bool { return normalized[i].ProductID < normalized[j].ProductID })
+	stored := make([]TeamPriceRule, len(normalized))
+	copy(stored, normalized)
+	for i := range stored {
+		stored[i].ProductName = ""
+		stored[i].ScenicAreaID = 0
+		stored[i].ScenicAreaName = ""
+	}
+	data, err := json.Marshal(stored)
+	return normalized, string(data), err
+}
+
+func syncTravelContractOffersTx(tx *gorm.DB, supplierTenantID, travelTenantID uint, rules []TeamPriceRule) error {
+	if err := requireActiveTenantCapability(tx, travelTenantID, "distributor"); err != nil {
+		return errors.New("该旅行社尚未启用分销能力")
+	}
+	for _, rule := range rules {
+		var product model.Product
+		if err := tx.Where("id = ? AND tenant_id = ?", rule.ProductID, supplierTenantID).First(&product).Error; err != nil {
+			return errors.New("合同产品当前不可用")
+		}
+		revision, err := ensureProductRevisionTx(tx, &product)
+		if err != nil {
+			return err
+		}
+		var offer model.ProductOffer
+		err = tx.Where("supplier_tenant_id = ? AND distributor_tenant_id = ? AND source_product_id = ?", supplierTenantID, travelTenantID, product.ID).First(&offer).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			offer = model.ProductOffer{
+				SupplierTenantID: supplierTenantID, DistributorTenantID: travelTenantID,
+				SourceProductID: product.ID, ProductRevisionID: revision.ID, FulfillmentScenicAreaID: product.ScenicAreaID,
+				SettlementPrice: centsMoney(rule.PriceCents), MinimumRetailPriceCents: rule.PriceCents,
+				Status: "active", AllowedChannels: "window,online,ota",
+			}
+			if err := tx.Create(&offer).Error; err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if offer.Status != "active" {
+			return fmt.Errorf("产品“%s”的供货已暂停或终止，请先在分销管理中恢复", product.Name)
+		}
+		minimumRetailPriceCents := offer.MinimumRetailPriceCents
+		if minimumRetailPriceCents < rule.PriceCents {
+			minimumRetailPriceCents = rule.PriceCents
+		}
+		if err := tx.Model(&offer).Updates(map[string]interface{}{
+			"product_revision_id": revision.ID, "fulfillment_scenic_area_id": product.ScenicAreaID,
+			"settlement_price": centsMoney(rule.PriceCents), "minimum_retail_price_cents": minimumRetailPriceCents,
+		}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateTravelContractInput(input TravelContractInput) error {
+	if input.TravelTenantID == 0 || strings.TrimSpace(input.ContractNo) == "" {
+		return errors.New("travel agency and contract number are required")
+	}
+	if input.SettlementDays < 0 || input.CreditLimitCents < 0 {
+		return errors.New("settlement days and credit limit cannot be negative")
+	}
+	if input.Status != "" && input.Status != "active" && input.Status != "suspended" {
+		return errors.New("invalid contract status")
+	}
+	if input.StartsAt != nil && input.EndsAt != nil && input.EndsAt.Before(*input.StartsAt) {
+		return errors.New("contract end date cannot be before start date")
+	}
+	return nil
+}
+
+func (s *TeamService) CreateContract(supplierTenantID, operatorID uint, input TravelContractInput) (*TravelContractView, error) {
+	if err := validateTravelContractInput(input); err != nil {
+		return nil, err
+	}
+	var contract model.TravelContract
+	err := model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, supplierTenantID, "supplier"); err != nil {
+			return err
+		}
+		if err := requireActiveTenantCapability(tx, input.TravelTenantID, "travel_agency"); err != nil {
+			return errors.New("travel agency tenant is unavailable")
+		}
+		var relationship model.DistributorRelationship
+		if err := tx.Where("agent_tenant_id = ? AND supplier_tenant_id = ? AND status = ?", input.TravelTenantID, supplierTenantID, "active").First(&relationship).Error; err != nil {
+			return errors.New("active travel agency relationship not found")
+		}
+		normalizedRules, priceJSON, err := normalizeTeamPriceRulesTx(tx, supplierTenantID, input.PriceRules)
+		if err != nil {
+			return err
+		}
+		if err := syncTravelContractOffersTx(tx, supplierTenantID, input.TravelTenantID, normalizedRules); err != nil {
+			return err
+		}
+		status := input.Status
+		if status == "" {
+			status = "active"
+		}
+		contract = model.TravelContract{
+			TravelTenantID: input.TravelTenantID, SupplierTenantID: supplierTenantID,
+			ContractNo: strings.TrimSpace(input.ContractNo), Status: status,
+			SettlementDays: input.SettlementDays, CreditLimitCents: input.CreditLimitCents,
+			PriceRulesJSON: priceJSON, StartsAt: input.StartsAt, EndsAt: input.EndsAt,
+		}
+		if err := tx.Create(&contract).Error; err != nil {
+			return err
+		}
+		after, _ := json.Marshal(input)
+		return recordAuditTx(tx, operatorID, supplierTenantID, "admin", "tenant", "travel_contract.create", "travel_contract", contract.ID, "供应商创建旅行社合同", "{}", string(after))
+	})
+	if err != nil {
+		return nil, err
+	}
+	view, err := s.GetContract(supplierTenantID, contract.ID)
+	return view, err
+}
+
+func (s *TeamService) UpdateContract(supplierTenantID, contractID, operatorID uint, input TravelContractInput) (*TravelContractView, error) {
+	if contractID == 0 {
+		return nil, errors.New("contract is required")
+	}
+	if err := validateTravelContractInput(input); err != nil {
+		return nil, err
+	}
+	err := model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, supplierTenantID, "supplier"); err != nil {
+			return err
+		}
+		var contract model.TravelContract
+		if err := tx.Where("id = ? AND supplier_tenant_id = ?", contractID, supplierTenantID).First(&contract).Error; err != nil {
+			return errors.New("travel contract not found")
+		}
+		if input.TravelTenantID != contract.TravelTenantID || strings.TrimSpace(input.ContractNo) != contract.ContractNo {
+			return errors.New("travel agency and contract number cannot be changed")
+		}
+		normalizedRules, priceJSON, err := normalizeTeamPriceRulesTx(tx, supplierTenantID, input.PriceRules)
+		if err != nil {
+			return err
+		}
+		if err := syncTravelContractOffersTx(tx, supplierTenantID, input.TravelTenantID, normalizedRules); err != nil {
+			return err
+		}
+		before, _ := json.Marshal(contract)
+		status := input.Status
+		if status == "" {
+			status = contract.Status
+		}
+		if err := tx.Model(&contract).Updates(map[string]interface{}{
+			"status": status, "settlement_days": input.SettlementDays, "credit_limit_cents": input.CreditLimitCents,
+			"price_rules_json": priceJSON, "starts_at": input.StartsAt, "ends_at": input.EndsAt,
+		}).Error; err != nil {
+			return err
+		}
+		after, _ := json.Marshal(input)
+		return recordAuditTx(tx, operatorID, supplierTenantID, "admin", "tenant", "travel_contract.update", "travel_contract", contract.ID, "供应商调整旅行社合同", string(before), string(after))
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.GetContract(supplierTenantID, contractID)
+}
+
+func decodeTeamPriceRules(raw string) ([]TeamPriceRule, error) {
+	if strings.TrimSpace(raw) == "" {
+		return []TeamPriceRule{}, nil
+	}
+	var rules []TeamPriceRule
+	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+		return nil, err
+	}
+	return rules, nil
+}
+
+func (s *TeamService) contractView(contract model.TravelContract) (*TravelContractView, error) {
+	rules, err := decodeTeamPriceRules(contract.PriceRulesJSON)
+	if err != nil {
+		return nil, err
+	}
+	var travel, supplier model.Tenant
+	if err := model.DB.Select("id", "name").First(&travel, contract.TravelTenantID).Error; err != nil {
+		return nil, err
+	}
+	if err := model.DB.Select("id", "name").First(&supplier, contract.SupplierTenantID).Error; err != nil {
+		return nil, err
+	}
+	for i := range rules {
+		var product model.Product
+		if err := model.DB.Select("id", "name", "scenic_area_id").Where("id = ? AND tenant_id = ?", rules[i].ProductID, contract.SupplierTenantID).First(&product).Error; err == nil {
+			rules[i].ProductName = product.Name
+			rules[i].ScenicAreaID = product.ScenicAreaID
+			var area model.ScenicArea
+			if err := model.DB.Select("id", "name").Where("id = ? AND tenant_id = ?", product.ScenicAreaID, contract.SupplierTenantID).First(&area).Error; err == nil {
+				rules[i].ScenicAreaName = area.Name
+			}
+		}
+	}
+	return &TravelContractView{TravelContract: contract, TravelTenantName: travel.Name, SupplierTenantName: supplier.Name, PriceRules: rules}, nil
+}
+
+func (s *TeamService) GetContract(tenantID, contractID uint) (*TravelContractView, error) {
+	var contract model.TravelContract
+	if err := model.DB.Where("id = ? AND (travel_tenant_id = ? OR supplier_tenant_id = ?)", contractID, tenantID, tenantID).First(&contract).Error; err != nil {
+		return nil, err
+	}
+	return s.contractView(contract)
+}
+
+func (s *TeamService) ListContracts(tenantID uint) ([]TravelContractView, error) {
+	var contracts []model.TravelContract
+	if err := model.DB.Where("travel_tenant_id = ? OR supplier_tenant_id = ?", tenantID, tenantID).Order("created_at DESC").Find(&contracts).Error; err != nil {
+		return nil, err
+	}
+	rows := make([]TravelContractView, 0, len(contracts))
+	for _, contract := range contracts {
+		view, err := s.contractView(contract)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, *view)
+	}
+	return rows, nil
+}
+
+func (s *TeamService) ListContractPartners(supplierTenantID uint) ([]TravelContractPartner, error) {
+	if err := requireActiveTenantCapability(model.DB, supplierTenantID, "supplier"); err != nil {
+		return nil, err
+	}
+	var relationships []model.DistributorRelationship
+	if err := model.DB.Preload("AgentTenant").Where("supplier_tenant_id = ? AND status = ?", supplierTenantID, "active").Order("created_at DESC").Find(&relationships).Error; err != nil {
+		return nil, err
+	}
+	rows := make([]TravelContractPartner, 0, len(relationships))
+	for _, relationship := range relationships {
+		if err := requireActiveTenantCapability(model.DB, relationship.AgentTenantID, "travel_agency"); err != nil {
+			continue
+		}
+		if err := requireActiveTenantCapability(model.DB, relationship.AgentTenantID, "distributor"); err != nil {
+			continue
+		}
+		rows = append(rows, TravelContractPartner{TenantID: relationship.AgentTenantID, Name: relationship.AgentTenant.Name, SystemCode: relationship.AgentTenant.SystemCode, RelationshipID: relationship.ID})
+	}
+	return rows, nil
 }
 
 func (s *TeamService) CreateAgent(tenantID uint, agent *model.TravelAgent) error {
@@ -540,12 +812,6 @@ func validateTeamContractTx(tx *gorm.DB, tenantID uint, group *model.TourGroup) 
 	return nil
 }
 
-type teamPriceRule struct {
-	ProductID   uint  `json:"product_id"`
-	PriceCents  int64 `json:"price_cents"`
-	MaxQuantity int   `json:"max_quantity"`
-}
-
 func validateTeamOrderAgainstContract(contract *model.TravelContract, order *model.Order) error {
 	if contract == nil || order == nil {
 		return errors.New("team contract and order are required")
@@ -554,11 +820,11 @@ func validateTeamOrderAgainstContract(contract *model.TravelContract, order *mod
 	if raw == "" {
 		return nil
 	}
-	var rules []teamPriceRule
-	if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+	rules, err := decodeTeamPriceRules(raw)
+	if err != nil {
 		return fmt.Errorf("invalid team contract price rules: %w", err)
 	}
-	byProduct := make(map[uint]teamPriceRule, len(rules))
+	byProduct := make(map[uint]TeamPriceRule, len(rules))
 	for _, rule := range rules {
 		if rule.ProductID == 0 || rule.PriceCents <= 0 || rule.MaxQuantity < 0 {
 			return errors.New("invalid team contract price rule")
@@ -566,15 +832,15 @@ func validateTeamOrderAgainstContract(contract *model.TravelContract, order *mod
 		byProduct[rule.ProductID] = rule
 	}
 	for _, item := range order.Items {
-		rule, ok := byProduct[item.ProductID]
+		rule, ok := byProduct[item.FulfillmentProductID]
 		if !ok {
-			return fmt.Errorf("product %d is not authorized by team contract", item.ProductID)
+			return fmt.Errorf("supplier product %d is not authorized by team contract", item.FulfillmentProductID)
 		}
-		if moneyCents(item.Price) != rule.PriceCents {
-			return fmt.Errorf("product %d price does not match team contract", item.ProductID)
+		if moneyCents(item.SettlementPrice) != rule.PriceCents {
+			return fmt.Errorf("supplier product %d settlement price does not match team contract", item.FulfillmentProductID)
 		}
 		if rule.MaxQuantity > 0 && item.Quantity > rule.MaxQuantity {
-			return fmt.Errorf("product %d exceeds team contract quantity", item.ProductID)
+			return fmt.Errorf("supplier product %d exceeds team contract quantity", item.FulfillmentProductID)
 		}
 	}
 	return nil

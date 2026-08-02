@@ -44,10 +44,12 @@
     <el-dialog v-model="mappingDialog" title="商品映射" width="780px">
       <div class="flex gap-2 mb-4">
         <el-input v-model="mapping.external_code" placeholder="外部商品编码" />
-        <el-input-number v-model="mapping.product_id" :min="1" placeholder="本商户商品编号" />
+        <el-select v-model="mapping.product_id" filterable placeholder="选择本商户产品" style="min-width: 260px">
+          <el-option v-for="product in products" :key="product.id" :label="product.name" :value="product.id" />
+        </el-select>
         <el-button type="primary" @click="addMapping">添加</el-button>
       </div>
-      <el-table :data="mappings" stripe><el-table-column prop="external_code" label="外部编码"/><el-table-column prop="product_id" label="本地商品编号"/><el-table-column label="状态"><template #default="{ row }">{{ mappingStatusText(row.status) }}</template></el-table-column></el-table>
+      <el-table :data="mappings" stripe><el-table-column prop="external_code" label="外部编码"/><el-table-column label="本地产品"><template #default="{ row }">{{ productName(row.product_id) }}</template></el-table-column><el-table-column label="状态"><template #default="{ row }">{{ mappingStatusText(row.status) }}</template></el-table-column></el-table>
     </el-dialog>
 
     <el-dialog v-model="secretDialog" title="新渠道密钥" width="460px"><el-alert type="warning" :closable="false" title="密钥只在本次显示，请立即交给渠道方并安全保存。"/><el-input class="mt-4" :model-value="newSecret" readonly /></el-dialog>
@@ -206,6 +208,7 @@ import { localizeDisplayText } from '@/utils/localize'
 
 const accounts = ref<any[]>([])
 const mappings = ref<any[]>([])
+const products = ref<any[]>([])
 const loading = ref(false)
 const saving = ref(false)
 const createDialog = ref(false)
@@ -246,7 +249,17 @@ const load = async () => { loading.value = true; try { accounts.value = (await r
 const create = async () => { saving.value = true; try { const response = await request.post('/channel-accounts', { ...form }); accounts.value.unshift(response.data); createDialog.value = false; ElMessage.success('渠道已创建'); form.code = ''; form.secret = '' } finally { saving.value = false } }
 const toggleStatus = async (row: any) => { const status = row.status === 'disabled' ? 'active' : 'disabled'; await request.patch(`/channel-accounts/${row.id}/status`, { status }); row.status = status; ElMessage.success('状态已更新') }
 const rotate = async (row: any) => { await ElMessageBox.confirm('轮换后旧密钥立即失效，确认继续？', '确认轮换', { type: 'warning' }); const response = await request.post(`/channel-accounts/${row.id}/rotate-secret`); newSecret.value = response.data.secret; secretDialog.value = true }
-const openMapping = async (row: any) => { selectedID.value = row.id; mapping.external_code = ''; mapping.product_id = 0; mappings.value = (await request.get('/channel-accounts/mappings', { params: { channel_account_id: row.id } })).data.data || []; mappingDialog.value = true }
+const productName = (id: number) => products.value.find((product: any) => Number(product.id) === Number(id))?.name || '已下架或不可见产品'
+const openMapping = async (row: any) => {
+  selectedID.value = row.id; mapping.external_code = ''; mapping.product_id = 0
+  const [mappingResponse, productResponse] = await Promise.all([
+    request.get('/channel-accounts/mappings', { params: { channel_account_id: row.id } }),
+    request.get('/products', { params: { page: 1, page_size: 100 } }),
+  ])
+  mappings.value = mappingResponse.data.data || []
+  products.value = productResponse.data.data || []
+  mappingDialog.value = true
+}
 const addMapping = async () => { if (!mapping.external_code || !mapping.product_id) return; const response = await request.post('/channel-accounts/mappings', { channel_account_id: selectedID.value, external_code: mapping.external_code, product_id: mapping.product_id }); mappings.value.unshift(response.data); mapping.external_code = ''; mapping.product_id = 0 }
 const dateTime = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
 const cents = (value: number) => (Number(value || 0) / 100).toFixed(2)

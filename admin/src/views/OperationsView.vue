@@ -111,7 +111,11 @@
 
     <el-dialog v-model="generateSettlementDialog" title="生成结算单" width="520px" align-center>
       <el-form label-position="top">
-        <el-form-item label="分销商租户编号" required><el-input-number v-model="settlementGenerate.distributor_tenant_id" :min="1" class="w-full" /></el-form-item>
+        <el-form-item label="结算对象" required>
+          <el-select v-model="settlementGenerate.distributor_tenant_id" filterable class="w-full" placeholder="选择分销商或旅行社">
+            <el-option v-for="partner in settlementPartners" :key="partner.agent_tenant_id" :label="partner.agent_name" :value="partner.agent_tenant_id" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="结算周期" required><el-date-picker v-model="settlementGenerate.period" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" class="w-full" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="generateSettlementDialog = false">取消</el-button><el-button type="primary" :loading="settlementActionLoading" @click="generateSettlement">生成</el-button></template>
@@ -303,6 +307,7 @@ const settlementDetailLoading = ref(false)
 const settlementActionLoading = ref(false)
 const settlementDetail = ref<any>(null)
 const generateSettlementDialog = ref(false)
+const settlementPartners = ref<any[]>([])
 const settlementGenerate = reactive<{ distributor_tenant_id: number, period: string[] }>({ distributor_tenant_id: 0, period: [] })
 const settlementAdjustmentDialog = ref(false)
 const settlementAdjustment = reactive({ amount: 0, reason: '' })
@@ -341,10 +346,12 @@ const exportSettlement = async () => {
   URL.revokeObjectURL(url)
 }
 
-const openGenerateSettlement = () => {
+const openGenerateSettlement = async () => {
   settlementGenerate.distributor_tenant_id = 0
   settlementGenerate.period = []
   generateSettlementDialog.value = true
+  try { settlementPartners.value = ((await request.get('/distribution/agents')).data.data || []).filter((row: any) => row.status === 'active') }
+  catch (e: any) { ElMessage.error(e.response?.data?.error || '合作方加载失败') }
 }
 
 const generateSettlement = async () => {
