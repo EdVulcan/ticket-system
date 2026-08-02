@@ -34,6 +34,7 @@ const child = spawn(executable, [], {
     TICKET_SERVER_PORT: '19180',
     TICKET_SERVER_MODE: 'release',
     TICKET_SERVER_CORS_ALLOWED_ORIGINS: 'http://127.0.0.1:4173',
+    TICKET_DATABASE_DRIVER: 'sqlite',
     TICKET_DATABASE_PATH: path.join(tempDir, 'ticket-system.db'),
     TICKET_SECURITY_KEY_FILE: path.join(tempDir, 'instance-key.json'),
     TICKET_BACKUP_DIRECTORY: path.join(tempDir, 'backups'),

@@ -11,6 +11,7 @@ import (
 	"ticket-backend/internal/model"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -81,7 +82,7 @@ func (s *OrderService) Create(req *model.Order) error {
 	if err := validateOrder(req); err != nil {
 		return err
 	}
-	return model.Write(func(tx *gorm.DB) error {
+	err := model.Write(func(tx *gorm.DB) error {
 		if err := requireActiveTenant(tx, req.TenantID); err != nil {
 			return err
 		}
@@ -238,6 +239,17 @@ func (s *OrderService) Create(req *model.Order) error {
 		}
 		return createFulfillmentProjections(tx, s, req)
 	})
+	if req.ExternalNo != nil && isExternalOrderUniqueViolation(err) {
+		return ErrDuplicateExternalOrder
+	}
+	return err
+}
+
+func isExternalOrderUniqueViolation(err error) bool {
+	var postgresError *pgconn.PgError
+	return errors.As(err, &postgresError) &&
+		postgresError.Code == "23505" &&
+		postgresError.ConstraintName == "idx_order_external"
 }
 
 func sameOptionalDate(left, right *time.Time) bool {

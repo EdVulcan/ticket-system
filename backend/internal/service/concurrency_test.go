@@ -15,10 +15,25 @@ import (
 	"ticket-backend/internal/model"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func TestExternalOrderUniqueViolationDetection(t *testing.T) {
+	externalOrderConflict := fmt.Errorf("create order: %w", &pgconn.PgError{
+		Code:           "23505",
+		ConstraintName: "idx_order_external",
+	})
+	if !isExternalOrderUniqueViolation(externalOrderConflict) {
+		t.Fatal("external order unique violation was not detected")
+	}
+	otherConflict := &pgconn.PgError{Code: "23505", ConstraintName: "uni_orders_order_no"}
+	if isExternalOrderUniqueViolation(otherConflict) {
+		t.Fatal("unrelated unique violation was detected as a duplicate external order")
+	}
+}
 
 func TestMain(m *testing.M) {
 	if os.Getenv("TICKET_TEST_POSTGRES") == "1" {
