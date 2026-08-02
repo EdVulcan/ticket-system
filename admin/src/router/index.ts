@@ -103,7 +103,13 @@ const router = createRouter({
             path: '/login',
             name: 'login',
             component: () => import('../views/LoginView.vue'),
-            meta: { title: '登录' }
+            meta: { title: '商户登录' }
+        },
+        {
+            path: '/platform/login',
+            name: 'platform-login',
+            component: () => import('../views/PlatformLoginView.vue'),
+            meta: { title: '平台登录', scope: 'platform' }
         },
         {
             path: '/staff',
@@ -152,9 +158,10 @@ const router = createRouter({
 
 router.beforeEach((to, _from, next) => {
     const token = localStorage.getItem('token')
-    if (to.name !== 'login' && !token) {
-        next({ name: 'login' })
-    } else if (to.name === 'login') {
+    const isLoginRoute = to.name === 'login' || to.name === 'platform-login'
+    if (!isLoginRoute && !token) {
+        next({ name: to.meta.scope === 'platform' ? 'platform-login' : 'login' })
+    } else if (isLoginRoute) {
         next()
     } else {
         let user: any = {}

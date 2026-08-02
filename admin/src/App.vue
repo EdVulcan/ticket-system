@@ -225,7 +225,7 @@ const router = useRouter()
 const isSuperAdmin = ref(false)
 const user = ref<any>({})
 
-const isLoginPage = computed(() => route.path === '/login' || route.name === 'login')
+const isLoginPage = computed(() => route.name === 'login' || route.name === 'platform-login')
 const activeCapabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability)))
 const hasCapability = (value: string) => activeCapabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(value => activeCapabilities.value.has(value))
@@ -235,10 +235,11 @@ const roleText = (role: string) => ({
 } as Record<string, string>)[role] || '系统用户'
 
 const handleLogout = () => {
+    const loginPath = user.value.scope === 'platform' ? '/platform/login' : '/login'
     localStorage.removeItem('token')
     localStorage.removeItem('user')
     ElMessage.success('退出登录成功')
-    router.push('/login')
+    router.push(loginPath)
 }
 
 const handleCommand = (command: string) => {

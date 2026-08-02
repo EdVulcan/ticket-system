@@ -35,14 +35,19 @@ service.interceptors.response.use(
     if (error.response) {
       const status = error.response.status
       if (status === 401) {
+        let loginPath = router.currentRoute.value.path.startsWith('/platform') ? '/platform/login' : '/login'
+        try {
+          const user = JSON.parse(localStorage.getItem('user') || '{}')
+          if (user.scope === 'platform') loginPath = '/platform/login'
+        } catch { /* invalid session */ }
         // Clear token
         localStorage.removeItem('token')
         localStorage.removeItem('user')
         
-        // Only redirect if not already on login page to avoid loops (though router handles this usually)
-        if (router.currentRoute.value.path !== '/login') {
+        const currentPath = router.currentRoute.value.path
+        if (currentPath !== '/login' && currentPath !== '/platform/login') {
             ElMessage.error('登录状态已失效，请重新登录')
-            router.push('/login')
+            router.push(loginPath)
         }
       } else {
         const message = localizeErrorMessage(error.response.data?.error, '请求失败，请稍后重试')

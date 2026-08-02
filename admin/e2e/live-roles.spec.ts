@@ -10,9 +10,8 @@ async function tenantLogin(page: import('@playwright/test').Page, systemCode: st
 }
 
 test('真实平台账号登录并读取治理总览', async ({ page }) => {
-  await page.goto('/login')
-  await page.getByText('平台登录', { exact: true }).click()
-  await page.getByPlaceholder('用户名').fill('platform-e2e')
+  await page.goto('/platform/login')
+  await page.getByPlaceholder('平台用户名').fill('platform-e2e')
   await page.getByPlaceholder('密码').fill('Platform-E2E-Password-2')
   await page.getByRole('button', { name: '登 录' }).click()
 

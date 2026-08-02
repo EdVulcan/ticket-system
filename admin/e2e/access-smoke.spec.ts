@@ -23,6 +23,7 @@ test('景区租户登录后只显示已授权工作区', async ({ page }) => {
   await mockJSON(page, '**/api/v1/auth/login', { token: 'tenant-token', user: tenantUser })
   await page.goto('/login')
 
+  await expect(page.getByText('平台登录', { exact: true })).toHaveCount(0)
   await page.getByPlaceholder('商户系统编号').fill('SCENIC001')
   await page.getByPlaceholder('用户名').fill('admin')
   await page.getByPlaceholder('密码').fill('tenant-password')
@@ -40,10 +41,10 @@ test('平台身份不能进入租户业务菜单', async ({ page }) => {
     user: { id: 9, username: 'platform_admin', role: 'platform_admin', scope: 'platform' },
   })
   await mockJSON(page, '**/api/v1/platform/overview', {})
-  await page.goto('/login')
+  await page.goto('/platform/login')
 
-  await page.getByText('平台登录', { exact: true }).click()
-  await page.getByPlaceholder('用户名').fill('platform_admin')
+  await expect(page.getByPlaceholder('商户系统编号')).toHaveCount(0)
+  await page.getByPlaceholder('平台用户名').fill('platform_admin')
   await page.getByPlaceholder('密码').fill('platform-password')
   await page.getByRole('button', { name: '登 录' }).click()
 
