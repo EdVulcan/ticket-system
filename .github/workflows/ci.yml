@@ -62,6 +62,17 @@ jobs:
         run: go vet ./...
         env:
           CGO_ENABLED: "1"
+      - name: Build Linux server artifact
+        run: go build -trimpath -ldflags="-s -w" -o ticket-backend ./cmd
+        env:
+          CGO_ENABLED: "1"
+      - name: Upload Linux server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-backend
+          path: backend/ticket-backend
+          retention-days: 3
+          if-no-files-found: error
 
   frontend:
     runs-on: ubuntu-latest
@@ -80,6 +91,14 @@ jobs:
           cache-dependency-path: ${{ matrix.app }}/package-lock.json
       - run: npm ci
       - run: npm run build
+      - name: Upload admin artifact
+        if: matrix.app == 'admin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: admin-web
+          path: admin/dist
+          retention-days: 3
+          if-no-files-found: error
 
   admin-e2e:
     runs-on: ubuntu-latest
@@ -122,3 +141,57 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
       - name: Build Windows POS
         run: wails build -clean -webview2 embed
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [backend, frontend, admin-e2e, desktop-wails]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Linux server artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: server-backend
+          path: release/backend
+      - name: Download admin artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: admin-web
+          path: release/admin/dist
+      - name: Assemble release
+        shell: bash
+        run: |
+          install -d release/backend/config
+          install -m 0644 backend/config/config.yaml release/backend/config/config.yaml
+          chmod 0755 release/backend/ticket-backend
+          tar -czf "ticket-system-${GITHUB_SHA}.tar.gz" -C release .
+      - name: Configure deployment SSH
+        shell: bash
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          install -d -m 0700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" | tr -d '\r' > ~/.ssh/ticket-system-deploy
+          chmod 0600 ~/.ssh/ticket-system-deploy
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 0600 ~/.ssh/known_hosts
+      - name: Upload and activate release
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_USER"
+          port="${DEPLOY_PORT:-22}"
+          archive="ticket-system-${GITHUB_SHA}.tar.gz"
+          scp -P "$port" -i ~/.ssh/ticket-system-deploy "$archive" "$DEPLOY_USER@$DEPLOY_HOST:$archive"
+          ssh -p "$port" -i ~/.ssh/ticket-system-deploy "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -eu; install -d -m 2775 '/opt/ticket-system/releases/${GITHUB_SHA}'; tar -xzf '$archive' -C '/opt/ticket-system/releases/${GITHUB_SHA}'; rm -f '$archive'; sudo /usr/local/sbin/ticket-system-deploy '${GITHUB_SHA}'"
