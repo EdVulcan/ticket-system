@@ -70,11 +70,59 @@ test('平台身份不能进入租户业务菜单', async ({ page }) => {
 
   await expect(page.getByRole('heading', { name: '平台运行总览' })).toBeVisible()
   await expect(page.getByText('商户开户管理', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('account-context')).toHaveText('系统服务商')
+  await expect(page.getByRole('menuitem', { name: '全局订单' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '异常事项' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '资金监控' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '设备监控' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '结算监控' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '审计日志' })).toBeVisible()
   await expect(page.getByText('线上门票', { exact: true })).toHaveCount(0)
 
   await page.goto('/product')
   await expect(page).toHaveURL('http://127.0.0.1:4173/')
   await expect(page.getByRole('heading', { name: '平台运行总览' })).toBeVisible()
+})
+
+test('商户业务能力排列清晰且强制下线有明确确认', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'platform-token')
+    localStorage.setItem('user', JSON.stringify({ id: 9, username: 'platform_admin', role: 'platform_admin', scope: 'platform' }))
+  })
+  await mockJSON(page, '**/api/v1/tenants?*', {
+    data: [{
+      id: 1,
+      name: '示例景区',
+      system_code: 'SCENIC001',
+      status: 'active',
+      qualification_status: 'approved',
+      capabilities: [
+        { capability: 'supplier', status: 'active' },
+        { capability: 'distributor', status: 'disabled' },
+        { capability: 'travel_agency', status: 'disabled' },
+      ],
+    }],
+    total: 1,
+  })
+
+  await page.goto('/tenant')
+  const capabilityButtons = [
+    page.getByRole('button', { name: '景区供应商 · 已启用' }),
+    page.getByRole('button', { name: '分销商 · 未启用' }),
+    page.getByRole('button', { name: '旅行社 · 未启用' }),
+  ]
+  const boxes = await Promise.all(capabilityButtons.map(async button => {
+    await expect(button).toBeVisible()
+    return button.boundingBox()
+  }))
+  const visibleBoxes = boxes.filter((box): box is NonNullable<typeof box> => box !== null)
+  const orderedBoxes = [...visibleBoxes].sort((left, right) => left.y - right.y)
+  expect(orderedBoxes[1].y - (orderedBoxes[0].y + orderedBoxes[0].height)).toBeGreaterThanOrEqual(6)
+  expect(orderedBoxes[2].y - (orderedBoxes[1].y + orderedBoxes[1].height)).toBeGreaterThanOrEqual(6)
+
+  await page.getByRole('button', { name: '强制下线' }).click()
+  await expect(page.getByText('用户需要重新登录。此操作不会删除账号或业务数据。', { exact: false })).toBeVisible()
+  await page.getByRole('button', { name: '取消' }).click()
 })
 
 test('旅行社能力可以进入团队工作区', async ({ page }) => {

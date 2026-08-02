@@ -29,11 +29,13 @@
           <el-tag :type="row.qualification_status === 'approved' ? 'success' : 'warning'">{{ qualificationStatusText(row.qualification_status) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="业务能力" min-width="260">
+      <el-table-column label="业务能力" width="180">
         <template #default="{ row }">
-          <el-button v-for="capability in capabilityOptions" :key="capability" size="small" :type="capabilityStatus(row, capability) === 'active' ? 'success' : 'info'" @click="toggleCapability(row, capability)">
-            {{ capabilityText(capability) }} · {{ capabilityStatusText(capabilityStatus(row, capability)) }}
-          </el-button>
+          <div class="capability-actions">
+            <el-button v-for="capability in capabilityOptions" :key="capability" size="small" :type="capabilityStatus(row, capability) === 'active' ? 'success' : 'info'" @click="toggleCapability(row, capability)">
+              {{ capabilityText(capability) }} · {{ capabilityStatusText(capabilityStatus(row, capability)) }}
+            </el-button>
+          </div>
         </template>
       </el-table-column>
       <el-table-column prop="contact" label="联系人" width="120" />
@@ -42,7 +44,9 @@
       <el-table-column label="操作" width="170" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
-          <el-button link type="warning" size="small" @click="revokeSessions(row)">撤销会话</el-button>
+          <el-tooltip content="使该商户所有账号退出登录" placement="top">
+            <el-button link type="danger" size="small" :icon="SwitchButton" @click="revokeSessions(row)">强制下线</el-button>
+          </el-tooltip>
         </template>
       </el-table-column>
     </el-table>
@@ -125,8 +129,8 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
-import { Plus } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { Plus, SwitchButton } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 
 const loading = ref(false)
@@ -245,11 +249,39 @@ const toggleCapability = async (row: any, capability: string) => {
 }
 
 const revokeSessions = async (row: any) => {
-  try { await request.post(`/tenants/${row.id}/revoke-sessions`); ElMessage.success('已撤销该租户全部会话') }
-  catch (error: any) { ElMessage.error(error.response?.data?.error || '会话撤销失败') }
+  try {
+    await ElMessageBox.confirm(
+      `将使“${row.name}”下所有后台账号和员工账号退出登录，用户需要重新登录。此操作不会删除账号或业务数据。`,
+      '确认强制下线？',
+      { confirmButtonText: '确认下线', cancelButtonText: '取消', type: 'warning' }
+    )
+    await request.post(`/tenants/${row.id}/revoke-sessions`)
+    ElMessage.success('该商户所有账号已强制下线')
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error.response?.data?.error || '强制下线失败')
+  }
 }
 
 onMounted(() => {
   fetchData()
 })
 </script>
+
+<style scoped>
+.capability-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+
+.capability-actions .el-button {
+  width: 140px;
+}
+
+.capability-actions .el-button + .el-button {
+  margin-left: 0;
+}
+</style>
