@@ -135,7 +135,7 @@ func (c *RefundController) CreateCash(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	refund, err := c.Service.CreateCashRefund(ctx.GetUint("tenant_id"), body.OrderNo, body.IdempotencyKey, body.Amount, body.TicketCodes, body.Reason)
+	refund, err := c.Service.CreateCashRefundAs(service.RefundActor{TenantID: ctx.GetUint("tenant_id"), UserID: ctx.GetUint("user_id")}, body.OrderNo, body.IdempotencyKey, body.Amount, body.TicketCodes, body.Reason)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, service.ErrDigitalRefundNotConfigured) {
@@ -163,7 +163,7 @@ func (c *RefundController) CreateMixed(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	refund, err := c.Service.CreateMixedRefund(ctx.GetUint("tenant_id"), body.OrderNo, body.IdempotencyKey, body.Amount, body.TicketCodes, body.Reason)
+	refund, err := c.Service.CreateMixedRefundAs(service.RefundActor{TenantID: ctx.GetUint("tenant_id"), UserID: ctx.GetUint("user_id")}, body.OrderNo, body.IdempotencyKey, body.Amount, body.TicketCodes, body.Reason)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -201,7 +201,7 @@ func (c *RefundController) CreateDigital(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	refund, err := c.Service.CreateDigitalRefund(ctx.GetUint("tenant_id"), body.OrderNo, body.IdempotencyKey, body.Amount, body.TicketCodes, body.Reason)
+	refund, err := c.Service.CreateDigitalRefundAs(service.RefundActor{TenantID: ctx.GetUint("tenant_id"), UserID: ctx.GetUint("user_id")}, body.OrderNo, body.IdempotencyKey, body.Amount, body.TicketCodes, body.Reason)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

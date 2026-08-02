@@ -80,10 +80,11 @@ func (s *TenantService) Create(tenant *model.Tenant, adminUsername, adminPasswor
 		}
 
 		adminUser := model.User{
-			Username: adminUsername,
-			Password: string(hashedPassword),
-			Role:     "admin", // Tenant Admin
-			TenantID: tenant.ID,
+			Username:       adminUsername,
+			Password:       string(hashedPassword),
+			Role:           "admin", // Tenant Admin
+			TenantID:       tenant.ID,
+			IsInitialAdmin: true,
 		}
 
 		if err := tx.Create(&adminUser).Error; err != nil {

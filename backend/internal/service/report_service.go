@@ -140,7 +140,7 @@ func (s *ReportService) GetDailyReport(tenantID uint, startDate, endDate string)
 	if err := model.DB.Table("check_in_records").Select(`DATE(check_in_time) AS date,
 		SUM(CASE WHEN result = 'success' THEN 1 ELSE 0 END) AS success_count,
 		SUM(CASE WHEN result != 'success' THEN 1 ELSE 0 END) AS failure_count`).
-		Where("tenant_id = ? AND check_in_time BETWEEN ? AND ?", tenantID, start, end).
+		Where("tenant_id = ? AND reversed_at IS NULL AND check_in_time BETWEEN ? AND ?", tenantID, start, end).
 		Group("DATE(check_in_time)").Order("date ASC").Scan(&report.CheckIns).Error; err != nil {
 		return nil, err
 	}

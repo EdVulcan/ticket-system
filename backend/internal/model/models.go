@@ -37,12 +37,13 @@ type Tenant struct {
 // User 用户
 type User struct {
 	Base
-	Username     string `gorm:"size:50;uniqueIndex:idx_tenant_username;not null" json:"username"`
-	Password     string `gorm:"size:100;not null" json:"-"`
-	Role         string `gorm:"size:20;default:'staff'" json:"role"` // admin, staff
-	TenantID     uint   `gorm:"uniqueIndex:idx_tenant_username" json:"tenant_id"`
-	TokenVersion int    `gorm:"not null;default:1" json:"-"`
-	Tenant       Tenant `json:"tenant,omitempty"`
+	Username       string `gorm:"size:50;uniqueIndex:idx_tenant_username;not null" json:"username"`
+	Password       string `gorm:"size:100;not null" json:"-"`
+	Role           string `gorm:"size:20;default:'staff'" json:"role"` // admin, staff
+	TenantID       uint   `gorm:"uniqueIndex:idx_tenant_username" json:"tenant_id"`
+	IsInitialAdmin bool   `gorm:"not null;default:false" json:"is_initial_admin"`
+	TokenVersion   int    `gorm:"not null;default:1" json:"-"`
+	Tenant         Tenant `json:"tenant,omitempty"`
 }
 
 // Staff 员工 (一线作业人员)
@@ -260,16 +261,19 @@ type Ticket struct {
 // CheckInRecord 核销记录
 type CheckInRecord struct {
 	Base
-	TenantID     uint       `gorm:"index" json:"tenant_id"`           // 租户隔离
-	ScenicAreaID uint       `gorm:"index" json:"scenic_area_id"`      // 核销履约景区
-	TicketCode   string     `gorm:"size:50;index" json:"ticket_code"` // 冗余存储，便于查询
-	TicketID     uint       `json:"ticket_id"`
-	CheckPointID uint       `json:"check_point_id"`
-	CheckPoint   CheckPoint `json:"check_point"`
-	DeviceID     uint       `json:"device_id"`
-	CheckInTime  time.Time  `json:"check_in_time"`
-	Result       string     `gorm:"size:20" json:"result"` // success, fail
-	Message      string     `gorm:"size:255" json:"message"`
+	TenantID         uint       `gorm:"index" json:"tenant_id"`           // 租户隔离
+	ScenicAreaID     uint       `gorm:"index" json:"scenic_area_id"`      // 核销履约景区
+	TicketCode       string     `gorm:"size:50;index" json:"ticket_code"` // 冗余存储，便于查询
+	TicketID         uint       `json:"ticket_id"`
+	CheckPointID     uint       `json:"check_point_id"`
+	CheckPoint       CheckPoint `json:"check_point"`
+	DeviceID         uint       `json:"device_id"`
+	CheckInTime      time.Time  `json:"check_in_time"`
+	Result           string     `gorm:"size:20" json:"result"` // success, fail
+	Message          string     `gorm:"size:255" json:"message"`
+	ReversedAt       *time.Time `gorm:"index" json:"-"`
+	ReversedBy       uint       `gorm:"index" json:"-"`
+	ReversalRefundID uint       `gorm:"index" json:"-"`
 }
 
 // ProductInventory tracks daily capacity independently for each visit date.

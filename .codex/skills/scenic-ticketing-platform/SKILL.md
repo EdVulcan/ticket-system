@@ -18,6 +18,7 @@ The product is a platform for supplier scenic areas, distributors, and travel ag
 - A supplier owns products, product revisions, inventory, checkpoints, devices, fulfillment orders, and ticket entitlements. A distributor owns the sales order and listing, not the supplier's fulfillment rules.
 - A distributor-owned cross-supplier bundle is presentation and pricing composition only. Its immutable version must expand atomically into supplier-owned component inventory, fulfillment orders, ticket entitlements, settlement facts, and separate scenic-area ticket codes.
 - Never create a universal bundle ticket that verifies across suppliers or scenic areas. Component refunds use the sale-time retail allocation and affect only that component's supplier facts; supplier term changes stop new bundle sales without changing sold rights.
+- A verified ticket normally remains non-refundable. The fulfillment supplier tenant's initial administrator may exceptionally issue the ordinary refund for its own direct-sale ticket; a successful refund reverses the active verification fact for business reports while retaining hidden, linked audit metadata. Never grant this exception to ordinary admins, distributors, platform operators, or another supplier.
 - Represent distribution with agreement/offer/listing entities. Do not copy supplier products and rules into a distributor tenant as an authorization mechanism.
 - Verify a ticket against its immutable fulfillment scenic area and the checkpoint/device scenic area. Never relax tenant checks to make distributor tickets pass.
 - Snapshot the product revision and ticket rights at sale time. Later product edits, removal, or rule changes must not rewrite sold ticket rights.
@@ -46,7 +47,7 @@ Do not mark production-ready or start storefront/channel expansion until these a
 - Suppliers create or approve version-bound product offers; distributors cannot create authoritative settlement prices or expand channel authorization.
 - Clients cannot forge `SourceProductID`, `SourceTenantID`, fulfillment scenic area, settlement price, or channel authorization.
 - Unpaid reservations expire and release inventory and any provisional funds exactly once.
-- Refunds restore the correct ticket entitlement, inventory, cash/credit facts, supplier receivable, and channel state exactly once.
+- Refunds restore the correct unused ticket entitlement, inventory, cash/credit facts, supplier receivable, and channel state exactly once. A consumed ticket refunded by the supplier initial administrator does not restore historical capacity and no longer contributes to verification revenue.
 - Settlement lines are unique to fulfillment facts, allocate refunds to the correct item/entitlement, use contract snapshots, and require controlled confirmation/payment transitions.
 - Sold ticket rights remain valid according to their sale-time snapshot after product edits or retirement.
 - Payment notifications, active queries, client polling, retries, and process restarts converge idempotently.

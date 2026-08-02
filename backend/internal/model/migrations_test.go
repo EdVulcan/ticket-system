@@ -29,8 +29,8 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if err := db.Order("version DESC").First(&latest).Error; err != nil {
 		t.Fatal(err)
 	}
-	if latest.Version != 57 {
-		t.Fatalf("latest migration=%d, want 57", latest.Version)
+	if latest.Version != 58 {
+		t.Fatalf("latest migration=%d, want 58", latest.Version)
 	}
 	if !db.Migrator().HasIndex(&TourEntryBatch{}, "idx_team_entry_request") {
 		t.Fatal("team admission idempotency index was not created")

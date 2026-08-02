@@ -122,7 +122,14 @@ func (c *UserController) Delete(ctx *gin.Context) {
 	tenantID := ctx.GetUint("tenant_id")
 	var rowsAffected int64
 	err := model.Write(func(tx *gorm.DB) error {
-		result := tx.Where("id = ? AND tenant_id = ?", id, tenantID).Delete(&model.User{})
+		var user model.User
+		if err := tx.Where("id = ? AND tenant_id = ?", id, tenantID).First(&user).Error; err != nil {
+			return err
+		}
+		if user.IsInitialAdmin {
+			return errors.New("initial administrator cannot be deleted")
+		}
+		result := tx.Delete(&user)
 		rowsAffected = result.RowsAffected
 		return result.Error
 	})

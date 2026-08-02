@@ -85,6 +85,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 55, name: "recoverable channel requests", apply: migrateRecoverableChannelRequests},
 		{version: 56, name: "channel reconciliation detail and tenant key", apply: migrateChannelReconciliationDetails},
 		{version: 57, name: "cross supplier bundle products", apply: migrateBundleProducts},
+		{version: 58, name: "initial administrator and reversible check-in facts", apply: migrateInitialAdministratorAndCheckInReversal},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -101,6 +102,40 @@ func runMigrations(db *gorm.DB) error {
 			return tx.Create(&SchemaMigration{Version: item.version, Name: item.name, AppliedAt: time.Now()}).Error
 		}); err != nil {
 			return fmt.Errorf("migration %d (%s): %w", item.version, item.name, err)
+		}
+	}
+	return nil
+}
+
+func migrateInitialAdministratorAndCheckInReversal(db *gorm.DB) error {
+	if err := db.AutoMigrate(&User{}, &CheckInRecord{}, &Refund{}); err != nil {
+		return err
+	}
+	if err := db.Exec(`
+		UPDATE users
+		SET is_initial_admin = 1
+		WHERE id IN (
+			SELECT MIN(candidate.id)
+			FROM users candidate
+			WHERE candidate.deleted_at IS NULL AND candidate.role IN ('admin', 'super_admin')
+			  AND NOT EXISTS (
+				SELECT 1 FROM users existing
+				WHERE existing.tenant_id = candidate.tenant_id AND existing.is_initial_admin = 1
+			  )
+			GROUP BY candidate.tenant_id
+		)
+	`).Error; err != nil {
+		return err
+	}
+	statements := []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_initial_admin
+			ON users(tenant_id) WHERE is_initial_admin = 1`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_refund_allocation_sequence
+			ON refunds(parent_refund_id, allocation_seq) WHERE parent_refund_id != 0`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return err
 		}
 	}
 	return nil

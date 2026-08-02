@@ -64,7 +64,14 @@ func (s *AfterSaleService) Create(req *model.AfterSaleRequest, ticketCodes []str
 		if req.Type == "refund" && req.AmountCents <= 0 {
 			return errors.New("refund amount is required")
 		}
-		if err := validateAfterSaleTickets(&order, codes, req.Type); err != nil {
+		allowUsed := false
+		if req.Type == "refund" {
+			allowUsed, err = authorizeUsedTicketRefundTx(tx, RefundActor{TenantID: req.TenantID, UserID: req.OperatorID}, &order, codes)
+			if err != nil {
+				return err
+			}
+		}
+		if err := validateAfterSaleTickets(&order, codes, req.Type, allowUsed); err != nil {
 			return err
 		}
 		req.Base = model.Base{}
@@ -78,7 +85,7 @@ func (s *AfterSaleService) Create(req *model.AfterSaleRequest, ticketCodes []str
 	})
 }
 
-func validateAfterSaleTickets(order *model.Order, codes []string, kind string) error {
+func validateAfterSaleTickets(order *model.Order, codes []string, kind string, allowUsed bool) error {
 	if kind == "void" && len(codes) == 0 {
 		return nil
 	}
@@ -92,7 +99,9 @@ func validateAfterSaleTickets(order *model.Order, codes []string, kind string) e
 				continue
 			}
 			seen++
-			if ticket.Status != "unused" || ticket.CheckInCount != 0 {
+			unused := ticket.Status == "unused" && ticket.CheckInCount == 0
+			usedRefund := kind == "refund" && allowUsed && ticket.CheckInCount > 0 && (ticket.Status == "used" || ticket.Status == "active" || ticket.Status == "unused")
+			if !unused && !usedRefund {
 				return fmt.Errorf("ticket %s is already used", ticket.TicketCode)
 			}
 		}
@@ -559,13 +568,13 @@ func (s *AfterSaleService) executeRefund(req *model.AfterSaleRequest) (*model.Re
 		method = "auto"
 	}
 	if method == "auto" || method == "mixed" {
-		return s.RefundService.CreateMixedRefund(req.TenantID, req.OrderNo, "after-sale:"+req.IdempotencyKey, amount, codes, req.Reason)
+		return s.RefundService.CreateMixedRefundAs(RefundActor{TenantID: req.TenantID, UserID: req.OperatorID}, req.OrderNo, "after-sale:"+req.IdempotencyKey, amount, codes, req.Reason)
 	}
 	if method == "cash" {
-		return s.RefundService.CreateCashRefund(req.TenantID, req.OrderNo, "after-sale:"+req.IdempotencyKey, amount, codes, req.Reason)
+		return s.RefundService.CreateCashRefundAs(RefundActor{TenantID: req.TenantID, UserID: req.OperatorID}, req.OrderNo, "after-sale:"+req.IdempotencyKey, amount, codes, req.Reason)
 	}
 	if method == "wechat" || method == "alipay" {
-		return s.RefundService.CreateDigitalRefund(req.TenantID, req.OrderNo, "after-sale:"+req.IdempotencyKey, amount, codes, req.Reason)
+		return s.RefundService.CreateDigitalRefundAs(RefundActor{TenantID: req.TenantID, UserID: req.OperatorID}, req.OrderNo, "after-sale:"+req.IdempotencyKey, amount, codes, req.Reason)
 	}
 	return nil, fmt.Errorf("unsupported refund method %s", method)
 }
