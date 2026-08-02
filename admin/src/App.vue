@@ -17,7 +17,7 @@
           active-text-color="#fff"
           background-color="transparent"
           class="el-menu-vertical-demo border-none flex-1 py-4"
-          :default-active="route.fullPath"
+          :default-active="route.path"
           text-color="#94a3b8"
           router
         >
@@ -29,35 +29,14 @@
 
           <!-- Super Admin Only -->
           <template v-if="isSuperAdmin">
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">平台治理</div>
+             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">平台管理</div>
              <el-menu-item index="/tenant" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><OfficeBuilding /></el-icon>
                 <span>商户开户管理</span>
              </el-menu-item>
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">平台运营</div>
-             <el-menu-item index="/platform-operations?tab=orders" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><List /></el-icon>
-                <span>全局订单</span>
-             </el-menu-item>
-             <el-menu-item index="/platform-operations?tab=issues" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Warning /></el-icon>
-                <span>异常事项</span>
-             </el-menu-item>
-             <el-menu-item index="/platform-operations?tab=finance" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Money /></el-icon>
-                <span>资金监控</span>
-             </el-menu-item>
-             <el-menu-item index="/platform-operations?tab=devices" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item index="/platform-operations" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Monitor /></el-icon>
-                <span>设备监控</span>
-             </el-menu-item>
-             <el-menu-item index="/platform-operations?tab=settlements" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Tickets /></el-icon>
-                <span>结算监控</span>
-             </el-menu-item>
-             <el-menu-item index="/platform-operations?tab=audit" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Reading /></el-icon>
-                <span>审计日志</span>
+                <span>平台运营工作台</span>
              </el-menu-item>
           </template>
 

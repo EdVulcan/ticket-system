@@ -89,18 +89,13 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { onMounted, ref } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
 import { localizeDisplayText } from '@/utils/localize'
 
-const route = useRoute()
-const router = useRouter()
-const platformTabs = new Set(['orders', 'issues', 'finance', 'devices', 'settlements', 'audit'])
-const routeTab = () => typeof route.query.tab === 'string' && platformTabs.has(route.query.tab) ? route.query.tab : 'orders'
-const activeTab = ref(routeTab())
+const activeTab = ref('orders')
 const tenantID = ref('')
 const orderStatus = ref('')
 const pageSize = ref(20)
@@ -227,25 +222,13 @@ const loadAudit = async () => {
 }
 
 const loadTab = (name: string | number) => {
-  const tab = String(name)
-  if (route.query.tab !== tab) router.replace({ query: { ...route.query, tab } })
   switch (name) {
-    case 'orders': return loadOrders()
-    case 'issues': return loadIssues()
     case 'finance': return loadFinance()
     case 'devices': return loadDevices()
     case 'settlements': return loadSettlements()
     case 'audit': return loadAudit()
   }
 }
-
-watch(() => route.query.tab, () => {
-  const tab = routeTab()
-  if (activeTab.value !== tab) {
-    activeTab.value = tab
-    loadTab(tab)
-  }
-})
 
 const loadAll = async () => {
   ordersPage.value = 1
