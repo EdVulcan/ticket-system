@@ -22,7 +22,7 @@ export default defineConfig({
       timeout: 180_000,
     },
     {
-      command: 'npm run dev -- --host 127.0.0.1 --port 4173 --strictPort',
+      command: 'npm run build && npm run preview -- --host 127.0.0.1 --port 4173 --strictPort',
       url: 'http://127.0.0.1:4173/login',
       env: { VITE_API_URL: 'http://127.0.0.1:19180/api/v1' },
       reuseExistingServer: false,
