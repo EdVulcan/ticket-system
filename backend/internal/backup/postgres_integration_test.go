@@ -69,8 +69,8 @@ func TestPostgresBackupAndRestore(t *testing.T) {
 	if err := db.Raw("SELECT COALESCE(MAX(version), 0) FROM schema_migrations").Scan(&version).Error; err != nil {
 		t.Fatal(err)
 	}
-	if version != 58 {
-		t.Fatalf("restored schema version=%d, want 58", version)
+	if version != 59 {
+		t.Fatalf("restored schema version=%d, want 59", version)
 	}
 }
 

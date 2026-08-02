@@ -30,9 +30,13 @@
           <!-- Super Admin Only -->
           <template v-if="isSuperAdmin">
              <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">平台管理</div>
-             <el-menu-item index="/tenant" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="user.role === 'platform_admin'" index="/tenant" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><OfficeBuilding /></el-icon>
                 <span>商户开户管理</span>
+             </el-menu-item>
+             <el-menu-item v-if="user.role === 'platform_admin'" index="/platform-users" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+                <el-icon><UserFilled /></el-icon>
+                <span>平台账号</span>
              </el-menu-item>
              <el-menu-item index="/platform-operations" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Monitor /></el-icon>
@@ -119,7 +123,7 @@
           </el-menu-item>
           <el-menu-item index="/system-user" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
             <el-icon><UserFilled /></el-icon>
-            <span>系统员管理</span>
+            <span>管理账号</span>
           </el-menu-item>
            <el-menu-item index="/payment-config" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
             <el-icon><CreditCard /></el-icon>
@@ -171,7 +175,7 @@
             <div class="w-px h-6 bg-gray-200 hidden md:block"></div>
 
             <!-- User Profile Dropdown -->
-            <el-dropdown trigger="click" @command="handleCommand">
+            <el-dropdown data-testid="profile-menu" trigger="click" @command="handleCommand">
                 <div class="flex items-center gap-3 cursor-pointer outline-none select-none transition-opacity hover:opacity-80">
                     <div class="flex flex-col items-end">
                         <span class="text-sm font-bold text-gray-800 leading-tight">{{ user.username || '未登录用户' }}</span>
@@ -188,6 +192,10 @@
                             <p class="text-xs text-gray-400 mb-1">当前身份</p>
                             <p class="text-sm font-bold text-gray-900">{{ roleText(user.role) }}</p>
                         </div>
+                        <el-dropdown-item command="change-password">
+                            <el-icon><Key /></el-icon>
+                            修改密码
+                        </el-dropdown-item>
                         <el-dropdown-item command="logout" class="text-red-500 focus:text-red-600">
                             <el-icon><SwitchButton /></el-icon>
                             退出登录
@@ -211,30 +219,46 @@
     
     <!-- Login Route (Full Screen, No Layout) -->
     <RouterView v-else />
+
+    <el-dialog v-model="passwordDialogVisible" title="修改登录密码" width="440px" append-to-body>
+      <el-form label-position="top">
+        <el-form-item label="当前密码"><el-input v-model="passwordForm.currentPassword" type="password" show-password autocomplete="current-password" /></el-form-item>
+        <el-form-item label="新密码"><el-input v-model="passwordForm.newPassword" type="password" show-password autocomplete="new-password" /></el-form-item>
+        <el-form-item label="确认新密码"><el-input v-model="passwordForm.confirmPassword" type="password" show-password autocomplete="new-password" @keyup.enter="changePassword" /></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="passwordDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="passwordSaving" @click="changePassword">确认修改</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue'
+import { computed, reactive, ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { 
   Odometer, Monitor, Location, Ticket, List, Setting, User, UserFilled,
   SwitchButton, OfficeBuilding, Connection, Money,
-  CaretBottom, Reading, TrendCharts, CreditCard, Tickets, Operation, Warning
+  CaretBottom, Reading, TrendCharts, CreditCard, Tickets, Operation, Warning, Key
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import request from '@/utils/request'
 
 const route = useRoute()
 const router = useRouter()
 const isSuperAdmin = ref(false)
 const user = ref<any>({})
+const passwordDialogVisible = ref(false)
+const passwordSaving = ref(false)
+const passwordForm = reactive({ currentPassword: '', newPassword: '', confirmPassword: '' })
 
 const isLoginPage = computed(() => route.name === 'login' || route.name === 'platform-login')
 const activeCapabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability)))
 const hasCapability = (value: string) => activeCapabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(value => activeCapabilities.value.has(value))
 const roleText = (role: string) => ({
-    platform_admin: '平台管理员', super_admin: '商户最高管理员', admin: '商户管理员',
+    platform_admin: '平台管理员', platform_operator: '平台运营员', super_admin: '商户最高管理员', admin: '商户管理员',
     sub_admin: '普通管理员', seller: '售票员', checker: '检票员', finance: '结算人员'
 } as Record<string, string>)[role] || '系统用户'
 
@@ -249,6 +273,32 @@ const handleLogout = () => {
 const handleCommand = (command: string) => {
     if (command === 'logout') {
         handleLogout()
+    } else if (command === 'change-password') {
+        Object.assign(passwordForm, { currentPassword: '', newPassword: '', confirmPassword: '' })
+        passwordDialogVisible.value = true
+    }
+}
+
+const changePassword = async () => {
+    if (!passwordForm.currentPassword || passwordForm.newPassword.length < 8) {
+        ElMessage.warning('请填写当前密码，新密码长度至少8位')
+        return
+    }
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+        ElMessage.warning('两次输入的新密码不一致')
+        return
+    }
+    passwordSaving.value = true
+    try {
+        const loginPath = user.value.scope === 'platform' ? '/platform/login' : '/login'
+        await request.put('/auth/password', { current_password: passwordForm.currentPassword, new_password: passwordForm.newPassword })
+        passwordDialogVisible.value = false
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        ElMessage.success('密码已修改，请重新登录')
+        await router.push(loginPath)
+    } finally {
+        passwordSaving.value = false
     }
 }
 

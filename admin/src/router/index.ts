@@ -19,7 +19,13 @@ const router = createRouter({
             path: '/platform-operations',
             name: 'platform-operations',
             component: () => import('../views/PlatformOperationsView.vue'),
-            meta: { scope: 'platform', roles: ['platform_admin'], title: '平台运营工作台' }
+            meta: { scope: 'platform', roles: ['platform_admin', 'platform_operator'], title: '平台运营工作台' }
+        },
+        {
+            path: '/platform-users',
+            name: 'platform-users',
+            component: () => import('../views/PlatformUserView.vue'),
+            meta: { scope: 'platform', roles: ['platform_admin'], title: '平台账号' }
         },
         {
             path: '/distribution',
@@ -121,7 +127,7 @@ const router = createRouter({
             path: '/system-user',
             name: 'system-user',
             component: () => import('../views/UserView.vue'),
-            meta: { title: '系统员管理' }
+            meta: { scope: 'tenant', roles: ['admin', 'super_admin'], title: '管理账号' }
         },
         {
             path: '/settings',

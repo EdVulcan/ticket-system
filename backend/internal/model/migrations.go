@@ -89,6 +89,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 56, name: "channel reconciliation detail and tenant key", apply: migrateChannelReconciliationDetails},
 		{version: 57, name: "cross supplier bundle products", apply: migrateBundleProducts},
 		{version: 58, name: "initial administrator and reversible check-in facts", apply: migrateInitialAdministratorAndCheckInReversal},
+		{version: 59, name: "platform account hierarchy", apply: migratePlatformAccountHierarchy},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -108,6 +109,27 @@ func runMigrations(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func migratePlatformAccountHierarchy(db *gorm.DB) error {
+	if err := db.AutoMigrate(&PlatformUser{}); err != nil {
+		return err
+	}
+	if err := db.Exec(`
+		UPDATE platform_users
+		SET is_initial_admin = 1
+		WHERE id = (
+			SELECT MIN(id) FROM platform_users
+			WHERE deleted_at IS NULL AND role = 'platform_admin'
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM platform_users WHERE is_initial_admin = 1
+		)
+	`).Error; err != nil {
+		return err
+	}
+	return db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_users_initial_admin
+		ON platform_users(is_initial_admin) WHERE is_initial_admin = 1`).Error
 }
 
 func migrateInitialAdministratorAndCheckInReversal(db *gorm.DB) error {

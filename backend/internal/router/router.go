@@ -24,9 +24,10 @@ func InitRouter(r *gin.Engine) {
 	// Protected Routes
 	protected := apiGroup.Group("")
 	protected.Use(middleware.JWTAuth())
+	protected.PUT("/auth/password", authController.ChangePassword)
 	platformController := &api.PlatformController{Service: service.PlatformService{}}
 	platformGroup := protected.Group("/platform")
-	platformGroup.Use(middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"))
+	platformGroup.Use(middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin", "platform_operator"))
 	platformGroup.GET("/overview", platformController.Overview)
 	platformGroup.GET("/finance", platformController.FinanceOverview)
 	platformGroup.GET("/orders", platformController.ListOrders)
@@ -34,6 +35,15 @@ func InitRouter(r *gin.Engine) {
 	platformGroup.GET("/devices", platformController.ListDevices)
 	platformGroup.GET("/settlements", platformController.ListSettlements)
 	platformGroup.GET("/audit-logs", platformController.ListAuditLogs)
+
+	platformUserController := &api.PlatformUserController{}
+	platformUserGroup := protected.Group("/platform-users")
+	platformUserGroup.Use(middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"))
+	platformUserGroup.GET("", platformUserController.List)
+	platformUserGroup.POST("", platformUserController.Create)
+	platformUserGroup.PUT("/:id", platformUserController.Update)
+	platformUserGroup.PUT("/:id/password", platformUserController.ResetPassword)
+	platformUserGroup.DELETE("/:id", platformUserController.Delete)
 
 	// Tenant Routes
 	tenantController := &api.TenantController{}

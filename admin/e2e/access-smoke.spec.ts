@@ -70,6 +70,7 @@ test('平台身份不能进入租户业务菜单', async ({ page }) => {
 
   await expect(page.getByRole('heading', { name: '平台运行总览' })).toBeVisible()
   await expect(page.getByText('商户开户管理', { exact: true })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '平台账号' })).toBeVisible()
   await expect(page.getByTestId('account-context')).toHaveText('系统服务商')
   await expect(page.getByRole('menuitem', { name: '平台运营工作台' })).toBeVisible()
   await expect(page.getByText('线上门票', { exact: true })).toHaveCount(0)
@@ -77,6 +78,47 @@ test('平台身份不能进入租户业务菜单', async ({ page }) => {
   await page.goto('/product')
   await expect(page).toHaveURL('http://127.0.0.1:4173/')
   await expect(page.getByRole('heading', { name: '平台运行总览' })).toBeVisible()
+})
+
+test('平台运营员只能进入只读运营工作台', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'platform-operator-token')
+    localStorage.setItem('user', JSON.stringify({ id: 10, username: 'operator', role: 'platform_operator', scope: 'platform' }))
+  })
+  await mockJSON(page, '**/api/v1/platform/overview', {})
+  await page.goto('/')
+
+  await expect(page.getByRole('heading', { name: '平台运行总览' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '平台运营工作台' })).toBeVisible()
+  await expect(page.getByText('商户开户管理', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('menuitem', { name: '平台账号' })).toHaveCount(0)
+
+  await page.goto('/tenant')
+  await expect(page).toHaveURL('http://127.0.0.1:4173/')
+})
+
+test('平台管理员可以查看平台账号并自行修改密码', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'platform-token')
+    localStorage.setItem('user', JSON.stringify({ id: 9, username: 'platform_admin', role: 'platform_admin', scope: 'platform', is_initial_admin: true }))
+  })
+  await mockJSON(page, '**/api/v1/platform-users', [
+    { id: 9, username: 'platform_admin', role: 'platform_admin', status: 'active', is_initial_admin: true },
+    { id: 10, username: 'operator', role: 'platform_operator', status: 'active', is_initial_admin: false },
+  ])
+  await mockJSON(page, '**/api/v1/auth/password', { message: 'password changed' })
+
+  await page.goto('/platform-users')
+  await expect(page.getByRole('heading', { name: '平台账号' })).toBeVisible()
+  await expect(page.getByText('平台运营员', { exact: true })).toBeVisible()
+
+  await page.getByTestId('profile-menu').click()
+  await page.getByRole('menuitem', { name: '修改密码' }).click()
+  await page.getByLabel('当前密码').fill('old-password')
+  await page.getByLabel('新密码', { exact: true }).fill('new-password')
+  await page.getByLabel('确认新密码').fill('new-password')
+  await page.getByRole('button', { name: '确认修改' }).click()
+  await expect(page).toHaveURL('http://127.0.0.1:4173/platform/login')
 })
 
 test('商户业务能力排列清晰且强制下线有明确确认', async ({ page }) => {

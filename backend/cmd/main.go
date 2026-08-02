@@ -345,7 +345,7 @@ func seedAdminUser() error {
 			if err != nil {
 				return err
 			}
-			if err := tx.Create(&model.PlatformUser{Username: bootstrap.PlatformUsername, Password: string(hashedPwd), Role: "platform_admin", Status: "active"}).Error; err != nil {
+			if err := tx.Create(&model.PlatformUser{Username: bootstrap.PlatformUsername, Password: string(hashedPwd), Role: "platform_admin", IsInitialAdmin: true, Status: "active"}).Error; err != nil {
 				return err
 			}
 		}

@@ -146,7 +146,11 @@ func (c *UserController) Delete(ctx *gin.Context) {
 
 // Reset Password
 func (c *UserController) ResetPassword(ctx *gin.Context) {
-	id, _ := strconv.Atoi(ctx.Param("id"))
+	id, err := strconv.Atoi(ctx.Param("id"))
+	if err != nil || id <= 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		return
+	}
 	var req struct {
 		Password string `json:"password"`
 	}
@@ -154,29 +158,13 @@ func (c *UserController) ResetPassword(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if len(req.Password) < 8 {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "password must be at least 8 characters"})
-		return
-	}
-
-	hashedPwd, err := service.HashPassword(req.Password)
+	err = service.ResetTenantUserPassword(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), req.Password)
 	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to hash password"})
-		return
-	}
-
-	var rowsAffected int64
-	err = model.Write(func(tx *gorm.DB) error {
-		result := tx.Model(&model.User{}).Where("id = ? AND tenant_id = ?", id, ctx.GetUint("tenant_id")).Updates(map[string]interface{}{"password": hashedPwd, "token_version": gorm.Expr("token_version + 1")})
-		rowsAffected = result.RowsAffected
-		return result.Error
-	})
-	if err != nil {
-		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if rowsAffected == 0 {
-		ctx.JSON(http.StatusNotFound, gin.H{"error": "user not found"})
+		status := http.StatusBadRequest
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+		}
+		ctx.JSON(status, gin.H{"error": err.Error()})
 		return
 	}
 

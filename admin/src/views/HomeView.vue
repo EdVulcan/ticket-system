@@ -16,7 +16,7 @@
         </div>
       </div>
       <div class="mt-6 flex gap-3">
-        <el-button type="primary" @click="$router.push('/tenant')">租户治理</el-button>
+        <el-button v-if="canManagePlatform" type="primary" @click="$router.push('/tenant')">租户治理</el-button>
         <el-button @click="$router.push('/platform-operations')">平台运营工作台</el-button>
       </div>
     </template>
@@ -39,6 +39,7 @@ import request from '@/utils/request'
 
 const user = computed<any>(() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })
 const isPlatform = computed(() => user.value.scope === 'platform')
+const canManagePlatform = computed(() => user.value.role === 'platform_admin')
 const capabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability)))
 const hasCapability = (value: string) => capabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(hasCapability)

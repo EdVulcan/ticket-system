@@ -1,11 +1,11 @@
 <template>
   <div class="user-view">
     <div class="header">
-      <h2>系统管理员</h2>
-      <el-button type="primary" @click="dialogVisible = true">新增管理员</el-button>
+      <h2>租户管理账号</h2>
+      <el-button type="primary" @click="dialogVisible = true">新增管理账号</el-button>
     </div>
 
-    <el-alert title="注意：此处管理的账号用于登录“本后台管理系统”，非窗口售票员。" type="info" show-icon class="mb-4" :closable="false" />
+    <el-alert title="这里可创建多个租户后台管理账号，均拥有本租户管理权限。售票员、验票员及其景区/设备范围请在“员工管理”中配置。" type="info" show-icon class="mb-4" :closable="false" />
 
     <el-table :data="userList" style="width: 100%" v-loading="loading">
       <el-table-column prop="username" label="登录用户名" width="180" />
@@ -19,13 +19,13 @@
       <el-table-column prop="created_at" label="创建时间" />
       <el-table-column label="操作" width="200">
         <template #default="scope">
-          <el-button size="small" type="warning" @click="handleResetPassword(scope.row)">重置密码</el-button>
+          <el-button size="small" type="warning" :disabled="scope.row.is_initial_admin || scope.row.id === currentUser.id" :title="scope.row.is_initial_admin ? '初始管理员只能自行修改密码' : (scope.row.id === currentUser.id ? '请从右上角修改自己的密码' : '')" @click="handleResetPassword(scope.row)">重置密码</el-button>
           <el-button 
             size="small" 
             type="danger" 
             @click="handleDelete(scope.row)" 
-            :disabled="scope.row.role === 'admin' || scope.row.id === currentUser.id || currentUser.role !== 'admin'"
-            :title="scope.row.id === currentUser.id ? '无法删除自己' : (currentUser.role !== 'admin' ? '权限不足' : '')"
+            :disabled="scope.row.is_initial_admin || scope.row.id === currentUser.id || !['admin', 'super_admin'].includes(currentUser.role)"
+            :title="scope.row.is_initial_admin ? '初始管理员不能删除' : (scope.row.id === currentUser.id ? '无法删除自己' : '')"
           >
             删除
           </el-button>
@@ -34,7 +34,7 @@
     </el-table>
 
     <!-- Create Dialog -->
-    <el-dialog v-model="dialogVisible" title="新增系统管理员" width="30%">
+    <el-dialog v-model="dialogVisible" title="新增租户管理账号" width="420px">
       <el-form :model="form" label-width="80px">
         <el-form-item label="用户名">
           <el-input v-model="form.username" placeholder="例如: finance_01" />
@@ -68,7 +68,8 @@ const loading = ref(false)
 const dialogVisible = ref(false)
 
 const roleMap: Record<string, string> = {
-  admin: '主管理员',
+  super_admin: '商户最高管理员',
+  admin: '商户管理员',
   staff: '员工'
 }
 

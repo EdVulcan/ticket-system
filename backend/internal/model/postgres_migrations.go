@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const currentPostgresSchemaVersion = 58
+const currentPostgresSchemaVersion = 59
 
 // PostgreSQL starts from the current domain schema. The historical migrations
 // contain SQLite trigger syntax and legacy backfills, so replaying them on a
@@ -36,6 +36,19 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
 	}
+	if err := db.Exec(`
+		UPDATE platform_users
+		SET is_initial_admin = TRUE
+		WHERE id = (
+			SELECT MIN(id) FROM platform_users
+			WHERE deleted_at IS NULL AND role = 'platform_admin'
+		)
+		AND NOT EXISTS (
+			SELECT 1 FROM platform_users WHERE is_initial_admin = TRUE
+		)
+	`).Error; err != nil {
+		return fmt.Errorf("backfill initial platform administrator: %w", err)
+	}
 	if err := applyPostgresIndexes(db); err != nil {
 		return err
 	}
@@ -55,6 +68,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 func applyPostgresIndexes(db *gorm.DB) error {
 	statements := []string{
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_initial_admin ON users(tenant_id) WHERE is_initial_admin`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_platform_users_initial_admin ON platform_users(is_initial_admin) WHERE is_initial_admin`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_refund_allocation_sequence ON refunds(parent_refund_id, allocation_seq) WHERE parent_refund_id != 0`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_bundle_component_product ON bundle_components(bundle_version_id, seller_product_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_team_entry_request ON tour_entry_batches(group_id, idempotency_key)`,
