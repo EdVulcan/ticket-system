@@ -3,7 +3,7 @@
     <div class="login-box">
       <div class="logo">
         <el-icon :size="48" class="text-primary"><Ticket /></el-icon>
-        <h1>TicketPro POS</h1>
+        <h1>景区售票终端</h1>
       </div>
       <el-form :model="form" :rules="rules" ref="formRef" size="large">
         <el-form-item prop="job_number">
@@ -54,7 +54,7 @@ const handleLogin = async () => {
         ElMessage.success('登录成功')
         router.push('/')
       } catch (error: any) {
-        ElMessage.error(error.response?.data?.error || '登录失败')
+        ElMessage.error('登录失败，请检查工号、密码和系统编号')
       } finally {
         loading.value = false
       }

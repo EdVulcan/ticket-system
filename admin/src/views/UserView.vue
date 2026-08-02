@@ -1,7 +1,7 @@
 <template>
   <div class="user-view">
     <div class="header">
-      <h2>系统员管理 (后台账号)</h2>
+      <h2>系统管理员</h2>
       <el-button type="primary" @click="dialogVisible = true">新增管理员</el-button>
     </div>
 
@@ -12,7 +12,7 @@
       <el-table-column prop="role" label="角色">
         <template #default="scope">
           <el-tag :type="scope.row.role === 'admin' ? 'danger' : 'success'">
-            {{ roleMap[scope.row.role] || scope.row.role }}
+            {{ roleMap[scope.row.role] || '其他角色' }}
           </el-tag>
         </template>
       </el-table-column>
@@ -68,7 +68,7 @@ const loading = ref(false)
 const dialogVisible = ref(false)
 
 const roleMap: Record<string, string> = {
-  admin: '超级管理员 (主)',
+  admin: '主管理员',
   staff: '员工'
 }
 

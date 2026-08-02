@@ -42,6 +42,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import axios from 'axios'
 import { Ticket, OfficeBuilding, User, Lock } from '@element-plus/icons-vue'
+import { localizeErrorMessage } from '../utils/localize'
 
 const router = useRouter()
 const formRef = ref()
@@ -73,7 +74,7 @@ const handleLogin = async () => {
         ElMessage.success('登录成功')
         router.push('/')
       } catch (error: any) {
-        ElMessage.error(error.response?.data?.error || '登录失败')
+        ElMessage.error(localizeErrorMessage(error.response?.data?.error || error.message, '登录失败'))
       } finally {
         loading.value = false
       }

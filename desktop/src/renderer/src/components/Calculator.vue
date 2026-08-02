@@ -8,7 +8,7 @@
 
     <!-- Keypad -->
     <div class="grid grid-cols-4 gap-2">
-      <button @click="clear" class="btn-op col-span-2">C</button>
+      <button @click="clear" class="btn-op col-span-2">清空</button>
       <button @click="backspace" class="btn-op">←</button>
       <button @click="appendOperator('/')" class="btn-op">÷</button>
 

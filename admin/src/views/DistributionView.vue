@@ -3,7 +3,7 @@
     <!-- Header -->
     <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100 flex justify-between items-center">
       <div>
-        <h2 class="text-lg font-bold text-gray-900">分销中心 (B2B)</h2>
+        <h2 class="text-lg font-bold text-gray-900">分销中心</h2>
         <p class="text-xs text-gray-500 mt-1">连接产业上下游，拓展业务边界</p>
       </div>
       <div>
@@ -126,7 +126,7 @@
                         <el-button type="danger" size="small" @click="handleAudit(row, 'rejected')">拒绝</el-button>
                     </div>
                     <div v-else>
-                         <el-button type="primary" size="small" @click="handleOffers(row)">Offers</el-button>
+                         <el-button type="primary" size="small" @click="handleOffers(row)">供货报价</el-button>
                          <el-button type="warning" size="small" @click="handleRecharge(row)">充值</el-button>
                     </div>
                 </template>
@@ -143,7 +143,7 @@
                         <el-option label="已履约" value="fulfilled" />
                         <el-option label="已取消" value="cancelled" />
                     </el-select>
-                    <el-input v-model="fulfillmentDistributorId" placeholder="分销商租户 ID" style="width: 180px" @keyup.enter="fetchFulfillments" />
+                    <el-input v-model="fulfillmentDistributorId" placeholder="分销商租户编号" style="width: 180px" @keyup.enter="fetchFulfillments" />
                 </div>
                 <el-button link type="primary" @click="fetchFulfillments"><el-icon><Refresh /></el-icon></el-button>
             </div>
@@ -213,7 +213,7 @@
     <el-dialog v-model="dialogVisible" title="申请代理权益" width="500px">
       <!-- ... (Same as before) ... -->
       <el-form label-position="top">
-        <el-form-item label="请输入目标供应商的系统编号 (System Code)">
+        <el-form-item label="请输入目标供应商的系统编号">
           <div class="flex gap-2">
             <el-input v-model="targetSystemCode" placeholder="例如: SYS001" class="flex-1" />
             <el-button @click="handleSearch" :loading="searching">查询</el-button>
@@ -276,8 +276,8 @@
             </el-form-item>
             <el-form-item label="上架渠道 (可多选)">
                 <el-checkbox-group v-model="importForm.channels">
-                    <el-checkbox label="online">线上微官网 (MiniApp)</el-checkbox>
-                    <el-checkbox label="offline">线下售票窗口 (Window)</el-checkbox>
+                    <el-checkbox label="online">线上微商城</el-checkbox>
+                    <el-checkbox label="offline">线下售票窗口</el-checkbox>
                 </el-checkbox-group>
             </el-form-item>
         </el-form>
@@ -309,60 +309,64 @@
         </template>
     </el-dialog>
 
-    <el-dialog v-model="offersDialogVisible" title="Supplier offers" width="980px">
+    <el-dialog v-model="offersDialogVisible" title="供应商供货报价" width="980px">
         <div class="flex justify-between items-center mb-3">
-            <span class="text-sm text-gray-500">Manage the supplier-authorized revision, price floor, quota and channels.</span>
+            <span class="text-sm text-gray-500">管理授权产品版本、结算价、最低售价、额度和销售渠道。</span>
             <div class="flex gap-2">
-                <el-button size="small" @click="loadOffers">Refresh</el-button>
-                <el-button type="primary" size="small" @click="openOfferForm">Create offer</el-button>
+                <el-button size="small" @click="loadOffers">刷新</el-button>
+                <el-button type="primary" size="small" @click="openOfferForm">新建报价</el-button>
             </div>
         </div>
         <el-table :data="offers" v-loading="loadingOffers" height="360" stripe>
-            <el-table-column prop="source_product_id" label="Product" width="90" />
-            <el-table-column prop="product_revision_id" label="Revision" width="90" />
-            <el-table-column prop="settlement_price" label="Settlement" width="110" />
-            <el-table-column prop="minimum_retail_price_cents" label="Retail floor (cents)" width="140" />
-            <el-table-column prop="quota" label="Quota" width="80" />
-            <el-table-column prop="allowed_channels" label="Channels" min-width="150" />
-            <el-table-column prop="status" label="Status" width="100" />
-            <el-table-column label="Actions" width="180" fixed="right">
+            <el-table-column prop="source_product_id" label="产品编号" width="100" />
+            <el-table-column prop="product_revision_id" label="版本编号" width="100" />
+            <el-table-column prop="settlement_price" label="结算价" width="110" />
+            <el-table-column label="最低售价" width="120"><template #default="{ row }">¥{{ centsToYuan(row.minimum_retail_price_cents) }}</template></el-table-column>
+            <el-table-column label="额度" width="90"><template #default="{ row }">{{ row.quota ? row.quota : '不限' }}</template></el-table-column>
+            <el-table-column label="销售渠道" min-width="150"><template #default="{ row }">{{ channelText(row.allowed_channels) }}</template></el-table-column>
+            <el-table-column label="状态" width="100"><template #default="{ row }">{{ offerStatusText(row.status) }}</template></el-table-column>
+            <el-table-column label="操作" width="180" fixed="right">
                 <template #default="{ row }">
-                    <el-button v-if="row.status === 'active'" link type="warning" @click="handleOfferStatus(row, 'suspended')">Suspend</el-button>
-                    <el-button v-else-if="row.status === 'suspended'" link type="success" @click="handleOfferStatus(row, 'active')">Resume</el-button>
-                    <el-button v-if="row.status !== 'expired'" link type="danger" @click="handleOfferStatus(row, 'expired')">Expire</el-button>
+                    <el-button v-if="row.status === 'active'" link type="warning" @click="handleOfferStatus(row, 'suspended')">暂停</el-button>
+                    <el-button v-else-if="row.status === 'suspended'" link type="success" @click="handleOfferStatus(row, 'active')">恢复</el-button>
+                    <el-button v-if="row.status !== 'expired'" link type="danger" @click="handleOfferStatus(row, 'expired')">终止</el-button>
                 </template>
             </el-table-column>
         </el-table>
     </el-dialog>
 
-    <el-dialog v-model="offerFormVisible" title="Create supplier offer" width="560px">
+    <el-dialog v-model="offerFormVisible" title="新建供货报价" width="560px">
         <el-form :model="offerForm" label-position="top">
-            <el-form-item label="Source product">
-                <el-select v-model="offerForm.source_product_id" filterable class="w-full" placeholder="Select an online distributable product">
+            <el-form-item label="供货产品">
+                <el-select v-model="offerForm.source_product_id" filterable class="w-full" placeholder="选择已上架且允许分销的产品">
                     <el-option v-for="product in sourceProducts" :key="product.id" :label="`${product.name} (#${product.id})`" :value="product.id" />
                 </el-select>
             </el-form-item>
             <div class="grid grid-cols-2 gap-3">
-                <el-form-item label="Settlement price">
+                <el-form-item label="结算价">
                     <el-input-number v-model="offerForm.settlement_price" :min="0.01" :precision="2" class="w-full" />
                 </el-form-item>
-                <el-form-item label="Minimum retail price">
+                <el-form-item label="最低零售价">
                     <el-input-number v-model="offerForm.minimum_retail_price" :min="0" :precision="2" class="w-full" />
                 </el-form-item>
-                <el-form-item label="Quota (0 = unlimited)">
+                <el-form-item label="销售额度（0表示不限）">
                     <el-input-number v-model="offerForm.quota" :min="0" :precision="0" class="w-full" />
                 </el-form-item>
-                <el-form-item label="Commission (BPS)">
+                <el-form-item label="佣金比例（万分比）">
                     <el-input-number v-model="offerForm.commission_bps" :min="0" :max="10000" :precision="0" class="w-full" />
                 </el-form-item>
             </div>
-            <el-form-item label="Allowed channels (comma-separated)">
-                <el-input v-model="offerForm.allowed_channels" placeholder="window,online,ota" />
+            <el-form-item label="允许销售渠道">
+                <el-checkbox-group v-model="offerChannels">
+                    <el-checkbox label="window">售票窗口</el-checkbox>
+                    <el-checkbox label="online">线上商城</el-checkbox>
+                    <el-checkbox label="ota">外部渠道</el-checkbox>
+                </el-checkbox-group>
             </el-form-item>
         </el-form>
         <template #footer>
-            <el-button @click="offerFormVisible = false">Cancel</el-button>
-            <el-button type="primary" :loading="savingOffer" @click="createOffer">Create</el-button>
+            <el-button @click="offerFormVisible = false">取消</el-button>
+            <el-button type="primary" :loading="savingOffer" @click="createOffer">创建</el-button>
         </template>
     </el-dialog>
 
@@ -475,6 +479,7 @@ const offerForm = reactive({
     commission_bps: 0,
     allowed_channels: 'window,online,ota'
 })
+const offerChannels = ref(['window', 'online', 'ota'])
 
 const loadingBundles = ref(false)
 const savingBundle = ref(false)
@@ -605,7 +610,7 @@ const fetchFulfillments = async () => {
         const res = await request.get('/distribution/fulfillments', { params })
         fulfillments.value = res.data.data || []
     } catch (e: any) {
-        ElMessage.error(e.response?.data?.error || 'Failed to load fulfillment worklist')
+        ElMessage.error(e.response?.data?.error || '履约工作列表加载失败')
     } finally {
         loadingFulfillments.value = false
     }
@@ -627,11 +632,13 @@ const openFulfillment = async (row: any) => {
 const centsToYuan = (value: number) => (Number(value || 0) / 100).toFixed(2)
 const formatDate = (value: string) => value ? new Date(value).toLocaleDateString('zh-CN') : '未指定日期'
 const formatDateTime = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
-const fulfillmentStatusText = (value: string) => ({ reserved: '已预占', paid: '已支付', fulfilled: '已履约', cancelled: '已取消' } as any)[value] || value
-const settlementStatusText = (value: string) => ({ draft: '草稿', supplier_confirmed: '供应商已确认', confirmed: '双方已确认', disputed: '有争议', paid: '已付款' } as any)[value] || value
-const ticketStatusText = (value: string) => ({ issued: '已出票', active: '可使用', unused: '未使用', used: '已核销', refunded: '已退款', void: '已作废', expired: '已过期' } as any)[value] || value
-const afterSaleTypeText = (value: string) => ({ refund: '退票', reschedule: '改期', exchange: '换票', void: '作废', reissue: '补打' } as any)[value] || value
-const afterSaleStatusText = (value: string) => ({ pending: '待审核', approved: '已批准', processing: '处理中', completed: '已完成', rejected: '已拒绝', failed: '失败' } as any)[value] || value
+const fulfillmentStatusText = (value: string) => ({ reserved: '已预占', paid: '已支付', fulfilled: '已履约', cancelled: '已取消' } as any)[value] || '未知状态'
+const settlementStatusText = (value: string) => ({ draft: '草稿', supplier_confirmed: '供应商已确认', confirmed: '双方已确认', disputed: '有争议', paid: '已付款' } as any)[value] || '未知状态'
+const ticketStatusText = (value: string) => ({ issued: '已出票', active: '可使用', unused: '未使用', used: '已核销', refunded: '已退款', void: '已作废', expired: '已过期' } as any)[value] || '未知状态'
+const afterSaleTypeText = (value: string) => ({ refund: '退票', reschedule: '改期', exchange: '换票', void: '作废', reissue: '补打' } as any)[value] || '其他售后'
+const afterSaleStatusText = (value: string) => ({ pending: '待审核', approved: '已批准', processing: '处理中', completed: '已完成', rejected: '已拒绝', failed: '失败' } as any)[value] || '未知状态'
+const offerStatusText = (value: string) => ({ active: '生效中', suspended: '已暂停', expired: '已终止' } as Record<string, string>)[value] || '未知状态'
+const channelText = (value: string) => String(value || '').split(',').map(item => ({ window: '售票窗口', online: '线上商城', ota: '外部渠道' } as Record<string, string>)[item.trim()] || '其他渠道').join('、')
 
 const handleSearch = async () => {
   if (!targetSystemCode.value) return
@@ -717,7 +724,7 @@ const loadOffers = async () => {
         const res = await request.get('/distribution/offers', { params: { distributor_tenant_id: selectedDistributorId.value, page: 1, page_size: 100 } })
         offers.value = res.data.data || []
     } catch (e: any) {
-        ElMessage.error(e.response?.data?.error || 'Failed to load offers')
+        ElMessage.error(e.response?.data?.error || '供货报价加载失败')
     } finally {
         loadingOffers.value = false
     }
@@ -728,7 +735,7 @@ const loadSourceProducts = async () => {
         const res = await request.get('/products', { params: { page: 1, page_size: 100 } })
         sourceProducts.value = (res.data.data || []).filter((product: any) => product.status === 'online' && product.is_distributable)
     } catch (e: any) {
-        ElMessage.error(e.response?.data?.error || 'Failed to load source products')
+        ElMessage.error(e.response?.data?.error || '可供货产品加载失败')
     }
 }
 
@@ -739,22 +746,24 @@ const openOfferForm = () => {
     offerForm.quota = 0
     offerForm.commission_bps = 0
     offerForm.allowed_channels = 'window,online,ota'
+    offerChannels.value = ['window', 'online', 'ota']
     offerFormVisible.value = true
 }
 
 const createOffer = async () => {
-    if (!selectedDistributorId.value || !offerForm.source_product_id || offerForm.settlement_price <= 0 || !offerForm.allowed_channels.trim()) {
-        ElMessage.warning('Product, settlement price and channels are required')
+    if (!selectedDistributorId.value || !offerForm.source_product_id || offerForm.settlement_price <= 0 || !offerChannels.value.length) {
+        ElMessage.warning('请选择供货产品，并填写结算价和销售渠道')
         return
     }
     savingOffer.value = true
     try {
+        offerForm.allowed_channels = offerChannels.value.join(',')
         await request.post('/distribution/offers', { distributor_tenant_id: selectedDistributorId.value, ...offerForm })
-        ElMessage.success('Offer created')
+        ElMessage.success('供货报价已创建')
         offerFormVisible.value = false
         await loadOffers()
     } catch (e: any) {
-        ElMessage.error(e.response?.data?.error || 'Failed to create offer')
+        ElMessage.error(e.response?.data?.error || '供货报价创建失败')
     } finally {
         savingOffer.value = false
     }
@@ -762,11 +771,11 @@ const createOffer = async () => {
 
 const handleOfferStatus = async (row: any, status: string) => {
     try {
-        await request.patch(`/distribution/offers/${row.id}/status`, { status, reason: `Changed from supplier console to ${status}` })
-        ElMessage.success('Offer status updated')
+        await request.patch(`/distribution/offers/${row.id}/status`, { status, reason: `供应商在管理端将报价状态调整为${offerStatusText(status)}` })
+        ElMessage.success('供货报价状态已更新')
         await loadOffers()
     } catch (e: any) {
-        ElMessage.error(e.response?.data?.error || 'Failed to update offer')
+        ElMessage.error(e.response?.data?.error || '供货报价状态更新失败')
     }
 }
 
@@ -841,7 +850,7 @@ const getStatusType = (status: string) => {
 
 const getStatusText = (status: string) => {
     const map: any = { active: '合作中', pending: '待审核', rejected: '已拒绝' }
-    return map[status] || status
+    return map[status] || '未知状态'
 }
 
 const getLevelText = (level: string) => {

@@ -13,8 +13,8 @@
 
     <el-table :data="accounts" v-loading="loading" stripe>
       <el-table-column prop="code" label="渠道编码" width="180" />
-      <el-table-column prop="type" label="适配器类型" width="140" />
-      <el-table-column prop="status" label="状态" width="120"><template #default="{row}"><el-tag :type="row.status === 'active' ? 'success' : row.status === 'sandbox' ? 'warning' : 'info'">{{ row.status }}</el-tag></template></el-table-column>
+      <el-table-column label="适配器类型" width="140"><template #default="{row}">{{ adapterTypeText(row.type) }}</template></el-table-column>
+      <el-table-column prop="status" label="状态" width="120"><template #default="{row}"><el-tag :type="row.status === 'active' ? 'success' : row.status === 'sandbox' ? 'warning' : 'info'">{{ accountStatusText(row.status) }}</el-tag></template></el-table-column>
       <el-table-column prop="rate_limit_per_min" label="限流/分钟" width="120" />
       <el-table-column prop="permissions_json" label="权限" min-width="220" show-overflow-tooltip />
       <el-table-column label="操作" width="530" fixed="right">
@@ -31,12 +31,12 @@
 
     <el-dialog v-model="createDialog" title="新增渠道账号" width="520px">
       <el-form :model="form" label-position="top">
-        <el-form-item label="渠道编码"><el-input v-model="form.code" placeholder="例如 ctrip-prod" /></el-form-item>
-        <el-form-item label="适配器类型"><el-input v-model="form.type" placeholder="core / ctrip / meituan" /></el-form-item>
+        <el-form-item label="渠道编码"><el-input v-model="form.code" placeholder="例如：携程正式渠道" /></el-form-item>
+        <el-form-item label="适配器类型"><el-input v-model="form.type" placeholder="例如：通用渠道、携程或美团" /></el-form-item>
         <el-form-item label="初始密钥"><el-input v-model="form.secret" type="password" show-password /></el-form-item>
-        <el-form-item label="权限 JSON"><el-input v-model="form.permissions_json" /></el-form-item>
+        <el-form-item label="接口权限配置"><el-input v-model="form.permissions_json" /></el-form-item>
         <el-form-item label="每分钟请求上限"><el-input-number v-model="form.rate_limit_per_min" :min="1" :max="100000" /></el-form-item>
-        <el-form-item label="允许 IP JSON"><el-input v-model="form.allowed_ips_json" placeholder='例如 ["203.0.113.5"]' /></el-form-item>
+        <el-form-item label="允许访问的网络地址"><el-input v-model="form.allowed_ips_json" placeholder='例如 ["203.0.113.5"]' /></el-form-item>
       </el-form>
       <template #footer><el-button @click="createDialog = false">取消</el-button><el-button type="primary" :loading="saving" @click="create">创建</el-button></template>
     </el-dialog>
@@ -44,10 +44,10 @@
     <el-dialog v-model="mappingDialog" title="商品映射" width="780px">
       <div class="flex gap-2 mb-4">
         <el-input v-model="mapping.external_code" placeholder="外部商品编码" />
-        <el-input-number v-model="mapping.product_id" :min="1" placeholder="本租户商品 ID" />
+        <el-input-number v-model="mapping.product_id" :min="1" placeholder="本商户商品编号" />
         <el-button type="primary" @click="addMapping">添加</el-button>
       </div>
-      <el-table :data="mappings" stripe><el-table-column prop="external_code" label="外部编码"/><el-table-column prop="product_id" label="本地商品 ID"/><el-table-column prop="status" label="状态"/></el-table>
+      <el-table :data="mappings" stripe><el-table-column prop="external_code" label="外部编码"/><el-table-column prop="product_id" label="本地商品编号"/><el-table-column label="状态"><template #default="{ row }">{{ mappingStatusText(row.status) }}</template></el-table-column></el-table>
     </el-dialog>
 
     <el-dialog v-model="secretDialog" title="新渠道密钥" width="460px"><el-alert type="warning" :closable="false" title="密钥只在本次显示，请立即交给渠道方并安全保存。"/><el-input class="mt-4" :model-value="newSecret" readonly /></el-dialog>
@@ -64,12 +64,12 @@
         <span class="text-sm text-gray-500">共 {{ requestTotal }} 条</span>
       </div>
       <el-table :data="channelRequests" v-loading="requestsLoading" stripe height="480" empty-text="暂无请求记录">
-        <el-table-column prop="request_id" label="请求 ID" min-width="180" show-overflow-tooltip />
+        <el-table-column prop="request_id" label="请求编号" min-width="180" show-overflow-tooltip />
         <el-table-column prop="endpoint" label="接口" min-width="210" show-overflow-tooltip />
         <el-table-column label="状态" width="120"><template #default="{ row }"><el-tag :type="requestStatusType(row.status)">{{ requestStatusText(row.status) }}</el-tag></template></el-table-column>
         <el-table-column prop="response_status" label="响应码" width="90" />
         <el-table-column prop="attempt_count" label="尝试" width="80" />
-        <el-table-column prop="remote_ip" label="来源 IP" width="130" />
+        <el-table-column prop="remote_ip" label="来源网络地址" width="150" />
         <el-table-column label="最后尝试" width="180"><template #default="{ row }">{{ dateTime(row.last_attempt_at || row.created_at) }}</template></el-table-column>
         <el-table-column prop="response_json" label="响应摘要" min-width="220" show-overflow-tooltip />
         <el-table-column label="操作" width="110" fixed="right">
@@ -126,26 +126,26 @@
               <el-table-column prop="product_name" label="产品" min-width="180" />
               <el-table-column prop="visitor_name" label="游客" width="120" />
               <el-table-column prop="visitor_phone" label="手机号" width="140" />
-              <el-table-column prop="status" label="状态" width="100" />
+              <el-table-column label="状态" width="100"><template #default="{ row }">{{ ticketStatusText(row.status) }}</template></el-table-column>
               <el-table-column prop="check_in_count" label="核销次数" width="100" />
             </el-table>
           </el-tab-pane>
           <el-tab-pane :label="`支付与退款 (${orderDetail.payments.length}/${orderDetail.refunds.length})`">
             <el-table :data="orderDetail.payments" stripe max-height="180" empty-text="暂无支付">
-              <el-table-column prop="payment_no" label="支付单" min-width="160" /><el-table-column prop="method" label="方式" width="100" /><el-table-column label="金额" width="120"><template #default="{ row }">¥{{ cents(row.amount_cents) }}</template></el-table-column><el-table-column prop="status" label="状态" width="110" /><el-table-column prop="transaction_id" label="渠道流水" min-width="160" />
+              <el-table-column prop="payment_no" label="支付单" min-width="160" /><el-table-column label="方式" width="100"><template #default="{ row }">{{ paymentMethodText(row.method) }}</template></el-table-column><el-table-column label="金额" width="120"><template #default="{ row }">¥{{ cents(row.amount_cents) }}</template></el-table-column><el-table-column label="状态" width="110"><template #default="{ row }">{{ paymentStatusText(row.status) }}</template></el-table-column><el-table-column prop="transaction_id" label="渠道流水" min-width="160" />
             </el-table>
             <el-table :data="orderDetail.refunds" stripe max-height="180" class="mt-3" empty-text="暂无退款">
-              <el-table-column prop="refund_no" label="退款单" min-width="160" /><el-table-column prop="method" label="方式" width="100" /><el-table-column label="金额" width="120"><template #default="{ row }">¥{{ cents(row.amount_cents) }}</template></el-table-column><el-table-column prop="status" label="状态" width="110" /><el-table-column prop="reason" label="原因" min-width="180" />
+              <el-table-column prop="refund_no" label="退款单" min-width="160" /><el-table-column label="方式" width="100"><template #default="{ row }">{{ paymentMethodText(row.method) }}</template></el-table-column><el-table-column label="金额" width="120"><template #default="{ row }">¥{{ cents(row.amount_cents) }}</template></el-table-column><el-table-column label="状态" width="110"><template #default="{ row }">{{ refundStatusText(row.status) }}</template></el-table-column><el-table-column prop="reason" label="原因" min-width="180" />
             </el-table>
           </el-tab-pane>
           <el-tab-pane :label="`核销 (${orderDetail.check_ins.length})`">
             <el-table :data="orderDetail.check_ins" stripe max-height="380" empty-text="暂无核销">
-              <el-table-column prop="ticket_code" label="票码" min-width="180" /><el-table-column prop="result" label="结果" width="100" /><el-table-column prop="message" label="说明" min-width="180" /><el-table-column label="时间" width="180"><template #default="{ row }">{{ dateTime(row.check_in_time) }}</template></el-table-column>
+              <el-table-column prop="ticket_code" label="票码" min-width="180" /><el-table-column label="结果" width="100"><template #default="{ row }">{{ checkInResultText(row.result) }}</template></el-table-column><el-table-column label="说明" min-width="180"><template #default="{ row }">{{ localizeDisplayText(row.message, '-') }}</template></el-table-column><el-table-column label="时间" width="180"><template #default="{ row }">{{ dateTime(row.check_in_time) }}</template></el-table-column>
             </el-table>
           </el-tab-pane>
           <el-tab-pane :label="`售后 (${orderDetail.after_sales.length})`">
             <el-table :data="orderDetail.after_sales" stripe max-height="380" empty-text="暂无售后">
-              <el-table-column prop="request_no" label="售后单" min-width="170" /><el-table-column prop="type" label="类型" width="100" /><el-table-column prop="status" label="状态" width="110" /><el-table-column prop="reason" label="原因" min-width="200" /><el-table-column label="申请时间" width="180"><template #default="{ row }">{{ dateTime(row.created_at) }}</template></el-table-column>
+              <el-table-column prop="request_no" label="售后单" min-width="170" /><el-table-column label="类型" width="100"><template #default="{ row }">{{ afterSaleTypeText(row.type) }}</template></el-table-column><el-table-column label="状态" width="110"><template #default="{ row }">{{ afterSaleStatusText(row.status) }}</template></el-table-column><el-table-column prop="reason" label="原因" min-width="200" /><el-table-column label="申请时间" width="180"><template #default="{ row }">{{ dateTime(row.created_at) }}</template></el-table-column>
             </el-table>
           </el-tab-pane>
         </el-tabs>
@@ -174,8 +174,8 @@
       <el-form label-position="top">
         <el-form-item label="批次号" required><el-input v-model="billBatchKey" maxlength="120" /></el-form-item>
         <el-form-item label="账单内容" required>
-          <el-input v-model="billText" type="textarea" :rows="9" placeholder="每行：外部单号,类型,金额(元),发生时间(可选)&#10;EXT-1001,payment,299.00,2026-08-01 10:30:00" />
-          <div class="mt-1 text-xs text-gray-500">类型支持 sale、payment、cancel、refund；金额使用元。</div>
+          <el-input v-model="billText" type="textarea" :rows="9" placeholder="每行：外部单号,类型,金额(元),发生时间(可选)&#10;示例订单,收款,299.00,2026-08-01 10:30:00" />
+          <div class="mt-1 text-xs text-gray-500">类型支持销售、收款、取消、退款；也兼容渠道提供的英文类型值。</div>
         </el-form-item>
       </el-form>
       <template #footer><el-button @click="billImportDialog = false">取消</el-button><el-button type="primary" :loading="billImporting" @click="importBill">导入并核对</el-button></template>
@@ -184,7 +184,7 @@
     <el-dialog v-model="reconciliationDetailDialog" title="渠道对账明细" width="1080px" append-to-body>
       <el-table :data="reconciliationDetail?.lines || []" v-loading="reconciliationDetailLoading" stripe height="500">
         <el-table-column prop="external_no" label="外部单号" min-width="170" />
-        <el-table-column prop="operation" label="类型" width="90" />
+        <el-table-column label="类型" width="90"><template #default="{ row }">{{ operationText(row.operation) }}</template></el-table-column>
         <el-table-column label="渠道金额" width="120"><template #default="{ row }">¥{{ cents(row.amount_cents) }}</template></el-table-column>
         <el-table-column prop="matched_order_no" label="内部订单" min-width="160" />
         <el-table-column prop="matched_payment_no" label="支付单" min-width="150" />
@@ -202,6 +202,7 @@ import { onMounted, reactive, ref } from 'vue'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
+import { localizeDisplayText } from '@/utils/localize'
 
 const accounts = ref<any[]>([])
 const mappings = ref<any[]>([])
@@ -250,9 +251,20 @@ const addMapping = async () => { if (!mapping.external_code || !mapping.product_
 const dateTime = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
 const cents = (value: number) => (Number(value || 0) / 100).toFixed(2)
 const signedCents = (value: number) => `${Number(value || 0) > 0 ? '+' : Number(value || 0) < 0 ? '-' : ''}¥${cents(Math.abs(Number(value || 0)))}`
-const requestStatusText = (status: string) => ({ processing: '处理中', completed: '已完成', failed: '失败待处理', retryable: '已授权重试' } as Record<string, string>)[status] || status
+const accountStatusText = (status: string) => ({ active: '正式启用', sandbox: '测试中', disabled: '已停用' } as Record<string, string>)[status] || '未知状态'
+const adapterTypeText = (type: string) => ({ core: '通用渠道', ctrip: '携程', meituan: '美团', zyb: '智游宝上游' } as Record<string, string>)[type] || '自定义渠道'
+const mappingStatusText = (status: string) => ({ active: '已启用', disabled: '已停用' } as Record<string, string>)[status] || '未知状态'
+const requestStatusText = (status: string) => ({ processing: '处理中', completed: '已完成', failed: '失败待处理', retryable: '已授权重试' } as Record<string, string>)[status] || '未知状态'
 const requestStatusType = (status: string) => status === 'completed' ? 'success' : status === 'failed' ? 'danger' : status === 'retryable' ? 'warning' : 'primary'
-const orderStatusText = (status: string) => ({ unpaid: '待支付', paid: '已支付', completed: '已完成', partial_refunded: '部分退款', refunded: '已退款', cancelled: '已取消' } as Record<string, string>)[status] || status
+const orderStatusText = (status: string) => ({ unpaid: '待支付', paid: '已支付', completed: '已完成', partial_refunded: '部分退款', refunded: '已退款', cancelled: '已取消' } as Record<string, string>)[status] || '未知状态'
+const ticketStatusText = (status: string) => ({ unused: '未使用', active: '可使用', issued: '已出票', used: '已核销', refunded: '已退款', expired: '已过期', void: '已作废' } as Record<string, string>)[status] || '未知状态'
+const paymentMethodText = (method: string) => ({ cash: '现金', wechat: '微信支付', alipay: '支付宝', touch: '碰一碰支付', balance: '账户余额', credit: '授信挂账' } as Record<string, string>)[method] || '其他方式'
+const paymentStatusText = (status: string) => ({ pending: '等待支付', processing: '支付处理中', paid: '支付成功', succeeded: '支付成功', failed: '支付失败', cancelled: '已取消', refunded: '已退款', partial_refunded: '部分退款' } as Record<string, string>)[status] || '未知状态'
+const refundStatusText = (status: string) => ({ pending: '等待退款', processing: '退款处理中', succeeded: '退款成功', completed: '退款成功', failed: '退款失败', manual_review: '人工复核' } as Record<string, string>)[status] || '未知状态'
+const checkInResultText = (result: string) => ({ success: '核销成功', failed: '核销失败', rejected: '已拒绝' } as Record<string, string>)[result] || '未知结果'
+const afterSaleTypeText = (type: string) => ({ refund: '退票', reschedule: '改期', exchange: '换票', void: '作废', reissue: '补打' } as Record<string, string>)[type] || '其他售后'
+const afterSaleStatusText = (status: string) => ({ pending: '待审核', approved: '已批准', processing: '处理中', completed: '已完成', rejected: '已拒绝', failed: '处理失败' } as Record<string, string>)[status] || '未知状态'
+const operationText = (operation: string) => ({ sale: '销售', payment: '收款', cancel: '取消', refund: '退款' } as Record<string, string>)[operation] || '其他'
 const orderTickets = (order: any) => (order?.items || []).flatMap((item: any) => (item.tickets || []).map((ticket: any) => ({ ...ticket, product_name: item.product_name })))
 const loadOrders = async (page = 1) => {
   if (!selectedAccount.value) return
@@ -292,7 +304,7 @@ const openRequests = async (row: any) => { selectedAccount.value = row; requestS
 const authorizeRetry = async (row: any) => {
   if (!selectedAccount.value) return
   try {
-    const result = await ElMessageBox.prompt('确认故障原因已排除，并填写授权重试原因。渠道方仍需使用相同请求 ID 和相同正文重新发送。', '授权渠道重试', { inputType: 'textarea', inputValidator: value => value.trim() ? true : '授权原因必填' })
+    const result = await ElMessageBox.prompt('确认故障原因已排除，并填写授权重试原因。渠道方仍需使用相同请求编号和相同正文重新发送。', '授权渠道重试', { inputType: 'textarea', inputValidator: value => value.trim() ? true : '授权原因必填' })
     await request.post(`/channel-accounts/${selectedAccount.value.id}/requests/${row.id}/authorize-retry`, { reason: result.value.trim() })
     ElMessage.success('已授权，等待渠道方重发原请求')
     await loadRequests()
@@ -310,11 +322,12 @@ const openReconciliations = async (row: any) => { selectedAccount.value = row; r
 const parseBill = () => billText.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map((line, index) => {
   const cells = line.split(/[\t,，]/).map(value => value.trim())
   if (index === 0 && /外部单号|external/i.test(cells[0] || '')) return null
+  const operation = ({ 销售: 'sale', 收款: 'payment', 取消: 'cancel', 退款: 'refund' } as Record<string, string>)[cells[1]] || cells[1]
   const amount = Number(cells[2])
-  if (!cells[0] || !['sale', 'payment', 'cancel', 'refund'].includes(cells[1]) || !Number.isFinite(amount) || amount < 0) throw new Error(`第 ${index + 1} 行格式不正确`)
+  if (!cells[0] || !['sale', 'payment', 'cancel', 'refund'].includes(operation) || !Number.isFinite(amount) || amount < 0) throw new Error(`第 ${index + 1} 行格式不正确`)
   const occurred = cells[3] ? new Date(cells[3].replace(' ', 'T')) : null
   if (occurred && Number.isNaN(occurred.getTime())) throw new Error(`第 ${index + 1} 行时间格式不正确`)
-  return { external_no: cells[0], operation: cells[1], amount_cents: Math.round(amount * 100), currency: 'CNY', external_occurred_at: occurred?.toISOString() }
+  return { external_no: cells[0], operation, amount_cents: Math.round(amount * 100), currency: 'CNY', external_occurred_at: occurred?.toISOString() }
 }).filter(Boolean)
 const importBill = async () => {
   if (!selectedAccount.value || !billBatchKey.value.trim() || !billText.value.trim()) { ElMessage.warning('批次号和账单内容必填'); return }

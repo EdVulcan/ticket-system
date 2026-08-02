@@ -9,7 +9,7 @@
           <div class="w-8 h-8 rounded-lg bg-indigo-500 flex items-center justify-center mr-3 shadow-lg shadow-indigo-500/30">
             <el-icon :size="20" class="text-white"><Ticket /></el-icon>
           </div>
-          <span class="text-lg font-bold tracking-wide bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">TicketPro</span>
+          <span class="text-lg font-bold tracking-wide bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">景区票务平台</span>
         </div>
 
         <!-- Menu -->
@@ -42,7 +42,7 @@
 
           <!-- Tenant Only -->
           <template v-else>
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">销售中心 (Sales)</div>
+             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">销售中心</div>
              <el-menu-item v-if="hasCapability('supplier')" index="/product" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Ticket /></el-icon>
                 <span>线上门票</span>
@@ -60,7 +60,7 @@
                 <span>线下/窗口订单</span>
              </el-menu-item>
 
-             <div v-if="hasAnyCapability('supplier', 'distributor')" class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">分销中心 (B2B)</div>
+             <div v-if="hasAnyCapability('supplier', 'distributor')" class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">分销中心</div>
              <el-menu-item v-if="hasAnyCapability('supplier', 'distributor')" index="/distribution" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Connection /></el-icon>
                 <span>分销商管理</span>
@@ -74,7 +74,7 @@
                 <span>旅行社团队</span>
              </el-menu-item>
 
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">现场运营 (OPS)</div>
+             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">现场运营</div>
              <el-menu-item index="/operations" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Operation /></el-icon>
                 <span>运营工作台</span>
@@ -92,14 +92,14 @@
                 <span>检票点位</span>
              </el-menu-item>
 
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">数据与财务 (Data)</div>
+             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">数据与财务</div>
              <el-menu-item index="/finance" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Money /></el-icon>
                 <span>财务报表</span>
              </el-menu-item>
              <el-menu-item index="/report" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors text-indigo-400">
                 <el-icon><TrendCharts /></el-icon>
-                <span>经营数据 (BI)</span>
+                <span>经营数据</span>
              </el-menu-item>
              <el-menu-item v-if="user.role === 'admin' || user.role === 'super_admin'" index="/refund-tasks" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Warning /></el-icon>
@@ -170,9 +170,9 @@
             <el-dropdown trigger="click" @command="handleCommand">
                 <div class="flex items-center gap-3 cursor-pointer outline-none select-none transition-opacity hover:opacity-80">
                     <div class="flex flex-col items-end">
-                        <span class="text-sm font-bold text-gray-800 leading-tight">{{ user.username || 'User' }}</span>
+                        <span class="text-sm font-bold text-gray-800 leading-tight">{{ user.username || '未登录用户' }}</span>
                         <span class="text-[10px] font-medium text-gray-500 uppercase tracking-wide bg-gray-100 px-1.5 py-px rounded mt-0.5">
-                            {{ user.role === 'admin' ? '管理员' : (user.role === 'sub_admin' ? '普通管理' : user.role) }}
+                            {{ roleText(user.role) }}
                         </span>
                     </div>
                     <el-avatar :size="40" class="ring-2 ring-gray-100 shadow-sm" src="https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png" />
@@ -182,7 +182,7 @@
                     <el-dropdown-menu class="w-48">
                         <div class="px-4 py-3 border-b border-gray-100 mb-1">
                             <p class="text-xs text-gray-400 mb-1">当前身份</p>
-                            <p class="text-sm font-bold text-gray-900">{{ user.role === 'admin' ? '商户主管理员' : '普通系统员' }}</p>
+                            <p class="text-sm font-bold text-gray-900">{{ roleText(user.role) }}</p>
                         </div>
                         <el-dropdown-item command="logout" class="text-red-500 focus:text-red-600">
                             <el-icon><SwitchButton /></el-icon>
@@ -229,6 +229,10 @@ const isLoginPage = computed(() => route.path === '/login' || route.name === 'lo
 const activeCapabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability)))
 const hasCapability = (value: string) => activeCapabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(value => activeCapabilities.value.has(value))
+const roleText = (role: string) => ({
+    platform_admin: '平台管理员', super_admin: '商户最高管理员', admin: '商户管理员',
+    sub_admin: '普通管理员', seller: '售票员', checker: '检票员', finance: '结算人员'
+} as Record<string, string>)[role] || '系统用户'
 
 const handleLogout = () => {
     localStorage.removeItem('token')

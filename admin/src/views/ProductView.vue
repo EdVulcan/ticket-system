@@ -3,7 +3,7 @@
     <div class="flex justify-between items-center mb-6">
       <div>
         <h2 class="text-lg font-bold text-gray-900">线上门票管理</h2>
-        <p class="text-xs text-gray-500 mt-1">管理线上销售渠道（OTA/微官网）的票务产品</p>
+        <p class="text-xs text-gray-500 mt-1">管理外部销售渠道和微商城销售的票务产品</p>
       </div>
       <el-button type="primary" @click="handleAdd">
         <el-icon class="mr-2"><Plus /></el-icon> 发布新门票
@@ -21,7 +21,7 @@
     </div>
 
     <el-table :data="tableData" style="width: 100%" v-loading="loading" border>
-      <el-table-column prop="id" label="ID" width="60" align="center" />
+      <el-table-column prop="id" label="编号" width="70" align="center" />
       <el-table-column prop="name" label="门票名称" min-width="180">
         <template #default="{ row }">
           <div class="font-medium">{{ row.name }}</div>
@@ -113,7 +113,7 @@
                 </el-select>
               </el-form-item>
               
-               <el-form-item label="B2B分销" prop="product.is_distributable">
+               <el-form-item label="供应商分销" prop="product.is_distributable">
                   <el-switch v-model="form.product.is_distributable" active-text="允许分销商代理销售" />
                   <div class="text-xs text-gray-400 mt-1" v-if="form.product.is_distributable">
                     开启后，已建立合作关系的分销商可在其后台看到并代理此产品。结算价为 ¥{{ form.product.settlement_price }}。

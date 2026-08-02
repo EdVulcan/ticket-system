@@ -88,9 +88,9 @@
       <el-form :model="groupForm" label-position="top">
         <el-form-item label="团队名称" required><el-input v-model="groupForm.name" maxlength="100" /></el-form-item>
         <div class="grid grid-cols-2 gap-3">
-          <el-form-item label="供应商租户 ID" required><el-input-number v-model="groupForm.supplier_tenant_id" :min="1" class="w-full" /></el-form-item>
-          <el-form-item label="供应商景区 ID" required><el-input-number v-model="groupForm.scenic_area_id" :min="1" class="w-full" /></el-form-item>
-          <el-form-item label="合同 ID" required><el-input-number v-model="groupForm.contract_id" :min="1" class="w-full" /></el-form-item>
+          <el-form-item label="供应商租户编号" required><el-input-number v-model="groupForm.supplier_tenant_id" :min="1" class="w-full" /></el-form-item>
+          <el-form-item label="供应商景区编号" required><el-input-number v-model="groupForm.scenic_area_id" :min="1" class="w-full" /></el-form-item>
+          <el-form-item label="合同编号" required><el-input-number v-model="groupForm.contract_id" :min="1" class="w-full" /></el-form-item>
           <el-form-item label="计划人数" required><el-input-number v-model="groupForm.expected_count" :min="1" class="w-full" /></el-form-item>
         </div>
         <el-form-item label="游玩日期" required><el-date-picker v-model="groupForm.visit_date" type="date" value-format="YYYY-MM-DD" class="w-full" /></el-form-item>
@@ -100,7 +100,7 @@
 
     <el-dialog v-model="contractDialog" title="新建旅行社合同" width="560px">
       <el-form :model="contractForm" label-position="top">
-        <el-form-item label="供应商租户 ID" required><el-input-number v-model="contractForm.supplier_tenant_id" :min="1" class="w-full" /></el-form-item>
+        <el-form-item label="供应商租户编号" required><el-input-number v-model="contractForm.supplier_tenant_id" :min="1" class="w-full" /></el-form-item>
         <el-form-item label="合同号" required><el-input v-model="contractForm.contract_no" maxlength="100" /></el-form-item>
         <div class="grid grid-cols-2 gap-3">
           <el-form-item label="账期（天）"><el-input-number v-model="contractForm.settlement_days" :min="0" class="w-full" /></el-form-item>
@@ -195,8 +195,8 @@
           <el-table :data="entryBatches" size="small" border empty-text="尚无入园批次">
             <el-table-column prop="batch_no" label="批次号" min-width="190" />
             <el-table-column prop="entered_count" label="入园人数" width="100" />
-            <el-table-column prop="device_id" label="设备 ID" width="100" />
-            <el-table-column prop="operator_id" label="操作员 ID" width="110" />
+            <el-table-column prop="device_id" label="设备编号" width="100" />
+            <el-table-column prop="operator_id" label="操作员编号" width="110" />
             <el-table-column label="入园时间" width="180"><template #default="{ row }">{{ dateTime(row.entered_at) }}</template></el-table-column>
           </el-table>
         </section>
@@ -216,7 +216,7 @@
         <section v-if="canEditRoster">
           <el-divider />
           <el-form label-position="top">
-            <el-form-item label="替换名单（每行：姓名,证件号,手机号；支持 CSV/Tab）">
+            <el-form-item label="替换名单（每行：姓名、证件号、手机号；支持逗号或制表符分隔）">
               <el-input v-model="rosterText" type="textarea" :rows="5" placeholder="张三,110101...,13800000000" />
             </el-form-item>
           </el-form>
@@ -251,7 +251,7 @@
     </el-dialog>
 
     <el-dialog v-model="attachOrderDialog" title="绑定已支付团队订单" width="440px">
-      <el-form label-position="top"><el-form-item label="订单 ID" required><el-input-number v-model="attachOrderId" :min="1" class="w-full" /></el-form-item></el-form>
+      <el-form label-position="top"><el-form-item label="订单编号" required><el-input-number v-model="attachOrderId" :min="1" class="w-full" /></el-form-item></el-form>
       <template #footer><el-button @click="attachOrderDialog = false">取消</el-button><el-button type="primary" :loading="attachingOrder" @click="attachOrder">绑定</el-button></template>
     </el-dialog>
 
@@ -331,11 +331,11 @@ const cents = (value: number) => (Number(value || 0) / 100).toFixed(2)
 const signedCents = (value: number) => `${Number(value || 0) > 0 ? '+' : Number(value || 0) < 0 ? '-' : ''}¥${cents(Math.abs(Number(value || 0)))}`
 const dateOnly = (value: string) => value ? value.slice(0, 10) : '-'
 const dateTime = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
-const groupStatusText = (status: string) => ({ draft: '草稿', confirmed: '待入园', partial_entry: '部分入园', entered: '已全部入园', cancelled: '已取消' } as Record<string, string>)[status] || status
+const groupStatusText = (status: string) => ({ draft: '草稿', confirmed: '待入园', partial_entry: '部分入园', entered: '已全部入园', cancelled: '已取消' } as Record<string, string>)[status] || '未知状态'
 const groupStatusType = (status: string) => status === 'entered' ? 'success' : status === 'partial_entry' ? 'warning' : status === 'cancelled' ? 'danger' : status === 'confirmed' ? 'primary' : 'info'
-const memberStatusText = (status: string) => ({ planned: '待出票', ticketed: '可入园', entered: '已入园', cancelled: '已取消' } as Record<string, string>)[status] || status
+const memberStatusText = (status: string) => ({ planned: '待出票', ticketed: '可入园', entered: '已入园', cancelled: '已取消' } as Record<string, string>)[status] || '未知状态'
 const memberStatusType = (status: string) => status === 'entered' ? 'success' : status === 'ticketed' ? 'primary' : status === 'cancelled' ? 'danger' : 'info'
-const settlementStatusText = (status: string) => ({ open: '未生成', statement: '已生成', settled: '已结清', draft: '待供应商确认', supplier_confirmed: '待旅行社确认', confirmed: '待付款', disputed: '有争议', paid: '已付款' } as Record<string, string>)[status] || status || '-'
+const settlementStatusText = (status: string) => ({ open: '未生成', statement: '已生成', settled: '已结清', draft: '待供应商确认', supplier_confirmed: '待旅行社确认', confirmed: '待付款', disputed: '有争议', paid: '已付款' } as Record<string, string>)[status] || '未知状态'
 const settlementStatusType = (status: string) => status === 'paid' ? 'success' : status === 'disputed' ? 'danger' : status === 'confirmed' ? 'warning' : status === 'supplier_confirmed' ? 'primary' : 'info'
 
 const openTeamAfterSales = () => {
@@ -602,7 +602,7 @@ const attachOrderId = ref(0)
 const attachingOrder = ref(false)
 const openAttachOrder = (row: any) => { selectedGroup.value = row; attachOrderId.value = 0; attachOrderDialog.value = true }
 const attachOrder = async () => {
-  if (!selectedGroup.value || !attachOrderId.value) { ElMessage.warning('请输入订单 ID'); return }
+  if (!selectedGroup.value || !attachOrderId.value) { ElMessage.warning('请输入订单编号'); return }
   attachingOrder.value = true
   try { await request.post(`/teams/${selectedGroup.value.id}/attach-order`, { order_id: attachOrderId.value }); attachOrderDialog.value = false; ElMessage.success('订单已绑定，成员票权益已匹配'); await loadGroups() }
   catch (e: any) { ElMessage.error(e.response?.data?.error || '订单绑定失败') }

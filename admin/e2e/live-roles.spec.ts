@@ -2,18 +2,18 @@ import { expect, test } from '@playwright/test'
 
 async function tenantLogin(page: import('@playwright/test').Page, systemCode: string, password: string) {
   await page.goto('/login')
-  await page.getByPlaceholder('系统编号 (System Code)').fill(systemCode)
-  await page.getByPlaceholder('用户名 (Username)').fill('admin')
-  await page.getByPlaceholder('密码 (Password)').fill(password)
+  await page.getByPlaceholder('商户系统编号').fill(systemCode)
+  await page.getByPlaceholder('用户名').fill('admin')
+  await page.getByPlaceholder('密码').fill(password)
   await page.getByRole('button', { name: '登 录' }).click()
   await expect(page.getByRole('heading', { name: '经营控制台' })).toBeVisible()
 }
 
 test('真实平台账号登录并读取治理总览', async ({ page }) => {
   await page.goto('/login')
-  await page.getByText('Platform', { exact: true }).click()
-  await page.getByPlaceholder('用户名 (Username)').fill('platform-e2e')
-  await page.getByPlaceholder('密码 (Password)').fill('Platform-E2E-Password-2')
+  await page.getByText('平台登录', { exact: true }).click()
+  await page.getByPlaceholder('用户名').fill('platform-e2e')
+  await page.getByPlaceholder('密码').fill('Platform-E2E-Password-2')
   await page.getByRole('button', { name: '登 录' }).click()
 
   await expect(page.getByRole('heading', { name: '平台运行总览' })).toBeVisible()
@@ -39,7 +39,7 @@ test('真实分销商只能进入销售与分销工作区', async ({ page }) => 
   await expect(page.getByRole('menuitem', { name: '线上门票' })).toHaveCount(0)
   await page.getByRole('menuitem', { name: '分销商管理' }).click()
   await expect(page).toHaveURL(/\/distribution$/)
-  await expect(page.getByRole('heading', { name: '分销中心 (B2B)' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '分销中心' })).toBeVisible()
   await page.goto('/teams')
   await expect(page).toHaveURL('http://127.0.0.1:4173/')
 })

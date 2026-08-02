@@ -8,7 +8,7 @@
     </div>
 
     <el-table :data="tableData" style="width: 100%" v-loading="loading">
-      <el-table-column prop="id" label="ID" width="80" />
+      <el-table-column prop="id" label="编号" width="80" />
       <el-table-column prop="name" label="设备名称" min-width="150" />
       <el-table-column prop="serial_number" label="序列号 (SN)" width="180">
         <template #default="{ row }">
@@ -32,7 +32,7 @@
           <span v-else class="text-gray-400">未绑定</span>
         </template>
       </el-table-column>
-      <el-table-column prop="ip_address" label="IP地址" width="140" />
+      <el-table-column prop="ip_address" label="网络地址" width="140" />
       <el-table-column label="操作" width="230" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
@@ -79,10 +79,10 @@
           <el-select v-model="form.type" placeholder="请选择类型" class="w-full">
             <el-option label="闸机" value="gate" />
             <el-option label="手持机" value="handheld" />
-            <el-option label="桌面POS" value="pos" />
+            <el-option label="桌面售票终端" value="pos" />
           </el-select>
         </el-form-item>
-        <el-form-item label="IP地址" prop="ip_address">
+        <el-form-item label="网络地址" prop="ip_address">
           <el-input v-model="form.ip_address" />
         </el-form-item>
         <el-form-item label="MAC地址" prop="mac_address">
@@ -162,9 +162,9 @@ const getDeviceTypeName = (type: string) => {
   const map: Record<string, string> = {
     gate: '闸机',
     handheld: '手持机',
-    pos: '桌面POS'
+    pos: '桌面售票终端'
   }
-  return map[type] || type
+  return map[type] || '其他设备'
 }
 
 const getDeviceTypeTag = (type: string) => {

@@ -43,7 +43,7 @@
         <div class="catalog-pane">
           <div v-if="!shiftState.isOpen || !posDeviceId" class="readiness-banner">
             <el-icon><Warning /></el-icon>
-            <span v-if="!posDeviceId">尚未配置 POS 设备，请先进入终端设置。</span>
+            <span v-if="!posDeviceId">尚未配置售票终端，请先进入终端设置。</span>
             <span v-else>当前未开班，开班后才能创建窗口订单。</span>
             <button @click="!posDeviceId ? (currentView = 'settings') : handleShiftAction()">立即处理</button>
           </div>
@@ -199,7 +199,7 @@
             <div class="section-heading"><el-icon><Place /></el-icon><div><h2>窗口归属</h2><p>核销与售票操作将记录到所选设备</p></div></div>
             <el-form label-position="top">
               <el-form-item label="当前检票点"><el-select v-model="currentCheckPointId" placeholder="请选择检票点" class="w-full" @change="saveSettings"><el-option v-for="cp in checkpoints" :key="cp.id" :label="cp.name" :value="cp.id" /></el-select></el-form-item>
-              <el-form-item label="POS 设备编号"><el-input-number v-model="posDeviceId" :min="1" class="w-full" controls-position="right" @change="saveSettings" /></el-form-item>
+              <el-form-item label="售票终端编号"><el-input-number v-model="posDeviceId" :min="1" class="w-full" controls-position="right" @change="saveSettings" /></el-form-item>
             </el-form>
           </section>
           <section class="settings-section">
@@ -309,6 +309,7 @@ import {
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import axios from 'axios'
+import { localizeErrorMessage } from '../utils/localize'
 
 const router = useRouter()
 
@@ -326,6 +327,10 @@ axios.interceptors.response.use(res => res, err => {
   if (err.response && err.response.status === 401) {
     ElMessage.error('登录失效，请重新登录')
     router.push('/login')
+  } else {
+    const message = localizeErrorMessage(err.response?.data?.error || err.message)
+    if (err.response?.data && typeof err.response.data === 'object') err.response.data.error = message
+    err.message = message
   }
   return Promise.reject(err)
 })
@@ -441,7 +446,7 @@ const loadSettings = () => {
 const handleShiftAction = async () => {
   const deviceId = Number(localStorage.getItem('pos_device_id') || 0)
   if (!deviceId) {
-    ElMessage.warning('请先在终端配置中设置 POS 设备编号')
+    ElMessage.warning('请先在终端配置中设置售票终端编号')
     return
   }
   if (!shiftState.value.isOpen) {
@@ -529,7 +534,7 @@ const saveNote = () => {
 
 const handleReprint = async () => {
   if (!posDeviceId.value) {
-    ElMessage.warning('请先配置当前 POS 设备')
+    ElMessage.warning('请先配置当前售票终端')
     return
   }
   try {
@@ -556,7 +561,7 @@ const handleHold = async () => {
     return
   }
   if (!shiftState.value.isOpen || !shiftState.value.shiftId || !posDeviceId.value) {
-    ElMessage.warning('请先开班并配置 POS 设备')
+    ElMessage.warning('请先开班并配置售票终端')
     return
   }
   try {
@@ -646,7 +651,7 @@ const currentCheckpointName = computed(() => {
 
 const orderStatusLabel = (status: string) => {
   const labels: Record<string, string> = { unpaid: '待支付', paid: '已支付', completed: '已完成', partial_refunded: '部分退款', refunded: '已退款', cancelled: '已取消' }
-  return labels[status] || status
+  return labels[status] || '未知状态'
 }
 const orderStatusTag = (status: string) => status === 'paid' || status === 'completed' ? 'success' : status === 'partial_refunded' ? 'warning' : status === 'refunded' || status === 'cancelled' ? 'danger' : 'info'
 
@@ -727,7 +732,7 @@ const clearCart = () => {
 const handleCheckout = async () => {
   if (cart.value.length === 0) return
   if (!shiftState.value.isOpen || !shiftState.value.shiftId || !posDeviceId.value) {
-    ElMessage.warning('请先在当前 POS 设备上开班')
+    ElMessage.warning('请先在当前售票终端上开班')
     return
   }
   try {

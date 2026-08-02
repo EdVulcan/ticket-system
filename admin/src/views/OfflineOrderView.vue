@@ -42,7 +42,7 @@
         <template #default="{ row }">
           <div v-for="item in row.items" :key="item.id" class="text-sm mb-1">
             <span class="font-medium">{{ item.product_name }}</span>
-            <span class="text-gray-500 mx-1">x</span>
+            <span class="text-gray-500 mx-1">×</span>
             <span>{{ item.quantity }}</span>
           </div>
         </template>
@@ -255,7 +255,7 @@ const getStatusType = (status: string) => {
 
 const getStatusText = (status: string) => {
   const map: any = { paid: '已支付', unpaid: '待支付', refunded: '已退款', completed: '已完成' }
-  return map[status] || status
+  return map[status] || '未知状态'
 }
 
 onMounted(() => {

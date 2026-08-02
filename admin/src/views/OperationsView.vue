@@ -13,7 +13,7 @@
         <el-table :data="rows.scenic" v-loading="loading">
           <el-table-column prop="code" label="编码" width="150" />
           <el-table-column prop="name" label="景区名称" min-width="220" />
-          <el-table-column prop="status" label="状态" width="120" />
+          <el-table-column label="状态" width="120"><template #default="{ row }">{{ scenicStatusText(row.status) }}</template></el-table-column>
           <el-table-column prop="address" label="地址" min-width="260" />
         </el-table>
       </el-tab-pane>
@@ -22,9 +22,9 @@
         <el-table :data="rows.channels" v-loading="loading">
           <el-table-column prop="code" label="渠道编码" width="180" />
           <el-table-column prop="name" label="名称" min-width="200" />
-          <el-table-column prop="provider" label="类型" width="140" />
-          <el-table-column prop="status" label="状态" width="120" />
-          <el-table-column prop="permissions_json" label="权限" min-width="260" show-overflow-tooltip />
+          <el-table-column label="类型" width="140"><template #default="{ row }">{{ channelProviderText(row.provider) }}</template></el-table-column>
+          <el-table-column label="状态" width="120"><template #default="{ row }">{{ commonStatusText(row.status) }}</template></el-table-column>
+          <el-table-column label="权限" min-width="260"><template #default="{ row }">{{ channelPermissionsText(row.permissions_json) }}</template></el-table-column>
         </el-table>
       </el-tab-pane>
 
@@ -35,7 +35,7 @@
           <el-table-column prop="visit_date" label="到园日期" width="180" />
           <el-table-column prop="planned_count" label="计划人数" width="110" />
           <el-table-column prop="entered_count" label="已入园" width="100" />
-          <el-table-column prop="status" label="状态" width="120" />
+          <el-table-column label="状态" width="120"><template #default="{ row }">{{ teamStatusText(row.status) }}</template></el-table-column>
         </el-table>
       </el-tab-pane>
 
@@ -63,12 +63,12 @@
           <el-table-column label="已用授信"><template #default="{ row }">¥{{ cents(row.used_credit_cents) }}</template></el-table-column>
           <el-table-column label="可用授信"><template #default="{ row }">¥{{ cents(Math.max(0, Number(row.credit_line_cents || 0) - Number(row.used_credit_cents || 0))) }}</template></el-table-column>
           <el-table-column label="冻结"><template #default="{ row }">¥{{ cents(row.frozen_cents) }}</template></el-table-column>
-          <el-table-column prop="status" label="状态" width="100" />
+          <el-table-column label="状态" width="100"><template #default="{ row }">{{ accountStatusText(row.status) }}</template></el-table-column>
         </el-table>
         <h3 class="detail-title">账户流水</h3>
         <el-table :data="rows.ledger" v-loading="loading">
           <el-table-column prop="created_at" label="时间" width="180" />
-          <el-table-column prop="entry_type" label="事实类型" width="180" />
+          <el-table-column label="流水类型" width="180"><template #default="{ row }">{{ ledgerTypeText(row.entry_type) }}</template></el-table-column>
           <el-table-column prop="related_order_no" label="订单" width="210" />
           <el-table-column label="金额" width="130"><template #default="{ row }">¥{{ cents(row.amount_cents) }}</template></el-table-column>
           <el-table-column prop="memo" label="说明" min-width="260" />
@@ -92,9 +92,9 @@
         <el-table :data="rows.prints" v-loading="loading">
           <el-table-column prop="order_no" label="订单" width="220" />
           <el-table-column prop="device_id" label="设备" width="100" />
-          <el-table-column prop="status" label="状态" width="120" />
+          <el-table-column label="状态" width="120"><template #default="{ row }">{{ printStatusText(row.status) }}</template></el-table-column>
           <el-table-column prop="attempt_count" label="尝试" width="90" />
-          <el-table-column prop="last_error" label="最后错误" min-width="280" />
+          <el-table-column label="最后错误" min-width="280"><template #default="{ row }">{{ localizeDisplayText(row.last_error, '暂无错误') }}</template></el-table-column>
         </el-table>
       </el-tab-pane>
 
@@ -102,16 +102,16 @@
         <el-table :data="rows.alerts" v-loading="loading">
           <el-table-column prop="opened_at" label="发生时间" width="180" />
           <el-table-column prop="device_id" label="设备" width="100" />
-          <el-table-column prop="type" label="类型" width="120" />
-          <el-table-column prop="status" label="状态" width="120" />
-          <el-table-column prop="message" label="详情" min-width="300" />
+          <el-table-column label="类型" width="120"><template #default="{ row }">{{ alertTypeText(row.type) }}</template></el-table-column>
+          <el-table-column label="状态" width="120"><template #default="{ row }">{{ commonStatusText(row.status) }}</template></el-table-column>
+          <el-table-column label="详情" min-width="300"><template #default="{ row }">{{ localizeDisplayText(row.message, '设备运行异常') }}</template></el-table-column>
         </el-table>
       </el-tab-pane>
     </el-tabs>
 
     <el-dialog v-model="generateSettlementDialog" title="生成结算单" width="520px" align-center>
       <el-form label-position="top">
-        <el-form-item label="分销商租户 ID" required><el-input-number v-model="settlementGenerate.distributor_tenant_id" :min="1" class="w-full" /></el-form-item>
+        <el-form-item label="分销商租户编号" required><el-input-number v-model="settlementGenerate.distributor_tenant_id" :min="1" class="w-full" /></el-form-item>
         <el-form-item label="结算周期" required><el-date-picker v-model="settlementGenerate.period" type="daterange" value-format="YYYY-MM-DD" start-placeholder="开始日期" end-placeholder="结束日期" class="w-full" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="generateSettlementDialog = false">取消</el-button><el-button type="primary" :loading="settlementActionLoading" @click="generateSettlement">生成</el-button></template>
@@ -136,7 +136,7 @@
         <section v-if="settlementDetail">
           <h3 class="detail-title">履约结算行</h3>
           <el-table :data="settlementDetail.lines || []" size="small" border>
-            <el-table-column prop="fulfillment_order_id" label="履约单 ID" width="120" />
+            <el-table-column prop="fulfillment_order_id" label="履约单编号" width="130" />
             <el-table-column label="履约总额"><template #default="{ row }">¥{{ cents(row.gross_cents) }}</template></el-table-column>
             <el-table-column label="退款冲减"><template #default="{ row }">¥{{ cents(row.refund_cents) }}</template></el-table-column>
             <el-table-column label="佣金"><template #default="{ row }">¥{{ cents(row.commission_cents) }}</template></el-table-column>
@@ -234,6 +234,7 @@ import { computed, reactive, ref, onMounted } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
+import { localizeDisplayText } from '@/utils/localize'
 
 const user = computed<any>(() => {
   try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
@@ -277,8 +278,25 @@ const loadActiveTab = async () => {
 const cents = (value: number) => ((value || 0) / 100).toFixed(2)
 const signedCents = (value: number) => `${Number(value || 0) > 0 ? '+' : Number(value || 0) < 0 ? '-' : ''}¥${cents(Math.abs(Number(value || 0)))}`
 const varianceClass = (value: number) => Number(value || 0) === 0 ? 'variance-ok' : 'variance-alert'
-const shiftStatusLabel = (status: string) => ({ open: '当班中', closed: '待复核', reconciled: '已复核' } as Record<string, string>)[status] || status
+const shiftStatusLabel = (status: string) => ({ open: '当班中', closed: '待复核', reconciled: '已复核' } as Record<string, string>)[status] || '未知状态'
 const shiftStatusType = (status: string) => status === 'reconciled' ? 'success' : status === 'closed' ? 'warning' : 'primary'
+const scenicStatusText = (status: string) => ({ active: '正常营业', inactive: '暂停营业', disabled: '已停用', closed: '已关闭' } as Record<string, string>)[status] || '未知状态'
+const channelProviderText = (provider: string) => ({ core: '通用渠道', ctrip: '携程', meituan: '美团', distributor: '分销商', miniapp: '小程序', h5: '网页商城' } as Record<string, string>)[provider] || '其他渠道'
+const commonStatusText = (status: string) => ({ active: '已启用', disabled: '已停用', pending: '待处理', processing: '处理中', completed: '已完成', failed: '处理失败', open: '待处理', closed: '已关闭', resolved: '已解决' } as Record<string, string>)[status] || '未知状态'
+const teamStatusText = (status: string) => ({ draft: '草稿', confirmed: '待入园', partial_entry: '部分入园', entered: '已全部入园', cancelled: '已取消' } as Record<string, string>)[status] || '未知状态'
+const accountStatusText = (status: string) => ({ active: '正常', frozen: '已冻结', disabled: '已停用' } as Record<string, string>)[status] || '未知状态'
+const printStatusText = (status: string) => ({ pending: '待打印', processing: '打印中', completed: '已打印', failed: '打印失败', cancelled: '已取消' } as Record<string, string>)[status] || '未知状态'
+const alertTypeText = (type: string) => ({ offline: '设备离线', heartbeat: '心跳异常', print: '打印异常', payment: '支付异常', gate: '闸机异常' } as Record<string, string>)[type] || '其他告警'
+const ledgerTypeText = (type: string) => ({ recharge: '预付款充值', payment: '订单扣款', refund: '订单退款', settlement: '结算入账', credit_used: '使用授信', credit_repaid: '归还授信', freeze: '资金冻结', unfreeze: '资金解冻', adjustment: '人工调整' } as Record<string, string>)[type] || '其他流水'
+const channelPermissionsText = (value: string) => {
+  if (!value) return '未配置'
+  try {
+    const permissions = typeof value === 'string' ? JSON.parse(value) : value
+    const names: Record<string, string> = { order: '下单', refund: '退款', query: '查询', verify: '核销', callback: '回调' }
+    if (Array.isArray(permissions)) return permissions.map(item => names[item] || '其他权限').join('、') || '未配置'
+    return Object.entries(permissions).filter(([, enabled]) => enabled).map(([key]) => names[key] || '其他权限').join('、') || '未配置'
+  } catch { return '已配置' }
+}
 
 const settlementDialog = ref(false)
 const settlementDetailLoading = ref(false)
@@ -296,7 +314,7 @@ const canDistributorConfirm = computed(() => settlementDetail.value?.status === 
 const canDispute = computed(() => ['supplier_confirmed', 'confirmed'].includes(settlementDetail.value?.status) && (isSettlementSupplier.value || isSettlementDistributor.value))
 const canAdjust = computed(() => settlementDetail.value?.status === 'disputed' && (isSettlementSupplier.value || isSettlementDistributor.value))
 const canMarkPaid = computed(() => settlementDetail.value?.status === 'confirmed' && isSettlementDistributor.value)
-const settlementStatusText = (status: string) => ({ draft: '草稿', supplier_confirmed: '供应商已确认', confirmed: '双方已确认', disputed: '有争议', paid: '已付款' } as Record<string, string>)[status] || status
+const settlementStatusText = (status: string) => ({ draft: '草稿', supplier_confirmed: '供应商已确认', confirmed: '双方已确认', disputed: '有争议', paid: '已付款' } as Record<string, string>)[status] || '未知状态'
 const settlementStatusType = (status: string) => status === 'paid' ? 'success' : status === 'disputed' ? 'danger' : status === 'confirmed' ? 'success' : status === 'supplier_confirmed' ? 'warning' : 'info'
 
 const loadSettlementDetail = async (id: number) => {

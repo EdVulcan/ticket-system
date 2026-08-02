@@ -1,36 +1,36 @@
 <template>
   <div class="max-w-4xl mx-auto p-6">
     <div class="mb-6 flex justify-between items-center">
-      <h2 class="text-2xl font-bold text-gray-800">支付参数配置 (Payment Settings)</h2>
-      <el-tag type="info">当前模式: 普通商户直连</el-tag>
+      <h2 class="text-2xl font-bold text-gray-800">支付参数配置</h2>
+      <el-tag type="info">当前模式：普通商户直连</el-tag>
     </div>
 
     <el-card class="shadow-sm rounded-xl border-0">
       <el-tabs v-model="activeTab" class="demo-tabs">
         <!-- WeChat Pay Config -->
-        <el-tab-pane label="微信支付 (WeChat Pay)" name="wechat">
+        <el-tab-pane label="微信支付" name="wechat">
           <div class="p-4">
             <el-alert title="请使用【微信支付商户平台】的参数进行配置" type="info" show-icon class="mb-6" />
             
             <el-form label-position="top" :model="wechatForm">
               <div class="grid grid-cols-2 gap-4">
-                <el-form-item label="AppID (应用ID)">
+                <el-form-item label="应用编号">
                   <el-input v-model="wechatForm.app_id" placeholder="wx..." />
                 </el-form-item>
-                <el-form-item label="MchID (商户号)">
+                <el-form-item label="商户号">
                   <el-input v-model="wechatForm.mch_id" placeholder="16..." />
                 </el-form-item>
               </div>
 
-              <el-form-item label="API V3 Key (32位密钥)">
-                <el-input v-model="wechatForm.key" type="password" show-password placeholder="在API安全中设置的32位密钥" />
+              <el-form-item label="第三版接口密钥（32位）">
+                <el-input v-model="wechatForm.key" type="password" show-password placeholder="在微信支付接口安全设置中配置的32位密钥" />
               </el-form-item>
 
-              <el-form-item label="Serial No (证书序列号)">
-                <el-input v-model="wechatForm.serial_no" placeholder="商户API证书序列号" />
+              <el-form-item label="证书序列号">
+                <el-input v-model="wechatForm.serial_no" placeholder="商户接口证书序列号" />
               </el-form-item>
 
-              <el-form-item label="Private Key (商户API私钥 PEM)">
+              <el-form-item label="商户接口私钥（PEM格式）">
                 <el-input 
                     v-model="wechatForm.private_key" 
                     type="textarea" 
@@ -49,16 +49,16 @@
         </el-tab-pane>
 
         <!-- Alipay Config -->
-        <el-tab-pane label="支付宝 (Alipay)" name="alipay">
+        <el-tab-pane label="支付宝" name="alipay">
           <div class="p-4">
             <el-alert title="请使用【支付宝开放平台】的参数进行配置" type="warning" show-icon class="mb-6" />
 
             <el-form label-position="top" :model="alipayForm">
-              <el-form-item label="AppID (应用ID)">
+              <el-form-item label="应用编号">
                 <el-input v-model="alipayForm.app_id" placeholder="2021..." />
               </el-form-item>
 
-              <el-form-item label="应用私钥 (Private Key RSA2)">
+              <el-form-item label="应用私钥（RSA2格式）">
                 <el-input 
                     v-model="alipayForm.private_key" 
                     type="textarea" 
@@ -68,7 +68,7 @@
                 />
               </el-form-item>
 
-              <el-form-item label="支付宝公钥 (Alipay Public Key)">
+              <el-form-item label="支付宝公钥">
                  <el-input 
                     v-model="alipayForm.public_key" 
                     type="textarea" 
@@ -117,7 +117,7 @@ const fetchConfigs = async () => {
 const saveConfig = async (provider: string) => {
     const data = provider === 'wechat' ? wechatForm.value : alipayForm.value
     // Simple validation
-    if (!data.app_id) return ElMessage.warning('AppID 不能为空')
+    if (!data.app_id) return ElMessage.warning('应用编号不能为空')
 
     try {
         await request.post('/payments/configs', data)

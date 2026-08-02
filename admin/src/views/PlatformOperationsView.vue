@@ -9,7 +9,7 @@
     </div>
 
     <div class="flex flex-wrap gap-3 items-center">
-      <el-input v-model="tenantID" clearable placeholder="目标租户 ID（可选）" style="width: 210px" @keyup.enter="loadAll" />
+      <el-input v-model="tenantID" clearable placeholder="目标租户编号（可选）" style="width: 210px" @keyup.enter="loadAll" />
       <el-select v-model="orderStatus" clearable placeholder="订单状态" style="width: 160px" @change="loadOrders">
         <el-option label="未支付" value="unpaid" />
         <el-option label="已支付" value="paid" />
@@ -24,21 +24,21 @@
       <el-tab-pane label="全局订单" name="orders">
         <el-table :data="orders" v-loading="ordersLoading" stripe>
           <el-table-column prop="order_no" label="订单号" min-width="190" />
-          <el-table-column prop="tenant_id" label="租户 ID" width="90" />
+          <el-table-column prop="tenant_id" label="租户编号" width="100" />
           <el-table-column prop="tenant_name" label="租户名称" min-width="150" />
-          <el-table-column prop="channel" label="渠道" width="100" />
+          <el-table-column label="渠道" width="120"><template #default="{ row }">{{ channelText(row.channel) }}</template></el-table-column>
           <el-table-column prop="total_amount" label="金额" width="110" />
-          <el-table-column prop="status" label="状态" width="120" />
+          <el-table-column label="状态" width="120"><template #default="{ row }">{{ orderStatusText(row.status) }}</template></el-table-column>
           <el-table-column prop="created_at" label="创建时间" min-width="180" />
         </el-table>
         <div class="mt-4 flex justify-end"><el-pagination v-model:current-page="ordersPage" v-model:page-size="pageSize" :total="ordersTotal" layout="total, prev, pager, next" @current-change="loadOrders" /></div>
       </el-tab-pane>
       <el-tab-pane label="异常工作台" name="issues">
         <el-table :data="issues" v-loading="issuesLoading" stripe>
-          <el-table-column prop="kind" label="类型" width="160" />
-          <el-table-column prop="id" label="记录 ID" width="90" />
-          <el-table-column prop="tenant_id" label="租户 ID" width="90" />
-          <el-table-column prop="status" label="状态" width="130" />
+          <el-table-column label="类型" width="160"><template #default="{ row }">{{ issueKindText(row.kind) }}</template></el-table-column>
+          <el-table-column prop="id" label="记录编号" width="100" />
+          <el-table-column prop="tenant_id" label="租户编号" width="100" />
+          <el-table-column label="状态" width="130"><template #default="{ row }">{{ commonStatusText(row.status) }}</template></el-table-column>
           <el-table-column prop="description" label="说明" min-width="260" show-overflow-tooltip />
           <el-table-column prop="created_at" label="创建时间" min-width="180" />
         </el-table>
@@ -53,12 +53,12 @@
       </el-tab-pane>
       <el-tab-pane label="设备总览" name="devices">
         <el-table :data="devices" v-loading="devicesLoading" stripe>
-          <el-table-column prop="id" label="设备 ID" width="90" />
+          <el-table-column prop="id" label="设备编号" width="100" />
           <el-table-column prop="tenant_name" label="租户" min-width="150" />
           <el-table-column prop="scenic_area_name" label="履约景区" min-width="150" />
           <el-table-column prop="name" label="设备" min-width="150" />
-          <el-table-column prop="type" label="类型" width="100" />
-          <el-table-column prop="status" label="状态" width="110" />
+          <el-table-column label="类型" width="110"><template #default="{ row }">{{ deviceTypeText(row.type) }}</template></el-table-column>
+          <el-table-column label="状态" width="110"><template #default="{ row }">{{ deviceStatusText(row.status) }}</template></el-table-column>
           <el-table-column prop="last_heartbeat" label="最后心跳" min-width="180" />
         </el-table>
         <div class="mt-4 flex justify-end"><el-pagination v-model:current-page="devicesPage" v-model:page-size="pageSize" :total="devicesTotal" layout="total, prev, pager, next" @current-change="loadDevices" /></div>
@@ -69,7 +69,7 @@
           <el-table-column prop="supplier_name" label="供应商" min-width="150" />
           <el-table-column prop="distributor_name" label="分销商" min-width="150" />
           <el-table-column prop="net_cents" label="应结(分)" width="110" />
-          <el-table-column prop="status" label="状态" width="130" />
+          <el-table-column label="状态" width="130"><template #default="{ row }">{{ settlementStatusText(row.status) }}</template></el-table-column>
           <el-table-column prop="created_at" label="创建时间" min-width="180" />
         </el-table>
         <div class="mt-4 flex justify-end"><el-pagination v-model:current-page="settlementsPage" v-model:page-size="pageSize" :total="settlementsTotal" layout="total, prev, pager, next" @current-change="loadSettlements" /></div>
@@ -77,10 +77,10 @@
       <el-tab-pane label="审计日志" name="audit">
         <el-table :data="auditLogs" v-loading="auditLoading" stripe>
           <el-table-column prop="created_at" label="时间" min-width="180" />
-          <el-table-column prop="action" label="动作" min-width="220" />
+          <el-table-column label="动作" min-width="220"><template #default="{ row }">{{ auditActionText(row.action) }}</template></el-table-column>
           <el-table-column prop="tenant_name" label="租户" min-width="150" />
-          <el-table-column prop="actor_role" label="操作者角色" width="130" />
-          <el-table-column prop="reason" label="原因" min-width="260" show-overflow-tooltip />
+          <el-table-column label="操作者角色" width="130"><template #default="{ row }">{{ roleText(row.actor_role) }}</template></el-table-column>
+          <el-table-column label="原因" min-width="260" show-overflow-tooltip><template #default="{ row }">{{ localizeDisplayText(row.reason, '系统操作记录') }}</template></el-table-column>
         </el-table>
         <div class="mt-4 flex justify-end"><el-pagination v-model:current-page="auditPage" v-model:page-size="pageSize" :total="auditTotal" layout="total, prev, pager, next" @current-change="loadAudit" /></div>
       </el-tab-pane>
@@ -93,6 +93,7 @@ import { onMounted, ref } from 'vue'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
+import { localizeDisplayText } from '@/utils/localize'
 
 const activeTab = ref('orders')
 const tenantID = ref('')
@@ -130,6 +131,44 @@ const financeCards = [
 ]
 
 const tenantParam = () => tenantID.value.trim() ? Number(tenantID.value) : undefined
+const orderStatusText = (status: string) => ({ unpaid: '待支付', paid: '已支付', completed: '已完成', partial_refunded: '部分退款', refunded: '已退款', cancelled: '已取消' } as Record<string, string>)[status] || '未知状态'
+const channelText = (channel: string) => ({ window: '窗口售票', h5: '网页商城', miniapp: '小程序', ota: '外部渠道', distributor: '分销商', team: '旅行社团队' } as Record<string, string>)[channel] || '其他渠道'
+const issueKindText = (kind: string) => ({ refund: '退款异常', payment: '支付异常', print: '打印异常', device: '设备异常', settlement: '结算异常', callback: '回调异常', after_sale: '售后异常' } as Record<string, string>)[kind] || '其他异常'
+const commonStatusText = (status: string) => ({ pending: '待处理', processing: '处理中', failed: '处理失败', retryable: '可重试', completed: '已完成', succeeded: '已成功', closed: '已关闭', open: '待处理' } as Record<string, string>)[status] || '未知状态'
+const deviceTypeText = (type: string) => ({ gate: '闸机', pos: '售票终端', printer: '打印机', id_reader: '身份证阅读器', scanner: '扫码设备' } as Record<string, string>)[type] || '其他设备'
+const deviceStatusText = (status: string) => ({ online: '在线', offline: '离线', active: '已启用', disabled: '已停用', maintenance: '维护中' } as Record<string, string>)[status] || '未知状态'
+const settlementStatusText = (status: string) => ({ draft: '待确认', supplier_confirmed: '供应商已确认', confirmed: '双方已确认', disputed: '有争议', paid: '已付款', settled: '已结清' } as Record<string, string>)[status] || '未知状态'
+const roleText = (role: string) => ({ super_admin: '平台管理员', admin: '租户管理员', seller: '售票员', checker: '验票员', finance: '结算人员', operator: '运营人员' } as Record<string, string>)[role] || '其他角色'
+const auditActionText = (action: string) => ({
+  'platform.overview.read': '查看平台总览',
+  'platform.orders.read': '查看全局订单',
+  'platform.issues.read': '查看异常工作台',
+  'platform.finance.read': '查看资金总览',
+  'platform.devices.read': '查看设备总览',
+  'platform.settlements.read': '查看结算总览',
+  'tenant.sessions.revoke': '撤销租户全部会话',
+  'tenant.status.update': '更新租户状态',
+  'tenant.lifecycle.update': '更新租户资质与合同',
+  'tenant.capability.update': '更新租户业务能力',
+  'settlement.adjust': '调整结算单',
+  'settlement.status': '更新结算单状态',
+  'pos.shift.correct': '更正收银班次',
+  'payment.refund.retry': '重试退款任务',
+  'payment.refund.cash': '确认现金退款',
+  'distribution.offer.status': '更新供货报价状态',
+  'distribution.listing.sync': '同步分销商品',
+  'distribution.bundle.create': '创建组合商品',
+  'distribution.bundle.revise': '修订组合商品',
+  'distribution.bundle.status': '更新组合商品状态',
+  'channel.request.retry_authorized': '授权重试渠道请求',
+  'team.settlement.generate': '生成团队结算单',
+  'team.settlement.status': '更新团队结算状态',
+  'team.settlement.adjust': '调整团队结算单',
+  'team.entry_batch': '登记团队分批入园',
+  'team.confirmation.submit': '提交团队现场确认',
+  'team.confirmation.acknowledge': '确认团队现场记录',
+  'team.member.change': '调整团队人数',
+} as Record<string, string>)[action] || '其他系统操作'
 
 const loadOrders = async () => {
   ordersLoading.value = true

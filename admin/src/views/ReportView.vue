@@ -16,7 +16,7 @@
           :clearable="false"
         />
         <el-button type="primary" :icon="Search" :loading="loading" @click="refresh">查询</el-button>
-        <el-button :icon="Download" :loading="exporting" @click="exportCurrent">导出 CSV</el-button>
+        <el-button :icon="Download" :loading="exporting" @click="exportCurrent">导出表格</el-button>
       </div>
     </header>
 
@@ -147,7 +147,7 @@ const total = ref(0)
 const channelOptions = [
   { value: 'window', label: '窗口直销' },
   { value: 'distributor', label: '分销商' },
-  { value: 'ota', label: 'OTA 渠道' },
+  { value: 'ota', label: '外部渠道' },
   { value: 'miniapp', label: '小程序 / H5' },
   { value: 'team', label: '旅行社团队' }
 ]
@@ -171,8 +171,8 @@ const verificationTotals = computed(() => rows.value.reduce((sum, row) => ({
   incomeCents: sum.incomeCents + Number(row.income_cents || 0)
 }), { count: 0, incomeCents: 0 }))
 
-const channelName = (value: string) => channelOptions.find(item => item.value === value)?.label || value || '-'
-const methodName = (value: string) => methodOptions.find(item => item.value === value)?.label || value || '-'
+const channelName = (value: string) => channelOptions.find(item => item.value === value)?.label || '其他渠道'
+const methodName = (value: string) => methodOptions.find(item => item.value === value)?.label || '其他方式'
 const yuan = (value: number) => (Number(value || 0) / 100).toFixed(2)
 const formatTime = (value: string) => value ? dayjs(value).format('YYYY-MM-DD HH:mm:ss') : '-'
 

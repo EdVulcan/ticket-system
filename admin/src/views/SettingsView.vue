@@ -1,7 +1,7 @@
 <template>
   <div class="max-w-4xl mx-auto space-y-6">
     <div class="flex items-center justify-between">
-      <h2 class="text-2xl font-bold text-gray-800">系统设置 (System Settings)</h2>
+      <h2 class="text-2xl font-bold text-gray-800">系统设置</h2>
     </div>
 
     <!-- Basic Info -->
@@ -17,19 +17,19 @@
 
     <!-- Developer Config -->
     <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
-      <h3 class="text-lg font-bold text-gray-900 mb-4 pb-2 border-b border-gray-100">开发配置 (Developer)</h3>
+      <h3 class="text-lg font-bold text-gray-900 mb-4 pb-2 border-b border-gray-100">对接配置</h3>
       <div class="bg-gray-50 rounded-lg p-6 border border-gray-200 space-y-6">
         <div>
-          <div class="text-sm font-bold text-gray-500 mb-1">系统编号 (System Code)</div>
+          <div class="text-sm font-bold text-gray-500 mb-1">系统编号</div>
           <div class="flex gap-2">
             <el-input v-model="tenant.system_code" readonly class="font-mono" />
             <el-button @click="copy(tenant.system_code)">复制</el-button>
           </div>
-          <div class="text-xs text-gray-400 mt-1">用于 B2B 分销时的身份标识。</div>
+          <div class="text-xs text-gray-400 mt-1">用于供应商与分销商对接时的身份标识。</div>
         </div>
 
         <div>
-          <div class="text-sm font-bold text-gray-500 mb-1">API 密钥 (Secret Key)</div>
+          <div class="text-sm font-bold text-gray-500 mb-1">接口签名密钥</div>
           <div class="flex gap-2">
              <el-input v-model="displayKey" readonly class="font-mono">
                 <template #append>
@@ -40,7 +40,7 @@
              </el-input>
              <el-button type="primary" @click="copy(tenant.secret_key)">复制密钥</el-button>
           </div>
-          <div class="text-xs text-red-400 mt-1">此密钥用于 OTA 接口签名，请妥善保管，切勿泄露给无关人员。</div>
+          <div class="text-xs text-red-400 mt-1">此密钥用于外部渠道接口签名，请妥善保管，切勿泄露给无关人员。</div>
         </div>
       </div>
     </div>

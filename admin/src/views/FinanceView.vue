@@ -158,7 +158,7 @@ const getTypeTag = (type: string) => {
 
 const getTypeText = (type: string) => {
     const map: any = { deposit: '充值', payment: '消费', refund: '退款', credit_adjust: '授信' }
-    return map[type] || type
+    return map[type] || '其他业务'
 }
 
 // Recharge Logic

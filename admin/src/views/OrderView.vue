@@ -42,7 +42,7 @@
         <template #default="{ row }">
           <div v-for="item in row.items" :key="item.id" class="text-sm mb-1">
             <div><el-tag v-if="item.bundle_name" size="small" effect="plain" class="mr-2">{{ item.bundle_name }}</el-tag><span class="font-medium">{{ item.product_name }}</span></div>
-            <span class="text-gray-500 mx-1">x</span>
+            <span class="text-gray-500 mx-1">×</span>
             <span>{{ item.quantity }}</span>
           </div>
         </template>
@@ -293,13 +293,13 @@ const getStatusType = (status: string) => {
 
 const getStatusText = (status: string) => {
   const map: any = { paid: '已支付', unpaid: '待支付', cancelled: '已取消', partial_refunded: '部分退款', refunded: '已退款', completed: '已完成' }
-  return map[status] || status
+  return map[status] || '未知状态'
 }
 
 const centsToYuan = (value: number) => ((value || 0) / 100).toFixed(2)
-const fulfillmentStatusText = (status: string) => ({ reserved: '已预占', paid: '待履约', fulfilled: '已履约', cancelled: '已取消' } as Record<string, string>)[status] || status || '-'
-const settlementStatusText = (status: string) => ({ open: '待结算', draft: '待供应商确认', supplier_confirmed: '待分销商确认', confirmed: '待付款', disputed: '有争议', paid: '已结清' } as Record<string, string>)[status] || status || '待结算'
-const ticketStatusText = (status: string) => ({ unused: '未使用', used: '已核销', refunded: '已退款', expired: '已过期', void: '已作废' } as Record<string, string>)[status] || status
+const fulfillmentStatusText = (status: string) => ({ reserved: '已预占', paid: '待履约', fulfilled: '已履约', cancelled: '已取消' } as Record<string, string>)[status] || '未知状态'
+const settlementStatusText = (status: string) => ({ open: '待结算', draft: '待供应商确认', supplier_confirmed: '待分销商确认', confirmed: '待付款', disputed: '有争议', paid: '已结清' } as Record<string, string>)[status] || '待结算'
+const ticketStatusText = (status: string) => ({ unused: '未使用', used: '已核销', refunded: '已退款', expired: '已过期', void: '已作废' } as Record<string, string>)[status] || '未知状态'
 const ticketStatusType = (status: string) => ({ unused: 'success', used: 'info', refunded: 'warning', expired: 'info', void: 'danger' } as Record<string, string>)[status] || 'info'
 
 onMounted(() => {

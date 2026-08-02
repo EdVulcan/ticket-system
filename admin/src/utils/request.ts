@@ -1,6 +1,7 @@
 import axios from 'axios'
 import router from '@/router'
 import { ElMessage } from 'element-plus'
+import { localizeErrorMessage } from '@/utils/localize'
 
 // Create axios instance
 const service = axios.create({
@@ -44,10 +45,15 @@ service.interceptors.response.use(
             router.push('/login')
         }
       } else {
-        ElMessage.error(error.response.data?.error || '请求失败')
+        const message = localizeErrorMessage(error.response.data?.error, '请求失败，请稍后重试')
+        if (error.response.data && typeof error.response.data === 'object') error.response.data.error = message
+        error.message = message
+        ElMessage.error(message)
       }
     } else {
-      ElMessage.error('网络连接异常')
+      const message = localizeErrorMessage(error.message, '网络连接异常')
+      error.message = message
+      ElMessage.error(message)
     }
     return Promise.reject(error)
   }

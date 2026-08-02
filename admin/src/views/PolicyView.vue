@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col p-6 space-y-4">
     <div class="flex justify-between items-center">
-      <h2 class="text-2xl font-bold text-gray-800">政策知识库 (Policy Knowledge Base)</h2>
+      <h2 class="text-2xl font-bold text-gray-800">政策知识库</h2>
       <el-button type="primary" @click="handleAdd">
         <el-icon class="mr-2"><Plus /></el-icon> 发布新政策
       </el-button>

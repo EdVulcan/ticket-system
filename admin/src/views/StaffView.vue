@@ -11,7 +11,7 @@
       <el-table-column prop="roles" label="角色">
         <template #default="scope">
           <el-tag v-for="role in scope.row.roles.split(',')" :key="role" class="mr-1">
-            {{ roleMap[role] || role }}
+            {{ roleMap[role] || '其他角色' }}
           </el-tag>
         </template>
       </el-table-column>

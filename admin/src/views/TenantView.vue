@@ -1,16 +1,16 @@
 <template>
   <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
     <div class="flex justify-between items-center mb-6">
-      <h2 class="text-lg font-bold text-gray-900">商户开户管理 (Tenant Management)</h2>
+      <h2 class="text-lg font-bold text-gray-900">商户开户管理</h2>
       <el-button type="primary" @click="handleAdd">
         <el-icon class="mr-2"><Plus /></el-icon> 新增商户主体
       </el-button>
     </div>
 
     <el-table :data="tableData" style="width: 100%" v-loading="loading">
-      <el-table-column prop="id" label="ID" width="80" />
+      <el-table-column prop="id" label="编号" width="80" />
       <el-table-column prop="name" label="商户名称" min-width="150" />
-      <el-table-column prop="system_code" label="系统编号 (System Code)" width="180">
+      <el-table-column prop="system_code" label="系统编号" width="180">
         <template #default="{ row }">
           <el-tag effect="dark" type="warning" class="font-mono text-base font-bold">{{ row.system_code }}</el-tag>
         </template>
@@ -26,13 +26,13 @@
       </el-table-column>
       <el-table-column label="资质" width="130">
         <template #default="{ row }">
-          <el-tag :type="row.qualification_status === 'approved' ? 'success' : 'warning'">{{ row.qualification_status || 'legacy' }}</el-tag>
+          <el-tag :type="row.qualification_status === 'approved' ? 'success' : 'warning'">{{ qualificationStatusText(row.qualification_status) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="业务能力" min-width="260">
         <template #default="{ row }">
           <el-button v-for="capability in capabilityOptions" :key="capability" size="small" :type="capabilityStatus(row, capability) === 'active' ? 'success' : 'info'" @click="toggleCapability(row, capability)">
-            {{ capability }} · {{ capabilityStatus(row, capability) }}
+            {{ capabilityText(capability) }} · {{ capabilityStatusText(capabilityStatus(row, capability)) }}
           </el-button>
         </template>
       </el-table-column>
@@ -67,9 +67,9 @@
         <el-form-item label="商户主体名称" prop="name">
           <el-input v-model="form.name" placeholder="请输入公司或景区名称" />
         </el-form-item>
-        <el-form-item label="分配系统编号 (System Code)" prop="system_code">
-          <el-input v-model="form.system_code" placeholder="用于跨系统对接的唯一ID，如：SH001" />
-          <div class="text-xs text-gray-400 mt-1">此编号将用于 B2B 分销对接，创建后建议不要修改。</div>
+        <el-form-item label="分配系统编号" prop="system_code">
+          <el-input v-model="form.system_code" placeholder="用于系统对接的唯一编号，如：SH001" />
+          <div class="text-xs text-gray-400 mt-1">此编号用于供应商与分销商对接，创建后建议不要修改。</div>
         </el-form-item>
         <div class="grid grid-cols-2 gap-4">
             <el-form-item label="联系人" prop="contact">
@@ -106,7 +106,7 @@
 
         <div v-if="!isEdit" class="grid grid-cols-2 gap-4 border-t border-gray-100 pt-4 mt-2">
             <el-form-item label="管理员账号" prop="admin_username">
-              <el-input v-model="form.admin_username" placeholder="默认: admin" />
+              <el-input v-model="form.admin_username" placeholder="不填写则使用默认管理员账号" />
             </el-form-item>
             <el-form-item label="初始密码" prop="admin_password">
               <el-input v-model="form.admin_password" type="password" show-password placeholder="至少8位" />
@@ -231,6 +231,9 @@ const handleSubmit = async () => {
 
 const capabilityOptions = ['supplier', 'distributor', 'travel_agency']
 const capabilityStatus = (row: any, capability: string) => row.capabilities?.find((item: any) => item.capability === capability)?.status || 'disabled'
+const qualificationStatusText = (status: string) => ({ pending: '待审核', approved: '已通过', rejected: '已驳回', expired: '已过期', legacy: '历史数据' } as Record<string, string>)[status || 'legacy'] || '待补充'
+const capabilityText = (capability: string) => ({ supplier: '景区供应商', distributor: '分销商', travel_agency: '旅行社' } as Record<string, string>)[capability] || '其他业务'
+const capabilityStatusText = (status: string) => ({ active: '已启用', suspended: '已暂停', disabled: '未启用' } as Record<string, string>)[status] || '未启用'
 const updateStatus = async (row: any, status: string) => {
   try { await request.patch(`/tenants/${row.id}/status`, { status }); await fetchData() }
   catch (error: any) { ElMessage.error(error.response?.data?.error || '状态更新失败') }

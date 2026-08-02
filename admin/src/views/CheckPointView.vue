@@ -8,7 +8,7 @@
     </div>
 
     <el-table :data="tableData" style="width: 100%" v-loading="loading">
-      <el-table-column prop="id" label="ID" width="80" />
+      <el-table-column prop="id" label="编号" width="80" />
       <el-table-column prop="name" label="检票点名称" min-width="150" />
       <el-table-column prop="location" label="位置/区域" min-width="150" />
       <el-table-column label="操作" width="150" fixed="right">

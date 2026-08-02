@@ -21,7 +21,7 @@
     </div>
 
     <el-table :data="tableData" style="width: 100%" v-loading="loading" border>
-      <el-table-column prop="id" label="ID" width="60" align="center" />
+      <el-table-column prop="id" label="编号" width="70" align="center" />
       <el-table-column prop="name" label="门票名称" min-width="180">
         <template #default="{ row }">
           <div class="font-medium">{{ row.name }}</div>

@@ -4,21 +4,21 @@
       <template #header>
         <div class="login-header">
           <h2>景区票务管理系统</h2>
-          <p class="text-xs text-gray-400 mt-2">Ticket SaaS Platform</p>
+          <p class="text-xs text-gray-400 mt-2">景区票务运营平台</p>
         </div>
       </template>
       <el-form :model="form" :rules="rules" ref="formRef" label-width="0">
         <el-form-item>
-          <el-segmented v-model="mode" :options="[{ label: 'Tenant', value: 'tenant' }, { label: 'Platform', value: 'platform' }]" class="w-full" />
+          <el-segmented v-model="mode" :options="[{ label: '商户登录', value: 'tenant' }, { label: '平台登录', value: 'platform' }]" class="w-full" />
         </el-form-item>
         <el-form-item v-if="mode === 'tenant'" prop="system_code">
-           <el-input v-model="form.system_code" placeholder="系统编号 (System Code)" prefix-icon="OfficeBuilding" />
+           <el-input v-model="form.system_code" placeholder="商户系统编号" prefix-icon="OfficeBuilding" />
         </el-form-item>
         <el-form-item prop="username">
-          <el-input v-model="form.username" placeholder="用户名 (Username)" prefix-icon="User" />
+          <el-input v-model="form.username" placeholder="用户名" prefix-icon="User" />
         </el-form-item>
         <el-form-item prop="password">
-          <el-input v-model="form.password" type="password" placeholder="密码 (Password)" prefix-icon="Lock" show-password @keyup.enter="handleLogin" />
+          <el-input v-model="form.password" type="password" placeholder="密码" prefix-icon="Lock" show-password @keyup.enter="handleLogin" />
         </el-form-item>
         <el-form-item>
           <el-button type="primary" :loading="loading" class="login-button" @click="handleLogin">登 录</el-button>

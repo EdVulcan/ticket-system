@@ -3,7 +3,7 @@
     <el-card class="simulator-card">
       <template #header>
         <div class="card-header">
-          <span>虚拟闸机模拟器 (Virtual Gate Simulator)</span>
+          <span>虚拟闸机模拟器</span>
           <el-tag :type="deviceStatus === 'online' ? 'success' : 'info'">
             {{ deviceStatus === 'online' ? '在线 (Online)' : '离线 (Offline)' }}
           </el-tag>
@@ -21,7 +21,7 @@
           <el-input v-model="form.device_key" type="password" show-password placeholder="设备创建或轮换时获得的密钥" />
         </el-form-item>
         
-        <el-divider content-position="left">设备动作 (Actions)</el-divider>
+        <el-divider content-position="left">设备动作</el-divider>
 
         <el-form-item>
           <el-button type="primary" @click="sendHeartbeat" :loading="loading.heartbeat">
@@ -32,7 +32,7 @@
           </div>
         </el-form-item>
 
-        <el-divider content-position="left">验票操作 (Verification)</el-divider>
+        <el-divider content-position="left">验票操作</el-divider>
 
         <el-form-item label="票据号码 Ticket">
           <el-input v-model="form.ticket_code" placeholder="模拟扫码结果..." clearable />
@@ -71,7 +71,7 @@
 
     <!-- Log Panel -->
     <el-card class="log-card">
-      <template #header>设备日志 (Device Logs)</template>
+      <template #header>设备日志</template>
       <div class="log-container">
         <div v-for="(log, index) in logs" :key="index" class="log-item">
           <span class="log-time">[{{ log.time }}]</span>
