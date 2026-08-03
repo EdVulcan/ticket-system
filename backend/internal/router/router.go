@@ -90,10 +90,13 @@ func InitRouter(r *gin.Engine) {
 
 	// Public Hardware APIs
 
-	apiGroup.POST("/hardware/heartbeat", deviceController.Heartbeat)
-	apiGroup.POST("/hardware/verify", deviceController.Verify)
-	apiGroup.POST("/hardware/commands/poll", deviceController.PollCommand)
-	apiGroup.POST("/hardware/commands/ack", deviceController.AckCommand)
+	hardwareGroup := apiGroup.Group("/hardware")
+	hardwareGroup.Use(middleware.DeviceAuth())
+	hardwareGroup.POST("/heartbeat", deviceController.Heartbeat)
+	hardwareGroup.POST("/verify", deviceController.Verify)
+	hardwareGroup.POST("/open-result", deviceController.OpenResult)
+	hardwareGroup.POST("/commands/poll", deviceController.PollCommand)
+	hardwareGroup.POST("/commands/ack", deviceController.AckCommand)
 
 	// Admin APIs (Protected)
 	deviceGroup := protected.Group("/devices")
@@ -391,6 +394,7 @@ func InitRouter(r *gin.Engine) {
 		paymentGroup.GET("/refund-tasks", middleware.RequireAnyRole("admin", "super_admin"), refundController.ListDigitalTasks)
 		paymentGroup.POST("/refund-tasks/:id/retry", middleware.RequireAnyRole("admin", "super_admin"), refundController.RetryDigitalTask)
 		paymentGroup.GET("/configs", middleware.RequireAnyRole("admin", "super_admin"), configController.GetConfigs)
+		paymentGroup.GET("/configs/readiness", middleware.RequireAnyRole("admin", "super_admin"), configController.GetReadiness)
 		paymentGroup.POST("/configs", middleware.RequireAnyRole("admin", "super_admin"), configController.SaveConfig)
 		paymentGroup.GET("/:id", middleware.RequireAnyRole("seller", "admin", "super_admin"), paymentController.Query)
 	}

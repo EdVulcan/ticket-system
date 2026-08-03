@@ -519,7 +519,7 @@ func executeExchangeTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 				"fulfillment_product_id": target.ID, "fulfillment_tenant_id": target.TenantID,
 				"scenic_area_id": target.ScenicAreaID, "fulfillment_scenic_area_id": target.ScenicAreaID,
 				"product_revision_id": target.CurrentRevisionID, "rule_snapshot": string(ruleSnapshot),
-				"code_mode": target.CodeMode,
+				"code_mode": target.CodeMode, "gate_voice_code": target.GateVoiceCode,
 			}).Error; err != nil {
 				return err
 			}

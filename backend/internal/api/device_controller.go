@@ -19,13 +19,16 @@ func NewDeviceController(s *service.DeviceService) *DeviceController {
 }
 
 func (c *DeviceController) Heartbeat(ctx *gin.Context) {
-	var req service.HeartbeatRequest
+	var req struct {
+		IP     string `json:"ip"`
+		Status string `json:"status"`
+	}
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if err := c.Service.Heartbeat(req); err != nil {
+	if err := c.Service.HeartbeatDirect(ctx.GetUint("tenant_id"), ctx.GetUint("device_id"), req.IP, req.Status); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()}) // Or 404 if not found? Service returns generic error.
 		// Proposal says: return {command: "none"}. Even if error? Maybe log error but return success to keep device happy?
 		// But checking if device registered is part of security. If not registered, return error.
@@ -36,17 +39,25 @@ func (c *DeviceController) Heartbeat(ctx *gin.Context) {
 }
 
 func (c *DeviceController) Verify(ctx *gin.Context) {
-	var req service.VerifyRequest
+	var req struct {
+		TicketCode string `json:"ticket_code" binding:"required"`
+		MediaType  string `json:"media_type"`
+		ScanTime   string `json:"scan_time"`
+	}
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	resp, err := c.Service.Verify(req)
+	resp, err := c.Service.VerifyDirect(service.DirectVerifyRequest{TenantID: ctx.GetUint("tenant_id"), DeviceID: ctx.GetUint("device_id"), CheckPointID: ctx.GetUint("check_point_id"), RequestID: ctx.GetString("device_request_id"), RequestHash: ctx.GetString("device_request_hash"), TicketCode: req.TicketCode, MediaType: req.MediaType, ScanTime: req.ScanTime})
 	if err != nil {
 		// If service error (DB error), 500.
 		// If deny (logic), Verify returns resp with 403 but err=nil?
 		// My Service implementation returns resp, err. If err != nil it means DB error mostly.
+		if err == service.ErrVerificationProcessing {
+			ctx.JSON(http.StatusConflict, gin.H{"error": "该扫码请求正在处理中，请稍后重试"})
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -56,16 +67,7 @@ func (c *DeviceController) Verify(ctx *gin.Context) {
 }
 
 func (c *DeviceController) PollCommand(ctx *gin.Context) {
-	var req struct {
-		SystemCode   string `json:"system_code" binding:"required"`
-		SerialNumber string `json:"serial_number" binding:"required"`
-		DeviceKey    string `json:"device_key" binding:"required"`
-	}
-	if err := ctx.ShouldBindJSON(&req); err != nil {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	command, err := c.Service.PollHardwareCommand(req.SystemCode, req.SerialNumber, req.DeviceKey)
+	command, err := c.Service.PollHardwareCommandByDevice(ctx.GetUint("tenant_id"), ctx.GetUint("device_id"))
 	if err != nil {
 		ctx.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 		return
@@ -78,12 +80,25 @@ func (c *DeviceController) PollCommand(ctx *gin.Context) {
 }
 
 func (c *DeviceController) AckCommand(ctx *gin.Context) {
-	var req service.HardwareAckRequest
+	var req service.DirectHardwareAckRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := c.Service.AckHardwareCommand(req); err != nil {
+	if err := c.Service.AckHardwareCommandByDevice(ctx.GetUint("tenant_id"), ctx.GetUint("device_id"), req); err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"status": req.Status})
+}
+
+func (c *DeviceController) OpenResult(ctx *gin.Context) {
+	var req service.OpenResultRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.ReportOpenResult(ctx.GetUint("tenant_id"), ctx.GetUint("device_id"), req); err != nil {
 		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}

@@ -57,3 +57,54 @@ test('供应商按旅行社和产品名称维护合同结算价', async ({ page 
   await dialog.getByRole('button', { name: '保存' }).click()
   await expect(page.getByText('旅行社合同已创建')).toBeVisible()
 })
+
+test('供应商可以为票种配置闸机本地语音编号', async ({ page }) => {
+  await prepareSupplier(page)
+  const product = {
+    id: 101, name: '青云景区成人票', price: 80, settlement_price: 60,
+    type: 'online', status: 'online', code_mode: 'ticket', validity_type: 'date', validity_days: 0,
+    stock_type: 'unlimited', daily_stock: 0, real_name_required: false, region_limit: '',
+    limit_per_phone: 0, limit_per_id: 0, refund_type: 'no_refund', refund_rule: '', tags: '',
+    is_distributable: true, gate_voice_code: 'adult_ticket',
+    rule: { name: '成人票规则', validity_type: 'date', groups: [
+      { group_name: '大门', max_total_check_in: 1, items: [{ check_point_id: 31, max_per_check_in: 1 }] },
+    ] },
+  }
+  await page.route('**/api/v1/products?*', route => json(route, { data: [product], total: 1 }))
+  await page.route('**/api/v1/checkpoints?*', route => json(route, { data: [{ id: 31, name: '东门检票点' }], total: 1 }))
+  let submitted: any
+  await page.route('**/api/v1/products/101', async route => {
+    submitted = route.request().postDataJSON()
+    await json(route, { ...product, ...submitted.product })
+  })
+
+  await page.goto('/product')
+  await page.getByRole('button', { name: '编辑' }).click()
+  const dialog = page.getByRole('dialog', { name: '编辑门票' })
+  const voice = dialog.locator('.el-form-item').filter({ hasText: '闸机本地语音' }).getByRole('combobox')
+  await voice.fill('vip_ticket')
+  await voice.press('Enter')
+  await dialog.getByRole('button', { name: '保存并发布' }).click()
+  await expect.poll(() => submitted?.product?.gate_voice_code).toBe('vip_ticket')
+})
+
+test('支付配置页展示各渠道真实接入状态', async ({ page }) => {
+  await prepareSupplier(page)
+  await page.route('**/api/v1/payments/configs', route => json(route, { data: [
+    { provider: 'wechat', app_id: 'wx-app', mch_id: 'merchant', key: '******', private_key: '******', public_key: '', serial_no: 'serial', platform_public_key: '', platform_public_key_id: '', notify_url: '', status: false },
+  ] }))
+  await page.route('**/api/v1/payments/configs/readiness', route => json(route, { data: [
+    { provider: 'wechat', name: '微信支付', configured: true, enabled: false, configuration_ready: false, issues: ['缺少微信支付平台公钥', '缺少支付结果通知地址'], capabilities: [
+      { code: 'customer_scan', name: '顾客扫码支付', available: false },
+      { code: 'payment_code', name: '付款码收款', available: false, note: '等待微信付款码或现场收款设备协议联调' },
+    ] },
+    { provider: 'alipay', name: '支付宝', configured: false, enabled: false, configuration_ready: false, issues: ['尚未保存配置'], capabilities: [] },
+  ] }))
+
+  await page.goto('/payment-config')
+  await expect(page.getByText('尚未启用').first()).toBeVisible()
+  await expect(page.getByText('缺少微信支付平台公钥；缺少支付结果通知地址')).toBeVisible()
+  await expect(page.getByText('付款码收款')).toBeVisible()
+  await expect(page.getByText('等待微信付款码或现场收款设备协议联调')).toBeVisible()
+  await expect(page.getByLabel('支付结果通知地址').first()).toBeVisible()
+})

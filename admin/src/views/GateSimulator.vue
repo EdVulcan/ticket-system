@@ -62,8 +62,8 @@
              <div class="gate-door right closed"></div>
           </div>
 
-          <div class="audio-log" v-if="result.voice_file">
-            <el-icon><Microphone /></el-icon> 播放语音: {{ result.voice_file }}
+          <div class="audio-log" v-if="result.voice_code || result.voice_file">
+            <el-icon><Microphone /></el-icon> 本地语音：{{ result.voice_code || result.voice_file }}
           </div>
         </div>
       </div>

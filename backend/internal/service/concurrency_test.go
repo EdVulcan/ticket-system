@@ -75,11 +75,11 @@ func TestMain(m *testing.M) {
 		&model.Product{}, &model.ProductOffer{}, &model.SellerListing{}, &model.ProductInventory{}, &model.Order{}, &model.OrderItem{}, &model.Ticket{}, &model.OrderVisitor{}, &model.FulfillmentOrder{}, &model.TicketEntitlement{},
 		&model.CheckInRecord{}, &model.DistributorRelationship{}, &model.CapitalAccount{}, &model.TransactionRecord{},
 		&model.LedgerEntry{}, &model.DigitalRefundTask{}, &model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{},
-		&model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{},
+		&model.Policy{}, &model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{},
 		&model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.TourGroup{}, &model.TourGroupMember{}, &model.TourEntryBatch{}, &model.TourGroupConfirmation{}, &model.TourGroupMemberChange{},
 		&model.POSShift{}, &model.POSShiftCorrection{}, &model.PrintJob{}, &model.DeviceAlert{}, &model.POSHold{},
 		&model.ProductRevision{}, &model.SettlementStatement{}, &model.SettlementLine{}, &model.SettlementAdjustment{}, &model.StaffResourceScope{},
-		&model.AfterSaleRequest{}, &model.AfterSaleEvent{}, &model.HardwareCommand{}, &model.HardwareEvent{}, &model.ChannelReservation{}, &model.FinancialDocument{}, &model.TeamSettlementStatement{}, &model.TeamSettlementAdjustment{},
+		&model.AfterSaleRequest{}, &model.AfterSaleEvent{}, &model.HardwareCommand{}, &model.HardwareEvent{}, &model.DeviceRequestNonce{}, &model.DeviceVerification{}, &model.ChannelReservation{}, &model.FinancialDocument{}, &model.TeamSettlementStatement{}, &model.TeamSettlementAdjustment{},
 		&model.ChannelBillRecord{}, &model.ChannelReconciliation{}, &model.ChannelReconciliationLine{},
 		&model.BundleProduct{}, &model.BundleVersion{}, &model.BundleComponent{},
 	); err != nil {
@@ -104,9 +104,9 @@ func resetBusinessData(t *testing.T) {
 	err := model.Write(func(tx *gorm.DB) error {
 		for _, table := range []interface{}{
 			&model.StaffResourceScope{}, &model.User{}, &model.Staff{},
-			&model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{}, &model.LedgerEntry{}, &model.DigitalRefundTask{},
+			&model.Policy{}, &model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{}, &model.LedgerEntry{}, &model.DigitalRefundTask{},
 			&model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{}, &model.ChannelReservation{}, &model.TourGroupConfirmation{}, &model.TourGroupMemberChange{}, &model.TourGroupMember{}, &model.TourEntryBatch{}, &model.TourGroup{}, &model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.POSShiftCorrection{}, &model.POSShift{}, &model.PrintJob{}, &model.DeviceAlert{}, &model.POSHold{},
-			&model.AfterSaleEvent{}, &model.AfterSaleRequest{}, &model.HardwareEvent{}, &model.HardwareCommand{}, &model.FinancialDocument{}, &model.TeamSettlementAdjustment{}, &model.TeamSettlementStatement{},
+			&model.AfterSaleEvent{}, &model.AfterSaleRequest{}, &model.HardwareEvent{}, &model.HardwareCommand{}, &model.DeviceRequestNonce{}, &model.DeviceVerification{}, &model.FinancialDocument{}, &model.TeamSettlementAdjustment{}, &model.TeamSettlementStatement{},
 			&model.ChannelReconciliationLine{}, &model.ChannelBillRecord{}, &model.ChannelReconciliation{},
 			&model.BundleComponent{}, &model.BundleProduct{}, &model.BundleVersion{},
 			&model.ProductRevision{}, &model.SettlementLine{}, &model.SettlementAdjustment{}, &model.SettlementStatement{},
@@ -426,6 +426,26 @@ func TestPaymentNotificationRejectsAmountAndTenantMismatch(t *testing.T) {
 	}
 	if storedOrder.Status != "unpaid" {
 		t.Fatalf("order status=%s, want unpaid", storedOrder.Status)
+	}
+}
+
+func TestUnavailablePaymentAdapterDoesNotCancelOrder(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{TenantID: tenantID, Channel: "online", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{OrderNo: order.OrderNo, Method: "wechat", PayType: "cscanb"}
+	if err := (&PaymentService{OrderService: &OrderService{}}).CreatePayment(tenantID, &payment); err == nil {
+		t.Fatal("unconfigured payment unexpectedly succeeded")
+	}
+	var storedOrder model.Order
+	if err := model.DB.Where("id = ? AND tenant_id = ?", order.ID, tenantID).First(&storedOrder).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedOrder.Status != "unpaid" {
+		t.Fatalf("order status=%s, want unpaid so cashier can choose another method", storedOrder.Status)
 	}
 }
 
@@ -871,6 +891,120 @@ func TestConcurrentVerificationConsumesOneAdmission(t *testing.T) {
 	}
 	if successfulRecords != 1 {
 		t.Fatalf("successful check-in records = %d, want 1", successfulRecords)
+	}
+}
+
+func TestDirectDeviceVerificationReplaysResultAndTracksGateOpen(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	orders := &OrderService{}
+	if err := orders.Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := orders.MarkAsPaid(order.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint model.CheckPoint
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&checkpoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	deviceID := verificationDeviceID(t, tenantID, checkpoint.ID)
+	svc := NewDeviceService(model.DB, &TicketService{})
+	req := DirectVerifyRequest{TenantID: tenantID, DeviceID: deviceID, CheckPointID: checkpoint.ID, RequestID: "scan-1", RequestHash: "body-hash", TicketCode: ticket.TicketCode}
+	first, err := svc.VerifyDirect(req)
+	if err != nil || first.Result != "allow" {
+		t.Fatalf("first verification=%+v err=%v", first, err)
+	}
+	second, err := svc.VerifyDirect(req)
+	if err != nil || second.Result != "allow" || second.DisplayText != first.DisplayText {
+		t.Fatalf("replayed verification=%+v err=%v", second, err)
+	}
+	var successful int64
+	if err := model.DB.Model(&model.CheckInRecord{}).Where("device_id = ? AND device_request_id = ? AND result = ?", deviceID, req.RequestID, "success").Count(&successful).Error; err != nil || successful != 1 {
+		t.Fatalf("successful records=%d err=%v", successful, err)
+	}
+	open := OpenResultRequest{VerificationRequestID: req.RequestID, Status: "opened", OccurredAt: time.Now().Format(time.RFC3339)}
+	if err := svc.ReportOpenResult(tenantID, deviceID, open); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ReportOpenResult(tenantID, deviceID, open); err != nil {
+		t.Fatalf("idempotent open report: %v", err)
+	}
+	if err := svc.ReportOpenResult(tenantID, deviceID, OpenResultRequest{VerificationRequestID: req.RequestID, Status: "failed"}); err == nil {
+		t.Fatal("conflicting open result should be rejected")
+	}
+	var events int64
+	if err := model.DB.Model(&model.HardwareEvent{}).Where("device_id = ? AND command_no = ? AND event_type = ?", deviceID, "VERIFY:"+req.RequestID, "gate_opened").Count(&events).Error; err != nil || events != 1 {
+		t.Fatalf("open events=%d err=%v", events, err)
+	}
+}
+
+func TestGateVoiceIsSnapshottedPerSoldTicket(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	var product model.Product
+	if err := model.DB.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Where("id = ? AND tenant_id = ?", productID, tenantID).First(&product).Error; err != nil {
+		t.Fatal(err)
+	}
+	product.GateVoiceCode = "adult_ticket"
+	if err := (&ProductService{}).Update(product.ID, tenantID, &product, &product.Rule); err != nil {
+		t.Fatal(err)
+	}
+	firstOrder := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&firstOrder); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(firstOrder.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var firstTicket model.Ticket
+	if err := model.DB.Where("order_id = ?", firstOrder.ID).First(&firstTicket).Error; err != nil {
+		t.Fatal(err)
+	}
+	if firstTicket.GateVoiceCode != "adult_ticket" {
+		t.Fatalf("first ticket voice=%q", firstTicket.GateVoiceCode)
+	}
+
+	if err := model.DB.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Where("id = ? AND tenant_id = ?", productID, tenantID).First(&product).Error; err != nil {
+		t.Fatal(err)
+	}
+	product.GateVoiceCode = "vip_ticket"
+	if err := (&ProductService{}).Update(product.ID, tenantID, &product, &product.Rule); err != nil {
+		t.Fatal(err)
+	}
+	firstTicket = model.Ticket{}
+	if err := model.DB.Where("order_id = ?", firstOrder.ID).First(&firstTicket).Error; err != nil {
+		t.Fatal(err)
+	}
+	if firstTicket.GateVoiceCode != "adult_ticket" {
+		t.Fatalf("sold ticket voice changed to %q", firstTicket.GateVoiceCode)
+	}
+
+	secondOrder := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&secondOrder); err != nil {
+		t.Fatal(err)
+	}
+	var secondTicket model.Ticket
+	if err := model.DB.Where("order_id = ?", secondOrder.ID).First(&secondTicket).Error; err != nil {
+		t.Fatal(err)
+	}
+	if secondTicket.GateVoiceCode != "vip_ticket" {
+		t.Fatalf("second ticket voice=%q", secondTicket.GateVoiceCode)
+	}
+
+	var checkpoint model.CheckPoint
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&checkpoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	deviceID := verificationDeviceID(t, tenantID, checkpoint.ID)
+	resp, err := NewDeviceService(model.DB, &TicketService{}).VerifyDirect(DirectVerifyRequest{TenantID: tenantID, DeviceID: deviceID, CheckPointID: checkpoint.ID, RequestID: "voice-scan-1", RequestHash: "voice-body", TicketCode: firstTicket.TicketCode})
+	if err != nil || resp.Result != "allow" || resp.VoiceCode != "adult_ticket" {
+		t.Fatalf("verification=%+v err=%v", resp, err)
 	}
 }
 

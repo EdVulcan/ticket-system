@@ -165,6 +165,10 @@ func (s *OrderService) Create(req *model.Order) error {
 				return fmt.Errorf("product %s revision: %w", listing.Name, err)
 			}
 			fulfillment.CurrentRevisionID = revision.ID
+			fulfillment.GateVoiceCode = strings.TrimSpace(revision.GateVoiceCode)
+			if fulfillment.GateVoiceCode == "" {
+				fulfillment.GateVoiceCode = "welcome"
+			}
 
 			item.ProductName = listing.Name
 			item.Price = roundMoney(listingForResolution.Price)
@@ -339,7 +343,7 @@ func ensureProductRevisionTx(tx *gorm.DB, product *model.Product) (*model.Produc
 	if product.CreatedAt.IsZero() {
 		product.CreatedAt = time.Now()
 	}
-	revision = model.ProductRevision{ProductID: product.ID, TenantID: product.TenantID, ScenicAreaID: product.ScenicAreaID, Version: 1, Status: "active", PriceCents: moneyCents(product.Price), SettlementCents: moneyCents(product.SettlementPrice), SnapshotJSON: string(snapshot), EffectiveFrom: product.CreatedAt}
+	revision = model.ProductRevision{ProductID: product.ID, TenantID: product.TenantID, ScenicAreaID: product.ScenicAreaID, Version: 1, Status: "active", PriceCents: moneyCents(product.Price), SettlementCents: moneyCents(product.SettlementPrice), GateVoiceCode: product.GateVoiceCode, SnapshotJSON: string(snapshot), EffectiveFrom: product.CreatedAt}
 	if err := tx.Create(&revision).Error; err != nil {
 		return nil, err
 	}
@@ -774,8 +778,8 @@ func buildTickets(service *OrderService, product *model.Product, quantity int, o
 			FulfillmentProductID: product.ID, FulfillmentTenantID: product.TenantID,
 			ScenicAreaID: product.ScenicAreaID, FulfillmentScenicAreaID: product.ScenicAreaID,
 			RuleSnapshot: string(ruleSnapshot), CodeMode: product.CodeMode,
-			ProductRevisionID: product.CurrentRevisionID,
-			VisitorName:       order.ContactName, VisitorPhone: order.ContactPhone, VisitorID: order.VisitorID,
+			ProductRevisionID: product.CurrentRevisionID, GateVoiceCode: product.GateVoiceCode,
+			VisitorName: order.ContactName, VisitorPhone: order.ContactPhone, VisitorID: order.VisitorID,
 		}
 	}
 	return tickets, nil

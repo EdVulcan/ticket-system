@@ -88,8 +88,29 @@ type VerifyResponse struct {
 	Result       string `json:"result"`        // allow, deny
 	DisplayText  string `json:"display_text"`  // Message for screen
 	VoiceFile    string `json:"voice_file"`    // e.g., welcome.mp3
+	VoiceCode    string `json:"voice_code"`    // device-local audio resource identifier
 	OpenDuration int    `json:"open_duration"` // ms
 }
+
+type DirectVerifyRequest struct {
+	TenantID     uint
+	DeviceID     uint
+	CheckPointID uint
+	RequestID    string
+	RequestHash  string
+	TicketCode   string
+	MediaType    string
+	ScanTime     string
+}
+
+type OpenResultRequest struct {
+	VerificationRequestID string `json:"verification_request_id" binding:"required"`
+	Status                string `json:"status" binding:"required"` // opened, failed
+	Error                 string `json:"error"`
+	OccurredAt            string `json:"occurred_at"`
+}
+
+var ErrVerificationProcessing = errors.New("verification request is processing")
 
 type HardwareCommandRequest struct {
 	TenantID    uint
@@ -108,6 +129,14 @@ type HardwareAckRequest struct {
 	Status       string `json:"status"` // acknowledged, failed
 	Payload      string `json:"payload"`
 	Error        string `json:"error"`
+}
+
+type DirectHardwareAckRequest struct {
+	CommandNo string `json:"command_no" binding:"required"`
+	AckToken  string `json:"ack_token" binding:"required"`
+	Status    string `json:"status" binding:"required"`
+	Payload   string `json:"payload"`
+	Error     string `json:"error"`
 }
 
 func (s *DeviceService) QueueHardwareCommand(req HardwareCommandRequest) (*model.HardwareCommand, error) {
@@ -211,6 +240,49 @@ func (s *DeviceService) AckHardwareCommand(req HardwareAckRequest) error {
 	})
 }
 
+func (s *DeviceService) PollHardwareCommandByDevice(tenantID, deviceID uint) (*model.HardwareCommand, error) {
+	var command model.HardwareCommand
+	err := model.Write(func(tx *gorm.DB) error {
+		now := time.Now()
+		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND device_id = ? AND status IN ? AND expires_at > ?", tenantID, deviceID, []string{"queued", "delivered"}, now).Order("id").First(&command)
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if result.Error != nil {
+			return result.Error
+		}
+		command.Status, command.AttemptCount, command.DeliveredAt = "delivered", command.AttemptCount+1, &now
+		return tx.Model(&command).Updates(map[string]interface{}{"status": command.Status, "attempt_count": command.AttemptCount, "delivered_at": now}).Error
+	})
+	if err != nil || command.ID == 0 {
+		return nil, err
+	}
+	return &command, nil
+}
+
+func (s *DeviceService) AckHardwareCommandByDevice(tenantID, deviceID uint, req DirectHardwareAckRequest) error {
+	if req.Status != "acknowledged" && req.Status != "failed" {
+		return errors.New("invalid hardware acknowledgement status")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var command model.HardwareCommand
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("command_no = ? AND tenant_id = ? AND device_id = ?", req.CommandNo, tenantID, deviceID).First(&command).Error; err != nil {
+			return err
+		}
+		if command.AckToken != req.AckToken {
+			return errors.New("invalid acknowledgement token")
+		}
+		if command.Status == "acknowledged" || command.Status == "failed" {
+			return nil
+		}
+		now := time.Now()
+		if err := tx.Model(&command).Updates(map[string]interface{}{"status": req.Status, "acked_at": now, "last_error": strings.TrimSpace(req.Error)}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.HardwareEvent{TenantID: tenantID, DeviceID: deviceID, CommandNo: command.CommandNo, EventType: req.Status, Payload: req.Payload}).Error
+	})
+}
+
 // --- Hardware API Methods ---
 
 func (s *DeviceService) Heartbeat(req HeartbeatRequest) error {
@@ -250,6 +322,28 @@ func (s *DeviceService) Heartbeat(req HeartbeatRequest) error {
 	})
 }
 
+func (s *DeviceService) HeartbeatDirect(tenantID, deviceID uint, ip, status string) error {
+	return model.Write(func(tx *gorm.DB) error {
+		var device model.Device
+		if err := tx.Where("id = ? AND tenant_id = ?", deviceID, tenantID).First(&device).Error; err != nil {
+			return errors.New("设备未登记")
+		}
+		status = strings.TrimSpace(status)
+		if status != "fault" {
+			status = "online"
+		}
+		now := time.Now()
+		updates := map[string]interface{}{"status": status, "last_heartbeat": now}
+		if strings.TrimSpace(ip) != "" {
+			updates["ip_address"] = strings.TrimSpace(ip)
+		}
+		if err := tx.Model(&device).Updates(updates).Error; err != nil {
+			return err
+		}
+		return syncDeviceAlertTx(tx, &device, status, now)
+	})
+}
+
 func (s *DeviceService) Verify(req VerifyRequest) (*VerifyResponse, error) {
 	// 1. Validate Tenant
 	var tenant model.Tenant
@@ -278,43 +372,168 @@ func (s *DeviceService) Verify(req VerifyRequest) (*VerifyResponse, error) {
 
 	err := s.TicketService.Verify(req.TicketCode, checkPointID, device.ID, tenant.ID)
 	if err != nil {
-		// Map error to Voice/Display
-		resp := &VerifyResponse{Code: 403, Result: "deny", VoiceFile: "invalid.mp3"}
-
-		if errors.Is(err, ErrInvalidTicket) {
-			resp.DisplayText = "无效票\nInvalid Ticket"
-		} else if errors.Is(err, ErrTicketExpired) {
-			resp.DisplayText = "已过期\nExpired"
-		} else if errors.Is(err, ErrTicketNotStarted) {
-			resp.DisplayText = "未生效\nNot Started"
-		} else if errors.Is(err, ErrOrderNotPaid) {
-			resp.DisplayText = "订单未支付\nUnpaid Order"
-		} else if errors.Is(err, ErrAccessDenied) || errors.Is(err, ErrCheckpointNotFound) {
-			resp.DisplayText = "区域无权\nAccess Denied"
-		} else if errors.Is(err, ErrPointLimitReached) || errors.Is(err, ErrTicketUnavailable) {
-			resp.DisplayText = "次数已满\nLimit Reached"
-			resp.VoiceFile = "already_used.mp3"
-		} else if errors.Is(err, ErrGroupLimitReached) {
-			resp.DisplayText = "权益已尽\nNo Quota"
-		} else {
-			resp.DisplayText = "验证失败\n" + err.Error()
-		}
-		return resp, nil
+		return denyResponse(err), nil
 	}
 
-	// 4. Success Response
-	// Fetch ticket productName for display
-	var ticket model.Ticket
-	s.DB.Preload("OrderItem").Where("ticket_code = ?", req.TicketCode).First(&ticket)
-	productName := ticket.OrderItem.ProductName
+	return s.allowResponse(req.TicketCode), nil
+}
 
-	return &VerifyResponse{
-		Code:         200,
-		Result:       "allow",
-		DisplayText:  fmt.Sprintf("欢迎光临\n%s", productName),
-		VoiceFile:    "welcome.mp3",
-		OpenDuration: 5000,
-	}, nil
+func (s *DeviceService) VerifyDirect(req DirectVerifyRequest) (*VerifyResponse, error) {
+	if req.TenantID == 0 || req.DeviceID == 0 || req.CheckPointID == 0 || strings.TrimSpace(req.RequestID) == "" || strings.TrimSpace(req.TicketCode) == "" {
+		return nil, errors.New("设备、检票点、请求号和票码不能为空")
+	}
+	var device model.Device
+	if err := s.DB.Where("id = ? AND tenant_id = ? AND check_point_id = ? AND scenic_area_id != 0", req.DeviceID, req.TenantID, req.CheckPointID).First(&device).Error; err != nil {
+		return denyResponse(ErrAccessDenied), nil
+	}
+	if device.Status != "online" {
+		return &VerifyResponse{Code: 403, Result: "deny", DisplayText: "设备不在线", VoiceFile: "invalid.mp3"}, nil
+	}
+
+	verification, replay, err := s.beginDeviceVerification(req, device.ScenicAreaID)
+	if err != nil {
+		return nil, err
+	}
+	if replay != nil {
+		return replay, nil
+	}
+
+	verifyErr := s.TicketService.VerifyDeviceRequest(req.TicketCode, req.CheckPointID, req.DeviceID, req.TenantID, req.RequestID)
+	resp := denyResponse(verifyErr)
+	if verifyErr == nil {
+		resp = s.allowResponse(req.TicketCode)
+	}
+	var checkIn model.CheckInRecord
+	_ = s.DB.Where("device_id = ? AND device_request_id = ?", req.DeviceID, req.RequestID).Order("id desc").First(&checkIn).Error
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&model.DeviceVerification{}).Where("id = ? AND status = ?", verification.ID, "processing").Updates(map[string]interface{}{
+			"status": "completed", "response_code": resp.Code, "result": resp.Result, "display_text": resp.DisplayText,
+			"voice_file": resp.VoiceFile, "voice_code": resp.VoiceCode, "open_duration": resp.OpenDuration, "check_in_record_id": checkIn.ID,
+			"open_status": map[bool]string{true: "pending", false: ""}[resp.Result == "allow"],
+		}).Error
+	}); err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (s *DeviceService) beginDeviceVerification(req DirectVerifyRequest, scenicAreaID uint) (*model.DeviceVerification, *VerifyResponse, error) {
+	var existing model.DeviceVerification
+	err := s.DB.Where("device_id = ? AND request_id = ?", req.DeviceID, req.RequestID).First(&existing).Error
+	if err == nil {
+		if existing.RequestHash != req.RequestHash || existing.TicketCode != req.TicketCode {
+			return nil, nil, errors.New("同一请求号不能用于不同票码或请求内容")
+		}
+		if existing.Status == "completed" {
+			return &existing, responseFromVerification(&existing), nil
+		}
+		var record model.CheckInRecord
+		if findErr := s.DB.Where("device_id = ? AND device_request_id = ?", req.DeviceID, req.RequestID).Order("id desc").First(&record).Error; findErr == nil {
+			resp := responseFromCheckIn(s, &record)
+			_ = model.Write(func(tx *gorm.DB) error {
+				return tx.Model(&existing).Updates(map[string]interface{}{"status": "completed", "response_code": resp.Code, "result": resp.Result, "display_text": resp.DisplayText, "voice_file": resp.VoiceFile, "voice_code": resp.VoiceCode, "open_duration": resp.OpenDuration, "check_in_record_id": record.ID, "open_status": map[bool]string{true: "pending", false: ""}[resp.Result == "allow"]}).Error
+			})
+			return &existing, resp, nil
+		}
+		return &existing, nil, ErrVerificationProcessing
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil, err
+	}
+	created := model.DeviceVerification{TenantID: req.TenantID, ScenicAreaID: scenicAreaID, DeviceID: req.DeviceID, RequestID: req.RequestID, RequestHash: req.RequestHash, TicketCode: req.TicketCode, Status: "processing"}
+	if createErr := model.Write(func(tx *gorm.DB) error { return tx.Create(&created).Error }); createErr != nil {
+		if loadErr := s.DB.Where("device_id = ? AND request_id = ?", req.DeviceID, req.RequestID).First(&existing).Error; loadErr != nil {
+			return nil, nil, createErr
+		}
+		return s.beginDeviceVerification(req, scenicAreaID)
+	}
+	return &created, nil, nil
+}
+
+func (s *DeviceService) ReportOpenResult(tenantID, deviceID uint, req OpenResultRequest) error {
+	if req.Status != "opened" && req.Status != "failed" {
+		return errors.New("开闸结果必须是 opened 或 failed")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var verification model.DeviceVerification
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND device_id = ? AND request_id = ? AND status = ? AND result = ?", tenantID, deviceID, strings.TrimSpace(req.VerificationRequestID), "completed", "allow").First(&verification).Error; err != nil {
+			return errors.New("未找到允许通行的核销请求")
+		}
+		if verification.OpenStatus == req.Status {
+			return nil
+		}
+		if verification.OpenStatus == "opened" || verification.OpenStatus == "failed" {
+			return errors.New("该核销请求已经上报过不同的开闸结果")
+		}
+		now := time.Now()
+		occurredAt := now
+		if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(req.OccurredAt)); err == nil {
+			occurredAt = parsed
+		}
+		updates := map[string]interface{}{"open_status": req.Status, "open_error": strings.TrimSpace(req.Error), "open_reported_at": now}
+		if req.Status == "opened" {
+			updates["opened_at"] = occurredAt
+		}
+		if err := tx.Model(&verification).Updates(updates).Error; err != nil {
+			return err
+		}
+		eventType := "gate_open_failed"
+		if req.Status == "opened" {
+			eventType = "gate_opened"
+		}
+		return tx.Create(&model.HardwareEvent{TenantID: tenantID, DeviceID: deviceID, CommandNo: "VERIFY:" + verification.RequestID, EventType: eventType, Payload: strings.TrimSpace(req.Error)}).Error
+	})
+}
+
+func responseFromVerification(row *model.DeviceVerification) *VerifyResponse {
+	return &VerifyResponse{Code: row.ResponseCode, Result: row.Result, DisplayText: row.DisplayText, VoiceFile: row.VoiceFile, VoiceCode: row.VoiceCode, OpenDuration: row.OpenDuration}
+}
+
+func responseFromCheckIn(s *DeviceService, record *model.CheckInRecord) *VerifyResponse {
+	if record.Result == "success" {
+		return s.allowResponse(record.TicketCode)
+	}
+	return denyResponse(errors.New(record.Message))
+}
+
+func (s *DeviceService) allowResponse(ticketCode string) *VerifyResponse {
+	var ticket model.Ticket
+	productName := ""
+	if s.DB.Preload("OrderItem").Where("ticket_code = ?", ticketCode).First(&ticket).Error == nil {
+		productName = ticket.OrderItem.ProductName
+	}
+	voiceCode := strings.TrimSpace(ticket.GateVoiceCode)
+	if voiceCode == "" {
+		voiceCode = "welcome"
+	}
+	return &VerifyResponse{Code: 200, Result: "allow", DisplayText: fmt.Sprintf("欢迎光临\n%s", productName), VoiceCode: voiceCode, OpenDuration: 5000}
+}
+
+func denyResponse(err error) *VerifyResponse {
+	resp := &VerifyResponse{Code: 403, Result: "deny", VoiceFile: "invalid.mp3", VoiceCode: "invalid"}
+	if err == nil {
+		return resp
+	}
+	message := err.Error()
+	switch {
+	case errors.Is(err, ErrInvalidTicket) || strings.Contains(message, ErrInvalidTicket.Error()):
+		resp.DisplayText = "无效票"
+	case errors.Is(err, ErrTicketExpired) || strings.Contains(message, ErrTicketExpired.Error()):
+		resp.DisplayText, resp.VoiceFile, resp.VoiceCode = "已过期", "expired.mp3", "expired"
+	case errors.Is(err, ErrTicketNotStarted) || strings.Contains(message, ErrTicketNotStarted.Error()):
+		resp.DisplayText, resp.VoiceFile, resp.VoiceCode = "未生效", "not_started.mp3", "not_started"
+	case errors.Is(err, ErrOrderNotPaid) || strings.Contains(message, ErrOrderNotPaid.Error()):
+		resp.DisplayText = "订单未支付"
+	case errors.Is(err, ErrAccessDenied) || errors.Is(err, ErrCheckpointNotFound) || strings.Contains(message, ErrAccessDenied.Error()) || strings.Contains(message, ErrCheckpointNotFound.Error()):
+		resp.DisplayText = "区域无权"
+	case errors.Is(err, ErrPointLimitReached) || errors.Is(err, ErrTicketUnavailable) || strings.Contains(message, ErrPointLimitReached.Error()) || strings.Contains(message, ErrTicketUnavailable.Error()):
+		resp.DisplayText, resp.VoiceFile, resp.VoiceCode = "次数已满", "already_used.mp3", "already_used"
+	case errors.Is(err, ErrGroupLimitReached) || strings.Contains(message, ErrGroupLimitReached.Error()):
+		resp.DisplayText = "权益已尽"
+	default:
+		resp.DisplayText = "验证失败\n" + message
+	}
+	return resp
 }
 
 // --- CRUD Methods (Admin UI) ---

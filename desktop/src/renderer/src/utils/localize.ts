@@ -7,6 +7,7 @@ const englishErrorRules: Array<[RegExp, string]> = [
   [/not found|record not found/i, '未找到相关数据'],
   [/duplicate|already exists|unique constraint/i, '相同记录已经存在，请勿重复提交'],
   [/insufficient.*stock|out of stock/i, '库存不足'],
+  [/WeChat payment-code collection is not configured/i, '微信付款码收款尚未完成协议联调，请改用微信扫码或其他支付方式。'],
   [/not configured|adapter.*unavailable/i, '相关设备或支付方式尚未配置'],
   [/unavailable|disabled|suspended/i, '当前业务暂不可用'],
   [/required|cannot be empty|missing/i, '请补充必填信息'],

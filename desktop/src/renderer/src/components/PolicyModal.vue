@@ -4,14 +4,14 @@
       <el-input
         v-model="searchText"
         prefix-icon="Search"
-        placeholder="搜索政策关键词 (如: 免票, 退款)..."
+        placeholder="搜索政策关键词，例如免票、退款"
         clearable
       />
     </div>
 
     <div class="flex-1 overflow-y-auto space-y-6 pr-2">
       <div v-if="loading" class="py-10 text-center text-gray-400">
-        <el-icon class="is-loading"><Loading /></el-icon> 加载中...
+        <el-icon class="is-loading"><Loading /></el-icon> 加载中
       </div>
 
       <div v-else-if="filteredPolicies.length === 0" class="py-10 text-center text-gray-400">

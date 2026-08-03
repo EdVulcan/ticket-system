@@ -26,6 +26,10 @@ var (
 type TicketService struct{}
 
 func (s *TicketService) Verify(code string, checkPointID, deviceID, tenantID uint) error {
+	return s.VerifyDeviceRequest(code, checkPointID, deviceID, tenantID, "")
+}
+
+func (s *TicketService) VerifyDeviceRequest(code string, checkPointID, deviceID, tenantID uint, deviceRequestID string) error {
 	var ticketID uint
 	var recordScenicAreaID uint
 	err := model.Write(func(tx *gorm.DB) error {
@@ -148,7 +152,7 @@ func (s *TicketService) Verify(code string, checkPointID, deviceID, tenantID uin
 
 		record := model.CheckInRecord{
 			TicketID: ticket.ID, TicketCode: code, TenantID: tenantID, ScenicAreaID: checkpoint.ScenicAreaID,
-			CheckPointID: checkPointID, DeviceID: deviceID, CheckInTime: now,
+			CheckPointID: checkPointID, DeviceID: deviceID, DeviceRequestID: deviceRequestID, CheckInTime: now,
 			Result: "success", Message: "verified",
 		}
 		if err := tx.Create(&record).Error; err != nil {
@@ -196,7 +200,7 @@ func (s *TicketService) Verify(code string, checkPointID, deviceID, tenantID uin
 		_ = model.Write(func(tx *gorm.DB) error {
 			return tx.Create(&model.CheckInRecord{
 				TicketID: ticketID, TicketCode: code, TenantID: tenantID, ScenicAreaID: recordScenicAreaID,
-				CheckPointID: checkPointID, DeviceID: deviceID, CheckInTime: time.Now(),
+				CheckPointID: checkPointID, DeviceID: deviceID, DeviceRequestID: deviceRequestID, CheckInTime: time.Now(),
 				Result: "deny", Message: err.Error(),
 			}).Error
 		})

@@ -55,32 +55,39 @@ func (s *PaymentService) GetConfig(tenantID uint, provider string) (*model.Payme
 	if err := model.DB.Where("tenant_id = ? AND provider = ? AND status = ?", tenantID, provider, true).First(&paymentConfig).Error; err != nil {
 		return nil, err
 	}
+	if err := decryptPaymentConfig(&paymentConfig); err != nil {
+		return nil, err
+	}
+	return &paymentConfig, nil
+}
+
+func decryptPaymentConfig(paymentConfig *model.PaymentConfig) error {
 	var err error
 	if paymentConfig.Key != "" {
 		paymentConfig.Key, err = utils.DecryptAES(paymentConfig.Key)
 		if err != nil {
-			return nil, fmt.Errorf("decrypt payment key: %w", err)
+			return fmt.Errorf("decrypt payment key: %w", err)
 		}
 	}
 	if paymentConfig.PrivateKey != "" {
 		paymentConfig.PrivateKey, err = utils.DecryptAES(paymentConfig.PrivateKey)
 		if err != nil {
-			return nil, fmt.Errorf("decrypt private key: %w", err)
+			return fmt.Errorf("decrypt private key: %w", err)
 		}
 	}
 	if paymentConfig.PublicKey != "" {
 		paymentConfig.PublicKey, err = utils.DecryptAES(paymentConfig.PublicKey)
 		if err != nil {
-			return nil, fmt.Errorf("decrypt public key: %w", err)
+			return fmt.Errorf("decrypt public key: %w", err)
 		}
 	}
 	if paymentConfig.PlatformPublicKey != "" {
 		paymentConfig.PlatformPublicKey, err = utils.DecryptAES(paymentConfig.PlatformPublicKey)
 		if err != nil {
-			return nil, fmt.Errorf("decrypt payment platform public key: %w", err)
+			return fmt.Errorf("decrypt payment platform public key: %w", err)
 		}
 	}
-	return &paymentConfig, nil
+	return nil
 }
 
 func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error {
@@ -243,8 +250,6 @@ func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error 
 			if enqueueErr := s.enqueuePaymentTask(req); enqueueErr != nil {
 				return fmt.Errorf("payment request unresolved and reconciliation could not be queued: %w", enqueueErr)
 			}
-		} else if s.OrderService != nil {
-			_ = s.cancelOrderWithoutCollectedPayment(req.OrderNo, tenantID)
 		}
 		return err
 	}

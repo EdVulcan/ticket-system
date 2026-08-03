@@ -168,6 +168,9 @@ type Product struct {
 
 	// Code Mode
 	CodeMode string `gorm:"size:20;default:'order'" json:"code_mode"` // order, ticket
+
+	// GateVoiceCode identifies a device-local audio resource and is snapshotted into every sold ticket.
+	GateVoiceCode string `gorm:"size:100" json:"gate_voice_code"`
 }
 
 // Order 订单
@@ -255,7 +258,8 @@ type Ticket struct {
 	VisitorRegion string `gorm:"size:50" json:"visitor_region"`
 
 	// Usage Tracking
-	CheckInCount int `gorm:"default:0" json:"check_in_count"` // 总核销次数
+	CheckInCount  int    `gorm:"default:0" json:"check_in_count"` // 总核销次数
+	GateVoiceCode string `gorm:"size:100" json:"gate_voice_code"`
 }
 
 // CheckInRecord 核销记录
@@ -268,6 +272,7 @@ type CheckInRecord struct {
 	CheckPointID     uint       `json:"check_point_id"`
 	CheckPoint       CheckPoint `json:"check_point"`
 	DeviceID         uint       `json:"device_id"`
+	DeviceRequestID  string     `gorm:"size:100;index" json:"device_request_id,omitempty"`
 	CheckInTime      time.Time  `json:"check_in_time"`
 	Result           string     `gorm:"size:20" json:"result"` // success, fail
 	Message          string     `gorm:"size:255" json:"message"`

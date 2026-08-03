@@ -50,9 +50,10 @@
       <p>请完成数字余款；如顾客放弃，必须退回现金并登记原因。</p>
     </div>
 
-    <div v-if="selectedMethod === 'alipay_scan'" class="scan-panel">
-      <div>扫描顾客的支付宝付款码</div>
+    <div v-if="selectedMethod === 'payment_code'" class="scan-panel">
+      <div>扫描顾客的微信或支付宝付款码</div>
       <el-input ref="scanInputRef" v-model="authCode" size="large" placeholder="等待扫码" :disabled="loading || !!paymentId" @keyup.enter="doPay" />
+      <small>系统自动识别支付渠道；尚未完成协议联调的渠道会明确拒绝，不会记录为支付成功。</small>
     </div>
 
     <div v-if="isQRMethod" class="qr-section">
@@ -99,7 +100,7 @@ const emit = defineEmits<{ success: []; cancelled: []; lockChange: [locked: bool
 
 const methods = [
   { key: 'cash', label: '现金', icon: Money },
-  { key: 'alipay_scan', label: '支付宝付款码', icon: Aim },
+  { key: 'payment_code', label: '付款码收款', icon: Aim },
   { key: 'wechat_qr', label: '微信扫码', icon: ChatDotRound },
   { key: 'alipay_qr', label: '支付宝扫码', icon: Wallet }
 ]
@@ -125,16 +126,16 @@ const cashDue = computed(() => paymentMode.value === 'combined' ? cashPortion.va
 const cashChange = computed(() => cashTendered.value - cashDue.value)
 const showCashPanel = computed(() => selectedMethod.value === 'cash' || (paymentMode.value === 'combined' && !partialCashRecorded.value))
 const isQRMethod = computed(() => selectedMethod.value.endsWith('_qr'))
-const canStartPayment = computed(() => selectedMethod.value === 'cash' || selectedMethod.value === 'alipay_scan' || (isQRMethod.value && !paymentId.value))
+const canStartPayment = computed(() => selectedMethod.value === 'cash' || selectedMethod.value === 'payment_code' || (isQRMethod.value && !paymentId.value))
 const payDisabled = computed(() => {
   if (cashChange.value < 0 && showCashPanel.value) return true
   if (paymentMode.value === 'combined' && (cashPortion.value <= 0 || digitalAmount.value <= 0)) return true
-  return selectedMethod.value === 'alipay_scan' && !authCode.value.trim()
+  return selectedMethod.value === 'payment_code' && !authCode.value.trim()
 })
 const payButtonLabel = computed(() => {
   if (paymentMode.value === 'combined') return partialCashRecorded.value ? `收取数字余款 ¥${digitalAmount.value.toFixed(2)}` : `收取现金并继续支付 ¥${digitalAmount.value.toFixed(2)}`
   if (selectedMethod.value === 'cash') return '确认现金收款'
-  return selectedMethod.value === 'alipay_scan' ? '确认付款码收款' : '生成支付码'
+  return selectedMethod.value === 'payment_code' ? '确认付款码收款' : '生成支付码'
 })
 const cashQuickAmounts = computed(() => {
   const due = cashDue.value
@@ -163,12 +164,12 @@ const selectMethod = async (key: string) => {
   selectedMethod.value = key
   authCode.value = ''
   if (key === 'cash') cashTendered.value = props.amount
-  if (key === 'alipay_scan') await nextTick(() => scanInputRef.value?.focus())
+  if (key === 'payment_code') await nextTick(() => scanInputRef.value?.focus())
 }
 
 const createPayment = async (methodKey: string, amountCents: number, idempotencyKey: string, tenderedCents = 0) => {
-  const isScan = methodKey === 'alipay_scan'
-  const method = isScan ? 'alipay' : methodKey.replace('_qr', '')
+  const isScan = methodKey === 'payment_code'
+  const method = isScan ? 'auto' : methodKey.replace('_qr', '')
   const response = await axios.post('/payments/pay', {
     order_no: props.orderNo,
     method,
@@ -205,7 +206,7 @@ const restorePendingAttempt = async () => {
       paymentMode.value = 'combined'
       cashPortion.value = Number(data.payments?.filter((payment: any) => payment.method === 'cash' && ['paid', 'partial_refunded'].includes(payment.status)).reduce((sum: number, payment: any) => sum + Number(payment.amount_cents || 0), 0) || 0) / 100
       cashTendered.value = cashPortion.value
-      selectedMethod.value = pending?.method === 'alipay' && pending?.pay_type === 'bscanc' ? 'alipay_scan' : `${pending?.method || 'wechat'}_qr`
+      selectedMethod.value = pending?.pay_type === 'bscanc' ? 'payment_code' : `${pending?.method || 'wechat'}_qr`
     }
     if (pending) {
       paymentId.value = pending.id
@@ -244,7 +245,8 @@ const doPay = async () => {
     await beginProviderWait(payment)
   } catch (error: any) {
     resetProviderAttempt()
-    const message = error.response?.data?.error || error.message || '支付请求失败'
+    const rawMessage = error.response?.data?.error || error.message || '支付请求失败'
+    const message = rawMessage.includes('WeChat payment-code collection is not configured') ? '微信付款码收款尚未完成协议联调，请改用微信扫码或其他支付方式。' : rawMessage
     const restored = paymentMode.value === 'combined' ? await restorePendingAttempt() : false
     errorMsg.value = restored ? '数字支付结果待确认，系统正在持续查询，请勿重复收款。' : message
   }

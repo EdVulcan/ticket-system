@@ -77,6 +77,21 @@ test('纯验票员工只进入核销工作区', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '当前班次' })).toHaveCount(0)
 })
 
+test('售票员可以查询并搜索启用的票务政策', async ({ page }) => {
+  await preparePOS(page, true)
+  await page.route('**/api/v1/policies*', route => json(route, { data: [
+    { id: 1, category: 'Admission', title: '儿童免票', content: '身高一米二以下儿童免票', is_active: true },
+    { id: 2, category: 'Refund', title: '退票规则', content: '未使用门票可按票规申请退款', is_active: true },
+  ] }))
+  await page.goto('/#/')
+  await page.getByRole('button', { name: '政策', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '票务政策' })
+  await expect(dialog.getByText('儿童免票', { exact: true })).toBeVisible()
+  await dialog.getByPlaceholder('搜索政策关键词，例如免票、退款').fill('退款')
+  await expect(dialog.getByText('退票规则', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('儿童免票', { exact: true })).toBeHidden()
+})
+
 test('备用金开班和交班汇总按支付方式展示', async ({ page }) => {
   await preparePOS(page, false)
   await page.route('**/api/v1/operations/shifts', async route => {
@@ -161,4 +176,28 @@ test('现金找零正确且打印未配置时保留订单与购物清单', async
   })
   await expect(page.getByText('支付已成功，但打印失败。订单和打印任务已保留，可稍后重打。')).toBeVisible()
   await expect(page.locator('.cart-item').getByText('标准成人票', { exact: true })).toBeVisible()
+})
+
+test('付款码入口自动识别渠道并对未联调微信保持明确失败', async ({ page }) => {
+  await preparePOS(page, true)
+  let paymentPayload: any
+  await page.route('**/api/v1/orders', route => json(route, { id: 52, order_no: 'POS-E2E-CODE', total_amount: 80, status: 'unpaid' }))
+  await page.route('**/api/v1/payments/orders/POS-E2E-CODE', route => json(route, { has_partial_cash: false, payments: [] }))
+  await page.route('**/api/v1/payments/pay', async route => {
+    paymentPayload = route.request().postDataJSON()
+    await json(route, { error: 'WeChat payment-code collection is not configured; use Alipay or customer-scan mode' }, 500)
+  })
+
+  await page.goto('/#/')
+  await page.getByRole('button', { name: /标准成人票/ }).click()
+  await page.getByRole('button', { name: '收款' }).click()
+  const payment = page.getByRole('dialog', { name: '收款' })
+  await payment.getByRole('button', { name: '付款码收款' }).click()
+  await payment.getByPlaceholder('等待扫码').fill('100000000000000000')
+  await payment.getByRole('button', { name: '确认付款码收款' }).click()
+
+  await expect.poll(() => paymentPayload).toMatchObject({
+    method: 'auto', pay_type: 'bscanc', auth_code: '100000000000000000', amount_cents: 8000,
+  })
+  await expect(payment.getByText('微信付款码收款尚未完成协议联调，请改用微信扫码或其他支付方式。')).toBeVisible()
 })

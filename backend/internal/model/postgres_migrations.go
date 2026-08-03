@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 61
+const CurrentPostgresSchemaVersion = 63
 
 // PostgreSQL starts from the current domain schema. The historical migrations
 // contain SQLite trigger syntax and legacy backfills, so replaying them on a
@@ -32,10 +32,13 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&TourEntryBatch{}, &TourGroupConfirmation{}, &TourGroupMemberChange{}, &TeamSettlementStatement{}, &TeamSettlementAdjustment{},
 		&POSShift{}, &POSShiftCorrection{}, &PrintJob{}, &DeviceAlert{}, &POSHold{}, &POSHoldLine{},
 		&SettlementStatement{}, &SettlementLine{}, &SettlementAdjustment{}, &StaffResourceScope{},
-		&AfterSaleRequest{}, &AfterSaleEvent{}, &HardwareCommand{}, &HardwareEvent{}, &MigrationAuditIssue{},
+		&AfterSaleRequest{}, &AfterSaleEvent{}, &HardwareCommand{}, &HardwareEvent{}, &DeviceRequestNonce{}, &DeviceVerification{}, &MigrationAuditIssue{},
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
+	}
+	if err := db.Model(&Product{}).Where("gate_voice_code IS NULL OR gate_voice_code = ?", "").Update("gate_voice_code", "welcome").Error; err != nil {
+		return fmt.Errorf("backfill product gate voice: %w", err)
 	}
 	if err := db.Model(&TeamSettlementStatement{}).Where("sequence IS NULL OR sequence = 0").Updates(map[string]interface{}{"sequence": 1, "kind": "original"}).Error; err != nil {
 		return fmt.Errorf("backfill team settlement sequence: %w", err)

@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"ticket-backend/internal/model"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 )
@@ -90,6 +92,7 @@ func (s *ProductService) Update(id, tenantID uint, product *model.Product, rule 
 			product.ProductOfferID = existingProduct.ProductOfferID
 			product.ScenicAreaID = existingProduct.ScenicAreaID
 			product.SettlementPrice = existingProduct.SettlementPrice
+			product.GateVoiceCode = existingProduct.GateVoiceCode
 			return tx.Model(&existingProduct).
 				Select("*").
 				Omit("id", "created_at", "updated_at", "deleted_at", "tenant_id", "rule_id",
@@ -207,7 +210,8 @@ func createProductRevisionTx(tx *gorm.DB, product *model.Product) (*model.Produc
 	revision := model.ProductRevision{
 		ProductID: product.ID, TenantID: product.TenantID, ScenicAreaID: product.ScenicAreaID,
 		Version: version, Status: "active", PriceCents: moneyCents(product.Price),
-		SettlementCents: moneyCents(product.SettlementPrice), SnapshotJSON: string(snapshot), EffectiveFrom: time.Now(),
+		SettlementCents: moneyCents(product.SettlementPrice), GateVoiceCode: product.GateVoiceCode,
+		SnapshotJSON: string(snapshot), EffectiveFrom: time.Now(),
 	}
 	if err := tx.Create(&revision).Error; err != nil {
 		return nil, err
@@ -318,6 +322,16 @@ func assignProductScenicArea(tx *gorm.DB, tenantID uint, product *model.Product,
 }
 
 func validateProductFields(product *model.Product) error {
+	product.GateVoiceCode = strings.TrimSpace(product.GateVoiceCode)
+	if product.GateVoiceCode == "" {
+		product.GateVoiceCode = "welcome"
+	}
+	if utf8.RuneCountInString(product.GateVoiceCode) > 100 {
+		return fmt.Errorf("gate voice code cannot exceed 100 characters")
+	}
+	if strings.ContainsAny(product.GateVoiceCode, `/\`) || strings.Contains(product.GateVoiceCode, "..") {
+		return fmt.Errorf("gate voice code must be a local resource identifier, not a path")
+	}
 	if product.Name == "" {
 		return fmt.Errorf("product name is required")
 	}

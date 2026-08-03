@@ -16,6 +16,13 @@ type PaymentConfigController struct {
 	Service service.PaymentService // Reuse PaymentService or create ConfigService
 }
 
+func savedSecretMarker(value string) string {
+	if value != "" {
+		return "******"
+	}
+	return ""
+}
+
 // GetConfigs 获取当前租户的所有支付配置
 func (c *PaymentConfigController) GetConfigs(ctx *gin.Context) {
 	tenantID := ctx.GetUint("tenant_id")
@@ -45,6 +52,15 @@ func (c *PaymentConfigController) GetConfigs(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"data": configs})
 }
 
+func (c *PaymentConfigController) GetReadiness(ctx *gin.Context) {
+	items, err := c.Service.GetConfigReadiness(ctx.GetUint("tenant_id"))
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": items})
+}
+
 // SaveConfig 保存或更新配置
 func (c *PaymentConfigController) SaveConfig(ctx *gin.Context) {
 	tenantID := ctx.GetUint("tenant_id")
@@ -57,6 +73,32 @@ func (c *PaymentConfigController) SaveConfig(ctx *gin.Context) {
 	if req.Provider != "wechat" && req.Provider != "alipay" {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported payment provider"})
 		return
+	}
+	if req.Status {
+		var existing model.PaymentConfig
+		err := model.DB.Where("tenant_id = ? AND provider = ?", tenantID, req.Provider).First(&existing).Error
+		candidate := req
+		if err == nil {
+			if candidate.Key == "" || candidate.Key == "******" {
+				candidate.Key = savedSecretMarker(existing.Key)
+			}
+			if candidate.PrivateKey == "" || candidate.PrivateKey == "******" {
+				candidate.PrivateKey = savedSecretMarker(existing.PrivateKey)
+			}
+			if candidate.PublicKey == "" || candidate.PublicKey == "******" {
+				candidate.PublicKey = savedSecretMarker(existing.PublicKey)
+			}
+			if candidate.PlatformPublicKey == "" || candidate.PlatformPublicKey == "******" {
+				candidate.PlatformPublicKey = savedSecretMarker(existing.PlatformPublicKey)
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if issues := service.PaymentConfigIssues(&candidate, tenantID); len(issues) > 0 {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "支付配置尚未完整，不能启用", "issues": issues})
+			return
+		}
 	}
 
 	// Encrypt Secrets
@@ -98,7 +140,7 @@ func (c *PaymentConfigController) SaveConfig(ctx *gin.Context) {
 		err := tx.Where("tenant_id = ? AND provider = ?", tenantID, req.Provider).First(&existing).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			req.Base = model.Base{}
-			return tx.Create(&req).Error
+			return tx.Select("*").Create(&req).Error
 		}
 		if err != nil {
 			return err

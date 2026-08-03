@@ -128,6 +128,23 @@
                     <el-radio label="ticket" border>一票一码 (一人一张)</el-radio>
                   </el-radio-group>
                 </el-form-item>
+
+                <el-form-item label="闸机本地语音" prop="product.gate_voice_code" class="col-span-2">
+                  <el-select
+                    v-model="form.product.gate_voice_code"
+                    filterable
+                    allow-create
+                    default-first-option
+                    placeholder="选择预置语音，或输入闸机已安装的音频编号"
+                    class="w-full"
+                  >
+                    <el-option label="欢迎光临" value="welcome" />
+                    <el-option label="成人票请通行" value="adult_ticket" />
+                    <el-option label="儿童票请通行" value="child_ticket" />
+                    <el-option label="团队票请通行" value="team_ticket" />
+                  </el-select>
+                  <div class="text-xs text-gray-400 mt-1">闸机程序从本机播放该编号对应的音频；已售门票保留售票时的编号。</div>
+                </el-form-item>
               
             </div>
           </el-form>
@@ -351,7 +368,8 @@ const form = reactive({
     refund_type: 'no_refund',
     refund_rule: '', // JSON string
     tags: '', // JSON string
-    is_distributable: false
+    is_distributable: false,
+    gate_voice_code: 'welcome'
   },
   rule: {
     name: '',
@@ -406,7 +424,8 @@ const handleAdd = () => {
     validity_type: 'date', validity_days: 0, validity_start_date: null, validity_end_date: null,
     stock_type: 'unlimited', daily_stock: 0, time_slot_config: '',
     real_name_required: false, region_limit: '', limit_per_phone: 0, limit_per_id: 0,
-    refund_type: 'no_refund', refund_rule: '', tags: '', is_distributable: false
+    refund_type: 'no_refund', refund_rule: '', tags: '', is_distributable: false,
+    gate_voice_code: 'welcome'
   }
   form.rule = {
     name: '', validity_type: 'date',

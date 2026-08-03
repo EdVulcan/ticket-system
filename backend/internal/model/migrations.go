@@ -92,6 +92,8 @@ func runMigrations(db *gorm.DB) error {
 		{version: 59, name: "platform account hierarchy", apply: migratePlatformAccountHierarchy},
 		{version: 60, name: "verification based settlement facts", apply: migrateVerificationSettlementFacts},
 		{version: 61, name: "team refund correction statements", apply: migrateTeamRefundCorrectionStatements},
+		{version: 62, name: "direct gate authentication and verification facts", apply: migrateDirectGateFacts},
+		{version: 63, name: "ticket gate voice snapshots", apply: migrateTicketGateVoiceSnapshots},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -111,6 +113,29 @@ func runMigrations(db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+func migrateTicketGateVoiceSnapshots(db *gorm.DB) error {
+	for _, field := range []struct {
+		model interface{}
+		name  string
+	}{
+		{&Product{}, "GateVoiceCode"},
+		{&ProductRevision{}, "GateVoiceCode"},
+		{&Ticket{}, "GateVoiceCode"},
+		{&DeviceVerification{}, "VoiceCode"},
+	} {
+		if !db.Migrator().HasColumn(field.model, field.name) {
+			if err := db.Migrator().AddColumn(field.model, field.name); err != nil {
+				return err
+			}
+		}
+	}
+	return db.Model(&Product{}).Where("gate_voice_code IS NULL OR gate_voice_code = ?", "").Update("gate_voice_code", "welcome").Error
+}
+
+func migrateDirectGateFacts(db *gorm.DB) error {
+	return db.AutoMigrate(&CheckInRecord{}, &DeviceRequestNonce{}, &DeviceVerification{})
 }
 
 func migrateTeamRefundCorrectionStatements(db *gorm.DB) error {
@@ -1089,7 +1114,7 @@ func migrateProductRevisions(db *gorm.DB) error {
 			if marshalErr != nil {
 				return marshalErr
 			}
-			revision = ProductRevision{ProductID: products[i].ID, TenantID: products[i].TenantID, ScenicAreaID: products[i].ScenicAreaID, Version: 1, Status: "active", PriceCents: legacyMoneyCents(products[i].Price), SettlementCents: legacyMoneyCents(products[i].SettlementPrice), SnapshotJSON: string(snapshot), EffectiveFrom: products[i].CreatedAt}
+			revision = ProductRevision{ProductID: products[i].ID, TenantID: products[i].TenantID, ScenicAreaID: products[i].ScenicAreaID, Version: 1, Status: "active", PriceCents: legacyMoneyCents(products[i].Price), SettlementCents: legacyMoneyCents(products[i].SettlementPrice), GateVoiceCode: products[i].GateVoiceCode, SnapshotJSON: string(snapshot), EffectiveFrom: products[i].CreatedAt}
 			if err := db.Create(&revision).Error; err != nil {
 				return err
 			}
@@ -1261,6 +1286,6 @@ func migrateInitialSchema(db *gorm.DB) error {
 		&DigitalRefundTask{}, &ChannelAccount{}, &ChannelProductMapping{}, &ChannelRequest{},
 		&TravelContract{}, &TravelAgent{}, &TourGuide{}, &TravelVehicle{}, &TourGroup{}, &TourGroupMember{}, &TourEntryBatch{},
 		&POSShift{}, &PrintJob{}, &DeviceAlert{}, &POSHold{}, &SettlementStatement{}, &SettlementLine{}, &StaffResourceScope{},
-		&MigrationAuditIssue{},
+		&MigrationAuditIssue{}, &HardwareCommand{}, &HardwareEvent{}, &DeviceRequestNonce{}, &DeviceVerification{},
 	)
 }

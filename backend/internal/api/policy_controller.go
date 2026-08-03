@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
 
@@ -61,7 +62,15 @@ func (c *PolicyController) List(ctx *gin.Context) {
 	tenantID, _ := ctx.Get("tenant_id")
 	category := ctx.Query("category")
 
-	policies, err := c.Service.List(tenantID.(uint), category)
+	includeInactive := false
+	for _, role := range strings.Split(ctx.GetString("role"), ",") {
+		role = strings.TrimSpace(role)
+		if role == "admin" || role == "super_admin" {
+			includeInactive = true
+			break
+		}
+	}
+	policies, err := c.Service.List(tenantID.(uint), category, includeInactive)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
