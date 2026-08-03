@@ -62,7 +62,7 @@
           <el-form-item class="col-span-2" :label="form.type === 'void' ? '票码（整单作废可留空）' : '票码（可填写一个或多个游客票码）'"><el-input v-model="form.ticket_codes" type="textarea" :rows="2" /></el-form-item>
           <template v-if="form.type === 'refund'">
             <el-form-item label="退款金额（分）"><el-input-number v-model="form.amount_cents" :min="0" class="w-full" /></el-form-item>
-            <el-form-item label="退款方式"><el-select v-model="form.payment_method" class="w-full"><el-option label="按原支付方式自动分摊" value="auto" /><el-option label="现金" value="cash" /><el-option label="微信" value="wechat" /><el-option label="支付宝" value="alipay" /></el-select></el-form-item>
+            <el-form-item label="退款方式"><el-select v-model="form.payment_method" class="w-full"><el-option label="按原支付方式自动分摊" value="auto" /><el-option v-if="isSupplier" label="现金" value="cash" /><el-option label="微信" value="wechat" /><el-option label="支付宝" value="alipay" /></el-select></el-form-item>
           </template>
           <template v-if="form.type === 'reschedule' || form.type === 'exchange'">
             <el-form-item label="目标日期"><el-date-picker v-model="form.target_date" value-format="YYYY-MM-DD" class="w-full" /></el-form-item>
@@ -95,7 +95,7 @@
     <el-dialog v-model="differenceVisible" title="收取换票差价" width="520px">
       <el-alert v-if="differenceTarget" type="warning" :closable="false" class="mb-4" :title="`应收 ¥${((differenceTarget.difference_cents || 0) / 100).toFixed(2)}`" />
       <el-form :model="differenceForm" label-position="top">
-        <el-form-item label="收款方式"><el-select v-model="differenceForm.method" class="w-full"><el-option label="现金" value="cash" /><el-option label="微信" value="wechat" /><el-option label="支付宝" value="alipay" /></el-select></el-form-item>
+        <el-form-item label="收款方式"><el-select v-model="differenceForm.method" class="w-full"><el-option v-if="isSupplier" label="现金" value="cash" /><el-option label="微信" value="wechat" /><el-option label="支付宝" value="alipay" /></el-select></el-form-item>
         <template v-if="differenceForm.method === 'cash'">
           <el-form-item label="顾客实付（分）"><el-input-number v-model="differenceForm.cash_tendered_cents" :min="differenceTarget?.difference_cents || 0" class="w-full" /></el-form-item>
           <div class="text-sm text-gray-600 mb-4">找零：¥{{ differenceChange }}</div>
@@ -104,7 +104,7 @@
           <el-form-item label="扫码方式"><el-segmented v-model="differenceForm.pay_type" :options="[{ label: '扫顾客付款码', value: 'bscanc' }, { label: '顾客扫码', value: 'cscanb' }]" /></el-form-item>
           <el-form-item v-if="differenceForm.pay_type === 'bscanc'" label="顾客付款码"><el-input v-model="differenceForm.auth_code" autocomplete="off" /></el-form-item>
         </template>
-        <div class="grid grid-cols-2 gap-3">
+        <div v-if="isSupplier" class="grid grid-cols-2 gap-3">
           <el-form-item label="售票终端"><el-select v-model="differenceForm.device_id" filterable class="w-full" placeholder="选择售票终端" @change="applyDifferenceDevice"><el-option v-for="device in posDevices" :key="device.id" :label="deviceLabel(device)" :value="device.id" /></el-select></el-form-item>
           <el-form-item label="当前班次"><el-select v-model="differenceForm.shift_id" class="w-full" placeholder="选择当班班次"><el-option v-for="shift in shiftsForDevice(differenceForm.device_id)" :key="shift.id" :label="shiftLabel(shift)" :value="shift.id" /></el-select></el-form-item>
         </div>
@@ -162,6 +162,8 @@ const route = useRoute()
 const user = ref<any>({})
 try { user.value = JSON.parse(localStorage.getItem('user') || '{}') } catch (_) { /* invalid session */ }
 const canApprove = computed(() => user.value.role === 'admin' || user.value.role === 'super_admin')
+const activeCapabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability)))
+const isSupplier = computed(() => activeCapabilities.value.has('supplier'))
 const rows = ref<any[]>([]); const loading = ref(false); const saving = ref(false); const total = ref(0); const page = ref(1); const pageSize = ref(20); const status = ref(''); const orderNo = ref(String(route.query.order_no || ''))
 const createVisible = ref(false); const detailVisible = ref(false); const approveVisible = ref(false); const differenceVisible = ref(false); const selected = ref<any>(null)
 const approveTarget = ref<any>(null); const differenceTarget = ref<any>(null)
@@ -173,22 +175,26 @@ const posDevices = computed(() => devices.value.filter((device: any) => device.t
 const shiftsForDevice = (deviceID: number) => openShifts.value.filter((shift: any) => shift.status === 'open' && Number(shift.device_id) === Number(deviceID))
 const deviceLabel = (device: any) => `${device.name}${device.serial_number ? `（${device.serial_number}）` : ''}`
 const shiftLabel = (shift: any) => `${shift.shift_no || `班次 ${shift.id}`} · ${shift.operator_name || '当前收银员'}`
-const types = [{ value: 'refund', label: '退票' }, { value: 'reschedule', label: '改期' }, { value: 'exchange', label: '换票' }, { value: 'void', label: '作废' }, { value: 'reissue', label: '补打' }]
+const types = computed(() => [
+  { value: 'refund', label: '退票' }, { value: 'reschedule', label: '改期' }, { value: 'exchange', label: '换票' }, { value: 'void', label: '作废' },
+  ...(isSupplier.value ? [{ value: 'reissue', label: '补打' }] : []),
+])
 const emptyForm = () => ({ order_no: '', type: 'refund', ticket_codes: '', amount_cents: 0, payment_method: 'auto', target_date: '', target_slot: '', target_product_id: 0, device_id: 0, shift_id: 0, reason: '' })
 const form = reactive(emptyForm())
 const approveForm = reactive({ reason: '', settlement_exception: false, settlement_exception_reason: '' })
-const differenceForm = reactive({ method: 'cash', pay_type: 'cscanb', auth_code: '', shift_id: 0, device_id: 0, cash_tendered_cents: 0 })
+const differenceForm = reactive({ method: isSupplier.value ? 'cash' : 'wechat', pay_type: 'cscanb', auth_code: '', shift_id: 0, device_id: 0, cash_tendered_cents: 0 })
 const differenceChange = computed(() => ((Math.max(0, differenceForm.cash_tendered_cents - (differenceTarget.value?.difference_cents || 0))) / 100).toFixed(2))
 
 const load = async () => { loading.value = true; try { const res = await request.get('/after-sales', { params: { page: page.value, page_size: pageSize.value, status: status.value, order_no: orderNo.value.trim() } }); rows.value = res.data.data || []; total.value = res.data.total || 0 } finally { loading.value = false } }
 const applyFilters = () => { page.value = 1; load() }
 const loadOperationOptions = async () => {
-	const [productResult, deviceResult, shiftResult] = await Promise.allSettled([
-		request.get('/products', { params: { page: 1, page_size: 100 } }),
+	const [productResult] = await Promise.allSettled([request.get('/products', { params: { page: 1, page_size: 100 } })])
+	availableProducts.value = productResult.status === 'fulfilled' ? (productResult.value.data.data || []).filter((product: any) => product.status === 'online') : []
+	if (!isSupplier.value) { devices.value = []; openShifts.value = []; return }
+	const [deviceResult, shiftResult] = await Promise.allSettled([
 		request.get('/devices', { params: { page: 1, page_size: 100 } }),
 		request.get('/operations/shifts', { params: { page: 1, page_size: 100 } }),
 	])
-	availableProducts.value = productResult.status === 'fulfilled' ? (productResult.value.data.data || []).filter((product: any) => product.status === 'online') : []
 	devices.value = deviceResult.status === 'fulfilled' ? deviceResult.value.data.data || [] : []
 	openShifts.value = shiftResult.status === 'fulfilled' ? shiftResult.value.data.data || [] : []
 }
@@ -206,15 +212,15 @@ const reject = async (row: any) => { const reason = await ElMessageBox.prompt('�
 const execute = async (row: any) => { await ElMessageBox.confirm(`确认执行 ${typeText(row.type)} ${row.request_no}？`, '执行售后', { type: 'warning' }); const result = (await request.post(`/after-sales/${row.id}/execute`)).data; ElMessage.success(result.difference_status === 'payment_required' ? '请继续收取换票差价' : '已进入执行流程'); await load() }
 const openDifferencePayment = async (row: any) => {
   differenceTarget.value = row
-  Object.assign(differenceForm, { method: 'cash', pay_type: 'cscanb', auth_code: '', shift_id: row.shift_id || 0, device_id: row.device_id || 0, cash_tendered_cents: row.difference_cents || 0 })
+  Object.assign(differenceForm, { method: isSupplier.value ? 'cash' : 'wechat', pay_type: 'cscanb', auth_code: '', shift_id: isSupplier.value ? row.shift_id || 0 : 0, device_id: isSupplier.value ? row.device_id || 0 : 0, cash_tendered_cents: row.difference_cents || 0 })
   differenceVisible.value = true
   try {
     await loadOperationOptions()
-    if (!differenceForm.device_id) differenceForm.device_id = posDevices.value[0]?.id || 0
-    if (!differenceForm.shift_id) applyDifferenceDevice()
-  } catch (e: any) { ElMessage.error(e.response?.data?.error || '收银上下文加载失败') }
+    if (isSupplier.value && !differenceForm.device_id) differenceForm.device_id = posDevices.value[0]?.id || 0
+    if (isSupplier.value && !differenceForm.shift_id) applyDifferenceDevice()
+  } catch (e: any) { ElMessage.error(e.response?.data?.error || '收款选项加载失败') }
 }
-const collectDifference = async () => { if (!differenceForm.device_id || !differenceForm.shift_id) { ElMessage.warning('请选择当前售票终端和班次'); return }; if (differenceForm.pay_type === 'bscanc' && differenceForm.method !== 'cash' && !differenceForm.auth_code.trim()) { ElMessage.warning('请扫描顾客付款码'); return }; saving.value = true; try { const response = await request.post(`/after-sales/${differenceTarget.value.id}/difference-payment`, { ...differenceForm, idempotency_key: `difference-${differenceTarget.value.request_no}-${Date.now()}` }); differenceVisible.value = false; ElMessage.success(response.data.status === 'paid' ? '差价收取完成，换票已生效' : '支付请求已提交，等待渠道确认'); await load() } finally { saving.value = false } }
+const collectDifference = async () => { if (isSupplier.value && (!differenceForm.device_id || !differenceForm.shift_id)) { ElMessage.warning('请选择当前售票终端和班次'); return }; if (differenceForm.pay_type === 'bscanc' && differenceForm.method !== 'cash' && !differenceForm.auth_code.trim()) { ElMessage.warning('请扫描顾客付款码'); return }; saving.value = true; try { const response = await request.post(`/after-sales/${differenceTarget.value.id}/difference-payment`, { ...differenceForm, idempotency_key: `difference-${differenceTarget.value.request_no}-${Date.now()}` }); differenceVisible.value = false; ElMessage.success(response.data.status === 'paid' ? '差价收取完成，换票已生效' : '支付请求已提交，等待渠道确认'); await load() } finally { saving.value = false } }
 const showDetail = async (row: any) => {
   selected.value = (await request.get(`/after-sales/${row.id}`)).data
   refundDetail.value = null
@@ -226,7 +232,7 @@ const showDetail = async (row: any) => {
 }
 const allocationStatus = (row: any) => refundDetail.value?.tasks?.find((task: any) => task.refund_id === row.id)?.status || row.status
 const parseCodes = (value: string) => { try { return (JSON.parse(value || '[]') || []).join('，') } catch (_) { return value || '' } }
-const typeText = (value: string) => types.find(item => item.value === value)?.label || '其他售后'
+const typeText = (value: string) => types.value.find(item => item.value === value)?.label || '其他售后'
 const statusText = (value: string) => ({ pending: '待审核', approved: '已批准', processing: '处理中', completed: '已完成', rejected: '已拒绝', failed: '失败' } as any)[value] || '未知状态'
 const statusType = (value: string) => ({ completed: 'success', rejected: 'info', failed: 'danger', processing: 'warning', approved: 'warning' } as any)[value] || 'info'
 const paymentMethodText = (value: string) => ({ cash: '现金', wechat: '微信', alipay: '支付宝', mixed: '混合支付' } as any)[value] || '其他方式'

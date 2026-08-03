@@ -59,7 +59,7 @@
                 <el-icon><List /></el-icon>
                 <span>线上订单</span>
              </el-menu-item>
-             <el-menu-item index="/offline-order" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasCapability('supplier')" index="/offline-order" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Tickets /></el-icon>
                 <span>线下/窗口订单</span>
              </el-menu-item>
@@ -78,8 +78,8 @@
                 <span>旅行社团队</span>
              </el-menu-item>
 
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">现场运营</div>
-             <el-menu-item index="/operations" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">运营管理</div>
+             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor', 'travel_agency')" index="/operations" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Operation /></el-icon>
                 <span>运营工作台</span>
              </el-menu-item>
@@ -97,7 +97,7 @@
              </el-menu-item>
 
              <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">数据与财务</div>
-             <el-menu-item index="/finance" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor')" index="/finance" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Money /></el-icon>
                 <span>财务报表</span>
              </el-menu-item>
@@ -105,7 +105,7 @@
                 <el-icon><TrendCharts /></el-icon>
                 <span>经营数据</span>
              </el-menu-item>
-             <el-menu-item v-if="user.role === 'admin' || user.role === 'super_admin'" index="/refund-tasks" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && (user.role === 'admin' || user.role === 'super_admin')" index="/refund-tasks" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Warning /></el-icon>
                 <span>退款待办</span>
              </el-menu-item>
@@ -117,7 +117,7 @@
           
           <template v-if="!isSuperAdmin">
           <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">组织与设置</div>
-           <el-menu-item index="/staff" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+           <el-menu-item v-if="hasCapability('supplier')" index="/staff" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
             <el-icon><User /></el-icon>
             <span>员工管理</span>
           </el-menu-item>
@@ -125,7 +125,7 @@
             <el-icon><UserFilled /></el-icon>
             <span>管理账号</span>
           </el-menu-item>
-           <el-menu-item index="/payment-config" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+           <el-menu-item v-if="hasAnyCapability('supplier', 'distributor')" index="/payment-config" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
             <el-icon><CreditCard /></el-icon>
             <span>支付参数配置</span>
           </el-menu-item>
@@ -254,7 +254,7 @@ const passwordSaving = ref(false)
 const passwordForm = reactive({ currentPassword: '', newPassword: '', confirmPassword: '' })
 
 const isLoginPage = computed(() => route.name === 'login' || route.name === 'platform-login')
-const activeCapabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability)))
+const activeCapabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active' && (!item.expires_at || new Date(item.expires_at).getTime() > Date.now())).map((item: any) => item.capability)))
 const hasCapability = (value: string) => activeCapabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(value => activeCapabilities.value.has(value))
 const roleText = (role: string) => ({

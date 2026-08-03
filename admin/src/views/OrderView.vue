@@ -3,7 +3,7 @@
     <div class="flex justify-between items-center mb-6">
       <div>
         <h2 class="text-lg font-bold text-gray-900">订单管理</h2>
-        <p class="text-xs text-gray-500 mt-1">查看线上销售订单、处理退款及手动核销</p>
+        <p class="text-xs text-gray-500 mt-1">{{ isSupplier ? '查看线上销售订单、处理退款及手动核销' : canDirectRefund ? '查看线上销售订单及处理退款' : '查看线上销售订单及售后状态' }}</p>
       </div>
       <div class="flex gap-2">
         <el-button @click="fetchData" icon="Refresh">刷新</el-button>
@@ -65,7 +65,7 @@
       <el-table-column label="操作" width="150" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleDetail(row)">详情</el-button>
-          <el-button link type="danger" size="small" v-if="row.status === 'paid'" @click="handleRefund(row)">退款</el-button>
+          <el-button link type="danger" size="small" v-if="row.status === 'paid' && canDirectRefund" @click="handleRefund(row)">退款</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -132,7 +132,7 @@
                 </template>
               </el-table-column>
               <el-table-column prop="check_in_count" label="核销次数" width="90" align="center" />
-              <el-table-column label="操作" width="100" align="center">
+              <el-table-column v-if="isSupplier" label="操作" width="100" align="center">
                 <template #default="{ row }">
                   <el-button v-if="fulfillment.can_verify && row.status === 'unused'" link type="primary" size="small" @click="handleVerify(row)">手动核销</el-button>
                   <span v-else class="text-xs text-gray-400">不可核销</span>
@@ -145,7 +145,7 @@
     </el-dialog>
 
     <!-- Verify Dialog -->
-    <el-dialog v-model="verifyDialogVisible" title="手动核销" width="400px">
+    <el-dialog v-if="isSupplier" v-model="verifyDialogVisible" title="手动核销" width="400px">
       <el-form :model="verifyForm" label-width="80px">
         <el-form-item label="核销码">
           <el-input v-model="verifyForm.code" disabled />
@@ -167,7 +167,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 
@@ -184,6 +184,10 @@ const detailVisible = ref(false)
 const currentOrder = ref<any>(null)
 const detailLoading = ref(false)
 const responsibilities = ref<any[]>([])
+const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
+const activeCapabilities = new Set((currentUser.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability))
+const isSupplier = computed(() => activeCapabilities.has('supplier'))
+const canDirectRefund = computed(() => isSupplier.value || activeCapabilities.has('distributor'))
 
 // Verify Logic
 const verifyDialogVisible = ref(false)
@@ -304,7 +308,7 @@ const ticketStatusType = (status: string) => ({ unused: 'success', used: 'info',
 
 onMounted(() => {
   fetchData()
-  fetchCheckPoints()
+  if (isSupplier.value) fetchCheckPoints()
 })
 </script>
 

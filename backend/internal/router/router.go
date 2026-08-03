@@ -74,7 +74,7 @@ func InitRouter(r *gin.Engine) {
 	// Staff Routes (Employee Management)
 	staffController := &api.StaffController{}
 	staffGroup := protected.Group("/staff")
-	staffGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
+	staffGroup.Use(middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier"))
 	{
 		staffGroup.POST("", staffController.Create)
 		staffGroup.GET("", staffController.List)
@@ -100,7 +100,7 @@ func InitRouter(r *gin.Engine) {
 
 	// Admin APIs (Protected)
 	deviceGroup := protected.Group("/devices")
-	deviceGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
+	deviceGroup.Use(middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier"))
 	{
 		deviceGroup.POST("", deviceController.Create)
 		deviceGroup.GET("", deviceController.List)
@@ -109,7 +109,7 @@ func InitRouter(r *gin.Engine) {
 		deviceGroup.DELETE("/:id", deviceController.Delete)
 	}
 	hardwareCommandGroup := protected.Group("/hardware-commands")
-	hardwareCommandGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"))
+	hardwareCommandGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier"))
 	{
 		hardwareCommandGroup.POST("", deviceController.QueueCommand)
 	}
@@ -117,6 +117,7 @@ func InitRouter(r *gin.Engine) {
 	// Product Routes
 	productController := &api.ProductController{}
 	productGroup := protected.Group("/products")
+	productGroup.Use(middleware.RequireAnyTenantCapability("supplier", "distributor"))
 	{
 		productGroup.POST("", middleware.RequireAnyRole("admin", "super_admin"), productController.Create)
 		productGroup.PUT("/:id", middleware.RequireAnyRole("admin", "super_admin"), productController.Update)
@@ -128,7 +129,7 @@ func InitRouter(r *gin.Engine) {
 
 	orderController := &api.OrderController{}
 	orderGroup := protected.Group("/orders")
-	orderGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"))
+	orderGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"))
 	{
 		orderGroup.POST("", orderController.Create)
 		orderGroup.GET("", orderController.List)
@@ -138,6 +139,7 @@ func InitRouter(r *gin.Engine) {
 
 	afterSaleController := &api.AfterSaleController{Service: service.AfterSaleService{}}
 	afterSaleGroup := protected.Group("/after-sales")
+	afterSaleGroup.Use(middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"))
 	{
 		afterSaleGroup.POST("", middleware.RequireAnyRole("seller", "admin", "super_admin"), afterSaleController.Create)
 		afterSaleGroup.GET("", middleware.RequireAnyRole("seller", "admin", "super_admin"), afterSaleController.List)
@@ -151,7 +153,7 @@ func InitRouter(r *gin.Engine) {
 	// Ticket Routes
 	ticketController := &api.TicketController{}
 	ticketGroup := protected.Group("/tickets")
-	ticketGroup.Use(middleware.RequireAnyRole("checker", "admin", "super_admin"))
+	ticketGroup.Use(middleware.RequireAnyRole("checker", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier"))
 	{
 		ticketGroup.POST("/verify", ticketController.Verify)
 	}
@@ -159,6 +161,7 @@ func InitRouter(r *gin.Engine) {
 	// CheckPoint Routes
 	scenicAreaController := &api.ScenicAreaController{}
 	scenicAreaGroup := protected.Group("/scenic-areas")
+	scenicAreaGroup.Use(middleware.RequireAnyTenantCapability("supplier"))
 	{
 		scenicAreaGroup.GET("", middleware.RequireAnyRole("seller", "checker", "admin", "super_admin"), scenicAreaController.List)
 		scenicAreaGroup.POST("", middleware.RequireAnyRole("admin", "super_admin"), scenicAreaController.Create)
@@ -169,6 +172,7 @@ func InitRouter(r *gin.Engine) {
 	// CheckPoint Routes
 	cpController := &api.CheckPointController{}
 	cpGroup := protected.Group("/checkpoints")
+	cpGroup.Use(middleware.RequireAnyTenantCapability("supplier"))
 	{
 		cpGroup.POST("", middleware.RequireAnyRole("admin", "super_admin"), cpController.Create)
 		cpGroup.GET("", middleware.RequireAnyRole("seller", "checker", "admin", "super_admin"), cpController.List)
@@ -179,6 +183,7 @@ func InitRouter(r *gin.Engine) {
 	// Policy Routes
 	policyController := &api.PolicyController{Service: service.PolicyService{}}
 	policyGroup := protected.Group("/policies")
+	policyGroup.Use(middleware.RequireAnyTenantCapability("supplier"))
 	{
 		policyGroup.POST("", middleware.RequireAnyRole("admin", "super_admin"), policyController.Create)
 		policyGroup.GET("", middleware.RequireAnyRole("seller", "admin", "super_admin"), policyController.List)
@@ -189,7 +194,7 @@ func InitRouter(r *gin.Engine) {
 	// Distribution Routes (B2B)
 	distController := &api.DistributionController{Service: service.DistributionService{}, BundleService: service.BundleService{}, RefundService: service.RefundService{}}
 	distGroup := protected.Group("/distribution")
-	distGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
+	distGroup.Use(middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"))
 	{
 		distGroup.GET("/search", distController.Search) // Search before apply
 		distGroup.POST("/apply", distController.Apply)
@@ -217,7 +222,7 @@ func InitRouter(r *gin.Engine) {
 		distGroup.PUT("/bundles/:id", distController.ReviseBundle)
 		distGroup.PATCH("/bundles/:id/status", distController.SetBundleStatus)
 	}
-	protected.GET("/bundle-catalog", middleware.RequireAnyRole("seller", "admin", "super_admin"), distController.ListBundleCatalog)
+	protected.GET("/bundle-catalog", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), distController.ListBundleCatalog)
 
 	// OTA Routes (External Integration)
 	otaController := &api.OTAController{
@@ -245,7 +250,7 @@ func InitRouter(r *gin.Engine) {
 	}
 
 	channelAdminGroup := protected.Group("/channel-accounts")
-	channelAdminGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
+	channelAdminGroup.Use(middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"))
 	{
 		channelAdminGroup.GET("", channelController.List)
 		channelAdminGroup.POST("", channelController.Create)
@@ -264,7 +269,7 @@ func InitRouter(r *gin.Engine) {
 
 	teamController := &api.TeamController{Service: service.TeamService{}}
 	teamGroup := protected.Group("/teams")
-	teamGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"))
+	teamGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "travel_agency"))
 	{
 		teamGroup.GET("/contract-partners", teamController.ListContractPartners)
 		teamGroup.GET("/contracts", teamController.ListContracts)
@@ -299,7 +304,7 @@ func InitRouter(r *gin.Engine) {
 
 	operationsController := &api.OperationsController{Service: service.OperationsService{}}
 	operationsGroup := protected.Group("/operations")
-	operationsGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"))
+	operationsGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier"))
 	{
 		operationsGroup.GET("/shifts", operationsController.ListShifts)
 		operationsGroup.GET("/shifts/:id/summary", operationsController.GetShiftSummary)
@@ -329,7 +334,7 @@ func InitRouter(r *gin.Engine) {
 	// Finance Routes
 	financeController := &api.FinanceController{Service: service.FinanceService{}}
 	financeGroup := protected.Group("/finance")
-	financeGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
+	financeGroup.Use(middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"))
 	{
 		financeGroup.GET("/accounts", financeController.ListAccounts)
 		financeGroup.GET("/managed-accounts", financeController.ListManagedAccounts)
@@ -343,7 +348,7 @@ func InitRouter(r *gin.Engine) {
 
 	settlementController := &api.SettlementController{Service: service.SettlementService{}}
 	settlementGroup := protected.Group("/settlements")
-	settlementGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
+	settlementGroup.Use(middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"))
 	{
 		settlementGroup.GET("", settlementController.List)
 		settlementGroup.GET("/:id", settlementController.Get)
@@ -358,15 +363,15 @@ func InitRouter(r *gin.Engine) {
 	reportGroup := protected.Group("/reports")
 	reportGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
 	{
-		reportGroup.GET("/sales", reportController.GetSales)
-		reportGroup.GET("/products", reportController.GetProducts)
-		reportGroup.GET("/channels", reportController.GetChannels)
-		reportGroup.GET("/daily", reportController.GetDaily)
-		reportGroup.GET("/operations", reportController.GetOperations)
-		reportGroup.GET("/business-summary", reportController.GetBusinessSummary)
-		reportGroup.GET("/business-details", reportController.GetBusinessDetails)
-		reportGroup.GET("/verification-summary", reportController.GetVerificationSummary)
-		reportGroup.GET("/verification-details", reportController.GetVerificationDetails)
+		reportGroup.GET("/sales", middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"), reportController.GetSales)
+		reportGroup.GET("/products", middleware.RequireAnyTenantCapability("supplier", "distributor"), reportController.GetProducts)
+		reportGroup.GET("/channels", middleware.RequireAnyTenantCapability("supplier", "distributor"), reportController.GetChannels)
+		reportGroup.GET("/daily", middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"), reportController.GetDaily)
+		reportGroup.GET("/operations", middleware.RequireAnyTenantCapability("supplier"), reportController.GetOperations)
+		reportGroup.GET("/business-summary", middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"), reportController.GetBusinessSummary)
+		reportGroup.GET("/business-details", middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"), reportController.GetBusinessDetails)
+		reportGroup.GET("/verification-summary", middleware.RequireAnyTenantCapability("supplier"), reportController.GetVerificationSummary)
+		reportGroup.GET("/verification-details", middleware.RequireAnyTenantCapability("supplier"), reportController.GetVerificationDetails)
 	}
 
 	// Payment Routes
@@ -384,18 +389,18 @@ func InitRouter(r *gin.Engine) {
 
 	paymentGroup := protected.Group("/payments")
 	{
-		paymentGroup.POST("/pay", middleware.RequireAnyRole("seller", "admin", "super_admin"), paymentController.Pay)
-		paymentGroup.GET("/orders/:orderNo", middleware.RequireAnyRole("seller", "admin", "super_admin"), paymentController.OrderProgress)
-		paymentGroup.POST("/orders/:orderNo/cancel-partial-cash", middleware.RequireAnyRole("seller", "admin", "super_admin"), paymentController.CancelPartialCash)
-		paymentGroup.POST("/refunds/cash", middleware.RequireAnyRole("seller", "admin", "super_admin"), refundController.CreateCash)
-		paymentGroup.POST("/refunds/mixed", middleware.RequireAnyRole("seller", "admin", "super_admin"), refundController.CreateMixed)
-		paymentGroup.GET("/refunds/:id", middleware.RequireAnyRole("seller", "admin", "super_admin"), refundController.GetGroup)
-		paymentGroup.POST("/refunds/digital", middleware.RequireAnyRole("seller", "admin", "super_admin"), refundController.CreateDigital)
-		paymentGroup.GET("/refund-tasks", middleware.RequireAnyRole("admin", "super_admin"), refundController.ListDigitalTasks)
-		paymentGroup.POST("/refund-tasks/:id/retry", middleware.RequireAnyRole("admin", "super_admin"), refundController.RetryDigitalTask)
-		paymentGroup.GET("/configs", middleware.RequireAnyRole("admin", "super_admin"), configController.GetConfigs)
-		paymentGroup.GET("/configs/readiness", middleware.RequireAnyRole("admin", "super_admin"), configController.GetReadiness)
-		paymentGroup.POST("/configs", middleware.RequireAnyRole("admin", "super_admin"), configController.SaveConfig)
-		paymentGroup.GET("/:id", middleware.RequireAnyRole("seller", "admin", "super_admin"), paymentController.Query)
+		paymentGroup.POST("/pay", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), paymentController.Pay)
+		paymentGroup.GET("/orders/:orderNo", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), paymentController.OrderProgress)
+		paymentGroup.POST("/orders/:orderNo/cancel-partial-cash", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier"), paymentController.CancelPartialCash)
+		paymentGroup.POST("/refunds/cash", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier"), refundController.CreateCash)
+		paymentGroup.POST("/refunds/mixed", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.CreateMixed)
+		paymentGroup.GET("/refunds/:id", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"), refundController.GetGroup)
+		paymentGroup.POST("/refunds/digital", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.CreateDigital)
+		paymentGroup.GET("/refund-tasks", middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.ListDigitalTasks)
+		paymentGroup.POST("/refund-tasks/:id/retry", middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.RetryDigitalTask)
+		paymentGroup.GET("/configs", middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.GetConfigs)
+		paymentGroup.GET("/configs/readiness", middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.GetReadiness)
+		paymentGroup.POST("/configs", middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.SaveConfig)
+		paymentGroup.GET("/:id", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), paymentController.Query)
 	}
 }

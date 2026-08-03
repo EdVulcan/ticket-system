@@ -6,6 +6,7 @@ import (
 	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
@@ -112,5 +113,25 @@ func RequireAnyRole(allowed ...string) gin.HandlerFunc {
 			}
 		}
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "permission denied"})
+	}
+}
+
+func RequireAnyTenantCapability(allowed ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := c.GetUint("tenant_id")
+		if c.GetString("scope") != "tenant" || tenantID == 0 || len(allowed) == 0 || model.DB == nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有此业务能力"})
+			return
+		}
+		var count int64
+		err := model.DB.Model(&model.TenantCapability{}).
+			Where("tenant_id = ? AND capability IN ? AND status = ?", tenantID, allowed, "active").
+			Where("expires_at IS NULL OR expires_at > ?", time.Now()).
+			Count(&count).Error
+		if err != nil || count == 0 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有此业务能力"})
+			return
+		}
+		c.Next()
 	}
 }

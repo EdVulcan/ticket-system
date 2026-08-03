@@ -23,8 +23,8 @@
     <el-tabs v-model="activeTab" class="report-tabs" @tab-change="handleTabChange">
       <el-tab-pane label="营业汇总表" name="business-summary" />
       <el-tab-pane label="营业明细表" name="business-details" />
-      <el-tab-pane label="核销汇总表" name="verification-summary" />
-      <el-tab-pane label="核销明细表" name="verification-details" />
+      <el-tab-pane v-if="isSupplier" label="核销汇总表" name="verification-summary" />
+      <el-tab-pane v-if="isSupplier" label="核销明细表" name="verification-details" />
     </el-tabs>
 
     <section class="filter-bar">
@@ -143,6 +143,9 @@ const exporting = ref(false)
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
+const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
+const activeCapabilities = new Set((currentUser.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability))
+const isSupplier = computed(() => activeCapabilities.has('supplier'))
 
 const channelOptions = [
   { value: 'window', label: '窗口直销' },
@@ -250,8 +253,12 @@ const exportCurrent = async () => {
 }
 
 onMounted(async () => {
-  const [areas] = await Promise.all([request.get('/scenic-areas'), loadRows()])
-  scenicAreas.value = areas.data.data || []
+  if (isSupplier.value) {
+    const [areas] = await Promise.all([request.get('/scenic-areas'), loadRows()])
+    scenicAreas.value = areas.data.data || []
+    return
+  }
+  await loadRows()
 })
 </script>
 
