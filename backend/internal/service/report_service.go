@@ -200,10 +200,7 @@ func (s *ReportService) GetSalesStats(tenantID uint, startDate, endDate string) 
 		return nil, err
 	}
 
-	// SQLite syntax for date formatting might differ (strftime).
-	// Assuming SQLite given previous context, or generic SQL.
-	// Using gorm's Raw for aggregation.
-	// Note: For SQLite, DATE(created_at) works.
+	// PostgreSQL DATE(created_at) keeps the aggregation on business dates.
 
 	err = model.DB.Table("orders").
 		Select(`DATE(orders.created_at) as date,

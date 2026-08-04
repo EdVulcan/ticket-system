@@ -1,36 +1,24 @@
-//go:build cgo
-
 package middleware
 
 import (
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 	"ticket-backend/internal/model"
+	"ticket-backend/internal/testdb"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 func TestRequireAnyTenantCapability(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "capability.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Open(t)
 	if err := db.AutoMigrate(&model.TenantCapability{}); err != nil {
 		t.Fatal(err)
 	}
 	previousDB := model.DB
 	model.DB = db
 	t.Cleanup(func() {
-		sqlDB, sqlErr := db.DB()
-		if sqlErr == nil {
-			_ = sqlDB.Close()
-		}
 		model.DB = previousDB
 	})
 	if err := db.Create(&model.TenantCapability{TenantID: 1, Capability: "distributor", Status: "active"}).Error; err != nil {

@@ -4,7 +4,7 @@
 
 生产数据库已切换到 PostgreSQL，当前 schema 版本为 64。Go 服务、管理端静态资源和业务任务仍由一个应用进程承载，不引入 Redis、MySQL、消息队列或微服务。
 
-PostgreSQL 负责并发事务和持久化。SQLite 仅保留用于快速单元/回归测试及未来可能的旧数据导入验证，不再作为生产数据库。
+PostgreSQL 负责并发事务和持久化，也是自动化测试的唯一数据库。项目不再包含 SQLite 驱动、运行配置、备份恢复或兼容测试。
 
 ## 2. 数据库账号
 
@@ -34,9 +34,9 @@ $env:TICKET_DATABASE_PASSWORD = '数据库账号密码'
 go run ./cmd/db-migrate
 ```
 
-命令可重复执行。新建 PostgreSQL 库会直接建立当前 schema、必要索引和跨租户/跨景区归属触发器，不重放包含 SQLite 专用语法的历史迁移。
+命令可重复执行。新建 PostgreSQL 库会直接建立当前 schema、必要索引和跨租户/跨景区归属触发器。
 
-本次迁移检查没有发现正式业务 SQLite 数据库，因此没有执行数据导入，也没有创建未经真实样本验证的通用转换器。以后如确有旧数据导入需求，应以真实脱敏样本单独设计、审计和验收，不在原库上试验。
+旧系统或 SQLite 数据导入不属于本项目交付范围；如以后单独立项，应使用独立工具和脱敏样本处理，不恢复 SQLite 运行支持。
 
 ## 4. 自动备份
 
@@ -54,7 +54,7 @@ go run ./cmd/db-migrate
 ```powershell
 cd backend
 $env:TICKET_DATABASE_PASSWORD = '数据库账号密码'
-go run ./cmd/restore --driver postgres `
+go run ./cmd/restore `
   --source-dump data/backups/ticket-system-pg-时间戳.dump `
   --source-key data/backups/ticket-system-pg-时间戳.key.json `
   --target-key data/instance-key.json `
@@ -70,11 +70,11 @@ go run ./cmd/restore --driver postgres `
 
 ## 6. 测试库与 CI
 
-本地 PostgreSQL 集成测试使用：
+普通测试使用具备 `CREATEDB` 权限的 PostgreSQL 测试账号，按包创建随机命名的隔离数据库并在结束后清理。备份恢复集成测试固定使用：
 
 - `ticket_system_test`
 - `ticket_system_restore_test`
 
-测试会修改和清理这些数据库，严禁将测试变量指向生产库。CI 使用独立 PostgreSQL 16 服务，除 SQLite 全量回归外，还运行核心业务服务测试和真实 `pg_dump`/`pg_restore` 演练。
+测试会修改和清理这些数据库，严禁将测试变量指向生产库。CI 使用独立 PostgreSQL 16 服务，运行核心业务、租户隔离、并发事务和真实 `pg_dump`/`pg_restore` 演练。
 
 当前没有启用 PostgreSQL RLS。租户隔离由服务层强制作用域、数据库归属触发器和跨租户负向测试共同保障；在没有明确多实例直连或数据库侧租户账号需求前，不增加 RLS 策略复杂度。

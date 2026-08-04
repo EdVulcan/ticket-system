@@ -1,5 +1,3 @@
-//go:build cgo
-
 package middleware
 
 import (
@@ -8,37 +6,28 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"ticket-backend/internal/deviceauth"
 	"ticket-backend/internal/model"
+	"ticket-backend/internal/testdb"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 func TestDeviceAuthRejectsReplay(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "device-auth.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Open(t)
 	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.Device{}, &model.DeviceRequestNonce{}); err != nil {
 		t.Fatal(err)
 	}
 	previousDB := model.DB
 	model.DB = db
-	model.InitWriter(db, 16, time.Second, 5*time.Second)
+	model.InitWriter(db, 5*time.Second)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = model.CloseWriter(ctx)
-		if sqlDB, dbErr := db.DB(); dbErr == nil {
-			_ = sqlDB.Close()
-		}
 		model.DB = previousDB
 	})
 	tenant := model.Tenant{Name: "景区", SystemCode: "SCENIC", Status: "active"}

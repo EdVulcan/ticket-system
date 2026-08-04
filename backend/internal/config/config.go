@@ -43,14 +43,7 @@ type DatabaseConfig struct {
 	MaxOpenConnections     int    `mapstructure:"max_open_connections"`
 	MaxIdleConnections     int    `mapstructure:"max_idle_connections"`
 	ConnMaxLifetimeMinutes int    `mapstructure:"conn_max_lifetime_minutes"`
-
-	// SQLite remains supported for regression tests and separately verified legacy import work.
-	Path                  string `mapstructure:"path"`
-	BusyTimeoutMS         int    `mapstructure:"busy_timeout_ms"`
-	MaxReadConnections    int    `mapstructure:"max_read_connections"`
-	WriteQueueSize        int    `mapstructure:"write_queue_size"`
-	WriteTimeoutSeconds   int    `mapstructure:"write_timeout_seconds"`
-	EnqueueTimeoutSeconds int    `mapstructure:"enqueue_timeout_seconds"`
+	WriteTimeoutSeconds    int    `mapstructure:"write_timeout_seconds"`
 }
 
 func (c DatabaseConfig) PostgresDSN() (string, error) {
@@ -138,12 +131,7 @@ func InitConfig() error {
 	viper.SetDefault("database.max_open_connections", 50)
 	viper.SetDefault("database.max_idle_connections", 10)
 	viper.SetDefault("database.conn_max_lifetime_minutes", 30)
-	viper.SetDefault("database.path", "data/ticket-system.db")
-	viper.SetDefault("database.busy_timeout_ms", 5000)
-	viper.SetDefault("database.max_read_connections", 8)
-	viper.SetDefault("database.write_queue_size", 1000)
 	viper.SetDefault("database.write_timeout_seconds", 10)
-	viper.SetDefault("database.enqueue_timeout_seconds", 2)
 	viper.SetDefault("security.ota_max_clock_skew_seconds", 300)
 	viper.SetDefault("security.key_file", "data/instance-key.json")
 	viper.SetDefault("bootstrap.tenant_name", "Default Tenant")
@@ -223,26 +211,14 @@ func (c *Config) resolveSecrets() error {
 
 func (c Config) Validate() error {
 	driver := strings.ToLower(strings.TrimSpace(c.Database.Driver))
-	switch driver {
-	case "postgres", "postgresql":
-		if strings.TrimSpace(c.Database.URL) == "" && (strings.TrimSpace(c.Database.Host) == "" || c.Database.Port <= 0 || strings.TrimSpace(c.Database.Name) == "" || strings.TrimSpace(c.Database.User) == "") {
-			return fmt.Errorf("PostgreSQL URL or host, port, name and user are required")
-		}
-		if c.Database.MaxOpenConnections <= 0 || c.Database.MaxIdleConnections < 0 || c.Database.MaxIdleConnections > c.Database.MaxOpenConnections || c.Database.ConnMaxLifetimeMinutes <= 0 {
-			return fmt.Errorf("invalid PostgreSQL connection pool settings")
-		}
-	case "sqlite":
-		if strings.TrimSpace(c.Database.Path) == "" {
-			return fmt.Errorf("database path is required")
-		}
-		if c.Database.BusyTimeoutMS <= 0 {
-			return fmt.Errorf("database busy timeout must be greater than zero")
-		}
-		if c.Database.MaxReadConnections < 2 || c.Database.WriteQueueSize <= 0 || c.Database.WriteTimeoutSeconds <= 0 || c.Database.EnqueueTimeoutSeconds <= 0 {
-			return fmt.Errorf("invalid SQLite concurrency settings")
-		}
-	default:
+	if driver != "postgres" && driver != "postgresql" {
 		return fmt.Errorf("unsupported database driver %q", c.Database.Driver)
+	}
+	if strings.TrimSpace(c.Database.URL) == "" && (strings.TrimSpace(c.Database.Host) == "" || c.Database.Port <= 0 || strings.TrimSpace(c.Database.Name) == "" || strings.TrimSpace(c.Database.User) == "") {
+		return fmt.Errorf("PostgreSQL URL or host, port, name and user are required")
+	}
+	if c.Database.MaxOpenConnections <= 0 || c.Database.MaxIdleConnections < 0 || c.Database.MaxIdleConnections > c.Database.MaxOpenConnections || c.Database.ConnMaxLifetimeMinutes <= 0 || c.Database.WriteTimeoutSeconds <= 0 {
+		return fmt.Errorf("invalid PostgreSQL connection settings")
 	}
 	if len(c.Security.JWTSecret) < 32 {
 		return fmt.Errorf("JWT secret must be at least 32 characters (set TICKET_SECURITY_JWT_SECRET)")

@@ -10,10 +10,8 @@ import (
 
 const CurrentPostgresSchemaVersion = 64
 
-// PostgreSQL starts from the current domain schema. The historical migrations
-// contain SQLite trigger syntax and legacy backfills, so replaying them on a
-// fresh PostgreSQL database would be incorrect. SQLite remains available for
-// regression tests and any future, separately verified legacy import work.
+// PostgreSQL starts from the current domain schema. Historical migrations are
+// retained as source history, but are not replayed against a fresh database.
 func runPostgresMigrations(db *gorm.DB) error {
 	hadSettlementSource := db.Migrator().HasColumn(&SettlementLine{}, "Source")
 	models := []interface{}{

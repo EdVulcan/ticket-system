@@ -31,41 +31,35 @@ jobs:
           go-version-file: backend/go.mod
           cache: true
           cache-dependency-path: backend/go.sum
-      - name: Install database test dependencies
-        run: sudo apt-get update && sudo apt-get install -y gcc libc6-dev postgresql-client
-      - name: Require CGO for core tests
-        shell: bash
-        run: |
-          test "${CGO_ENABLED:-}" = "1"
-          command -v gcc
-        env:
-          CGO_ENABLED: "1"
+      - name: Install PostgreSQL test tools
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: Test
         run: go test ./... -count=1
         env:
-          CGO_ENABLED: "1"
+          CGO_ENABLED: "0"
+          PGPASSWORD: postgres
       - name: Race test
         run: go test -race ./... -count=1 -timeout 10m
         env:
           CGO_ENABLED: "1"
+          PGPASSWORD: postgres
       - name: PostgreSQL integration
         shell: bash
         run: |
           createdb -h 127.0.0.1 -U postgres ticket_system_test
           createdb -h 127.0.0.1 -U postgres ticket_system_restore_test
-          TICKET_TEST_POSTGRES=1 go test ./internal/service -count=1
           TICKET_TEST_POSTGRES=1 go test ./internal/backup -run TestPostgresBackupAndRestore -count=1
         env:
-          CGO_ENABLED: "1"
+          CGO_ENABLED: "0"
           PGPASSWORD: postgres
       - name: Vet
         run: go vet ./...
         env:
-          CGO_ENABLED: "1"
+          CGO_ENABLED: "0"
       - name: Build Linux server artifact
         run: go build -trimpath -ldflags="-s -w" -o ticket-backend ./cmd
         env:
-          CGO_ENABLED: "1"
+          CGO_ENABLED: "0"
       - name: Upload Linux server artifact
         uses: actions/upload-artifact@v4
         with:
@@ -102,6 +96,18 @@ jobs:
 
   admin-e2e:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     defaults:
       run:
         working-directory: admin
@@ -112,9 +118,14 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: admin/package-lock.json
+      - name: Install PostgreSQL test tools
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+        working-directory: .
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+        env:
+          PGPASSWORD: postgres
       - run: npm ci
         working-directory: desktop
       - run: npm run test:e2e

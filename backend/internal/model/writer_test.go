@@ -1,36 +1,24 @@
-//go:build cgo
-
 package model
 
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
+	"ticket-backend/internal/testdb"
 	"time"
 
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 func TestWriterSerializesAndRejectsWritesAfterClose(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "writer.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sqlDB.Close()
+	db := testdb.Open(t)
 	if err := db.Exec("CREATE TABLE counters (id INTEGER PRIMARY KEY, value INTEGER NOT NULL)").Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Exec("INSERT INTO counters(id, value) VALUES (1, 0)").Error; err != nil {
 		t.Fatal(err)
 	}
-	InitWriter(db, 32, time.Second, 5*time.Second)
+	InitWriter(db, 5*time.Second)
 	for i := 0; i < 50; i++ {
 		if err := Write(func(tx *gorm.DB) error {
 			return tx.Exec("UPDATE counters SET value = value + 1 WHERE id = 1").Error

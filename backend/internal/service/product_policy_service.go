@@ -19,7 +19,7 @@ type timeSlotRule struct {
 }
 
 // salePolicyContext carries quantities already validated in the current
-// order. Historical orders are queried from SQLite, but a single request can
+// order. Historical orders are queried from PostgreSQL, but a single request can
 // contain multiple lines for the same product and visitor. Keeping this
 // context inside the transaction prevents that request from bypassing a
 // phone/identity purchase limit by splitting its lines.

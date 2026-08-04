@@ -36,14 +36,7 @@ finally {
     Pop-Location
 }
 
-$gccDirectory = 'C:\msys64\ucrt64\bin'
-if ((Test-Path (Join-Path $gccDirectory 'gcc.exe')) -and ($env:Path -notlike "*$gccDirectory*")) {
-    $env:Path = "$gccDirectory;$env:Path"
-}
-if (-not (Get-Command gcc -ErrorAction SilentlyContinue)) {
-    throw 'CGO requires GCC. Install mingw-w64-ucrt-x86_64-gcc with MSYS2 first.'
-}
-$env:CGO_ENABLED = '1'
+$env:CGO_ENABLED = '0'
 
 if (Test-Path -LiteralPath $releaseDirectory) {
     Remove-Item -LiteralPath $releaseDirectory -Recurse -Force

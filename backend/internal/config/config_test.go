@@ -57,3 +57,14 @@ func TestPostgresDSNRejectsInvalidTimeZone(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestConfigRejectsSQLiteDriver(t *testing.T) {
+	configuration := Config{
+		Database: DatabaseConfig{Driver: "sqlite"},
+		Security: SecurityConfig{JWTSecret: strings.Repeat("j", 32), EncryptionKey: strings.Repeat("e", 32), OTAMaxClockSkewSeconds: 300},
+		Backup:   BackupConfig{IntervalHours: 24, Retention: 14},
+	}
+	if err := configuration.Validate(); err == nil || !strings.Contains(err.Error(), "unsupported database driver") {
+		t.Fatalf("unexpected validation result: %v", err)
+	}
+}

@@ -1,5 +1,3 @@
-//go:build cgo
-
 package middleware
 
 import (
@@ -11,38 +9,29 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
+	"ticket-backend/internal/testdb"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 func TestChannelSignatureCoversBodyAndRejectsConflict(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "channel.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Open(t)
 	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.ChannelAccount{}, &model.ChannelRequest{}, &model.AuditLog{}); err != nil {
 		t.Fatal(err)
 	}
 	model.DB = db
-	model.InitWriter(db, 16, time.Second, 5*time.Second)
+	model.InitWriter(db, 5*time.Second)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = model.CloseWriter(ctx)
 		model.DB = nil
-		if sqlDB, dbErr := db.DB(); dbErr == nil {
-			_ = sqlDB.Close()
-		}
 	})
 	config.GlobalConfig.Security.EncryptionKey = strings.Repeat("a", 32)
 	config.GlobalConfig.Security.OTAMaxClockSkewSeconds = 300

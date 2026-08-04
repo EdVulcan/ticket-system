@@ -52,10 +52,9 @@ go run ./cmd
 
 ## 构建发布包
 
-构建环境需要 Go、Node.js 22，以及用于 SQLite 兼容测试的 CGO/GCC。Windows 推荐 MSYS2 UCRT64 GCC：
+构建环境需要 Go 和 Node.js 22。后端只支持 PostgreSQL，普通构建不需要 SQLite、CGO 或 GCC：
 
 ```powershell
-pacman -S --needed mingw-w64-ucrt-x86_64-gcc
 powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
 ```
 
@@ -69,7 +68,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build-release.ps1
 
 ```powershell
 cd backend
-go run ./cmd/restore --driver postgres `
+go run ./cmd/restore `
   --source-dump data/backups/ticket-system-pg-时间戳.dump `
   --source-key data/backups/ticket-system-pg-时间戳.key.json `
   --target-key data/instance-key.json
@@ -79,20 +78,17 @@ go run ./cmd/restore --driver postgres `
 
 ## 开发验证
 
-SQLite 继续用于快速回归和历史兼容测试；核心业务还必须在真实 PostgreSQL 测试库运行：
+所有后端测试均使用真实 PostgreSQL。测试账号需要有 `CREATEDB` 权限，测试会创建并清理随机命名的隔离数据库，严禁指向生产实例：
 
 ```powershell
-$env:Path = 'C:\msys64\ucrt64\bin;' + $env:Path
-$env:CGO_ENABLED = '1'
 cd backend
+$env:PGPASSWORD = 'PostgreSQL测试账号密码'
 go test ./... -count=1
 go test -race ./... -count=1 -timeout 10m
 go vet ./...
 
-$env:PGPASSWORD = 'PostgreSQL测试账号密码'
 $env:TICKET_TEST_POSTGRES = '1'
 $env:TICKET_TEST_POSTGRES_BIN = 'F:\PGSQL\bin'
-go test ./internal/service -count=1
 go test ./internal/backup -run TestPostgresBackupAndRestore -count=1
 ```
 

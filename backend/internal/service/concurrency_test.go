@@ -1,5 +1,3 @@
-//go:build cgo
-
 package service
 
 import (
@@ -13,10 +11,10 @@ import (
 	"testing"
 	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
+	"ticket-backend/internal/testdb"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -36,66 +34,24 @@ func TestExternalOrderUniqueViolationDetection(t *testing.T) {
 }
 
 func TestMain(m *testing.M) {
-	if os.Getenv("TICKET_TEST_POSTGRES") == "1" {
-		config.GlobalConfig.Database = config.DatabaseConfig{
-			Driver: "postgres", Host: "127.0.0.1", Port: 5432, Name: "ticket_system_test", User: "postgres",
-			Password: os.Getenv("PGPASSWORD"), SSLMode: "disable", TimeZone: "Asia/Shanghai",
-			MaxOpenConnections: 30, MaxIdleConnections: 5, ConnMaxLifetimeMinutes: 5,
-			WriteQueueSize: 256, WriteTimeoutSeconds: 10, EnqueueTimeoutSeconds: 2,
-		}
-		if err := model.InitDB(); err != nil {
-			panic(err)
-		}
-		model.DB.Logger = logger.Default.LogMode(logger.Silent)
-		code := m.Run()
-		closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = model.CloseWriter(closeContext)
-		cancel()
-		if sqlDB, dbErr := model.DB.DB(); dbErr == nil {
-			_ = sqlDB.Close()
-		}
-		os.Exit(code)
-	}
-
-	databasePath, err := os.CreateTemp("", "ticket-service-test-*.db")
+	database, dropDatabase, err := testdb.CreateDatabase()
 	if err != nil {
 		panic(err)
 	}
-	path := databasePath.Name()
-	_ = databasePath.Close()
-
-	db, err := gorm.Open(sqlite.Open("file:"+path+"?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on"), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	if err != nil {
+	config.GlobalConfig.Database = database
+	if err := model.InitDB(); err != nil {
 		panic(err)
 	}
-	if err := db.AutoMigrate(
-		&model.Tenant{}, &model.TenantCapability{}, &model.User{}, &model.Staff{}, &model.ScenicArea{}, &model.PlatformUser{}, &model.CheckPoint{}, &model.Device{}, &model.TicketRule{}, &model.RuleGroup{}, &model.RuleItem{},
-		&model.Product{}, &model.ProductOffer{}, &model.SellerListing{}, &model.ProductInventory{}, &model.Order{}, &model.OrderItem{}, &model.Ticket{}, &model.OrderVisitor{}, &model.FulfillmentOrder{}, &model.TicketEntitlement{},
-		&model.CheckInRecord{}, &model.DistributorRelationship{}, &model.CapitalAccount{}, &model.TransactionRecord{},
-		&model.LedgerEntry{}, &model.DigitalRefundTask{}, &model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{}, &model.CtripOrderLink{}, &model.CtripOrderItem{},
-		&model.Policy{}, &model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{},
-		&model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.TourGroup{}, &model.TourGroupMember{}, &model.TourEntryBatch{}, &model.TourGroupConfirmation{}, &model.TourGroupMemberChange{},
-		&model.POSShift{}, &model.POSShiftCorrection{}, &model.PrintJob{}, &model.DeviceAlert{}, &model.POSHold{},
-		&model.ProductRevision{}, &model.SettlementStatement{}, &model.SettlementLine{}, &model.SettlementAdjustment{}, &model.StaffResourceScope{},
-		&model.AfterSaleRequest{}, &model.AfterSaleEvent{}, &model.HardwareCommand{}, &model.HardwareEvent{}, &model.DeviceRequestNonce{}, &model.DeviceVerification{}, &model.ChannelReservation{}, &model.FinancialDocument{}, &model.TeamSettlementStatement{}, &model.TeamSettlementAdjustment{},
-		&model.ChannelBillRecord{}, &model.ChannelReconciliation{}, &model.ChannelReconciliationLine{},
-		&model.BundleProduct{}, &model.BundleVersion{}, &model.BundleComponent{},
-	); err != nil {
-		panic(err)
-	}
-	model.DB = db
-	model.InitWriter(db, 256, 2*time.Second, 10*time.Second)
+	model.DB.Logger = logger.Default.LogMode(logger.Silent)
 
 	code := m.Run()
 	closeContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	_ = model.CloseWriter(closeContext)
 	cancel()
-	if sqlDB, dbErr := db.DB(); dbErr == nil {
+	if sqlDB, dbErr := model.DB.DB(); dbErr == nil {
 		_ = sqlDB.Close()
 	}
-	_ = os.Remove(path)
+	_ = dropDatabase()
 	os.Exit(code)
 }
 

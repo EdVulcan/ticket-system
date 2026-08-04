@@ -1,5 +1,3 @@
-//go:build cgo
-
 package middleware
 
 import (
@@ -8,26 +6,20 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strconv"
 	"testing"
 	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
+	"ticket-backend/internal/testdb"
 	"ticket-backend/internal/utils"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 func TestOTASignatureTimestampAndReplayProtection(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "ota.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Open(t)
 	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.OTANonce{}); err != nil {
 		t.Fatal(err)
 	}
@@ -39,14 +31,11 @@ func TestOTASignatureTimestampAndReplayProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 	model.DB = db
-	model.InitWriter(db, 16, time.Second, 5*time.Second)
+	model.InitWriter(db, 5*time.Second)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = model.CloseWriter(ctx)
-		if sqlDB, dbErr := db.DB(); dbErr == nil {
-			_ = sqlDB.Close()
-		}
 	})
 	config.GlobalConfig.Security.OTAMaxClockSkewSeconds = 300
 

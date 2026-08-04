@@ -57,11 +57,7 @@ func main() {
 	defer stopBackups()
 	backupConfig := config.GlobalConfig.Backup
 	backupReporter := func(err error) { logger.Log.Error(fmt.Sprintf("Database backup failed: %v", err)) }
-	if strings.EqualFold(config.GlobalConfig.Database.Driver, "sqlite") {
-		backup.Start(backupContext, model.DB, backupConfig.Directory, config.GlobalConfig.Security.KeyFile, time.Duration(backupConfig.IntervalHours)*time.Hour, backupConfig.Retention, backupReporter)
-	} else {
-		backup.StartPostgres(backupContext, config.GlobalConfig.Database, backupConfig.Directory, config.GlobalConfig.Security.KeyFile, backupConfig.PostgresBinDir, time.Duration(backupConfig.IntervalHours)*time.Hour, backupConfig.Retention, backupReporter)
-	}
+	backup.StartPostgres(backupContext, config.GlobalConfig.Database, backupConfig.Directory, config.GlobalConfig.Security.KeyFile, backupConfig.PostgresBinDir, time.Duration(backupConfig.IntervalHours)*time.Hour, backupConfig.Retention, backupReporter)
 
 	orderExpiryContext, stopOrderExpiry := context.WithCancel(context.Background())
 	defer stopOrderExpiry()

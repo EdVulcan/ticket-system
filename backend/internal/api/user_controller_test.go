@@ -1,41 +1,30 @@
-//go:build cgo
-
 package api
 
 import (
 	"bytes"
 	"context"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 	"ticket-backend/internal/model"
+	"ticket-backend/internal/testdb"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 func TestRestoredTenantAdministratorRevokesOldTokenVersion(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "users.db")), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	if err != nil {
-		t.Fatal(err)
-	}
+	db := testdb.Open(t)
 	if err := db.AutoMigrate(&model.User{}); err != nil {
 		t.Fatal(err)
 	}
 	model.DB = db
-	model.InitWriter(db, 8, time.Second, 5*time.Second)
+	model.InitWriter(db, 5*time.Second)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = model.CloseWriter(ctx)
 		model.DB = nil
-		if sqlDB, dbErr := db.DB(); dbErr == nil {
-			_ = sqlDB.Close()
-		}
 	})
 
 	user := model.User{TenantID: 7, Username: "restored-admin", Password: "old-password", Role: "admin", TokenVersion: 3}

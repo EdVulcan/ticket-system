@@ -24,9 +24,15 @@ type migration struct {
 }
 
 func runMigrations(db *gorm.DB) error {
-	if db.Dialector.Name() == "postgres" {
-		return runPostgresMigrations(db)
+	if db.Dialector.Name() != "postgres" {
+		return fmt.Errorf("unsupported database dialect %q", db.Dialector.Name())
 	}
+	return runPostgresMigrations(db)
+}
+
+// runLegacyMigrations is retained only as source history for old schema
+// interpretation. The application and automated tests never execute it.
+func runLegacyMigrations(db *gorm.DB) error {
 	if err := db.AutoMigrate(&SchemaMigration{}); err != nil {
 		return err
 	}

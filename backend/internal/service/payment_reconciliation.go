@@ -180,7 +180,7 @@ func reschedulePaymentTask(task *model.PaymentReconciliationTask, cause error, n
 		attempt = 1
 	}
 	// 2s, 4s ... up to 30m. The task remains durable and observable while a
-	// provider is unavailable, rather than blocking the SQLite writer.
+	// provider is unavailable, rather than holding a database transaction.
 	seconds := math.Pow(2, float64(minInt(attempt, 14)))
 	delay := time.Duration(seconds) * time.Second
 	if delay > 30*time.Minute {

@@ -16,14 +16,7 @@ database:
   max_open_connections: 50
   max_idle_connections: 10
   conn_max_lifetime_minutes: 30
-
-  # Retained only for SQLite tests and one-time data import.
-  path: "data/ticket-system.db"
-  busy_timeout_ms: 5000
-  max_read_connections: 8
-  write_queue_size: 1000
   write_timeout_seconds: 10
-  enqueue_timeout_seconds: 2
 
 security:
   # Environment variables override these values. If blank, a persistent key file is generated.

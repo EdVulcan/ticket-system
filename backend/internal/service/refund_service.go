@@ -611,8 +611,8 @@ func (s *RefundService) ProcessDigitalRefundTasks(ctx context.Context, now time.
 	return processed, nil
 }
 
-// claimDigitalRefundTask changes a due task to processing in the serialized
-// SQLite writer before any provider call is made. A stale processing lease is
+// claimDigitalRefundTask changes a due task to processing in a short database
+// transaction before any provider call is made. A stale processing lease is
 // reclaimable after a crash, while a second worker cannot claim the same task
 // during a normal provider request.
 func claimDigitalRefundTask(now time.Time) (*model.DigitalRefundTask, error) {

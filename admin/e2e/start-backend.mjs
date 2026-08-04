@@ -14,11 +14,7 @@ rmSync(tempDir, { recursive: true, force: true })
 mkdirSync(tempDir, { recursive: true })
 
 const executable = path.join(tempDir, process.platform === 'win32' ? 'ticket-e2e.exe' : 'ticket-e2e')
-const buildEnv = { ...process.env, CGO_ENABLED: '1' }
-if (process.platform === 'win32') {
-  const pathKey = Object.keys(buildEnv).find(key => key.toLowerCase() === 'path') || 'PATH'
-  buildEnv[pathKey] = `C:\\msys64\\ucrt64\\bin${path.delimiter}${buildEnv[pathKey] || ''}`
-}
+const buildEnv = { ...process.env, CGO_ENABLED: '0' }
 const build = spawnSync('go', ['build', '-o', executable, './cmd'], {
   cwd: backendDir,
   env: buildEnv,
@@ -27,6 +23,15 @@ const build = spawnSync('go', ['build', '-o', executable, './cmd'], {
 if (build.error) console.error(build.error)
 if (build.status !== 0) process.exit(build.status ?? 1)
 
+const databaseName = `ticket_admin_e2e_${process.pid}_${Date.now()}`
+const postgresHost = process.env.TICKET_TEST_POSTGRES_HOST || process.env.PGHOST || '127.0.0.1'
+const postgresPort = process.env.TICKET_TEST_POSTGRES_PORT || process.env.PGPORT || '5432'
+const postgresUser = process.env.TICKET_TEST_POSTGRES_USER || process.env.PGUSER || 'postgres'
+const databaseArgs = ['-h', postgresHost, '-p', postgresPort, '-U', postgresUser]
+const createDatabase = spawnSync('createdb', [...databaseArgs, databaseName], { env: process.env, stdio: 'inherit' })
+if (createDatabase.error) console.error(createDatabase.error)
+if (createDatabase.status !== 0) process.exit(createDatabase.status ?? 1)
+
 const child = spawn(executable, [], {
   cwd: backendDir,
   env: {
@@ -34,8 +39,13 @@ const child = spawn(executable, [], {
     TICKET_SERVER_PORT: '19180',
     TICKET_SERVER_MODE: 'release',
     TICKET_SERVER_CORS_ALLOWED_ORIGINS: 'http://127.0.0.1:4173',
-    TICKET_DATABASE_DRIVER: 'sqlite',
-    TICKET_DATABASE_PATH: path.join(tempDir, 'ticket-system.db'),
+    TICKET_DATABASE_DRIVER: 'postgres',
+    TICKET_DATABASE_HOST: postgresHost,
+    TICKET_DATABASE_PORT: postgresPort,
+    TICKET_DATABASE_NAME: databaseName,
+    TICKET_DATABASE_USER: postgresUser,
+    TICKET_DATABASE_PASSWORD: process.env.PGPASSWORD || '',
+    TICKET_DATABASE_SSLMODE: process.env.TICKET_TEST_POSTGRES_SSLMODE || 'disable',
     TICKET_SECURITY_KEY_FILE: path.join(tempDir, 'instance-key.json'),
     TICKET_BACKUP_DIRECTORY: path.join(tempDir, 'backups'),
     TICKET_BOOTSTRAP_ADMIN_PASSWORD: 'Supplier-E2E-Password-1',
@@ -46,6 +56,13 @@ const child = spawn(executable, [], {
 })
 
 let stopping = false
+let databaseDropped = false
+const dropDatabase = () => {
+  if (databaseDropped) return
+  databaseDropped = true
+  const dropped = spawnSync('dropdb', [...databaseArgs, '--if-exists', '--force', databaseName], { env: process.env, stdio: 'inherit' })
+  if (dropped.error) console.error(dropped.error)
+}
 const stop = signal => {
   if (stopping) return
   stopping = true
@@ -53,4 +70,8 @@ const stop = signal => {
 }
 process.on('SIGINT', () => stop('SIGINT'))
 process.on('SIGTERM', () => stop('SIGTERM'))
-child.on('exit', code => process.exit(code ?? 0))
+child.on('error', () => dropDatabase())
+child.on('exit', code => {
+  dropDatabase()
+  process.exit(code ?? 0)
+})
