@@ -66,6 +66,7 @@ func (s *ChannelService) Create(tenantID uint, account *model.ChannelAccount, se
 	account.Base = model.Base{}
 	account.TenantID = tenantID
 	account.Status = normalizeChannelStatus(account.Status)
+	account.Environment = channelEnvironment(account.Status)
 	account.SecretCiphertext = ciphertext
 	if account.SignAlgorithm == "" {
 		account.SignAlgorithm = "hmac-sha256"
@@ -107,6 +108,7 @@ func (s *ChannelService) CreateCtrip(tenantID uint, account *model.ChannelAccoun
 	account.Type = "ctrip"
 	account.AppID = accountID
 	account.Status = normalizeChannelStatus(account.Status)
+	account.Environment = channelEnvironment(account.Status)
 	account.SecretCiphertext = secretCiphertext
 	account.ProtocolConfigCiphertext = configCiphertext
 	account.SignAlgorithm = "md5"
@@ -133,6 +135,13 @@ func normalizeChannelStatus(value string) string {
 		return value
 	}
 	return "active"
+}
+
+func channelEnvironment(status string) string {
+	if status == "sandbox" {
+		return "sandbox"
+	}
+	return "production"
 }
 
 func (s *ChannelService) List(tenantID uint) ([]model.ChannelAccount, error) {
@@ -199,7 +208,11 @@ func (s *ChannelService) SetStatus(tenantID, id uint, status string) error {
 		return errors.New("invalid channel status")
 	}
 	return model.Write(func(tx *gorm.DB) error {
-		result := tx.Model(&model.ChannelAccount{}).Where("id = ? AND tenant_id = ?", id, tenantID).Update("status", status)
+		updates := map[string]interface{}{"status": status}
+		if status == "active" || status == "sandbox" {
+			updates["environment"] = channelEnvironment(status)
+		}
+		result := tx.Model(&model.ChannelAccount{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -250,6 +263,9 @@ func (s *ChannelService) AddMapping(tenantID uint, mapping *model.ChannelProduct
 		if err := tx.Where("id = ? AND tenant_id = ?", mapping.ProductID, tenantID).First(&product).Error; err != nil {
 			return errors.New("product not found")
 		}
+		if account.Type == "ctrip" && (mapping.ChannelSaleCents <= 0 || mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents) {
+			return errors.New("ctrip mapping requires a positive sale price and a cost price not greater than the sale price")
+		}
 		mapping.Base = model.Base{}
 		mapping.Status = "active"
 		return tx.Create(mapping).Error
@@ -263,6 +279,27 @@ func (s *ChannelService) ListMappings(tenantID, accountID uint) ([]model.Channel
 		query = query.Where("channel_product_mappings.channel_account_id = ?", accountID)
 	}
 	return rows, query.Order("channel_product_mappings.created_at DESC").Find(&rows).Error
+}
+
+func (s *ChannelService) UpdateMappingPricing(tenantID, accountID, mappingID uint, saleCents, costCents int64) error {
+	if tenantID == 0 || accountID == 0 || mappingID == 0 || saleCents <= 0 || costCents < 0 || costCents > saleCents {
+		return errors.New("a positive sale price and a cost price not greater than the sale price are required")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var account model.ChannelAccount
+		if err := tx.Where("id = ? AND tenant_id = ? AND type = ?", accountID, tenantID, "ctrip").First(&account).Error; err != nil {
+			return errors.New("ctrip channel account not found")
+		}
+		result := tx.Model(&model.ChannelProductMapping{}).Where("id = ? AND channel_account_id = ?", mappingID, account.ID).
+			Updates(map[string]interface{}{"channel_sale_cents": saleCents, "channel_cost_cents": costCents})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
 }
 
 func (s *ChannelService) GetByCode(code string) (*model.ChannelAccount, string, error) {

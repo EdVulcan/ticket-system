@@ -73,8 +73,17 @@ func TestCtripPreOrderPaymentQueryAndCancellation(t *testing.T) {
 	if err := channelService.CreateCtrip(tenantID, &channel, accountID, signKey, aesKey, aesIV); err != nil {
 		t.Fatal(err)
 	}
-	if err := channelService.AddMapping(tenantID, &model.ChannelProductMapping{ChannelAccountID: channel.ID, ProductID: productID, ExternalCode: "PLU-ADULT"}); err != nil {
+	mapping := model.ChannelProductMapping{ChannelAccountID: channel.ID, ProductID: productID, ExternalCode: "PLU-ADULT", ChannelSaleCents: 9950, ChannelCostCents: 8000}
+	if err := channelService.AddMapping(tenantID, &mapping); err != nil {
 		t.Fatal(err)
+	}
+	syncDate := startOfDay(time.Now().AddDate(0, 0, 1))
+	syncResult, err := (&CtripSyncService{}).EnqueueMappingSync(tenantID, channel.ID, mapping.ID, syncDate, syncDate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(syncResult.Tasks) != 2 {
+		t.Fatalf("Ctrip sync tasks=%d, want price and inventory", len(syncResult.Tasks))
 	}
 	service := &CtripProtocolService{OrderService: OrderService{}}
 	visitDate := time.Now().AddDate(0, 0, 1).Format("2006-01-02")
@@ -88,6 +97,20 @@ func TestCtripPreOrderPaymentQueryAndCancellation(t *testing.T) {
 			"passengers": []map[string]string{{"passengerId": "PASSENGER-001", "name": "测试游客", "mobile": "13800138000", "cardNo": "110101199001010011"}},
 		}},
 	}
+	wrongPriceBodyBytes, _ := json.Marshal(createBody)
+	var wrongPriceBody map[string]interface{}
+	_ = json.Unmarshal(wrongPriceBodyBytes, &wrongPriceBody)
+	wrongPriceBody["sequenceId"] = "20260804-price-mismatch"
+	wrongPriceBody["otaOrderId"] = "CTRIP-ORDER-PRICE-MISMATCH"
+	wrongPriceBody["items"].([]interface{})[0].(map[string]interface{})["salePrice"] = 98.5
+	wrongPriceRequest := buildCtripTestRequest(t, accountID, signKey, aesKey, aesIV, "CreatePreOrder", wrongPriceBody)
+	wrongPriceResponse, err := service.Handle(wrongPriceRequest, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := decodeCtripTestResponse(t, wrongPriceResponse, aesKey, aesIV); result.Code != "1008" {
+		t.Fatalf("price mismatch response=%+v", result)
+	}
 	createRequest := buildCtripTestRequest(t, accountID, signKey, aesKey, aesIV, "CreatePreOrder", createBody)
 	createResponse, err := service.Handle(createRequest, "127.0.0.1")
 	if err != nil {
@@ -98,6 +121,13 @@ func TestCtripPreOrderPaymentQueryAndCancellation(t *testing.T) {
 		t.Fatalf("create response=%+v", createResult)
 	}
 	supplierOrderID := createResult.Body["supplierOrderId"].(string)
+	var pricedItem model.OrderItem
+	if err := model.DB.Joins("JOIN orders ON orders.id = order_items.order_id").Where("orders.order_no = ?", supplierOrderID).First(&pricedItem).Error; err != nil {
+		t.Fatal(err)
+	}
+	if moneyToCents(pricedItem.Price) != 9950 || moneyToCents(pricedItem.SettlementPrice) != 8000 {
+		t.Fatalf("Ctrip order prices were not sourced from the channel mapping: %+v", pricedItem)
+	}
 
 	repeatedResponse, err := service.Handle(createRequest, "127.0.0.1")
 	if err != nil || string(repeatedResponse) != string(createResponse) {

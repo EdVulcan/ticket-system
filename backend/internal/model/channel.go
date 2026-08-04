@@ -17,7 +17,8 @@ type ChannelAccount struct {
 	SignAlgorithm            string     `gorm:"size:20;not null;default:'hmac-sha256'" json:"sign_algorithm"`
 	PermissionsJSON          string     `gorm:"type:text" json:"permissions_json"`
 	CallbackURL              string     `gorm:"size:255" json:"callback_url"`
-	Status                   string     `gorm:"size:20;not null;default:'active';index" json:"status"` // active, disabled, sandbox
+	Status                   string     `gorm:"size:20;not null;default:'active';index" json:"status"`    // active, disabled, sandbox
+	Environment              string     `gorm:"size:20;not null;default:'production'" json:"environment"` // sandbox, production
 	KeyVersion               int        `gorm:"not null;default:1" json:"key_version"`
 	LastUsedAt               *time.Time `json:"last_used_at,omitempty"`
 	RateLimitPerMin          int        `gorm:"not null;default:600" json:"rate_limit_per_min"`
@@ -34,6 +35,30 @@ type ChannelProductMapping struct {
 	ExternalCode     string `gorm:"size:120;uniqueIndex:idx_channel_external_product,priority:2;not null" json:"external_code"`
 	Status           string `gorm:"size:20;not null;default:'active'" json:"status"`
 	DisplayName      string `gorm:"size:120" json:"display_name"`
+	ChannelSaleCents int64  `gorm:"not null;default:0" json:"channel_sale_cents"`
+	ChannelCostCents int64  `gorm:"not null;default:0" json:"channel_cost_cents"`
+}
+
+// CtripOutboundTask persists price and inventory notifications before any
+// network call. A failed call can be retried after a restart without changing
+// the supplier product or inventory facts.
+type CtripOutboundTask struct {
+	Base
+	TenantID                uint       `gorm:"index;not null" json:"tenant_id"`
+	ChannelAccountID        uint       `gorm:"index;not null;uniqueIndex:idx_ctrip_outbound_payload,priority:1" json:"channel_account_id"`
+	ChannelProductMappingID uint       `gorm:"index;not null" json:"channel_product_mapping_id"`
+	Kind                    string     `gorm:"size:20;not null;uniqueIndex:idx_ctrip_outbound_payload,priority:2" json:"kind"`
+	PayloadHash             string     `gorm:"size:64;not null;uniqueIndex:idx_ctrip_outbound_payload,priority:3" json:"payload_hash"`
+	Endpoint                string     `gorm:"size:255;not null" json:"-"`
+	PayloadJSON             string     `gorm:"type:text;not null" json:"-"`
+	Status                  string     `gorm:"size:20;not null;default:'pending';index" json:"status"`
+	AttemptCount            int        `gorm:"not null;default:0" json:"attempt_count"`
+	NextAttemptAt           *time.Time `gorm:"index" json:"next_attempt_at,omitempty"`
+	LockedAt                *time.Time `gorm:"index" json:"-"`
+	ResultCode              string     `gorm:"size:30" json:"result_code,omitempty"`
+	ResultMessage           string     `gorm:"size:500" json:"result_message,omitempty"`
+	LastError               string     `gorm:"size:500" json:"last_error,omitempty"`
+	CompletedAt             *time.Time `json:"completed_at,omitempty"`
 }
 
 // ChannelRequest records the first body hash for an external request id. A

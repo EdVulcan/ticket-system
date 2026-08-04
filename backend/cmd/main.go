@@ -78,6 +78,9 @@ func main() {
 	reservationContext, stopReservationWorker := context.WithCancel(context.Background())
 	defer stopReservationWorker()
 	go runChannelReservationWorker(reservationContext)
+	ctripSyncContext, stopCtripSync := context.WithCancel(context.Background())
+	defer stopCtripSync()
+	go runCtripSyncWorker(ctripSyncContext)
 	holdContext, stopHoldWorker := context.WithCancel(context.Background())
 	defer stopHoldWorker()
 	go runPOSHoldExpiryWorker(holdContext)
@@ -244,6 +247,26 @@ func runChannelReservationWorker(ctx context.Context) {
 			if _, err := workflow.Expire(now, 100); err != nil {
 				logger.Log.Error(fmt.Sprintf("channel reservation expiry failed: %v", err))
 			}
+		}
+	}
+}
+
+func runCtripSyncWorker(ctx context.Context) {
+	syncService := &service.CtripSyncService{}
+	process := func(now time.Time) {
+		if _, err := syncService.ProcessTasks(ctx, now, 20); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Log.Error(fmt.Sprintf("Ctrip price and inventory synchronization failed: %v", err))
+		}
+	}
+	process(time.Now())
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			process(now)
 		}
 	}
 }

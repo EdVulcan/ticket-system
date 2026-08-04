@@ -63,15 +63,47 @@
       <template #footer><el-button @click="ctripConfigDialog = false">取消</el-button><el-button type="primary" :loading="ctripConfigSaving" @click="saveCtripConfig">保存参数</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="mappingDialog" title="商品映射" width="780px">
-      <div class="flex gap-2 mb-4">
-        <el-input v-model="mapping.external_code" placeholder="外部商品编码" />
-        <el-select v-model="mapping.product_id" filterable placeholder="选择本商户产品" style="min-width: 260px">
+    <el-dialog v-model="mappingDialog" title="商品映射" width="1060px">
+      <el-alert v-if="selectedAccount?.type === 'ctrip'" class="mb-4" type="info" :closable="false" title="外部编码填写携程 PLU；价格按当前携程合同单独设置，不会改动景区产品原价。" />
+      <div class="grid grid-cols-1 gap-2 mb-4 md:grid-cols-5">
+        <el-input v-model="mapping.external_code" placeholder="外部商品编码 / PLU" />
+        <el-select v-model="mapping.product_id" filterable placeholder="选择本商户产品">
           <el-option v-for="product in products" :key="product.id" :label="product.name" :value="product.id" />
         </el-select>
+        <el-input-number v-if="selectedAccount?.type === 'ctrip'" v-model="mapping.channel_sale_yuan" :min="0.01" :precision="2" :step="1" controls-position="right" placeholder="携程销售价" class="w-full" />
+        <el-input-number v-if="selectedAccount?.type === 'ctrip'" v-model="mapping.channel_cost_yuan" :min="0" :precision="2" :step="1" controls-position="right" placeholder="携程结算价" class="w-full" />
         <el-button v-if="canWrite" type="primary" @click="addMapping">添加</el-button>
       </div>
-      <el-table :data="mappings" stripe><el-table-column prop="external_code" label="外部编码"/><el-table-column label="本地产品"><template #default="{ row }">{{ productName(row.product_id) }}</template></el-table-column><el-table-column label="状态"><template #default="{ row }">{{ mappingStatusText(row.status) }}</template></el-table-column></el-table>
+      <div v-if="selectedAccount?.type === 'ctrip'" class="flex flex-wrap items-center gap-2 mb-3">
+        <el-date-picker v-model="syncDateRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" :clearable="false" />
+        <span class="text-sm text-gray-500">同步范围最多 90 天</span>
+      </div>
+      <el-table :data="mappings" stripe>
+        <el-table-column prop="external_code" label="外部编码" min-width="150" />
+        <el-table-column label="本地产品" min-width="180"><template #default="{ row }">{{ productName(row.product_id) }}</template></el-table-column>
+        <el-table-column v-if="selectedAccount?.type === 'ctrip'" label="携程销售价" width="120"><template #default="{ row }">¥{{ cents(row.channel_sale_cents) }}</template></el-table-column>
+        <el-table-column v-if="selectedAccount?.type === 'ctrip'" label="携程结算价" width="120"><template #default="{ row }">¥{{ cents(row.channel_cost_cents) }}</template></el-table-column>
+        <el-table-column label="状态" width="90"><template #default="{ row }">{{ mappingStatusText(row.status) }}</template></el-table-column>
+        <el-table-column v-if="selectedAccount?.type === 'ctrip'" label="操作" width="210"><template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openPricing(row)">修改价格</el-button><el-button v-if="canWrite" link type="primary" :loading="syncingMappingID === row.id" @click="syncMapping(row)">同步价格库存</el-button></template></el-table-column>
+      </el-table>
+      <template v-if="selectedAccount?.type === 'ctrip'">
+        <div class="flex items-center justify-between mt-5 mb-2"><h3 class="font-medium text-gray-900">最近同步</h3><el-button link type="primary" @click="loadCtripSyncTasks">刷新</el-button></div>
+        <el-table :data="ctripSyncTasks" size="small" max-height="240" empty-text="暂无同步记录">
+          <el-table-column label="内容" width="90"><template #default="{ row }">{{ row.kind === 'price' ? '价格' : '库存' }}</template></el-table-column>
+          <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="syncStatusType(row.status)">{{ syncStatusText(row.status) }}</el-tag></template></el-table-column>
+          <el-table-column prop="attempt_count" label="尝试次数" width="90" />
+          <el-table-column label="时间" width="180"><template #default="{ row }">{{ dateTime(row.completed_at || row.created_at) }}</template></el-table-column>
+          <el-table-column label="结果" min-width="260" show-overflow-tooltip><template #default="{ row }">{{ row.last_error || row.result_message || '-' }}</template></el-table-column>
+        </el-table>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="pricingDialog" title="修改携程渠道价格" width="460px" :close-on-click-modal="false">
+      <el-form label-position="top">
+        <el-form-item label="携程销售价"><el-input-number v-model="pricing.channel_sale_yuan" :min="0.01" :precision="2" :step="1" controls-position="right" class="w-full" /></el-form-item>
+        <el-form-item label="携程结算价"><el-input-number v-model="pricing.channel_cost_yuan" :min="0" :precision="2" :step="1" controls-position="right" class="w-full" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="pricingDialog = false">取消</el-button><el-button type="primary" :loading="pricingSaving" @click="savePricing">保存</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="secretDialog" title="新渠道密钥" width="460px"><el-alert type="warning" :closable="false" title="密钥只在本次显示，请立即交给渠道方并安全保存。"/><el-input class="mt-4" :model-value="newSecret" readonly /></el-dialog>
@@ -273,7 +305,15 @@ const ctripConfigSaving = ref(false)
 const ctripConfig = reactive({ account_id: '', sign_key: '', aes_key: '', aes_iv: '' })
 const ctripEndpoint = `${window.location.origin}/api/v1/integrations/ctrip/order`
 const form = reactive({ code: '', type: 'core', app_id: '', secret: '', aes_key: '', aes_iv: '', status: 'active', permissions_json: '["products:read","inventory:reserve","orders:create","orders:query","orders:cancel"]', rate_limit_per_min: 600, allowed_ips_json: '' })
-const mapping = reactive({ external_code: '', product_id: 0 })
+const mapping = reactive({ external_code: '', product_id: 0, channel_sale_yuan: 0, channel_cost_yuan: 0 })
+const ctripSyncTasks = ref<any[]>([])
+const syncingMappingID = ref(0)
+const pricingDialog = ref(false)
+const pricingSaving = ref(false)
+const pricing = reactive({ mapping_id: 0, channel_sale_yuan: 0, channel_cost_yuan: 0 })
+const dateValue = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+const syncEnd = new Date(); syncEnd.setDate(syncEnd.getDate() + 30)
+const syncDateRange = ref<[string, string]>([dateValue(new Date()), dateValue(syncEnd)])
 
 const load = async () => { loading.value = true; try { accounts.value = (await request.get('/channel-accounts')).data.data || [] } finally { loading.value = false } }
 const handleAdapterTypeChange = (type: string) => { form.status = type === 'ctrip' ? 'sandbox' : 'active' }
@@ -297,26 +337,62 @@ const saveCtripConfig = async () => {
   finally { ctripConfigSaving.value = false }
 }
 const copyCtripEndpoint = async () => { await navigator.clipboard.writeText(ctripEndpoint); ElMessage.success('接口地址已复制') }
-const toggleStatus = async (row: any) => { const status = row.status === 'disabled' ? 'active' : 'disabled'; await request.patch(`/channel-accounts/${row.id}/status`, { status }); row.status = status; ElMessage.success('状态已更新') }
+const toggleStatus = async (row: any) => { const status = row.status === 'disabled' ? (row.environment === 'sandbox' ? 'sandbox' : 'active') : 'disabled'; await request.patch(`/channel-accounts/${row.id}/status`, { status }); row.status = status; ElMessage.success('状态已更新') }
 const rotate = async (row: any) => { await ElMessageBox.confirm('轮换后旧密钥立即失效，确认继续？', '确认轮换', { type: 'warning' }); const response = await request.post(`/channel-accounts/${row.id}/rotate-secret`); newSecret.value = response.data.secret; secretDialog.value = true }
 const productName = (id: number) => products.value.find((product: any) => Number(product.id) === Number(id))?.name || '已下架或不可见产品'
 const openMapping = async (row: any) => {
-  selectedID.value = row.id; mapping.external_code = ''; mapping.product_id = 0
+  selectedAccount.value = row; selectedID.value = row.id
+  Object.assign(mapping, { external_code: '', product_id: 0, channel_sale_yuan: 0, channel_cost_yuan: 0 })
   const [mappingResponse, productResponse] = await Promise.all([
     request.get('/channel-accounts/mappings', { params: { channel_account_id: row.id } }),
     request.get('/products', { params: { page: 1, page_size: 100 } }),
   ])
   mappings.value = mappingResponse.data.data || []
   products.value = productResponse.data.data || []
+  ctripSyncTasks.value = []
+  if (row.type === 'ctrip') await loadCtripSyncTasks()
   mappingDialog.value = true
 }
-const addMapping = async () => { if (!mapping.external_code || !mapping.product_id) return; const response = await request.post('/channel-accounts/mappings', { channel_account_id: selectedID.value, external_code: mapping.external_code, product_id: mapping.product_id }); mappings.value.unshift(response.data); mapping.external_code = ''; mapping.product_id = 0 }
+const addMapping = async () => {
+  if (!mapping.external_code.trim() || !mapping.product_id) { ElMessage.warning('请选择产品并填写外部编码'); return }
+  if (selectedAccount.value?.type === 'ctrip' && (mapping.channel_sale_yuan <= 0 || mapping.channel_cost_yuan < 0 || mapping.channel_cost_yuan > mapping.channel_sale_yuan)) { ElMessage.warning('携程销售价必须大于 0，结算价不能高于销售价'); return }
+  const response = await request.post('/channel-accounts/mappings', { channel_account_id: selectedID.value, external_code: mapping.external_code.trim(), product_id: mapping.product_id, channel_sale_cents: Math.round(mapping.channel_sale_yuan * 100), channel_cost_cents: Math.round(mapping.channel_cost_yuan * 100) })
+  mappings.value.unshift(response.data)
+  Object.assign(mapping, { external_code: '', product_id: 0, channel_sale_yuan: 0, channel_cost_yuan: 0 })
+}
+const loadCtripSyncTasks = async () => {
+  if (!selectedAccount.value || selectedAccount.value.type !== 'ctrip') return
+  ctripSyncTasks.value = (await request.get(`/channel-accounts/${selectedAccount.value.id}/ctrip-sync-tasks`, { params: { limit: 100 } })).data.data || []
+}
+const syncMapping = async (row: any) => {
+  if (!selectedAccount.value || syncDateRange.value.length !== 2) return
+  syncingMappingID.value = row.id
+  try {
+    await request.post(`/channel-accounts/${selectedAccount.value.id}/mappings/${row.id}/ctrip-sync`, { start_date: syncDateRange.value[0], end_date: syncDateRange.value[1] })
+    ElMessage.success('价格和库存已进入同步队列')
+    await loadCtripSyncTasks()
+  } finally { syncingMappingID.value = 0 }
+}
+const openPricing = (row: any) => { Object.assign(pricing, { mapping_id: row.id, channel_sale_yuan: Number(row.channel_sale_cents || 0) / 100, channel_cost_yuan: Number(row.channel_cost_cents || 0) / 100 }); pricingDialog.value = true }
+const savePricing = async () => {
+  if (!selectedAccount.value || pricing.channel_sale_yuan <= 0 || pricing.channel_cost_yuan < 0 || pricing.channel_cost_yuan > pricing.channel_sale_yuan) { ElMessage.warning('携程销售价必须大于 0，结算价不能高于销售价'); return }
+  pricingSaving.value = true
+  try {
+    await request.patch(`/channel-accounts/${selectedAccount.value.id}/mappings/${pricing.mapping_id}/ctrip-pricing`, { channel_sale_cents: Math.round(pricing.channel_sale_yuan * 100), channel_cost_cents: Math.round(pricing.channel_cost_yuan * 100) })
+    const row = mappings.value.find((item: any) => item.id === pricing.mapping_id)
+    if (row) { row.channel_sale_cents = Math.round(pricing.channel_sale_yuan * 100); row.channel_cost_cents = Math.round(pricing.channel_cost_yuan * 100) }
+    pricingDialog.value = false
+    ElMessage.success('携程渠道价格已更新，请按需要重新同步')
+  } finally { pricingSaving.value = false }
+}
 const dateTime = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
 const cents = (value: number) => (Number(value || 0) / 100).toFixed(2)
 const signedCents = (value: number) => `${Number(value || 0) > 0 ? '+' : Number(value || 0) < 0 ? '-' : ''}¥${cents(Math.abs(Number(value || 0)))}`
 const accountStatusText = (status: string) => ({ active: '正式启用', sandbox: '测试中', disabled: '已停用' } as Record<string, string>)[status] || '未知状态'
 const adapterTypeText = (type: string) => ({ core: '通用渠道', ctrip: '携程', meituan: '美团', zyb: '智游宝上游' } as Record<string, string>)[type] || '自定义渠道'
 const mappingStatusText = (status: string) => ({ active: '已启用', disabled: '已停用' } as Record<string, string>)[status] || '未知状态'
+const syncStatusText = (status: string) => ({ pending: '等待同步', processing: '同步中', succeeded: '已成功', failed: '同步失败' } as Record<string, string>)[status] || '未知状态'
+const syncStatusType = (status: string) => status === 'succeeded' ? 'success' : status === 'failed' ? 'danger' : status === 'processing' ? 'primary' : 'warning'
 const requestStatusText = (status: string) => ({ processing: '处理中', completed: '已完成', failed: '失败待处理', retryable: '已授权重试' } as Record<string, string>)[status] || '未知状态'
 const requestStatusType = (status: string) => status === 'completed' ? 'success' : status === 'failed' ? 'danger' : status === 'retryable' ? 'warning' : 'primary'
 const orderStatusText = (status: string) => ({ unpaid: '待支付', paid: '已支付', completed: '已完成', partial_refunded: '部分退款', refunded: '已退款', cancelled: '已取消' } as Record<string, string>)[status] || '未知状态'

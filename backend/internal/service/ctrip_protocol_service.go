@@ -460,6 +460,13 @@ func (s *CtripProtocolService) createPreOrder(account *model.ChannelAccount, raw
 		if err := model.DB.Where("channel_account_id = ? AND external_code = ? AND status = ?", account.ID, plu, "active").First(&mapping).Error; err != nil {
 			return nil, &ctripBusinessError{Code: "1001", Message: "产品 PLU 不存在"}
 		}
+		if mapping.ChannelSaleCents <= 0 || mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents {
+			return nil, &ctripBusinessError{Code: "1002", Message: "产品价格尚未配置"}
+		}
+		costProvided := strings.TrimSpace(source.CostCurrency) != "" || source.Cost != 0
+		if moneyToCents(source.SalePrice) != mapping.ChannelSaleCents || costProvided && moneyToCents(source.Cost) != mapping.ChannelCostCents {
+			return nil, &ctripBusinessError{Code: "1008", Message: "订单价格与已同步价格不一致"}
+		}
 		var product model.Product
 		if err := model.DB.Where("id = ? AND tenant_id = ?", mapping.ProductID, account.TenantID).First(&product).Error; err != nil {
 			return nil, &ctripBusinessError{Code: "1001", Message: "产品 PLU 不存在"}

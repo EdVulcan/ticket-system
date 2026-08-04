@@ -136,6 +136,26 @@ func (s *OrderService) Create(req *model.Order) error {
 				return fmt.Errorf("product %d is unavailable", item.ProductID)
 			}
 			listingForResolution := listing
+			var channelCostCents int64
+			channelPricing := false
+			if req.ChannelAccountID != 0 {
+				var channelAccount model.ChannelAccount
+				if err := tx.Where("id = ? AND tenant_id = ? AND status != ?", req.ChannelAccountID, req.TenantID, "disabled").First(&channelAccount).Error; err != nil {
+					return errors.New("channel account is unavailable")
+				}
+				if channelAccount.Type == "ctrip" {
+					var mapping model.ChannelProductMapping
+					if err := tx.Where("channel_account_id = ? AND product_id = ? AND status = ?", channelAccount.ID, listing.ID, "active").First(&mapping).Error; err != nil {
+						return errors.New("Ctrip product mapping is unavailable")
+					}
+					if mapping.ChannelSaleCents <= 0 || mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents {
+						return errors.New("Ctrip product pricing is not configured")
+					}
+					listingForResolution.Price = centsMoney(mapping.ChannelSaleCents)
+					channelCostCents = mapping.ChannelCostCents
+					channelPricing = true
+				}
+			}
 			if item.BundleComponentID != 0 {
 				component, err := bundleComponentForOrderTx(tx, req.TenantID, item)
 				if err != nil {
@@ -173,6 +193,9 @@ func (s *OrderService) Create(req *model.Order) error {
 			item.ProductName = listing.Name
 			item.Price = roundMoney(listingForResolution.Price)
 			item.SettlementPrice = roundMoney(fulfillment.SettlementPrice)
+			if channelPricing {
+				item.SettlementPrice = centsMoney(channelCostCents)
+			}
 			item.ValidityType = fulfillment.ValidityType
 			item.FulfillmentProductID = fulfillment.ID
 			item.FulfillmentTenantID = fulfillment.TenantID

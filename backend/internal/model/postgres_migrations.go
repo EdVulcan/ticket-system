@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 64
+const CurrentPostgresSchemaVersion = 65
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -25,7 +25,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&Policy{}, &PaymentConfig{}, &Payment{}, &Refund{}, &PaymentReconciliationTask{}, &DigitalRefundTask{},
 		&AuditLog{}, &OTANonce{}, &FinancialDocument{},
 		&ChannelAccount{}, &ChannelProductMapping{}, &ChannelRequest{}, &ChannelReservation{},
-		&CtripOrderLink{}, &CtripOrderItem{},
+		&CtripOrderLink{}, &CtripOrderItem{}, &CtripOutboundTask{},
 		&ChannelBillRecord{}, &ChannelReconciliation{}, &ChannelReconciliationLine{},
 		&TravelContract{}, &TravelAgent{}, &TourGuide{}, &TravelVehicle{}, &TourGroup{}, &TourGroupMember{},
 		&TourEntryBatch{}, &TourGroupConfirmation{}, &TourGroupMemberChange{}, &TeamSettlementStatement{}, &TeamSettlementAdjustment{},
@@ -35,6 +35,9 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
+	}
+	if err := db.Model(&ChannelAccount{}).Where("status = ?", "sandbox").Update("environment", "sandbox").Error; err != nil {
+		return fmt.Errorf("backfill channel environment: %w", err)
 	}
 	if err := db.Model(&Product{}).Where("gate_voice_code IS NULL OR gate_voice_code = ?", "").Update("gate_voice_code", "welcome").Error; err != nil {
 		return fmt.Errorf("backfill product gate voice: %w", err)
@@ -178,6 +181,12 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 				SELECT 1 FROM ctrip_order_links l JOIN order_items i ON i.id = NEW.order_item_id
 				WHERE l.id = NEW.ctrip_order_link_id AND i.order_id = l.order_id
 			) THEN RAISE EXCEPTION 'ctrip order item ownership mismatch'; END IF;
+		WHEN 'ctrip_outbound_tasks' THEN
+			IF NEW.tenant_id = 0 OR NOT EXISTS (
+				SELECT 1 FROM channel_accounts a JOIN channel_product_mappings m ON m.channel_account_id = a.id
+				WHERE a.id = NEW.channel_account_id AND a.tenant_id = NEW.tenant_id AND a.type = 'ctrip'
+				  AND m.id = NEW.channel_product_mapping_id
+			) THEN RAISE EXCEPTION 'ctrip outbound task ownership mismatch'; END IF;
 		END CASE;
 		RETURN NEW;
 	END;
@@ -185,7 +194,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items"} {
+	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

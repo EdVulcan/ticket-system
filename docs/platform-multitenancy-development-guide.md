@@ -1,6 +1,6 @@
 # 多租户景区票务平台开发基线与演进指南
 
-> **当前审查状态（2026-08-04）**：代码级 P0/P1 已完成一轮闭环并进入自动化，schema 版本为 64，生产数据库已迁移到 PostgreSQL；携程供应商预下单模式已进入沙箱联调阶段。当前生产阻断项已收敛为真实支付、真实硬件、真实渠道沙箱与生产验收、部署恢复演练及现场容量/长稳验收。旧库导入不是新系统发布门槛，仅在以后明确提出时作为独立项目处理。当前执行状态以[当前开发推进路线](./current-development-roadmap-2026-08-01.md)和[现场联调准备清单](./field-integration-readiness-checklist.md)为准。
+> **当前审查状态（2026-08-04）**：代码级 P0/P1 已完成一轮闭环并进入自动化，schema 版本为 65，生产数据库已迁移到 PostgreSQL；携程供应商预下单及价格库存推送已进入沙箱联调阶段。当前生产阻断项已收敛为真实支付、真实硬件、真实渠道沙箱与生产验收、部署恢复演练及现场容量/长稳验收。旧库导入不是新系统发布门槛，仅在以后明确提出时作为独立项目处理。当前执行状态以[当前开发推进路线](./current-development-roadmap-2026-08-01.md)和[现场联调准备清单](./field-integration-readiness-checklist.md)为准。
 
 - 文档状态：后续开发的架构与验收基线
 - 审计日期：2026-07-31
@@ -476,7 +476,7 @@ flowchart LR
 
 完成标准：直营票不能跨景区；分销售出的 A 景区票能在 A 景区核销但不能在 B 景区核销；分销商无法伪造来源或结算价。
 
-当前状态：P0-1 至 P0-6 已通过本地自动化验收，数据库 schema 版本为 64，PostgreSQL 初始化和重复执行幂等测试已通过。`ScenicArea`、租户状态/能力、审计日志、`ProductRevision`、`ProductOffer/SellerListing`、`BundleProduct/BundleVersion/BundleComponent`、`FulfillmentOrder/TicketEntitlement`、整数分账本、结算单、追加式结算调整、售后价差事实和核销冲销审计均已进入当前模型。阶段 0 仍未达到生产准入：真实支付商户证书、双方对账验收及现场硬件联调尚未完成；旧库导入仅在以后明确提出时另行验收。
+当前状态：P0-1 至 P0-6 已通过本地自动化验收，数据库 schema 版本为 65，PostgreSQL 初始化和重复执行幂等测试已通过。`ScenicArea`、租户状态/能力、审计日志、`ProductRevision`、`ProductOffer/SellerListing`、`BundleProduct/BundleVersion/BundleComponent`、`FulfillmentOrder/TicketEntitlement`、整数分账本、结算单、追加式结算调整、售后价差事实和核销冲销审计均已进入当前模型。阶段 0 仍未达到生产准入：真实支付商户证书、双方对账验收及现场硬件联调尚未完成；旧库导入仅在以后明确提出时另行验收。
 
 ### 阶段 1：完成景区直营生产闭环
 

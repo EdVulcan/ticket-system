@@ -11,8 +11,9 @@ import (
 )
 
 type ChannelController struct {
-	Service service.ChannelService
-	Gateway *service.ChannelGatewayService
+	Service   service.ChannelService
+	Gateway   *service.ChannelGatewayService
+	CtripSync service.CtripSyncService
 }
 
 func (c *ChannelController) List(ctx *gin.Context) {
@@ -131,6 +132,72 @@ func (c *ChannelController) AddMapping(ctx *gin.Context) {
 func (c *ChannelController) ListMappings(ctx *gin.Context) {
 	accountID, _ := strconv.ParseUint(ctx.Query("channel_account_id"), 10, 32)
 	rows, err := c.Service.ListMappings(ctx.GetUint("tenant_id"), uint(accountID))
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": rows})
+}
+
+func (c *ChannelController) SyncCtripMapping(ctx *gin.Context) {
+	accountID, accountErr := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	mappingID, mappingErr := strconv.ParseUint(ctx.Param("mappingId"), 10, 32)
+	if accountErr != nil || mappingErr != nil || accountID == 0 || mappingID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel or mapping id"})
+		return
+	}
+	var body struct {
+		StartDate string `json:"start_date" binding:"required"`
+		EndDate   string `json:"end_date" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	start, startErr := time.ParseInLocation("2006-01-02", body.StartDate, time.Local)
+	end, endErr := time.ParseInLocation("2006-01-02", body.EndDate, time.Local)
+	if startErr != nil || endErr != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid synchronization date range"})
+		return
+	}
+	result, err := c.CtripSync.EnqueueMappingSync(ctx.GetUint("tenant_id"), uint(accountID), uint(mappingID), start, end)
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusAccepted, result)
+}
+
+func (c *ChannelController) UpdateCtripMappingPricing(ctx *gin.Context) {
+	accountID, accountErr := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	mappingID, mappingErr := strconv.ParseUint(ctx.Param("mappingId"), 10, 32)
+	if accountErr != nil || mappingErr != nil || accountID == 0 || mappingID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel or mapping id"})
+		return
+	}
+	var body struct {
+		SaleCents int64 `json:"channel_sale_cents"`
+		CostCents int64 `json:"channel_cost_cents"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.UpdateMappingPricing(ctx.GetUint("tenant_id"), uint(accountID), uint(mappingID), body.SaleCents, body.CostCents); err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"updated": true})
+}
+
+func (c *ChannelController) ListCtripSyncTasks(ctx *gin.Context) {
+	accountID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || accountID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	limit, _ := strconv.Atoi(ctx.DefaultQuery("limit", "100"))
+	rows, err := c.CtripSync.ListTasks(ctx.GetUint("tenant_id"), uint(accountID), limit)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
