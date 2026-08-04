@@ -25,6 +25,24 @@ func TestPostgresBackupAndRestore(t *testing.T) {
 	binDirectory := os.Getenv("TICKET_TEST_POSTGRES_BIN")
 	source := testPostgresConfig("ticket_system_test", password)
 	target := testPostgresConfig("ticket_system_restore_test", password)
+	previousDatabase := config.GlobalConfig.Database
+	config.GlobalConfig.Database = source
+	if err := model.InitDB(); err != nil {
+		t.Fatalf("initialize backup source schema: %v", err)
+	}
+	closeContext, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := model.CloseWriter(closeContext); err != nil {
+		closeCancel()
+		t.Fatalf("close backup source writer: %v", err)
+	}
+	closeCancel()
+	if sqlDB, dbErr := model.DB.DB(); dbErr != nil {
+		t.Fatal(dbErr)
+	} else if err := sqlDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	model.DB = nil
+	config.GlobalConfig.Database = previousDatabase
 	temp := t.TempDir()
 	keyFile := filepath.Join(temp, "instance-key.json")
 	if err := os.WriteFile(keyFile, []byte(`{"test":"source-key"}`), 0600); err != nil {
@@ -80,5 +98,6 @@ func testPostgresConfig(name, password string) config.DatabaseConfig {
 		Driver: "postgres", Host: "127.0.0.1", Port: 5432, Name: name, User: "postgres",
 		Password: password, SSLMode: "disable", TimeZone: "Asia/Shanghai",
 		MaxOpenConnections: 5, MaxIdleConnections: 1, ConnMaxLifetimeMinutes: 5,
+		WriteTimeoutSeconds: 10,
 	}
 }
