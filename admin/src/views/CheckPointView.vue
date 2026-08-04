@@ -36,6 +36,11 @@
       width="500px"
     >
       <el-form :model="form" label-width="100px" :rules="rules" ref="formRef">
+        <el-form-item label="所属景区" prop="scenic_area_id">
+          <el-select v-model="form.scenic_area_id" class="w-full" placeholder="请选择检票点所属景区" :disabled="isEdit">
+            <el-option v-for="area in scenicAreas" :key="area.id" :label="area.name" :value="area.id" :disabled="area.status !== 'active'" />
+          </el-select>
+        </el-form-item>
         <el-form-item label="名称" prop="name">
           <el-input v-model="form.name" placeholder="例如：正门闸机组、西门手持机" />
         </el-form-item>
@@ -66,25 +71,30 @@ const total = ref(0)
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref()
+const scenicAreas = ref<any[]>([])
 
 const form = reactive({
   id: 0,
+  scenic_area_id: 0,
   name: '',
   location: ''
 })
 
 const rules = {
+  scenic_area_id: [{ required: true, type: 'number', min: 1, message: '请选择所属景区', trigger: 'change' }],
   name: [{ required: true, message: '请输入检票点名称', trigger: 'blur' }]
 }
 
 const fetchData = async () => {
   loading.value = true
   try {
-    const res = await request.get('/checkpoints', {
-      params: { page: currentPage.value, page_size: pageSize.value }
-    })
+    const [res, areaRes] = await Promise.all([
+      request.get('/checkpoints', { params: { page: currentPage.value, page_size: pageSize.value } }),
+      request.get('/scenic-areas')
+    ])
     tableData.value = res.data.data
     total.value = res.data.total
+    scenicAreas.value = areaRes.data.data || []
   } catch (error) {
     ElMessage.error('获取数据失败')
   } finally {
@@ -94,7 +104,8 @@ const fetchData = async () => {
 
 const handleAdd = () => {
   isEdit.value = false
-  Object.assign(form, { id: 0, name: '', location: '' })
+  const activeAreas = scenicAreas.value.filter(area => area.status === 'active')
+  Object.assign(form, { id: 0, scenic_area_id: activeAreas.length === 1 ? activeAreas[0].id : 0, name: '', location: '' })
   dialogVisible.value = true
 }
 

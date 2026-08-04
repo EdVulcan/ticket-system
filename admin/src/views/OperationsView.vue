@@ -10,11 +10,16 @@
 
     <el-tabs v-model="activeTab" @tab-change="loadActiveTab">
       <el-tab-pane v-if="hasCapability('supplier')" label="景区" name="scenic">
+        <div class="flex justify-end mb-3">
+          <el-button v-if="canScenicWrite" type="primary" @click="openCreateScenic">新增景区</el-button>
+        </div>
         <el-table :data="rows.scenic" v-loading="loading">
           <el-table-column prop="code" label="编码" width="150" />
           <el-table-column prop="name" label="景区名称" min-width="220" />
           <el-table-column label="状态" width="120"><template #default="{ row }">{{ scenicStatusText(row.status) }}</template></el-table-column>
-          <el-table-column prop="address" label="地址" min-width="260" />
+          <el-table-column v-if="canScenicWrite" label="操作" width="100" fixed="right">
+            <template #default="{ row }"><el-button link type="primary" @click="openEditScenic(row)">编辑</el-button></template>
+          </el-table-column>
         </el-table>
       </el-tab-pane>
 
@@ -108,6 +113,27 @@
         </el-table>
       </el-tab-pane>
     </el-tabs>
+
+    <el-dialog v-model="scenicDialog" :title="scenicForm.id ? '编辑景区' : '新增景区'" width="520px" align-center>
+      <el-form label-position="top">
+        <el-form-item label="景区编码" required>
+          <el-input v-model="scenicForm.code" :disabled="Boolean(scenicForm.id)" maxlength="50" placeholder="例如：MAIN_PARK" />
+          <div class="text-xs text-gray-500 mt-1">编码用于设备和渠道识别，创建后不可修改。</div>
+        </el-form-item>
+        <el-form-item label="景区名称" required><el-input v-model="scenicForm.name" maxlength="100" placeholder="请输入游客和员工熟悉的名称" /></el-form-item>
+        <el-form-item label="经营状态">
+          <el-select v-model="scenicForm.status" class="w-full">
+            <el-option label="正常营业" value="active" />
+            <el-option label="暂停营业" value="frozen" />
+            <el-option label="已关闭" value="closed" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="scenicDialog = false">取消</el-button>
+        <el-button type="primary" :loading="scenicSaving" @click="saveScenic">保存</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="generateSettlementDialog" title="生成结算单" width="520px" align-center>
       <el-form label-position="top">
@@ -248,6 +274,7 @@ const capabilities = computed(() => new Set((user.value.capabilities || []).filt
 const hasCapability = (value: string) => capabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(hasCapability)
 const isSupervisor = computed(() => hasPermission(user.value, 'onsite.manage'))
+const canScenicWrite = computed(() => hasPermission(user.value, 'onsite.manage'))
 const canSettlementWrite = computed(() => hasPermission(user.value, 'settlements.write'))
 const currentTenantID = computed(() => Number(user.value.tenant_id || 0))
 const firstTab = () => hasCapability('supplier') ? 'scenic' : hasCapability('travel_agency') ? 'teams' : 'channels'
@@ -302,6 +329,35 @@ const channelPermissionsText = (value: string) => {
     if (Array.isArray(permissions)) return permissions.map(item => names[item] || '其他权限').join('、') || '未配置'
     return Object.entries(permissions).filter(([, enabled]) => enabled).map(([key]) => names[key] || '其他权限').join('、') || '未配置'
   } catch { return '已配置' }
+}
+
+const scenicDialog = ref(false)
+const scenicSaving = ref(false)
+const scenicForm = reactive({ id: 0, code: '', name: '', status: 'active' })
+
+const openCreateScenic = () => {
+  Object.assign(scenicForm, { id: 0, code: '', name: '', status: 'active' })
+  scenicDialog.value = true
+}
+
+const openEditScenic = (row: any) => {
+  Object.assign(scenicForm, { id: row.id, code: row.code, name: row.name, status: row.status || 'active' })
+  scenicDialog.value = true
+}
+
+const saveScenic = async () => {
+  scenicForm.code = scenicForm.code.trim()
+  scenicForm.name = scenicForm.name.trim()
+  if (!scenicForm.code || !scenicForm.name) { ElMessage.warning('请填写景区编码和名称'); return }
+  scenicSaving.value = true
+  try {
+    const payload = { code: scenicForm.code, name: scenicForm.name, status: scenicForm.status }
+    if (scenicForm.id) await request.put(`/scenic-areas/${scenicForm.id}`, payload)
+    else await request.post('/scenic-areas', payload)
+    scenicDialog.value = false
+    ElMessage.success(scenicForm.id ? '景区已更新' : '景区已创建')
+    await loadActiveTab()
+  } finally { scenicSaving.value = false }
 }
 
 const settlementDialog = ref(false)
