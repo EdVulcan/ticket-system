@@ -260,7 +260,9 @@ func sameOptionalDate(left, right *time.Time) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
 	}
-	return startOfDay(*left).Equal(startOfDay(*right))
+	leftYear, leftMonth, leftDay := left.Date()
+	rightYear, rightMonth, rightDay := right.Date()
+	return leftYear == rightYear && leftMonth == rightMonth && leftDay == rightDay
 }
 
 func createFulfillmentProjections(tx *gorm.DB, service *OrderService, order *model.Order) error {

@@ -183,6 +183,20 @@ func TestCtripPreOrderPaymentQueryAndCancellation(t *testing.T) {
 	assertCtripItemStatus(t, decodeCtripTestResponse(t, queryResponse, aesKey, aesIV), 5)
 }
 
+func TestSameOptionalDateIgnoresDatabaseTimezone(t *testing.T) {
+	shanghai := time.FixedZone("Asia/Shanghai", 8*60*60)
+	requestDate := time.Date(2026, 8, 5, 0, 0, 0, 0, shanghai)
+	databaseDate := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
+	differentDate := time.Date(2026, 8, 6, 0, 0, 0, 0, time.UTC)
+
+	if !sameOptionalDate(&requestDate, &databaseDate) {
+		t.Fatal("the same calendar date in different timezones must match")
+	}
+	if sameOptionalDate(&requestDate, &differentDate) {
+		t.Fatal("different calendar dates must not match")
+	}
+}
+
 type ctripTestResponse struct {
 	Code    string
 	Message string
