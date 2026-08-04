@@ -29,8 +29,8 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if err := db.Order("version DESC").First(&latest).Error; err != nil {
 		t.Fatal(err)
 	}
-	if latest.Version != 63 {
-		t.Fatalf("latest migration=%d, want 63", latest.Version)
+	if latest.Version != 64 {
+		t.Fatalf("latest migration=%d, want 64", latest.Version)
 	}
 	if !db.Migrator().HasIndex(&TourEntryBatch{}, "idx_team_entry_request") {
 		t.Fatal("team admission idempotency index was not created")
@@ -41,7 +41,7 @@ func TestMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if !db.Migrator().HasIndex(&PlatformUser{}, "idx_platform_users_initial_admin") {
 		t.Fatal("initial platform administrator index was not created")
 	}
-	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "tour_entry_batches", "tour_group_confirmations", "tour_group_member_changes", "pos_shifts", "pos_shift_corrections", "pos_holds", "settlement_statements", "settlement_adjustments", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements", "team_settlement_adjustments", "channel_bill_records", "channel_reconciliations", "channel_reconciliation_lines", "migration_audit_issues", "order_visitors", "bundle_products", "bundle_versions", "bundle_components"} {
+	for _, table := range []string{"product_revisions", "ledger_entries", "channel_accounts", "tour_groups", "tour_entry_batches", "tour_group_confirmations", "tour_group_member_changes", "pos_shifts", "pos_shift_corrections", "pos_holds", "settlement_statements", "settlement_adjustments", "after_sale_requests", "hardware_commands", "channel_reservations", "financial_documents", "team_settlement_statements", "team_settlement_adjustments", "channel_bill_records", "channel_reconciliations", "channel_reconciliation_lines", "migration_audit_issues", "order_visitors", "bundle_products", "bundle_versions", "bundle_components", "ctrip_order_links", "ctrip_order_items"} {
 		var count int64
 		if err := db.Raw("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?", table).Scan(&count).Error; err != nil {
 			t.Fatal(err)

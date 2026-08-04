@@ -28,9 +28,23 @@ func (c *ChannelController) Create(ctx *gin.Context) {
 	var body struct {
 		model.ChannelAccount
 		Secret string `json:"secret"`
+		AESKey string `json:"aes_key"`
+		AESIV  string `json:"aes_iv"`
 	}
 	if err := ctx.ShouldBindJSON(&body); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if body.Type == "ctrip" {
+		if err := c.Service.CreateCtrip(ctx.GetUint("tenant_id"), &body.ChannelAccount, body.AppID, body.Secret, body.AESKey, body.AESIV); err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		body.ProtocolConfigured = true
+		body.Secret = ""
+		body.SecretCiphertext = ""
+		body.ProtocolConfigCiphertext = ""
+		ctx.JSON(http.StatusCreated, body.ChannelAccount)
 		return
 	}
 	secret, err := c.Service.Create(ctx.GetUint("tenant_id"), &body.ChannelAccount, body.Secret)
@@ -76,6 +90,29 @@ func (c *ChannelController) RotateSecret(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"secret": secret})
+}
+
+func (c *ChannelController) ConfigureCtrip(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	var body struct {
+		AccountID string `json:"account_id" binding:"required"`
+		SignKey   string `json:"sign_key" binding:"required"`
+		AESKey    string `json:"aes_key" binding:"required"`
+		AESIV     string `json:"aes_iv" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.ConfigureCtrip(ctx.GetUint("tenant_id"), uint(id), body.AccountID, body.SignKey, body.AESKey, body.AESIV); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"configured": true})
 }
 
 func (c *ChannelController) AddMapping(ctx *gin.Context) {

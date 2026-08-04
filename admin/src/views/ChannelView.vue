@@ -14,17 +14,19 @@
     <el-table :data="accounts" v-loading="loading" stripe>
       <el-table-column prop="code" label="渠道编码" width="180" />
       <el-table-column label="适配器类型" width="140"><template #default="{row}">{{ adapterTypeText(row.type) }}</template></el-table-column>
+      <el-table-column label="接口参数" width="120"><template #default="{row}"><el-tag v-if="row.type === 'ctrip'" :type="row.protocol_configured ? 'success' : 'danger'" effect="plain">{{ row.protocol_configured ? '已配置' : '待配置' }}</el-tag><span v-else>-</span></template></el-table-column>
       <el-table-column prop="status" label="状态" width="120"><template #default="{row}"><el-tag :type="row.status === 'active' ? 'success' : row.status === 'sandbox' ? 'warning' : 'info'">{{ accountStatusText(row.status) }}</el-tag></template></el-table-column>
       <el-table-column prop="rate_limit_per_min" label="限流/分钟" width="120" />
       <el-table-column prop="permissions_json" label="权限" min-width="220" show-overflow-tooltip />
-      <el-table-column label="操作" width="530" fixed="right">
+      <el-table-column label="操作" width="600" fixed="right">
         <template #default="{row}">
+          <el-button v-if="canWrite && row.type === 'ctrip'" link type="primary" @click="openCtripConfig(row)">携程参数</el-button>
           <el-button v-if="canWrite" link type="primary" @click="openMapping(row)">商品映射</el-button>
           <el-button link type="primary" @click="openOrders(row)">渠道订单</el-button>
           <el-button link type="primary" @click="openRequests(row)">请求日志</el-button>
           <el-button link type="primary" @click="openReconciliations(row)">账单对账</el-button>
           <el-button v-if="canWrite" link type="warning" @click="toggleStatus(row)">{{ row.status === 'disabled' ? '启用' : '停用' }}</el-button>
-          <el-button v-if="canWrite" link type="danger" @click="rotate(row)">轮换密钥</el-button>
+          <el-button v-if="canWrite && row.type !== 'ctrip'" link type="danger" @click="rotate(row)">轮换密钥</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -32,13 +34,33 @@
     <el-dialog v-model="createDialog" title="新增渠道账号" width="520px">
       <el-form :model="form" label-position="top">
         <el-form-item label="渠道编码"><el-input v-model="form.code" placeholder="例如：携程正式渠道" /></el-form-item>
-        <el-form-item label="适配器类型"><el-input v-model="form.type" placeholder="例如：通用渠道、携程或美团" /></el-form-item>
-        <el-form-item label="初始密钥"><el-input v-model="form.secret" type="password" show-password /></el-form-item>
+        <el-form-item label="适配器类型"><el-select v-model="form.type" class="w-full" @change="handleAdapterTypeChange"><el-option label="通用渠道" value="core" /><el-option label="携程" value="ctrip" /></el-select></el-form-item>
+        <template v-if="form.type === 'ctrip'">
+          <el-alert class="mb-4" type="info" :closable="false" title="请填写携程沙箱“订单参数”中的接口账号、接口密钥、AES 密钥和初始向量。" />
+          <el-form-item label="携程接口账号"><el-input v-model="form.app_id" autocomplete="off" /></el-form-item>
+          <el-form-item label="携程接口密钥"><el-input v-model="form.secret" type="password" show-password autocomplete="new-password" /></el-form-item>
+          <el-form-item label="AES 加密密钥"><el-input v-model="form.aes_key" type="password" show-password autocomplete="new-password" maxlength="16" /></el-form-item>
+          <el-form-item label="AES 初始向量"><el-input v-model="form.aes_iv" type="password" show-password autocomplete="new-password" maxlength="16" /></el-form-item>
+        </template>
+        <el-form-item v-else label="初始密钥"><el-input v-model="form.secret" type="password" show-password /></el-form-item>
+        <el-form-item label="运行环境"><el-radio-group v-model="form.status"><el-radio-button label="sandbox">测试环境</el-radio-button><el-radio-button label="active">正式环境</el-radio-button></el-radio-group></el-form-item>
         <el-form-item label="接口权限配置"><el-input v-model="form.permissions_json" /></el-form-item>
         <el-form-item label="每分钟请求上限"><el-input-number v-model="form.rate_limit_per_min" :min="1" :max="100000" /></el-form-item>
         <el-form-item label="允许访问的网络地址"><el-input v-model="form.allowed_ips_json" placeholder='例如 ["203.0.113.5"]' /></el-form-item>
       </el-form>
       <template #footer><el-button @click="createDialog = false">取消</el-button><el-button type="primary" :loading="saving" @click="create">创建</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="ctripConfigDialog" title="携程订单接口参数" width="560px" :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" title="保存后旧参数立即失效。密钥不会在页面回显，四项内容必须重新完整填写。" />
+      <el-form class="mt-4" :model="ctripConfig" label-position="top">
+        <el-form-item label="携程接口账号"><el-input v-model="ctripConfig.account_id" autocomplete="off" /></el-form-item>
+        <el-form-item label="携程接口密钥"><el-input v-model="ctripConfig.sign_key" type="password" show-password autocomplete="new-password" /></el-form-item>
+        <el-form-item label="AES 加密密钥（16 位）"><el-input v-model="ctripConfig.aes_key" type="password" show-password maxlength="16" autocomplete="new-password" /></el-form-item>
+        <el-form-item label="AES 初始向量（16 位）"><el-input v-model="ctripConfig.aes_iv" type="password" show-password maxlength="16" autocomplete="new-password" /></el-form-item>
+        <el-form-item label="提供给携程的商家接口地址"><el-input :model-value="ctripEndpoint" readonly><template #append><el-button @click="copyCtripEndpoint">复制</el-button></template></el-input></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="ctripConfigDialog = false">取消</el-button><el-button type="primary" :loading="ctripConfigSaving" @click="saveCtripConfig">保存参数</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="mappingDialog" title="商品映射" width="780px">
@@ -246,11 +268,35 @@ const billText = ref('')
 const reconciliationDetailDialog = ref(false)
 const reconciliationDetailLoading = ref(false)
 const reconciliationDetail = ref<any>(null)
-const form = reactive({ code: '', type: 'core', secret: '', permissions_json: '["products:read","inventory:reserve","orders:create","orders:query","orders:cancel"]', rate_limit_per_min: 600, allowed_ips_json: '' })
+const ctripConfigDialog = ref(false)
+const ctripConfigSaving = ref(false)
+const ctripConfig = reactive({ account_id: '', sign_key: '', aes_key: '', aes_iv: '' })
+const ctripEndpoint = `${window.location.origin}/api/v1/integrations/ctrip/order`
+const form = reactive({ code: '', type: 'core', app_id: '', secret: '', aes_key: '', aes_iv: '', status: 'active', permissions_json: '["products:read","inventory:reserve","orders:create","orders:query","orders:cancel"]', rate_limit_per_min: 600, allowed_ips_json: '' })
 const mapping = reactive({ external_code: '', product_id: 0 })
 
 const load = async () => { loading.value = true; try { accounts.value = (await request.get('/channel-accounts')).data.data || [] } finally { loading.value = false } }
-const create = async () => { saving.value = true; try { const response = await request.post('/channel-accounts', { ...form }); accounts.value.unshift(response.data); createDialog.value = false; ElMessage.success('渠道已创建'); form.code = ''; form.secret = '' } finally { saving.value = false } }
+const handleAdapterTypeChange = (type: string) => { form.status = type === 'ctrip' ? 'sandbox' : 'active' }
+const create = async () => {
+  if (!form.code.trim()) { ElMessage.warning('请填写渠道编码'); return }
+  if (form.type === 'ctrip' && (!form.app_id.trim() || !form.secret.trim() || form.aes_key.length !== 16 || form.aes_iv.length !== 16)) { ElMessage.warning('请完整填写携程接口参数，AES 密钥和初始向量必须为 16 位'); return }
+  saving.value = true
+  try {
+    await request.post('/channel-accounts', { code: form.code, type: form.type, app_id: form.app_id, secret: form.secret, aes_key: form.aes_key, aes_iv: form.aes_iv, status: form.status, permissions_json: form.permissions_json, rate_limit_per_min: form.rate_limit_per_min, allowed_ips_json: form.allowed_ips_json })
+    createDialog.value = false
+    ElMessage.success('渠道已创建')
+    Object.assign(form, { code: '', type: 'core', app_id: '', secret: '', aes_key: '', aes_iv: '', status: 'active' })
+    await load()
+  } finally { saving.value = false }
+}
+const openCtripConfig = (row: any) => { selectedAccount.value = row; Object.assign(ctripConfig, { account_id: row.app_id || '', sign_key: '', aes_key: '', aes_iv: '' }); ctripConfigDialog.value = true }
+const saveCtripConfig = async () => {
+  if (!selectedAccount.value || !ctripConfig.account_id.trim() || !ctripConfig.sign_key.trim() || ctripConfig.aes_key.length !== 16 || ctripConfig.aes_iv.length !== 16) { ElMessage.warning('请完整填写参数，AES 密钥和初始向量必须为 16 位'); return }
+  ctripConfigSaving.value = true
+  try { await request.put(`/channel-accounts/${selectedAccount.value.id}/ctrip-config`, { ...ctripConfig }); ctripConfigDialog.value = false; ElMessage.success('携程接口参数已保存'); await load() }
+  finally { ctripConfigSaving.value = false }
+}
+const copyCtripEndpoint = async () => { await navigator.clipboard.writeText(ctripEndpoint); ElMessage.success('接口地址已复制') }
 const toggleStatus = async (row: any) => { const status = row.status === 'disabled' ? 'active' : 'disabled'; await request.patch(`/channel-accounts/${row.id}/status`, { status }); row.status = status; ElMessage.success('状态已更新') }
 const rotate = async (row: any) => { await ElMessageBox.confirm('轮换后旧密钥立即失效，确认继续？', '确认轮换', { type: 'warning' }); const response = await request.post(`/channel-accounts/${row.id}/rotate-secret`); newSecret.value = response.data.secret; secretDialog.value = true }
 const productName = (id: number) => products.value.find((product: any) => Number(product.id) === Number(id))?.name || '已下架或不可见产品'

@@ -235,6 +235,8 @@ func InitRouter(r *gin.Engine) {
 	channelGateway := &service.ChannelGatewayService{Registry: channelRegistry}
 	otaController.Gateway = channelGateway
 	channelController := &api.ChannelController{Service: service.ChannelService{}, Gateway: channelGateway}
+	ctripController := &api.CtripController{Service: service.CtripProtocolService{OrderService: service.OrderService{}}}
+	apiGroup.POST("/integrations/ctrip/order", ctripController.HandleOrder)
 
 	// Independently credentialed channel routes. The legacy /ota routes remain
 	// available for migration and continue using the tenant OTA secret.
@@ -258,6 +260,7 @@ func InitRouter(r *gin.Engine) {
 		channelAdminGroup.POST("", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.Create)
 		channelAdminGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SetStatus)
 		channelAdminGroup.POST("/:id/rotate-secret", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.RotateSecret)
+		channelAdminGroup.PUT("/:id/ctrip-config", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.ConfigureCtrip)
 		channelAdminGroup.GET("/mappings", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.ListMappings)
 		channelAdminGroup.POST("/mappings", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.AddMapping)
 		channelAdminGroup.POST("/:id/bills/import", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.ImportBill)

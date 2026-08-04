@@ -7,20 +7,22 @@ import "time"
 // in API responses.
 type ChannelAccount struct {
 	Base
-	TenantID            uint       `gorm:"index;not null" json:"tenant_id"`
-	Code                string     `gorm:"size:80;uniqueIndex;not null" json:"code"`
-	Type                string     `gorm:"size:30;not null" json:"type"`
-	AppID               string     `gorm:"size:120" json:"app_id"`
-	SecretCiphertext    string     `gorm:"type:text" json:"-"`
-	VerifyKeyCiphertext string     `gorm:"type:text" json:"-"`
-	SignAlgorithm       string     `gorm:"size:20;not null;default:'hmac-sha256'" json:"sign_algorithm"`
-	PermissionsJSON     string     `gorm:"type:text" json:"permissions_json"`
-	CallbackURL         string     `gorm:"size:255" json:"callback_url"`
-	Status              string     `gorm:"size:20;not null;default:'active';index" json:"status"` // active, disabled, sandbox
-	KeyVersion          int        `gorm:"not null;default:1" json:"key_version"`
-	LastUsedAt          *time.Time `json:"last_used_at,omitempty"`
-	RateLimitPerMin     int        `gorm:"not null;default:600" json:"rate_limit_per_min"`
-	AllowedIPsJSON      string     `gorm:"type:text" json:"allowed_ips_json,omitempty"`
+	TenantID                 uint       `gorm:"index;not null" json:"tenant_id"`
+	Code                     string     `gorm:"size:80;uniqueIndex;not null" json:"code"`
+	Type                     string     `gorm:"size:30;not null" json:"type"`
+	AppID                    string     `gorm:"size:120" json:"app_id"`
+	SecretCiphertext         string     `gorm:"type:text" json:"-"`
+	VerifyKeyCiphertext      string     `gorm:"type:text" json:"-"`
+	ProtocolConfigCiphertext string     `gorm:"type:text" json:"-"`
+	SignAlgorithm            string     `gorm:"size:20;not null;default:'hmac-sha256'" json:"sign_algorithm"`
+	PermissionsJSON          string     `gorm:"type:text" json:"permissions_json"`
+	CallbackURL              string     `gorm:"size:255" json:"callback_url"`
+	Status                   string     `gorm:"size:20;not null;default:'active';index" json:"status"` // active, disabled, sandbox
+	KeyVersion               int        `gorm:"not null;default:1" json:"key_version"`
+	LastUsedAt               *time.Time `json:"last_used_at,omitempty"`
+	RateLimitPerMin          int        `gorm:"not null;default:600" json:"rate_limit_per_min"`
+	AllowedIPsJSON           string     `gorm:"type:text" json:"allowed_ips_json,omitempty"`
+	ProtocolConfigured       bool       `gorm:"-" json:"protocol_configured"`
 }
 
 // ChannelProductMapping maps a channel product identifier to a seller-owned
@@ -50,4 +52,32 @@ type ChannelRequest struct {
 	LastAttemptAt    *time.Time `gorm:"index" json:"last_attempt_at,omitempty"`
 	CompletedAt      *time.Time `json:"completed_at,omitempty"`
 	LockedAt         *time.Time `gorm:"index" json:"-"`
+}
+
+// CtripOrderLink keeps Ctrip protocol identifiers outside the core order
+// model. Business state remains authoritative on Order and Ticket.
+type CtripOrderLink struct {
+	Base
+	TenantID         uint             `gorm:"index;not null;uniqueIndex:idx_ctrip_order_account_ota,priority:1" json:"tenant_id"`
+	ChannelAccountID uint             `gorm:"index;not null;uniqueIndex:idx_ctrip_order_account_ota,priority:2" json:"channel_account_id"`
+	OrderID          uint             `gorm:"uniqueIndex;not null" json:"order_id"`
+	OTAOrderID       string           `gorm:"size:100;not null;uniqueIndex:idx_ctrip_order_account_ota,priority:3" json:"ota_order_id"`
+	SupplierOrderID  string           `gorm:"size:50;not null;index" json:"supplier_order_id"`
+	State            string           `gorm:"size:20;not null;default:'preordered'" json:"state"`
+	Items            []CtripOrderItem `gorm:"foreignKey:CtripOrderLinkID" json:"items,omitempty"`
+}
+
+// CtripOrderItem maps one Ctrip item and its passenger identifiers to the
+// corresponding local order item. Passenger data stays as an immutable JSON
+// snapshot because Ctrip owns those identifiers.
+type CtripOrderItem struct {
+	Base
+	CtripOrderLinkID uint   `gorm:"index;not null;uniqueIndex:idx_ctrip_link_item,priority:1" json:"ctrip_order_link_id"`
+	OrderItemID      uint   `gorm:"uniqueIndex;not null" json:"order_item_id"`
+	ExternalItemID   string `gorm:"size:100;not null;uniqueIndex:idx_ctrip_link_item,priority:2" json:"external_item_id"`
+	PLU              string `gorm:"size:120;not null" json:"plu"`
+	PassengerIDsJSON string `gorm:"type:text" json:"passenger_ids_json,omitempty"`
+	GuestPriceCents  int64  `gorm:"not null;default:0" json:"guest_price_cents"`
+	SalePriceCents   int64  `gorm:"not null;default:0" json:"sale_price_cents"`
+	CostCents        int64  `gorm:"not null;default:0" json:"cost_cents"`
 }

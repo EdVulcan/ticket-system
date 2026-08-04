@@ -94,6 +94,7 @@ func runMigrations(db *gorm.DB) error {
 		{version: 61, name: "team refund correction statements", apply: migrateTeamRefundCorrectionStatements},
 		{version: 62, name: "direct gate authentication and verification facts", apply: migrateDirectGateFacts},
 		{version: 63, name: "ticket gate voice snapshots", apply: migrateTicketGateVoiceSnapshots},
+		{version: 64, name: "ctrip supplier protocol links", apply: migrateCtripSupplierProtocol},
 	}
 	for _, item := range migrations {
 		var count int64
@@ -110,6 +111,47 @@ func runMigrations(db *gorm.DB) error {
 			return tx.Create(&SchemaMigration{Version: item.version, Name: item.name, AppliedAt: time.Now()}).Error
 		}); err != nil {
 			return fmt.Errorf("migration %d (%s): %w", item.version, item.name, err)
+		}
+	}
+	return nil
+}
+
+func migrateCtripSupplierProtocol(db *gorm.DB) error {
+	if err := db.AutoMigrate(&ChannelAccount{}, &CtripOrderLink{}, &CtripOrderItem{}); err != nil {
+		return err
+	}
+	statements := []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_ctrip_app_id ON channel_accounts(type, app_id) WHERE type = 'ctrip' AND app_id != ''`,
+		`CREATE TRIGGER IF NOT EXISTS trg_ctrip_order_link_ownership_insert BEFORE INSERT ON ctrip_order_links BEGIN
+			SELECT CASE WHEN NOT EXISTS (
+				SELECT 1 FROM channel_accounts a JOIN orders o ON o.id = NEW.order_id
+				WHERE a.id = NEW.channel_account_id AND a.tenant_id = NEW.tenant_id AND a.type = 'ctrip'
+				  AND o.tenant_id = NEW.tenant_id AND o.channel_account_id = NEW.channel_account_id AND o.order_no = NEW.supplier_order_id
+			) THEN RAISE(ABORT, 'ctrip order ownership mismatch') END;
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS trg_ctrip_order_link_ownership_update BEFORE UPDATE ON ctrip_order_links BEGIN
+			SELECT CASE WHEN NOT EXISTS (
+				SELECT 1 FROM channel_accounts a JOIN orders o ON o.id = NEW.order_id
+				WHERE a.id = NEW.channel_account_id AND a.tenant_id = NEW.tenant_id AND a.type = 'ctrip'
+				  AND o.tenant_id = NEW.tenant_id AND o.channel_account_id = NEW.channel_account_id AND o.order_no = NEW.supplier_order_id
+			) THEN RAISE(ABORT, 'ctrip order ownership mismatch') END;
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS trg_ctrip_order_item_ownership_insert BEFORE INSERT ON ctrip_order_items BEGIN
+			SELECT CASE WHEN NOT EXISTS (
+				SELECT 1 FROM ctrip_order_links l JOIN order_items i ON i.id = NEW.order_item_id
+				WHERE l.id = NEW.ctrip_order_link_id AND i.order_id = l.order_id
+			) THEN RAISE(ABORT, 'ctrip order item ownership mismatch') END;
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS trg_ctrip_order_item_ownership_update BEFORE UPDATE ON ctrip_order_items BEGIN
+			SELECT CASE WHEN NOT EXISTS (
+				SELECT 1 FROM ctrip_order_links l JOIN order_items i ON i.id = NEW.order_item_id
+				WHERE l.id = NEW.ctrip_order_link_id AND i.order_id = l.order_id
+			) THEN RAISE(ABORT, 'ctrip order item ownership mismatch') END;
+		END`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return err
 		}
 	}
 	return nil

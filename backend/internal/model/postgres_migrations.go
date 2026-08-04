@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 63
+const CurrentPostgresSchemaVersion = 64
 
 // PostgreSQL starts from the current domain schema. The historical migrations
 // contain SQLite trigger syntax and legacy backfills, so replaying them on a
@@ -27,6 +27,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&Policy{}, &PaymentConfig{}, &Payment{}, &Refund{}, &PaymentReconciliationTask{}, &DigitalRefundTask{},
 		&AuditLog{}, &OTANonce{}, &FinancialDocument{},
 		&ChannelAccount{}, &ChannelProductMapping{}, &ChannelRequest{}, &ChannelReservation{},
+		&CtripOrderLink{}, &CtripOrderItem{},
 		&ChannelBillRecord{}, &ChannelReconciliation{}, &ChannelReconciliationLine{},
 		&TravelContract{}, &TravelAgent{}, &TourGuide{}, &TravelVehicle{}, &TourGroup{}, &TourGroupMember{},
 		&TourEntryBatch{}, &TourGroupConfirmation{}, &TourGroupMemberChange{}, &TeamSettlementStatement{}, &TeamSettlementAdjustment{},
@@ -98,6 +99,7 @@ func applyPostgresIndexes(db *gorm.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_distribution_pair ON distributor_relationships(agent_tenant_id, supplier_tenant_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_capital_account_pair ON capital_accounts(owner_tenant_id, manager_tenant_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_accounts_code_global ON channel_accounts(code)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_ctrip_app_id ON channel_accounts(type, app_id) WHERE type = 'ctrip' AND app_id != ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_settlement_statement_fulfillment ON settlement_lines(statement_id, fulfillment_order_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_product_revision_unique ON product_revisions(product_id, version)`,
 	}
@@ -167,6 +169,17 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 				WHERE o.id = NEW.order_id AND i.id = NEW.order_item_id AND t.id = NEW.ticket_id
 				  AND o.tenant_id = NEW.tenant_id AND t.tenant_id = NEW.tenant_id AND t.ticket_code = NEW.ticket_code
 			) THEN RAISE EXCEPTION 'order visitor ownership mismatch'; END IF;
+		WHEN 'ctrip_order_links' THEN
+			IF NEW.tenant_id = 0 OR NOT EXISTS (
+				SELECT 1 FROM channel_accounts a JOIN orders o ON o.id = NEW.order_id
+				WHERE a.id = NEW.channel_account_id AND a.tenant_id = NEW.tenant_id AND a.type = 'ctrip'
+				  AND o.tenant_id = NEW.tenant_id AND o.channel_account_id = NEW.channel_account_id AND o.order_no = NEW.supplier_order_id
+			) THEN RAISE EXCEPTION 'ctrip order ownership mismatch'; END IF;
+		WHEN 'ctrip_order_items' THEN
+			IF NOT EXISTS (
+				SELECT 1 FROM ctrip_order_links l JOIN order_items i ON i.id = NEW.order_item_id
+				WHERE l.id = NEW.ctrip_order_link_id AND i.order_id = l.order_id
+			) THEN RAISE EXCEPTION 'ctrip order item ownership mismatch'; END IF;
 		END CASE;
 		RETURN NEW;
 	END;
@@ -174,7 +187,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors"} {
+	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

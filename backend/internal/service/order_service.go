@@ -998,7 +998,7 @@ func cancelOrderTx(tx *gorm.DB, order *model.Order) error {
 	if order.Status == "cancelled" {
 		return nil
 	}
-	if order.Status != "unpaid" && !(order.Status == "paid" && order.Channel == "ota") {
+	if order.Status != "unpaid" && !(order.Status == "paid" && order.ChannelAccountID > 0) {
 		return fmt.Errorf("paid orders must use the refund workflow")
 	}
 	var pendingPayments int64

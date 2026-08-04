@@ -2,6 +2,7 @@ package service
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,6 +14,11 @@ import (
 )
 
 type ChannelService struct{}
+
+type CtripChannelConfig struct {
+	AESKey string `json:"aes_key"`
+	AESIV  string `json:"aes_iv"`
+}
 
 type ChannelOrderSummary struct {
 	ID                  uint      `json:"id"`
@@ -78,6 +84,50 @@ func (s *ChannelService) Create(tenantID uint, account *model.ChannelAccount, se
 	return secret, nil
 }
 
+func (s *ChannelService) CreateCtrip(tenantID uint, account *model.ChannelAccount, accountID, signKey, aesKey, aesIV string) error {
+	accountID, signKey = strings.TrimSpace(accountID), strings.TrimSpace(signKey)
+	aesKey, aesIV = strings.TrimSpace(aesKey), strings.TrimSpace(aesIV)
+	if tenantID == 0 || strings.TrimSpace(account.Code) == "" || accountID == "" || signKey == "" {
+		return errors.New("渠道编码、携程接口账号和接口密钥必填")
+	}
+	if len([]byte(aesKey)) != 16 || len([]byte(aesIV)) != 16 {
+		return errors.New("AES 密钥和初始向量必须各为 16 字节")
+	}
+	configJSON, _ := json.Marshal(CtripChannelConfig{AESKey: aesKey, AESIV: aesIV})
+	secretCiphertext, err := utils.EncryptAES(signKey)
+	if err != nil {
+		return err
+	}
+	configCiphertext, err := utils.EncryptAES(string(configJSON))
+	if err != nil {
+		return err
+	}
+	account.Base = model.Base{}
+	account.TenantID = tenantID
+	account.Type = "ctrip"
+	account.AppID = accountID
+	account.Status = normalizeChannelStatus(account.Status)
+	account.SecretCiphertext = secretCiphertext
+	account.ProtocolConfigCiphertext = configCiphertext
+	account.SignAlgorithm = "md5"
+	if account.RateLimitPerMin <= 0 {
+		account.RateLimitPerMin = 600
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		if err := requireAnyActiveTenantCapability(tx, tenantID, "supplier"); err != nil {
+			return err
+		}
+		var duplicate int64
+		if err := tx.Model(&model.ChannelAccount{}).Where("type = ? AND app_id = ?", "ctrip", accountID).Count(&duplicate).Error; err != nil {
+			return err
+		}
+		if duplicate > 0 {
+			return errors.New("该携程接口账号已被配置")
+		}
+		return tx.Create(account).Error
+	})
+}
+
 func normalizeChannelStatus(value string) string {
 	if value == "disabled" || value == "sandbox" {
 		return value
@@ -91,10 +141,57 @@ func (s *ChannelService) List(tenantID uint) ([]model.ChannelAccount, error) {
 		return nil, err
 	}
 	for i := range accounts {
+		accounts[i].ProtocolConfigured = accounts[i].Type == "ctrip" && accounts[i].AppID != "" && accounts[i].SecretCiphertext != "" && accounts[i].ProtocolConfigCiphertext != ""
 		accounts[i].SecretCiphertext = ""
 		accounts[i].VerifyKeyCiphertext = ""
+		accounts[i].ProtocolConfigCiphertext = ""
 	}
 	return accounts, nil
+}
+
+func (s *ChannelService) ConfigureCtrip(tenantID, id uint, accountID, signKey, aesKey, aesIV string) error {
+	accountID = strings.TrimSpace(accountID)
+	signKey = strings.TrimSpace(signKey)
+	aesKey = strings.TrimSpace(aesKey)
+	aesIV = strings.TrimSpace(aesIV)
+	if tenantID == 0 || id == 0 || accountID == "" || signKey == "" {
+		return errors.New("携程接口账号和接口密钥必填")
+	}
+	if len([]byte(aesKey)) != 16 || len([]byte(aesIV)) != 16 {
+		return errors.New("AES 密钥和初始向量必须各为 16 字节")
+	}
+	configJSON, err := json.Marshal(CtripChannelConfig{AESKey: aesKey, AESIV: aesIV})
+	if err != nil {
+		return err
+	}
+	secretCiphertext, err := utils.EncryptAES(signKey)
+	if err != nil {
+		return err
+	}
+	configCiphertext, err := utils.EncryptAES(string(configJSON))
+	if err != nil {
+		return err
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var duplicate int64
+		if err := tx.Model(&model.ChannelAccount{}).Where("type = ? AND app_id = ? AND id != ?", "ctrip", accountID, id).Count(&duplicate).Error; err != nil {
+			return err
+		}
+		if duplicate > 0 {
+			return errors.New("该携程接口账号已被配置")
+		}
+		result := tx.Model(&model.ChannelAccount{}).Where("id = ? AND tenant_id = ? AND type = ?", id, tenantID, "ctrip").Updates(map[string]interface{}{
+			"app_id": accountID, "secret_ciphertext": secretCiphertext, "protocol_config_ciphertext": configCiphertext,
+			"sign_algorithm": "md5", "key_version": gorm.Expr("key_version + 1"),
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
 }
 
 func (s *ChannelService) SetStatus(tenantID, id uint, status string) error {
@@ -114,6 +211,13 @@ func (s *ChannelService) SetStatus(tenantID, id uint, status string) error {
 }
 
 func (s *ChannelService) RotateSecret(tenantID, id uint) (string, error) {
+	var account model.ChannelAccount
+	if err := model.DB.Select("id", "type").Where("id = ? AND tenant_id = ?", id, tenantID).First(&account).Error; err != nil {
+		return "", err
+	}
+	if account.Type == "ctrip" {
+		return "", errors.New("携程渠道请通过“携程参数”完整更新接口密钥和 AES 参数")
+	}
 	secret := randomChannelSecret()
 	ciphertext, err := utils.EncryptAES(secret)
 	if err != nil {

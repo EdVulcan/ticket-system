@@ -74,7 +74,7 @@ func TestMain(m *testing.M) {
 		&model.Tenant{}, &model.TenantCapability{}, &model.User{}, &model.Staff{}, &model.ScenicArea{}, &model.PlatformUser{}, &model.CheckPoint{}, &model.Device{}, &model.TicketRule{}, &model.RuleGroup{}, &model.RuleItem{},
 		&model.Product{}, &model.ProductOffer{}, &model.SellerListing{}, &model.ProductInventory{}, &model.Order{}, &model.OrderItem{}, &model.Ticket{}, &model.OrderVisitor{}, &model.FulfillmentOrder{}, &model.TicketEntitlement{},
 		&model.CheckInRecord{}, &model.DistributorRelationship{}, &model.CapitalAccount{}, &model.TransactionRecord{},
-		&model.LedgerEntry{}, &model.DigitalRefundTask{}, &model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{},
+		&model.LedgerEntry{}, &model.DigitalRefundTask{}, &model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{}, &model.CtripOrderLink{}, &model.CtripOrderItem{},
 		&model.Policy{}, &model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{},
 		&model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.TourGroup{}, &model.TourGroupMember{}, &model.TourEntryBatch{}, &model.TourGroupConfirmation{}, &model.TourGroupMemberChange{},
 		&model.POSShift{}, &model.POSShiftCorrection{}, &model.PrintJob{}, &model.DeviceAlert{}, &model.POSHold{},
@@ -105,7 +105,7 @@ func resetBusinessData(t *testing.T) {
 		for _, table := range []interface{}{
 			&model.StaffResourceScope{}, &model.User{}, &model.Staff{},
 			&model.Policy{}, &model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{}, &model.LedgerEntry{}, &model.DigitalRefundTask{},
-			&model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{}, &model.ChannelReservation{}, &model.TourGroupConfirmation{}, &model.TourGroupMemberChange{}, &model.TourGroupMember{}, &model.TourEntryBatch{}, &model.TourGroup{}, &model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.POSShiftCorrection{}, &model.POSShift{}, &model.PrintJob{}, &model.DeviceAlert{}, &model.POSHold{},
+			&model.CtripOrderItem{}, &model.CtripOrderLink{}, &model.ChannelAccount{}, &model.ChannelProductMapping{}, &model.ChannelRequest{}, &model.ChannelReservation{}, &model.TourGroupConfirmation{}, &model.TourGroupMemberChange{}, &model.TourGroupMember{}, &model.TourEntryBatch{}, &model.TourGroup{}, &model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.POSShiftCorrection{}, &model.POSShift{}, &model.PrintJob{}, &model.DeviceAlert{}, &model.POSHold{},
 			&model.AfterSaleEvent{}, &model.AfterSaleRequest{}, &model.HardwareEvent{}, &model.HardwareCommand{}, &model.DeviceRequestNonce{}, &model.DeviceVerification{}, &model.FinancialDocument{}, &model.TeamSettlementAdjustment{}, &model.TeamSettlementStatement{},
 			&model.ChannelReconciliationLine{}, &model.ChannelBillRecord{}, &model.ChannelReconciliation{},
 			&model.BundleComponent{}, &model.BundleProduct{}, &model.BundleVersion{},
