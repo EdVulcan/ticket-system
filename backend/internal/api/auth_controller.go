@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"net/http"
+	"ticket-backend/internal/authz"
 	"ticket-backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -48,6 +49,7 @@ func (c *AuthController) Login(ctx *gin.Context) {
 			"tenant_name":      user.Tenant.Name,
 			"scope":            "tenant",
 			"capabilities":     user.Tenant.Capabilities,
+			"permissions":      authz.PermissionsForRole(user.Role),
 		},
 	})
 }

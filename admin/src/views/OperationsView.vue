@@ -42,7 +42,7 @@
       <el-tab-pane v-if="hasAnyCapability('supplier', 'distributor')" label="结算" name="settlements">
         <div class="flex items-center justify-between mb-3">
           <span class="text-sm text-gray-500">只处理供应商与分销商之间的履约对账和付款确认。</span>
-          <el-button v-if="hasCapability('supplier')" type="primary" @click="openGenerateSettlement">生成结算单</el-button>
+          <el-button v-if="hasCapability('supplier') && canSettlementWrite" type="primary" @click="openGenerateSettlement">生成结算单</el-button>
         </div>
         <el-table :data="rows.settlements" v-loading="loading">
           <el-table-column prop="statement_no" label="结算单" width="210" />
@@ -239,6 +239,7 @@ import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { localizeDisplayText } from '@/utils/localize'
+import { hasPermission } from '@/utils/permissions'
 
 const user = computed<any>(() => {
   try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
@@ -246,7 +247,8 @@ const user = computed<any>(() => {
 const capabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability)))
 const hasCapability = (value: string) => capabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(hasCapability)
-const isSupervisor = computed(() => ['admin', 'super_admin'].includes(user.value.role))
+const isSupervisor = computed(() => hasPermission(user.value, 'onsite.manage'))
+const canSettlementWrite = computed(() => hasPermission(user.value, 'settlements.write'))
 const currentTenantID = computed(() => Number(user.value.tenant_id || 0))
 const firstTab = () => hasCapability('supplier') ? 'scenic' : hasCapability('travel_agency') ? 'teams' : 'channels'
 const activeTab = ref(firstTab())
@@ -314,11 +316,11 @@ const settlementAdjustment = reactive({ amount: 0, reason: '' })
 const settlementPayable = computed(() => Number(settlementDetail.value?.net_cents || 0) + Number(settlementDetail.value?.adjustment_cents || 0))
 const isSettlementSupplier = computed(() => currentTenantID.value > 0 && currentTenantID.value === Number(settlementDetail.value?.supplier_tenant_id))
 const isSettlementDistributor = computed(() => currentTenantID.value > 0 && currentTenantID.value === Number(settlementDetail.value?.distributor_tenant_id))
-const canSupplierConfirm = computed(() => settlementDetail.value?.status === 'draft' && isSettlementSupplier.value)
-const canDistributorConfirm = computed(() => settlementDetail.value?.status === 'supplier_confirmed' && isSettlementDistributor.value)
-const canDispute = computed(() => ['supplier_confirmed', 'confirmed'].includes(settlementDetail.value?.status) && (isSettlementSupplier.value || isSettlementDistributor.value))
-const canAdjust = computed(() => settlementDetail.value?.status === 'disputed' && (isSettlementSupplier.value || isSettlementDistributor.value))
-const canMarkPaid = computed(() => settlementDetail.value?.status === 'confirmed' && isSettlementDistributor.value)
+const canSupplierConfirm = computed(() => canSettlementWrite.value && settlementDetail.value?.status === 'draft' && isSettlementSupplier.value)
+const canDistributorConfirm = computed(() => canSettlementWrite.value && settlementDetail.value?.status === 'supplier_confirmed' && isSettlementDistributor.value)
+const canDispute = computed(() => canSettlementWrite.value && ['supplier_confirmed', 'confirmed'].includes(settlementDetail.value?.status) && (isSettlementSupplier.value || isSettlementDistributor.value))
+const canAdjust = computed(() => canSettlementWrite.value && settlementDetail.value?.status === 'disputed' && (isSettlementSupplier.value || isSettlementDistributor.value))
+const canMarkPaid = computed(() => canSettlementWrite.value && settlementDetail.value?.status === 'confirmed' && isSettlementDistributor.value)
 const settlementStatusText = (status: string) => ({ draft: '草稿', supplier_confirmed: '供应商已确认', confirmed: '双方已确认', disputed: '有争议', paid: '已付款' } as Record<string, string>)[status] || '未知状态'
 const settlementStatusType = (status: string) => status === 'paid' ? 'success' : status === 'disputed' ? 'danger' : status === 'confirmed' ? 'success' : status === 'supplier_confirmed' ? 'warning' : 'info'
 

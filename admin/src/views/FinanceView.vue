@@ -24,7 +24,7 @@
           </div>
         </div>
         <div class="mt-4 pt-4 border-t border-gray-50 flex justify-end">
-             <el-button type="primary" link size="small" @click="handleRecharge(acc)">申请充值</el-button>
+             <el-button v-if="canWrite" type="primary" link size="small" @click="handleRecharge(acc)">申请充值</el-button>
         </div>
       </div>
       
@@ -97,6 +97,10 @@
 import { ref, onMounted, watch } from 'vue'
 import request from '@/utils/request'
 import { ElMessage } from 'element-plus'
+import { hasPermission } from '@/utils/permissions'
+
+const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
+const canWrite = hasPermission(currentUser, 'finance.write')
 
 // Accounts
 const loadingAccounts = ref(false)

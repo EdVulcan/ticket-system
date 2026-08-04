@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"ticket-backend/internal/authz"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
 
@@ -32,7 +33,7 @@ func (c *UserController) Create(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "password must be at least 8 characters"})
 		return
 	}
-	if req.Role != "admin" {
+	if !authz.IsDelegatedTenantRole(req.Role) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid user role"})
 		return
 	}
@@ -88,6 +89,30 @@ func (c *UserController) Create(ctx *gin.Context) {
 	}
 
 	ctx.JSON(http.StatusCreated, user)
+}
+
+func (c *UserController) UpdateRole(ctx *gin.Context) {
+	id, err := strconv.Atoi(ctx.Param("id"))
+	if err != nil || id <= 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		return
+	}
+	var req struct {
+		Role string `json:"role" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&req); err != nil || !authz.IsDelegatedTenantRole(req.Role) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid user role"})
+		return
+	}
+	if err := service.UpdateTenantUserRole(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), req.Role); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+		}
+		ctx.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"message": "role updated"})
 }
 
 // List Staff

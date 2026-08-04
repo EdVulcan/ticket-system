@@ -7,7 +7,7 @@
       </div>
       <div class="flex gap-2">
         <el-button :icon="Refresh" circle title="刷新" @click="load" />
-        <el-button type="primary" :icon="Plus" @click="openCreate">新建售后</el-button>
+        <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreate">新建售后</el-button>
       </div>
     </div>
 
@@ -45,8 +45,8 @@
         <template #default="{ row }">
           <el-button v-if="row.status === 'pending' && canApprove" link type="primary" @click="openApprove(row)">批准</el-button>
           <el-button v-if="row.status === 'pending' && canApprove" link type="danger" @click="reject(row)">拒绝</el-button>
-          <el-button v-if="row.status === 'approved'" link type="primary" @click="execute(row)">执行</el-button>
-          <el-button v-if="row.status === 'processing' && row.difference_cents > 0 && row.difference_status !== 'settled'" link type="warning" @click="openDifferencePayment(row)">收取差价</el-button>
+          <el-button v-if="canWrite && row.status === 'approved'" link type="primary" @click="execute(row)">执行</el-button>
+          <el-button v-if="canWrite && row.status === 'processing' && row.difference_cents > 0 && row.difference_status !== 'settled'" link type="warning" @click="openDifferencePayment(row)">收取差价</el-button>
           <el-button link @click="showDetail(row)">详情</el-button>
         </template>
       </el-table-column>
@@ -156,12 +156,14 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { localizeDisplayText } from '@/utils/localize'
+import { hasPermission } from '@/utils/permissions'
 
 const route = useRoute()
 
 const user = ref<any>({})
 try { user.value = JSON.parse(localStorage.getItem('user') || '{}') } catch (_) { /* invalid session */ }
-const canApprove = computed(() => user.value.role === 'admin' || user.value.role === 'super_admin')
+const canWrite = computed(() => hasPermission(user.value, 'after_sales.write'))
+const canApprove = computed(() => hasPermission(user.value, 'after_sales.approve'))
 const activeCapabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability)))
 const isSupplier = computed(() => activeCapabilities.value.has('supplier'))
 const rows = ref<any[]>([]); const loading = ref(false); const saving = ref(false); const total = ref(0); const page = ref(1); const pageSize = ref(20); const status = ref(''); const orderNo = ref(String(route.query.order_no || ''))
@@ -235,7 +237,7 @@ const parseCodes = (value: string) => { try { return (JSON.parse(value || '[]') 
 const typeText = (value: string) => types.value.find(item => item.value === value)?.label || '其他售后'
 const statusText = (value: string) => ({ pending: '待审核', approved: '已批准', processing: '处理中', completed: '已完成', rejected: '已拒绝', failed: '失败' } as any)[value] || '未知状态'
 const statusType = (value: string) => ({ completed: 'success', rejected: 'info', failed: 'danger', processing: 'warning', approved: 'warning' } as any)[value] || 'info'
-const paymentMethodText = (value: string) => ({ cash: '现金', wechat: '微信', alipay: '支付宝', mixed: '混合支付' } as any)[value] || '其他方式'
+const paymentMethodText = (value: string) => ({ cash: '现金', wechat: '微信', alipay: '支付宝', mixed: '混合支付', team_account: '团队预付款/授信' } as any)[value] || '其他方式'
 const refundStatusText = (value: string) => ({ group_pending: '等待全部退款', group_succeeded: '退款完成', pending: '等待渠道', processing: '处理中', submitted: '渠道处理中', succeeded: '已退款', failed: '失败', manual_review: '待人工复核' } as any)[value] || '未知状态'
 const refundStatusType = (value: string) => ({ group_succeeded: 'success', succeeded: 'success', failed: 'danger', manual_review: 'danger', group_pending: 'warning', pending: 'warning', processing: 'warning', submitted: 'warning' } as any)[value] || 'info'
 const differenceStatusText = (value: string) => ({ payment_required: '待收取差价', payment_pending: '等待支付确认', refund_pending: '等待退款完成', settled: '已结清' } as any)[value] || '无需处理'

@@ -5,7 +5,7 @@
         <h2 class="text-lg font-bold text-gray-900">窗口门票管理</h2>
         <p class="text-xs text-gray-500 mt-1">管理线下窗口销售的票务产品（仅限窗口/自助机使用）</p>
       </div>
-      <el-button type="primary" @click="handleAdd">
+      <el-button v-if="canWrite" type="primary" @click="handleAdd">
         <el-icon class="mr-2"><Plus /></el-icon> 发布窗口票
       </el-button>
     </div>
@@ -49,7 +49,7 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="200" fixed="right" align="center">
+      <el-table-column v-if="canWrite" label="操作" width="200" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
           <el-button 
@@ -202,6 +202,10 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { Plus, Minus } from '@element-plus/icons-vue'
+import { hasPermission } from '@/utils/permissions'
+
+const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
+const canWrite = hasPermission(currentUser, 'catalog.write')
 
 const loading = ref(false)
 const submitting = ref(false)

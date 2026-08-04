@@ -39,7 +39,7 @@ type User struct {
 	Base
 	Username       string `gorm:"size:50;uniqueIndex:idx_tenant_username;not null" json:"username"`
 	Password       string `gorm:"size:100;not null" json:"-"`
-	Role           string `gorm:"size:20;default:'staff'" json:"role"` // admin, staff
+	Role           string `gorm:"size:20;default:'staff'" json:"role"` // tenant admin or a fixed back-office role
 	TenantID       uint   `gorm:"uniqueIndex:idx_tenant_username" json:"tenant_id"`
 	IsInitialAdmin bool   `gorm:"not null;default:false" json:"is_initial_admin"`
 	TokenVersion   int    `gorm:"not null;default:1" json:"-"`

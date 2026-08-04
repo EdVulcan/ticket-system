@@ -144,6 +144,25 @@ func (c *TeamController) CreateGroup(ctx *gin.Context) {
 	ctx.JSON(http.StatusCreated, group)
 }
 
+func (c *TeamController) CreateContractOrder(ctx *gin.Context) {
+	groupID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || groupID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid group id"})
+		return
+	}
+	var input service.TeamOrderInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	order, err := c.Service.CreateContractOrder(ctx.GetUint("tenant_id"), uint(groupID), ctx.GetUint("user_id"), input)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusCreated, order)
+}
+
 func (c *TeamController) AddMembers(ctx *gin.Context) {
 	groupID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
 	if err != nil {

@@ -47,69 +47,69 @@
           <!-- Tenant Only -->
           <template v-else>
              <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">销售中心</div>
-             <el-menu-item v-if="hasCapability('supplier')" index="/product" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasCapability('supplier') && can('catalog.read')" index="/product" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Ticket /></el-icon>
                 <span>线上门票</span>
              </el-menu-item>
-             <el-menu-item v-if="hasCapability('supplier')" index="/product/offline" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasCapability('supplier') && can('catalog.read')" index="/product/offline" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Monitor /></el-icon>
                 <span>窗口门票</span>
              </el-menu-item>
-             <el-menu-item index="/online-order" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="can('orders.read')" index="/online-order" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><List /></el-icon>
                 <span>线上订单</span>
              </el-menu-item>
-             <el-menu-item v-if="hasCapability('supplier')" index="/offline-order" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasCapability('supplier') && can('onsite.read')" index="/offline-order" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Tickets /></el-icon>
                 <span>线下/窗口订单</span>
              </el-menu-item>
 
-             <div v-if="hasAnyCapability('supplier', 'distributor')" class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">分销中心</div>
-             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor')" index="/distribution" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <div v-if="hasAnyCapability('supplier', 'distributor') && (can('distribution.read') || can('channels.read'))" class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">分销中心</div>
+             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && can('distribution.read')" index="/distribution" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Connection /></el-icon>
                 <span>分销商管理</span>
              </el-menu-item>
-             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor')" index="/channels" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && can('channels.read')" index="/channels" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Connection /></el-icon>
                 <span>渠道连接</span>
              </el-menu-item>
-             <el-menu-item v-if="hasAnyCapability('supplier', 'travel_agency')" index="/teams" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasAnyCapability('supplier', 'travel_agency') && can('teams.read')" index="/teams" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Tickets /></el-icon>
                 <span>旅行社团队</span>
              </el-menu-item>
 
              <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">运营管理</div>
-             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor', 'travel_agency')" index="/operations" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && can('operations.read')" index="/operations" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Operation /></el-icon>
                 <span>运营工作台</span>
              </el-menu-item>
-             <el-menu-item v-if="hasCapability('supplier')" index="/policy" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasCapability('supplier') && can('catalog.read')" index="/policy" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Reading /></el-icon>
                 <span>政策知识库</span>
              </el-menu-item>
-             <el-menu-item v-if="hasCapability('supplier')" index="/device" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasCapability('supplier') && can('onsite.manage')" index="/device" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Monitor /></el-icon>
                 <span>终端设备</span>
              </el-menu-item>
-             <el-menu-item v-if="hasCapability('supplier')" index="/checkpoint" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasCapability('supplier') && can('onsite.read')" index="/checkpoint" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Location /></el-icon>
                 <span>检票点位</span>
              </el-menu-item>
 
              <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">数据与财务</div>
-             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor')" index="/finance" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && can('finance.read')" index="/finance" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Money /></el-icon>
                 <span>财务报表</span>
              </el-menu-item>
-             <el-menu-item index="/report" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors text-indigo-400">
+             <el-menu-item v-if="can('reports.read')" index="/report" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors text-indigo-400">
                 <el-icon><TrendCharts /></el-icon>
                 <span>经营数据</span>
              </el-menu-item>
-             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && (user.role === 'admin' || user.role === 'super_admin')" index="/refund-tasks" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && can('refunds.read')" index="/refund-tasks" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Warning /></el-icon>
                 <span>退款待办</span>
              </el-menu-item>
-             <el-menu-item v-if="user.role === 'seller' || user.role === 'admin' || user.role === 'super_admin'" index="/after-sales" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+             <el-menu-item v-if="can('after_sales.read')" index="/after-sales" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Warning /></el-icon>
                 <span>售后工作台</span>
              </el-menu-item>
@@ -117,15 +117,15 @@
           
           <template v-if="!isSuperAdmin">
           <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">组织与设置</div>
-           <el-menu-item v-if="hasCapability('supplier')" index="/staff" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+           <el-menu-item v-if="hasCapability('supplier') && can('onsite.manage')" index="/staff" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
             <el-icon><User /></el-icon>
             <span>员工管理</span>
           </el-menu-item>
-          <el-menu-item index="/system-user" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+          <el-menu-item v-if="can('tenant_accounts.manage')" index="/system-user" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
             <el-icon><UserFilled /></el-icon>
             <span>管理账号</span>
           </el-menu-item>
-           <el-menu-item v-if="hasAnyCapability('supplier', 'distributor')" index="/payment-config" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
+           <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && can('payment_config.manage')" index="/payment-config" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
             <el-icon><CreditCard /></el-icon>
             <span>支付参数配置</span>
           </el-menu-item>
@@ -244,6 +244,7 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
+import { hasPermission, tenantRoleLabel } from '@/utils/permissions'
 
 const route = useRoute()
 const router = useRouter()
@@ -257,10 +258,11 @@ const isLoginPage = computed(() => route.name === 'login' || route.name === 'pla
 const activeCapabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active' && (!item.expires_at || new Date(item.expires_at).getTime() > Date.now())).map((item: any) => item.capability)))
 const hasCapability = (value: string) => activeCapabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(value => activeCapabilities.value.has(value))
+const can = (permission: string) => hasPermission(user.value, permission)
 const roleText = (role: string) => ({
     platform_admin: '平台管理员', platform_operator: '平台运营员', super_admin: '商户最高管理员', admin: '商户管理员',
-    sub_admin: '普通管理员', seller: '售票员', checker: '检票员', finance: '结算人员'
-} as Record<string, string>)[role] || '系统用户'
+    seller: '售票员', checker: '验票员'
+} as Record<string, string>)[role] || tenantRoleLabel(role)
 
 const handleLogout = () => {
     const loginPath = user.value.scope === 'platform' ? '/platform/login' : '/login'

@@ -49,6 +49,12 @@ type TravelContractPartner struct {
 	RelationshipID uint   `json:"relationship_id"`
 }
 
+type TeamOrderInput struct {
+	ProductID    uint   `json:"product_id"`
+	ContactName  string `json:"contact_name"`
+	ContactPhone string `json:"contact_phone"`
+}
+
 func normalizeTeamPriceRulesTx(tx *gorm.DB, supplierTenantID uint, rules []TeamPriceRule) ([]TeamPriceRule, string, error) {
 	if len(rules) == 0 {
 		return nil, "", errors.New("at least one contract product price is required")
@@ -84,8 +90,8 @@ func normalizeTeamPriceRulesTx(tx *gorm.DB, supplierTenantID uint, rules []TeamP
 }
 
 func syncTravelContractOffersTx(tx *gorm.DB, supplierTenantID, travelTenantID uint, rules []TeamPriceRule) error {
-	if err := requireActiveTenantCapability(tx, travelTenantID, "distributor"); err != nil {
-		return errors.New("该旅行社尚未启用分销能力")
+	if err := requireActiveTenantCapability(tx, travelTenantID, "travel_agency"); err != nil {
+		return errors.New("该旅行社业务能力当前不可用")
 	}
 	for _, rule := range rules {
 		var product model.Product
@@ -309,9 +315,6 @@ func (s *TeamService) ListContractPartners(supplierTenantID uint) ([]TravelContr
 	rows := make([]TravelContractPartner, 0, len(relationships))
 	for _, relationship := range relationships {
 		if err := requireActiveTenantCapability(model.DB, relationship.AgentTenantID, "travel_agency"); err != nil {
-			continue
-		}
-		if err := requireActiveTenantCapability(model.DB, relationship.AgentTenantID, "distributor"); err != nil {
 			continue
 		}
 		rows = append(rows, TravelContractPartner{TenantID: relationship.AgentTenantID, Name: relationship.AgentTenant.Name, SystemCode: relationship.AgentTenant.SystemCode, RelationshipID: relationship.ID})
@@ -793,6 +796,174 @@ func (s *TeamService) AttachOrder(tenantID, groupID, orderID uint) error {
 		}
 		return tx.Model(&group).Updates(map[string]interface{}{"sales_order_id": order.ID, "status": "confirmed", "contract_amount_cents": amountCents, "credit_used_cents": creditUsed, "settlement_status": "open"}).Error
 	})
+}
+
+// CreateContractOrder creates the paid fulfillment fact for a pure travel-agency
+// team. Product ownership, visit date and price are derived from the active
+// supplier contract; the client cannot submit distribution or settlement fields.
+func (s *TeamService) CreateContractOrder(tenantID, groupID, operatorID uint, input TeamOrderInput) (*model.Order, error) {
+	if input.ProductID == 0 {
+		return nil, errors.New("请选择合同产品")
+	}
+	var order model.Order
+	err := model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
+			return err
+		}
+		var group model.TourGroup
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
+			return errors.New("团队不存在")
+		}
+		if group.Status != "draft" || group.SalesOrderID != 0 {
+			return errors.New("只有尚未绑定订单的草稿团队可以生成合同订单")
+		}
+		if err := validateTeamContractTx(tx, tenantID, &group); err != nil {
+			return err
+		}
+		var contract model.TravelContract
+		if err := tx.Where("id = ? AND travel_tenant_id = ? AND supplier_tenant_id = ? AND status = ?", group.ContractID, tenantID, group.SupplierTenantID, "active").First(&contract).Error; err != nil {
+			return errors.New("有效旅行社合同不存在")
+		}
+		rules, err := decodeTeamPriceRules(contract.PriceRulesJSON)
+		if err != nil {
+			return errors.New("合同产品价格配置无效")
+		}
+		var priceRule *TeamPriceRule
+		for i := range rules {
+			if rules[i].ProductID == input.ProductID {
+				priceRule = &rules[i]
+				break
+			}
+		}
+		if priceRule == nil || priceRule.PriceCents <= 0 {
+			return errors.New("所选产品不在当前合同中")
+		}
+		var members []model.TourGroupMember
+		if err := tx.Where("group_id = ? AND status = ?", group.ID, "planned").Order("id ASC").Find(&members).Error; err != nil {
+			return err
+		}
+		quantity := len(members)
+		if quantity == 0 || quantity != group.ExpectedCount {
+			return errors.New("请先录入与计划人数一致的游客名单")
+		}
+		if priceRule.MaxQuantity > 0 && quantity > priceRule.MaxQuantity {
+			return errors.New("团队人数超过合同产品每单上限")
+		}
+		var product model.Product
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Where(
+			"id = ? AND tenant_id = ? AND scenic_area_id = ? AND status = ? AND is_distributable = ?",
+			input.ProductID, group.SupplierTenantID, group.ScenicAreaID, "online", true,
+		).First(&product).Error; err != nil {
+			return errors.New("合同产品当前不可售或不属于团队景区")
+		}
+		if product.CodeMode == "order" {
+			return errors.New("团队产品必须按游客生成独立票码")
+		}
+		if err := requireActiveTenantCapability(tx, product.TenantID, "supplier"); err != nil {
+			return errors.New("景区供应商当前不可用")
+		}
+		revision, err := ensureProductRevisionTx(tx, &product)
+		if err != nil {
+			return err
+		}
+		product.CurrentRevisionID = revision.ID
+		product.GateVoiceCode = strings.TrimSpace(revision.GateVoiceCode)
+		if product.GateVoiceCode == "" {
+			product.GateVoiceCode = "welcome"
+		}
+		visitors := make([]model.VisitorInput, quantity)
+		for i := range members {
+			visitors[i] = model.VisitorInput{Name: members[i].Name, Phone: members[i].Phone, IdentityNo: members[i].IdentityNo}
+		}
+		useDate := startOfDay(group.VisitDate)
+		orderService := &OrderService{}
+		order = model.Order{
+			OrderNo: orderService.GenerateOrderNo(), TenantID: tenantID, Status: "unpaid", Channel: "team",
+			ContactName: strings.TrimSpace(input.ContactName), ContactPhone: strings.TrimSpace(input.ContactPhone),
+			TotalAmount: centsMoney(priceRule.PriceCents * int64(quantity)),
+			Items: []model.OrderItem{{
+				ProductID: product.ID, ProductName: product.Name, Price: centsMoney(priceRule.PriceCents),
+				SettlementPrice: centsMoney(priceRule.PriceCents), Quantity: quantity, UseDate: &useDate,
+				ValidityType: product.ValidityType, FulfillmentProductID: product.ID,
+				FulfillmentTenantID: product.TenantID, FulfillmentScenicAreaID: product.ScenicAreaID,
+				ProductRevisionID: revision.ID, Visitors: visitors,
+			}},
+		}
+		item := &order.Items[0]
+		if err := applyValidity(item, &product); err != nil {
+			return err
+		}
+		if err := validateSalePolicyTx(tx, &product, &order, item, newSalePolicyContext()); err != nil {
+			return err
+		}
+		if err := reserveStock(tx, &product, item.UseDate, item.StockSlot, quantity); err != nil {
+			return err
+		}
+		item.Tickets, err = buildTickets(orderService, &product, quantity, &order)
+		if err != nil {
+			return err
+		}
+		if err := assignTicketVisitors(item); err != nil {
+			return err
+		}
+		creditUsed := priceRule.PriceCents*int64(quantity) - group.DepositCents
+		if creditUsed < 0 {
+			creditUsed = 0
+		}
+		var occupied int64
+		if err := tx.Model(&model.TourGroup{}).Where("contract_id = ? AND id != ? AND status != ? AND settlement_status != ?", contract.ID, group.ID, "cancelled", "settled").Select("COALESCE(SUM(credit_used_cents), 0)").Scan(&occupied).Error; err != nil {
+			return err
+		}
+		if contract.CreditLimitCents > 0 && occupied+creditUsed > contract.CreditLimitCents {
+			return errors.New("团队订单超过合同可用授信额度")
+		}
+		if err := tx.Create(&order).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("UPDATE tickets SET order_id = ? WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = ?)", order.ID, order.ID).Error; err != nil {
+			return err
+		}
+		if err := persistOrderVisitorsTx(tx, &order); err != nil {
+			return err
+		}
+		if err := createFulfillmentProjections(tx, orderService, &order); err != nil {
+			return err
+		}
+		now := time.Now()
+		payment := model.Payment{
+			TenantID: tenantID, PaymentNo: generatePaymentNo(), IdempotencyKey: fmt.Sprintf("team-order:%d", group.ID),
+			OrderNo: order.OrderNo, Purpose: "order", Amount: order.TotalAmount,
+			AmountCents: moneyCents(order.TotalAmount), Method: "team_account", Status: "paid",
+			PaidAt: &now, TransactionID: fmt.Sprintf("TEAM_%d", group.ID), OperatorID: operatorID,
+		}
+		if err := tx.Create(&payment).Error; err != nil {
+			return err
+		}
+		if err := settleOrderIfFullyPaidTx(tx, &order); err != nil {
+			return err
+		}
+		var tickets []model.Ticket
+		if err := tx.Where("order_id = ?", order.ID).Order("id ASC").Find(&tickets).Error; err != nil {
+			return err
+		}
+		for i := range members {
+			if err := tx.Model(&members[i]).Updates(map[string]interface{}{"ticket_code": tickets[i].TicketCode, "status": "ticketed"}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&group).Updates(map[string]interface{}{
+			"sales_order_id": order.ID, "status": "confirmed", "contract_amount_cents": moneyCents(order.TotalAmount),
+			"credit_used_cents": creditUsed, "settlement_status": "open",
+		}).Error; err != nil {
+			return err
+		}
+		return recordAuditTx(tx, operatorID, tenantID, "admin", "tenant", "team.contract_order.create", "tour_group", group.ID,
+			"旅行社按合同生成团队订单", "{}", fmt.Sprintf(`{"order_no":%q,"product_id":%d,"quantity":%d}`, order.OrderNo, product.ID, quantity))
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &order, nil
 }
 
 func teamOrderSettlementCents(order *model.Order, supplierTenantID, scenicAreaID uint) int64 {

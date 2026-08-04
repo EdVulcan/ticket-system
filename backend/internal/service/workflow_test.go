@@ -1411,7 +1411,6 @@ func TestSupplierControlsTravelContractProductPrices(t *testing.T) {
 			{TenantID: supplier.ID, Capability: "supplier", Status: "active"},
 			{TenantID: otherSupplier.ID, Capability: "supplier", Status: "active"},
 			{TenantID: travel.ID, Capability: "travel_agency", Status: "active"},
-			{TenantID: travel.ID, Capability: "distributor", Status: "active"},
 		} {
 			if err := tx.Create(&capability).Error; err != nil {
 				return err
@@ -1428,7 +1427,7 @@ func TestSupplierControlsTravelContractProductPrices(t *testing.T) {
 		if err := tx.Create(&rule).Error; err != nil {
 			return err
 		}
-		product = model.Product{TenantID: supplier.ID, ScenicAreaID: area.ID, RuleID: rule.ID, Name: "Team Ticket", Status: "online", IsDistributable: true, Price: 120}
+		product = model.Product{TenantID: supplier.ID, ScenicAreaID: area.ID, RuleID: rule.ID, Name: "Team Ticket", Status: "online", IsDistributable: true, Price: 120, CodeMode: "ticket", ValidityType: "date", StockType: "unlimited"}
 		return tx.Create(&product).Error
 	}); err != nil {
 		t.Fatal(err)
@@ -1445,6 +1444,10 @@ func TestSupplierControlsTravelContractProductPrices(t *testing.T) {
 	}
 	if contract.SupplierTenantID != supplier.ID || contract.TravelTenantID != travel.ID || len(contract.PriceRules) != 1 || contract.PriceRules[0].ProductName != product.Name {
 		t.Fatalf("unexpected contract: %+v", contract)
+	}
+	partners, err := team.ListContractPartners(supplier.ID)
+	if err != nil || len(partners) != 1 || partners[0].TenantID != travel.ID {
+		t.Fatalf("pure travel partner list=%+v err=%v", partners, err)
 	}
 	var offer model.ProductOffer
 	if err := model.DB.Where("supplier_tenant_id = ? AND distributor_tenant_id = ? AND source_product_id = ?", supplier.ID, travel.ID, product.ID).First(&offer).Error; err != nil || moneyCents(offer.SettlementPrice) != 8800 || offer.Status != "active" {
@@ -1463,6 +1466,32 @@ func TestSupplierControlsTravelContractProductPrices(t *testing.T) {
 	}
 	if err := model.DB.First(&offer, offer.ID).Error; err != nil || moneyCents(offer.SettlementPrice) != 8500 {
 		t.Fatalf("updated contract supply offer=%+v err=%v", offer, err)
+	}
+	var area model.ScenicArea
+	if err := model.DB.Where("tenant_id = ?", supplier.ID).First(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	group := model.TourGroup{Name: "Pure Travel Team", SupplierTenantID: supplier.ID, ScenicAreaID: area.ID, ContractID: contract.ID, VisitDate: time.Now(), ExpectedCount: 1}
+	if err := team.CreateGroup(travel.ID, &group); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := team.ReplaceMembers(travel.ID, group.ID, []model.TourGroupMember{{Name: "游客甲", Phone: "13800138000", IdentityNo: "ID-TEAM-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	teamOrder, err := team.CreateContractOrder(travel.ID, group.ID, 21, TeamOrderInput{ProductID: product.ID, ContactName: "领队", ContactPhone: "13900139000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if teamOrder.Status != "paid" || teamOrder.Channel != "team" || moneyCents(teamOrder.TotalAmount) != 8500 {
+		t.Fatalf("pure travel team order=%+v", teamOrder)
+	}
+	var payment model.Payment
+	if err := model.DB.Where("order_no = ?", teamOrder.OrderNo).First(&payment).Error; err != nil || payment.Method != "team_account" || payment.Status != "paid" {
+		t.Fatalf("team account payment=%+v err=%v", payment, err)
+	}
+	var storedGroup model.TourGroup
+	if err := model.DB.First(&storedGroup, group.ID).Error; err != nil || storedGroup.SalesOrderID != teamOrder.ID || storedGroup.Status != "confirmed" {
+		t.Fatalf("team order binding=%+v err=%v", storedGroup, err)
 	}
 }
 

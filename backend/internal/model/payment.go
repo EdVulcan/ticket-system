@@ -39,7 +39,7 @@ type Payment struct {
 	RefundedAmountCents int64      `gorm:"not null;default:0" json:"refunded_amount_cents"`
 	TenderedCents       int64      `gorm:"not null;default:0" json:"tendered_cents"`
 	ChangeCents         int64      `gorm:"not null;default:0" json:"change_cents"`
-	Method              string     `gorm:"size:20" json:"method"`                   // cash, wechat, alipay
+	Method              string     `gorm:"size:20" json:"method"`                   // cash, wechat, alipay, team_account
 	Status              string     `gorm:"size:20;default:'pending'" json:"status"` // pending, paid, failed, refunded
 	PaidAt              *time.Time `json:"paid_at,omitempty"`
 	TransactionID       string     `gorm:"size:100" json:"transaction_id"` // 第三方流水号

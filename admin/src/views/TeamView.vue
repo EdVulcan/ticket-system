@@ -9,8 +9,8 @@
     </div>
 
     <div class="flex flex-wrap gap-2">
-      <el-button v-if="isTravelAgency" type="primary" :icon="Plus" @click="openGroupDialog">新建团队</el-button>
-      <el-button v-if="isSupplier" type="primary" :icon="DocumentAdd" @click="openContractDialog()">新增旅行社合同</el-button>
+      <el-button v-if="isTravelAgency && can('teams.write')" type="primary" :icon="Plus" @click="openGroupDialog">新建团队</el-button>
+      <el-button v-if="isSupplier && can('teams.write')" type="primary" :icon="DocumentAdd" @click="openContractDialog()">新增旅行社合同</el-button>
     </div>
 
     <el-tabs v-model="activeTab" @tab-change="handleTabChange">
@@ -30,10 +30,11 @@
             <template #default="{ row }"><el-tag :type="groupStatusType(row.status)">{{ groupStatusText(row.status) }}</el-tag></template>
           </el-table-column>
           <el-table-column label="结算" width="110"><template #default="{ row }">{{ settlementStatusText(row.settlement_status) }}</template></el-table-column>
-          <el-table-column label="操作" width="290" fixed="right">
+          <el-table-column label="操作" width="360" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" @click="openGroupDetail(row)">{{ isGroupSupplier(row) ? '履约入园' : '名单详情' }}</el-button>
-              <el-button v-if="isGroupOwner(row)" link type="primary" :disabled="row.status !== 'draft'" @click="openAttachOrder(row)">绑定订单</el-button>
+              <el-button v-if="isGroupOwner(row) && can('teams.write')" link type="success" :disabled="row.status !== 'draft'" @click="openContractOrder(row)">生成订单</el-button>
+              <el-button v-if="isGroupOwner(row) && can('teams.write')" link type="primary" :disabled="row.status !== 'draft'" @click="openAttachOrder(row)">绑定已有订单</el-button>
               <el-button v-if="canGenerateSettlement(row)" link type="success" @click="generateSettlement(row)">生成结算单</el-button>
             </template>
           </el-table-column>
@@ -56,7 +57,7 @@
           <el-table-column label="授信额度" width="130"><template #default="{ row }">¥{{ cents(row.credit_limit_cents) }}</template></el-table-column>
           <el-table-column label="账期" width="100"><template #default="{ row }">{{ row.settlement_days }} 天</template></el-table-column>
           <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'warning'">{{ row.status === 'active' ? '有效' : '已暂停' }}</el-tag></template></el-table-column>
-          <el-table-column v-if="isSupplier" label="操作" width="90" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openContractDialog(row)">编辑</el-button></template></el-table-column>
+          <el-table-column v-if="isSupplier && can('teams.write')" label="操作" width="90" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openContractDialog(row)">编辑</el-button></template></el-table-column>
         </el-table>
       </el-tab-pane>
 
@@ -203,7 +204,7 @@
             <el-table-column label="供应商确认" width="130">
               <template #default="{ row }">
                 <el-tag v-if="row.supplier_acknowledged_at" type="success" effect="plain">已确认</el-tag>
-                <el-button v-else-if="isGroupSupplier(selectedGroup)" link type="primary" @click="acknowledgeConfirmation(row)">确认收到</el-button>
+                <el-button v-else-if="isGroupSupplier(selectedGroup) && can('teams.write')" link type="primary" @click="acknowledgeConfirmation(row)">确认收到</el-button>
                 <el-tag v-else type="warning" effect="plain">待确认</el-tag>
               </template>
             </el-table-column>
@@ -297,6 +298,23 @@
       <template #footer><el-button @click="attachOrderDialog = false">取消</el-button><el-button type="primary" :loading="attachingOrder" @click="attachOrder">绑定</el-button></template>
     </el-dialog>
 
+    <el-dialog v-model="contractOrderDialog" title="按合同生成团队订单" width="560px">
+      <el-alert title="系统按当前游客名单逐人出票，并直接记入团队合同预付款或授信；价格、景区和供应商均从合同读取。" type="info" show-icon :closable="false" class="mb-4" />
+      <el-form label-position="top">
+        <el-form-item label="合同产品" required>
+          <el-select v-model="contractOrderForm.product_id" class="w-full" placeholder="选择本团队景区的合同产品">
+            <el-option v-for="rule in contractOrderProducts" :key="rule.product_id" :value="rule.product_id" :label="`${rule.product_name} · ¥${cents(rule.price_cents)}/人`" />
+          </el-select>
+        </el-form-item>
+        <div class="grid grid-cols-2 gap-3">
+          <el-form-item label="联系人"><el-input v-model="contractOrderForm.contact_name" maxlength="50" /></el-form-item>
+          <el-form-item label="联系电话"><el-input v-model="contractOrderForm.contact_phone" maxlength="20" /></el-form-item>
+        </div>
+        <div class="text-sm text-gray-500">出票人数取当前团队的完整游客名单，不允许手工改数量。</div>
+      </el-form>
+      <template #footer><el-button @click="contractOrderDialog = false">取消</el-button><el-button type="primary" :loading="creatingContractOrder" @click="createContractOrder">确认生成并出票</el-button></template>
+    </el-dialog>
+
     <el-dialog v-model="settlementDialog" title="团队结算处理" width="720px" :close-on-click-modal="false">
       <el-descriptions v-if="selectedSettlement" :column="2" border>
         <el-descriptions-item label="结算单" :span="2">{{ selectedSettlement.statement_no }}</el-descriptions-item>
@@ -350,11 +368,13 @@ import { useRouter } from 'vue-router'
 import { Delete, DocumentAdd, Download, Plus, Printer, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
+import { hasPermission } from '@/utils/permissions'
 
 const router = useRouter()
 
 const user = computed<any>(() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })
 const currentTenantID = computed(() => Number(user.value.tenant_id || 0))
+const can = (permission: string) => hasPermission(user.value, permission)
 const capabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability)))
 const isTravelAgency = computed(() => capabilities.value.has('travel_agency'))
 const isSupplier = computed(() => capabilities.value.has('supplier'))
@@ -550,10 +570,10 @@ const entering = ref(false)
 const pendingEntryRequest = ref({ fingerprint: '', key: '' })
 const rosterText = ref('')
 const savingRoster = ref(false)
-const canEditRoster = computed(() => isGroupOwner(selectedGroup.value) && selectedGroup.value?.status === 'draft' && !selectedGroup.value?.sales_order_id)
-const canChangeMembers = computed(() => isGroupOwner(selectedGroup.value) && ['confirmed', 'partial_entry'].includes(selectedGroup.value?.status))
+const canEditRoster = computed(() => can('teams.write') && isGroupOwner(selectedGroup.value) && selectedGroup.value?.status === 'draft' && !selectedGroup.value?.sales_order_id)
+const canChangeMembers = computed(() => can('teams.write') && isGroupOwner(selectedGroup.value) && ['confirmed', 'partial_entry'].includes(selectedGroup.value?.status))
 const canSubmitConfirmation = computed(() => canChangeMembers.value)
-const canEnterSelectedGroup = computed(() => isGroupSupplier(selectedGroup.value) && ['confirmed', 'partial_entry'].includes(selectedGroup.value?.status))
+const canEnterSelectedGroup = computed(() => can('teams.write') && isGroupSupplier(selectedGroup.value) && ['confirmed', 'partial_entry'].includes(selectedGroup.value?.status))
 const admissionDevices = computed(() => devices.value.filter(device => device.status === 'online' && Number(device.scenic_area_id) === Number(selectedGroup.value?.scenic_area_id) && device.check_point_id))
 const loadGroupDetail = async () => {
   if (!selectedGroup.value) return
@@ -727,7 +747,30 @@ const attachOrder = async () => {
   finally { attachingOrder.value = false }
 }
 
-const canGenerateSettlement = (row: any) => isGroupOwner(row) && row.sales_order_id && row.settlement_status === 'open' && row.status !== 'cancelled'
+const contractOrderDialog = ref(false)
+const creatingContractOrder = ref(false)
+const contractOrderForm = reactive({ product_id: 0, contact_name: '', contact_phone: '' })
+const selectedOrderContract = computed(() => contracts.value.find((contract: any) => Number(contract.id) === Number(selectedGroup.value?.contract_id)))
+const contractOrderProducts = computed(() => (selectedOrderContract.value?.price_rules || []).filter((rule: any) => Number(rule.scenic_area_id) === Number(selectedGroup.value?.scenic_area_id)))
+const openContractOrder = async (row: any) => {
+  selectedGroup.value = row
+  if (!contracts.value.length) await loadContracts()
+  Object.assign(contractOrderForm, { product_id: contractOrderProducts.value[0]?.product_id || 0, contact_name: '', contact_phone: '' })
+  contractOrderDialog.value = true
+}
+const createContractOrder = async () => {
+  if (!selectedGroup.value || !contractOrderForm.product_id) { ElMessage.warning('请选择合同产品'); return }
+  creatingContractOrder.value = true
+  try {
+    const response = await request.post(`/teams/${selectedGroup.value.id}/contract-order`, contractOrderForm)
+    contractOrderDialog.value = false
+    ElMessage.success(`团队订单 ${response.data.order_no} 已生成并出票`)
+    await loadGroups()
+  } catch (e: any) { ElMessage.error(e.response?.data?.error || '团队订单生成失败') }
+  finally { creatingContractOrder.value = false }
+}
+
+const canGenerateSettlement = (row: any) => can('settlements.write') && isGroupOwner(row) && row.sales_order_id && row.settlement_status === 'open' && row.status !== 'cancelled'
 const generateSettlement = async (row: any) => {
   try { await request.post(`/teams/${row.id}/settlement`); ElMessage.success('团队结算单已生成'); activeTab.value = 'settlements'; await Promise.all([loadGroups(), loadSettlements()]) }
   catch (e: any) { ElMessage.error(e.response?.data?.error || '团队结算单生成失败') }
@@ -755,11 +798,11 @@ const downloadTeamSettlement = async () => {
 }
 const isSettlementSupplier = computed(() => Number(selectedSettlement.value?.supplier_tenant_id) === currentTenantID.value)
 const isSettlementTravel = computed(() => Number(selectedSettlement.value?.travel_tenant_id) === currentTenantID.value)
-const canSupplierConfirmSettlement = computed(() => isSettlementSupplier.value && selectedSettlement.value?.status === 'draft')
-const canTravelConfirmSettlement = computed(() => isSettlementTravel.value && selectedSettlement.value?.status === 'supplier_confirmed')
-const canDisputeSettlement = computed(() => (isSettlementSupplier.value || isSettlementTravel.value) && ['supplier_confirmed', 'confirmed'].includes(selectedSettlement.value?.status))
-const canAdjustSettlement = computed(() => (isSettlementSupplier.value || isSettlementTravel.value) && selectedSettlement.value?.status === 'disputed')
-const canMarkSettlementPaid = computed(() => isSettlementTravel.value && selectedSettlement.value?.status === 'confirmed')
+const canSupplierConfirmSettlement = computed(() => can('settlements.write') && isSettlementSupplier.value && selectedSettlement.value?.status === 'draft')
+const canTravelConfirmSettlement = computed(() => can('settlements.write') && isSettlementTravel.value && selectedSettlement.value?.status === 'supplier_confirmed')
+const canDisputeSettlement = computed(() => can('settlements.write') && (isSettlementSupplier.value || isSettlementTravel.value) && ['supplier_confirmed', 'confirmed'].includes(selectedSettlement.value?.status))
+const canAdjustSettlement = computed(() => can('settlements.write') && (isSettlementSupplier.value || isSettlementTravel.value) && selectedSettlement.value?.status === 'disputed')
+const canMarkSettlementPaid = computed(() => can('settlements.write') && isSettlementTravel.value && selectedSettlement.value?.status === 'confirmed')
 const settlementAdjustmentDialog = ref(false)
 const settlementAdjustment = reactive({ amount: 0, reason: '' })
 const updateSettlementStatus = async (status: string, detail = '') => {

@@ -2,6 +2,7 @@ package router
 
 import (
 	"ticket-backend/internal/api"
+	"ticket-backend/internal/authz"
 	"ticket-backend/internal/middleware"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
@@ -63,18 +64,19 @@ func InitRouter(r *gin.Engine) {
 	// User Routes (Staff Management)
 	userController := &api.UserController{}
 	userGroup := protected.Group("/users")
-	userGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
+	userGroup.Use(middleware.RequireTenantPermission(authz.PermissionTenantAccounts))
 	{
 		userGroup.POST("", userController.Create)
 		userGroup.GET("", userController.List)
 		userGroup.DELETE("/:id", userController.Delete)
 		userGroup.PUT("/:id/password", userController.ResetPassword)
+		userGroup.PUT("/:id/role", userController.UpdateRole)
 	}
 
 	// Staff Routes (Employee Management)
 	staffController := &api.StaffController{}
 	staffGroup := protected.Group("/staff")
-	staffGroup.Use(middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier"))
+	staffGroup.Use(middleware.RequireTenantPermission(authz.PermissionOnsiteManage), middleware.RequireAnyTenantCapability("supplier"))
 	{
 		staffGroup.POST("", staffController.Create)
 		staffGroup.GET("", staffController.List)
@@ -100,16 +102,16 @@ func InitRouter(r *gin.Engine) {
 
 	// Admin APIs (Protected)
 	deviceGroup := protected.Group("/devices")
-	deviceGroup.Use(middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier"))
+	deviceGroup.Use(middleware.RequireAnyTenantCapability("supplier"))
 	{
-		deviceGroup.POST("", deviceController.Create)
-		deviceGroup.GET("", deviceController.List)
-		deviceGroup.PUT("/:id", deviceController.Update)
-		deviceGroup.POST("/:id/rotate-key", deviceController.RotateKey)
-		deviceGroup.DELETE("/:id", deviceController.Delete)
+		deviceGroup.POST("", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), deviceController.Create)
+		deviceGroup.GET("", middleware.RequireTenantPermission(authz.PermissionOnsiteRead), deviceController.List)
+		deviceGroup.PUT("/:id", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), deviceController.Update)
+		deviceGroup.POST("/:id/rotate-key", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), deviceController.RotateKey)
+		deviceGroup.DELETE("/:id", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), deviceController.Delete)
 	}
 	hardwareCommandGroup := protected.Group("/hardware-commands")
-	hardwareCommandGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier"))
+	hardwareCommandGroup.Use(middleware.RequireTenantPermission(authz.PermissionOperationsWrite), middleware.RequireAnyTenantCapability("supplier"))
 	{
 		hardwareCommandGroup.POST("", deviceController.QueueCommand)
 	}
@@ -119,41 +121,41 @@ func InitRouter(r *gin.Engine) {
 	productGroup := protected.Group("/products")
 	productGroup.Use(middleware.RequireAnyTenantCapability("supplier", "distributor"))
 	{
-		productGroup.POST("", middleware.RequireAnyRole("admin", "super_admin"), productController.Create)
-		productGroup.PUT("/:id", middleware.RequireAnyRole("admin", "super_admin"), productController.Update)
-		productGroup.GET("", middleware.RequireAnyRole("seller", "checker", "admin", "super_admin"), productController.List)
-		productGroup.GET("/:id", middleware.RequireAnyRole("seller", "checker", "admin", "super_admin"), productController.Get)
-		productGroup.DELETE("/:id", middleware.RequireAnyRole("admin", "super_admin"), productController.Delete)
-		productGroup.PATCH("/:id/status", middleware.RequireAnyRole("admin", "super_admin"), productController.UpdateStatus)
+		productGroup.POST("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), productController.Create)
+		productGroup.PUT("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), productController.Update)
+		productGroup.GET("", middleware.RequireTenantPermission(authz.PermissionCatalogRead), productController.List)
+		productGroup.GET("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogRead), productController.Get)
+		productGroup.DELETE("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), productController.Delete)
+		productGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), productController.UpdateStatus)
 	}
 
 	orderController := &api.OrderController{}
 	orderGroup := protected.Group("/orders")
-	orderGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"))
+	orderGroup.Use(middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"))
 	{
-		orderGroup.POST("", orderController.Create)
-		orderGroup.GET("", orderController.List)
-		orderGroup.GET("/:orderNo", orderController.Get)
-		orderGroup.POST("/:orderNo/cancel", orderController.Cancel)
+		orderGroup.POST("", middleware.RequireTenantPermission(authz.PermissionOrdersWrite), orderController.Create)
+		orderGroup.GET("", middleware.RequireTenantPermission(authz.PermissionOrdersRead), orderController.List)
+		orderGroup.GET("/:orderNo", middleware.RequireTenantPermission(authz.PermissionOrdersRead), orderController.Get)
+		orderGroup.POST("/:orderNo/cancel", middleware.RequireTenantPermission(authz.PermissionOrdersWrite), orderController.Cancel)
 	}
 
 	afterSaleController := &api.AfterSaleController{Service: service.AfterSaleService{}}
 	afterSaleGroup := protected.Group("/after-sales")
 	afterSaleGroup.Use(middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"))
 	{
-		afterSaleGroup.POST("", middleware.RequireAnyRole("seller", "admin", "super_admin"), afterSaleController.Create)
-		afterSaleGroup.GET("", middleware.RequireAnyRole("seller", "admin", "super_admin"), afterSaleController.List)
-		afterSaleGroup.GET("/:id", middleware.RequireAnyRole("seller", "admin", "super_admin"), afterSaleController.Get)
-		afterSaleGroup.POST("/:id/approve", middleware.RequireAnyRole("admin", "super_admin"), afterSaleController.Approve)
-		afterSaleGroup.POST("/:id/reject", middleware.RequireAnyRole("admin", "super_admin"), afterSaleController.Reject)
-		afterSaleGroup.POST("/:id/execute", middleware.RequireAnyRole("seller", "admin", "super_admin"), afterSaleController.Execute)
-		afterSaleGroup.POST("/:id/difference-payment", middleware.RequireAnyRole("seller", "admin", "super_admin"), afterSaleController.CollectDifference)
+		afterSaleGroup.POST("", middleware.RequireTenantPermission(authz.PermissionAfterSalesWrite), afterSaleController.Create)
+		afterSaleGroup.GET("", middleware.RequireTenantPermission(authz.PermissionAfterSalesRead), afterSaleController.List)
+		afterSaleGroup.GET("/:id", middleware.RequireTenantPermission(authz.PermissionAfterSalesRead), afterSaleController.Get)
+		afterSaleGroup.POST("/:id/approve", middleware.RequireTenantPermission(authz.PermissionAfterSalesApprove), afterSaleController.Approve)
+		afterSaleGroup.POST("/:id/reject", middleware.RequireTenantPermission(authz.PermissionAfterSalesApprove), afterSaleController.Reject)
+		afterSaleGroup.POST("/:id/execute", middleware.RequireTenantPermission(authz.PermissionAfterSalesWrite), afterSaleController.Execute)
+		afterSaleGroup.POST("/:id/difference-payment", middleware.RequireTenantPermission(authz.PermissionAfterSalesWrite), afterSaleController.CollectDifference)
 	}
 
 	// Ticket Routes
 	ticketController := &api.TicketController{}
 	ticketGroup := protected.Group("/tickets")
-	ticketGroup.Use(middleware.RequireAnyRole("checker", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier"))
+	ticketGroup.Use(middleware.RequireTenantPermission(authz.PermissionTicketsVerify), middleware.RequireAnyTenantCapability("supplier"))
 	{
 		ticketGroup.POST("/verify", ticketController.Verify)
 	}
@@ -163,10 +165,10 @@ func InitRouter(r *gin.Engine) {
 	scenicAreaGroup := protected.Group("/scenic-areas")
 	scenicAreaGroup.Use(middleware.RequireAnyTenantCapability("supplier"))
 	{
-		scenicAreaGroup.GET("", middleware.RequireAnyRole("seller", "checker", "admin", "super_admin"), scenicAreaController.List)
-		scenicAreaGroup.POST("", middleware.RequireAnyRole("admin", "super_admin"), scenicAreaController.Create)
-		scenicAreaGroup.PUT("/:id", middleware.RequireAnyRole("admin", "super_admin"), scenicAreaController.Update)
-		scenicAreaGroup.DELETE("/:id", middleware.RequireAnyRole("admin", "super_admin"), scenicAreaController.Delete)
+		scenicAreaGroup.GET("", middleware.RequireTenantPermission(authz.PermissionOnsiteRead), scenicAreaController.List)
+		scenicAreaGroup.POST("", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), scenicAreaController.Create)
+		scenicAreaGroup.PUT("/:id", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), scenicAreaController.Update)
+		scenicAreaGroup.DELETE("/:id", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), scenicAreaController.Delete)
 	}
 
 	// CheckPoint Routes
@@ -174,10 +176,10 @@ func InitRouter(r *gin.Engine) {
 	cpGroup := protected.Group("/checkpoints")
 	cpGroup.Use(middleware.RequireAnyTenantCapability("supplier"))
 	{
-		cpGroup.POST("", middleware.RequireAnyRole("admin", "super_admin"), cpController.Create)
-		cpGroup.GET("", middleware.RequireAnyRole("seller", "checker", "admin", "super_admin"), cpController.List)
-		cpGroup.PUT("/:id", middleware.RequireAnyRole("admin", "super_admin"), cpController.Update)
-		cpGroup.DELETE("/:id", middleware.RequireAnyRole("admin", "super_admin"), cpController.Delete)
+		cpGroup.POST("", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), cpController.Create)
+		cpGroup.GET("", middleware.RequireTenantPermission(authz.PermissionOnsiteRead), cpController.List)
+		cpGroup.PUT("/:id", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), cpController.Update)
+		cpGroup.DELETE("/:id", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), cpController.Delete)
 	}
 
 	// Policy Routes
@@ -185,44 +187,44 @@ func InitRouter(r *gin.Engine) {
 	policyGroup := protected.Group("/policies")
 	policyGroup.Use(middleware.RequireAnyTenantCapability("supplier"))
 	{
-		policyGroup.POST("", middleware.RequireAnyRole("admin", "super_admin"), policyController.Create)
-		policyGroup.GET("", middleware.RequireAnyRole("seller", "admin", "super_admin"), policyController.List)
-		policyGroup.PUT("/:id", middleware.RequireAnyRole("admin", "super_admin"), policyController.Update)
-		policyGroup.DELETE("/:id", middleware.RequireAnyRole("admin", "super_admin"), policyController.Delete)
+		policyGroup.POST("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), policyController.Create)
+		policyGroup.GET("", middleware.RequireTenantPermission(authz.PermissionCatalogRead), policyController.List)
+		policyGroup.PUT("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), policyController.Update)
+		policyGroup.DELETE("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), policyController.Delete)
 	}
 
 	// Distribution Routes (B2B)
 	distController := &api.DistributionController{Service: service.DistributionService{}, BundleService: service.BundleService{}, RefundService: service.RefundService{}}
 	distGroup := protected.Group("/distribution")
-	distGroup.Use(middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"))
+	distGroup.Use(middleware.RequireAnyTenantCapability("supplier", "distributor"))
 	{
-		distGroup.GET("/search", distController.Search) // Search before apply
-		distGroup.POST("/apply", distController.Apply)
-		distGroup.GET("/suppliers", distController.ListSuppliers)
+		distGroup.GET("/search", middleware.RequireTenantPermission(authz.PermissionDistributionRead), distController.Search)
+		distGroup.POST("/apply", middleware.RequireTenantPermission(authz.PermissionDistributionWrite), distController.Apply)
+		distGroup.GET("/suppliers", middleware.RequireTenantPermission(authz.PermissionDistributionRead), distController.ListSuppliers)
 
 		// Supplier Side
-		distGroup.GET("/agents", distController.ListAgents)
-		distGroup.POST("/agents/:id/audit", distController.AuditAgent)
-		distGroup.POST("/agents/:id/recharge", distController.RechargeAgent) // New Recharge Route
+		distGroup.GET("/agents", middleware.RequireTenantPermission(authz.PermissionDistributionRead), distController.ListAgents)
+		distGroup.POST("/agents/:id/audit", middleware.RequireTenantPermission(authz.PermissionDistributionWrite), distController.AuditAgent)
+		distGroup.POST("/agents/:id/recharge", middleware.RequireTenantPermission(authz.PermissionDistributionWrite), distController.RechargeAgent)
 
 		// Product Distribution
-		distGroup.POST("/offers", distController.CreateOffer)
-		distGroup.GET("/offers", distController.ListOffers)
-		distGroup.PATCH("/offers/:id/status", distController.SetOfferStatus)
-		distGroup.GET("/fulfillments", distController.ListFulfillmentOrders)
-		distGroup.GET("/fulfillments/:id", distController.GetFulfillmentOrder)
-		distGroup.POST("/fulfillments/:id/used-refunds", distController.RefundUsedFulfillmentTicket)
-		distGroup.GET("/products", distController.ListDistributableProducts)
-		distGroup.POST("/products/import", distController.ImportProduct)
-		distGroup.POST("/listings/:id/sync", distController.SyncListing)
-		distGroup.GET("/bundle-components", distController.ListBundleComponents)
-		distGroup.GET("/bundles", distController.ListBundles)
-		distGroup.POST("/bundles", distController.CreateBundle)
-		distGroup.GET("/bundles/:id", distController.GetBundle)
-		distGroup.PUT("/bundles/:id", distController.ReviseBundle)
-		distGroup.PATCH("/bundles/:id/status", distController.SetBundleStatus)
+		distGroup.POST("/offers", middleware.RequireTenantPermission(authz.PermissionDistributionWrite), distController.CreateOffer)
+		distGroup.GET("/offers", middleware.RequireTenantPermission(authz.PermissionDistributionRead), distController.ListOffers)
+		distGroup.PATCH("/offers/:id/status", middleware.RequireTenantPermission(authz.PermissionDistributionWrite), distController.SetOfferStatus)
+		distGroup.GET("/fulfillments", middleware.RequireTenantPermission(authz.PermissionDistributionRead), distController.ListFulfillmentOrders)
+		distGroup.GET("/fulfillments/:id", middleware.RequireTenantPermission(authz.PermissionDistributionRead), distController.GetFulfillmentOrder)
+		distGroup.POST("/fulfillments/:id/used-refunds", middleware.RequireTenantPermission(authz.PermissionAfterSalesApprove), distController.RefundUsedFulfillmentTicket)
+		distGroup.GET("/products", middleware.RequireTenantPermission(authz.PermissionDistributionRead), distController.ListDistributableProducts)
+		distGroup.POST("/products/import", middleware.RequireTenantPermission(authz.PermissionDistributionWrite), distController.ImportProduct)
+		distGroup.POST("/listings/:id/sync", middleware.RequireTenantPermission(authz.PermissionDistributionWrite), distController.SyncListing)
+		distGroup.GET("/bundle-components", middleware.RequireTenantPermission(authz.PermissionDistributionRead), distController.ListBundleComponents)
+		distGroup.GET("/bundles", middleware.RequireTenantPermission(authz.PermissionDistributionRead), distController.ListBundles)
+		distGroup.POST("/bundles", middleware.RequireTenantPermission(authz.PermissionDistributionWrite), distController.CreateBundle)
+		distGroup.GET("/bundles/:id", middleware.RequireTenantPermission(authz.PermissionDistributionRead), distController.GetBundle)
+		distGroup.PUT("/bundles/:id", middleware.RequireTenantPermission(authz.PermissionDistributionWrite), distController.ReviseBundle)
+		distGroup.PATCH("/bundles/:id/status", middleware.RequireTenantPermission(authz.PermissionDistributionWrite), distController.SetBundleStatus)
 	}
-	protected.GET("/bundle-catalog", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), distController.ListBundleCatalog)
+	protected.GET("/bundle-catalog", middleware.RequireTenantPermission(authz.PermissionCatalogRead), middleware.RequireAnyTenantCapability("supplier", "distributor"), distController.ListBundleCatalog)
 
 	// OTA Routes (External Integration)
 	otaController := &api.OTAController{
@@ -250,76 +252,77 @@ func InitRouter(r *gin.Engine) {
 	}
 
 	channelAdminGroup := protected.Group("/channel-accounts")
-	channelAdminGroup.Use(middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"))
+	channelAdminGroup.Use(middleware.RequireAnyTenantCapability("supplier", "distributor"))
 	{
-		channelAdminGroup.GET("", channelController.List)
-		channelAdminGroup.POST("", channelController.Create)
-		channelAdminGroup.PATCH("/:id/status", channelController.SetStatus)
-		channelAdminGroup.POST("/:id/rotate-secret", channelController.RotateSecret)
-		channelAdminGroup.GET("/mappings", channelController.ListMappings)
-		channelAdminGroup.POST("/mappings", channelController.AddMapping)
-		channelAdminGroup.POST("/:id/bills/import", channelController.ImportBill)
-		channelAdminGroup.GET("/:id/reconciliations", channelController.ListReconciliations)
-		channelAdminGroup.GET("/:id/reconciliations/:reconciliationId", channelController.GetReconciliation)
-		channelAdminGroup.GET("/:id/requests", channelController.ListRequests)
-		channelAdminGroup.POST("/:id/requests/:requestId/authorize-retry", channelController.AuthorizeRequestRetry)
-		channelAdminGroup.GET("/:id/orders", channelController.ListOrders)
-		channelAdminGroup.GET("/:id/orders/:orderNo", channelController.GetOrder)
+		channelAdminGroup.GET("", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.List)
+		channelAdminGroup.POST("", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.Create)
+		channelAdminGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SetStatus)
+		channelAdminGroup.POST("/:id/rotate-secret", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.RotateSecret)
+		channelAdminGroup.GET("/mappings", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.ListMappings)
+		channelAdminGroup.POST("/mappings", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.AddMapping)
+		channelAdminGroup.POST("/:id/bills/import", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.ImportBill)
+		channelAdminGroup.GET("/:id/reconciliations", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.ListReconciliations)
+		channelAdminGroup.GET("/:id/reconciliations/:reconciliationId", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.GetReconciliation)
+		channelAdminGroup.GET("/:id/requests", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.ListRequests)
+		channelAdminGroup.POST("/:id/requests/:requestId/authorize-retry", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.AuthorizeRequestRetry)
+		channelAdminGroup.GET("/:id/orders", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.ListOrders)
+		channelAdminGroup.GET("/:id/orders/:orderNo", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.GetOrder)
 	}
 
 	teamController := &api.TeamController{Service: service.TeamService{}}
 	teamGroup := protected.Group("/teams")
-	teamGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "travel_agency"))
+	teamGroup.Use(middleware.RequireAnyTenantCapability("supplier", "travel_agency"))
 	{
-		teamGroup.GET("/contract-partners", teamController.ListContractPartners)
-		teamGroup.GET("/contracts", teamController.ListContracts)
-		teamGroup.POST("/contracts", teamController.CreateContract)
-		teamGroup.PUT("/contracts/:id", teamController.UpdateContract)
-		teamGroup.GET("/agents", teamController.ListAgents)
-		teamGroup.POST("/agents", teamController.CreateAgent)
-		teamGroup.GET("/guides", teamController.ListGuides)
-		teamGroup.POST("/guides", teamController.CreateGuide)
-		teamGroup.GET("/vehicles", teamController.ListVehicles)
-		teamGroup.POST("/vehicles", teamController.CreateVehicle)
-		teamGroup.GET("", teamController.ListGroups)
-		teamGroup.POST("", teamController.CreateGroup)
-		teamGroup.GET("/:id/members", teamController.ListMembers)
-		teamGroup.POST("/:id/members", teamController.AddMembers)
-		teamGroup.PUT("/:id/members", teamController.ReplaceMembers)
-		teamGroup.POST("/:id/enter-batch", teamController.EnterBatch)
-		teamGroup.GET("/:id/entry-batches", teamController.ListEntryBatches)
-		teamGroup.GET("/:id/confirmations", teamController.ListConfirmations)
-		teamGroup.POST("/:id/confirmations", teamController.SubmitConfirmation)
-		teamGroup.POST("/:id/confirmations/:confirmationId/acknowledge", teamController.AcknowledgeConfirmation)
-		teamGroup.GET("/:id/member-changes", teamController.ListMemberChanges)
-		teamGroup.POST("/:id/member-changes", teamController.ChangeMember)
-		teamGroup.POST("/:id/attach-order", teamController.AttachOrder)
-		teamGroup.GET("/settlements", teamController.ListSettlements)
-		teamGroup.GET("/settlements/:id/export", teamController.ExportSettlement)
-		teamGroup.GET("/accounts", teamController.ListAccountSummaries)
-		teamGroup.POST("/:id/settlement", teamController.GenerateSettlement)
-		teamGroup.PATCH("/settlements/:id/status", teamController.SetSettlementStatus)
-		teamGroup.POST("/settlements/:id/adjustments", teamController.AdjustSettlement)
+		teamGroup.GET("/contract-partners", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListContractPartners)
+		teamGroup.GET("/contracts", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListContracts)
+		teamGroup.POST("/contracts", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.CreateContract)
+		teamGroup.PUT("/contracts/:id", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.UpdateContract)
+		teamGroup.GET("/agents", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListAgents)
+		teamGroup.POST("/agents", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.CreateAgent)
+		teamGroup.GET("/guides", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListGuides)
+		teamGroup.POST("/guides", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.CreateGuide)
+		teamGroup.GET("/vehicles", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListVehicles)
+		teamGroup.POST("/vehicles", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.CreateVehicle)
+		teamGroup.GET("", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListGroups)
+		teamGroup.POST("", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.CreateGroup)
+		teamGroup.POST("/:id/contract-order", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.CreateContractOrder)
+		teamGroup.GET("/:id/members", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListMembers)
+		teamGroup.POST("/:id/members", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.AddMembers)
+		teamGroup.PUT("/:id/members", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.ReplaceMembers)
+		teamGroup.POST("/:id/enter-batch", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.EnterBatch)
+		teamGroup.GET("/:id/entry-batches", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListEntryBatches)
+		teamGroup.GET("/:id/confirmations", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListConfirmations)
+		teamGroup.POST("/:id/confirmations", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.SubmitConfirmation)
+		teamGroup.POST("/:id/confirmations/:confirmationId/acknowledge", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.AcknowledgeConfirmation)
+		teamGroup.GET("/:id/member-changes", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListMemberChanges)
+		teamGroup.POST("/:id/member-changes", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.ChangeMember)
+		teamGroup.POST("/:id/attach-order", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.AttachOrder)
+		teamGroup.GET("/settlements", middleware.RequireTenantPermission(authz.PermissionSettlementsRead), teamController.ListSettlements)
+		teamGroup.GET("/settlements/:id/export", middleware.RequireTenantPermission(authz.PermissionSettlementsRead), teamController.ExportSettlement)
+		teamGroup.GET("/accounts", middleware.RequireTenantPermission(authz.PermissionFinanceRead), teamController.ListAccountSummaries)
+		teamGroup.POST("/:id/settlement", middleware.RequireTenantPermission(authz.PermissionSettlementsWrite), teamController.GenerateSettlement)
+		teamGroup.PATCH("/settlements/:id/status", middleware.RequireTenantPermission(authz.PermissionSettlementsWrite), teamController.SetSettlementStatus)
+		teamGroup.POST("/settlements/:id/adjustments", middleware.RequireTenantPermission(authz.PermissionSettlementsWrite), teamController.AdjustSettlement)
 	}
 
 	operationsController := &api.OperationsController{Service: service.OperationsService{}}
 	operationsGroup := protected.Group("/operations")
-	operationsGroup.Use(middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier"))
+	operationsGroup.Use(middleware.RequireTenantPermission(authz.PermissionOperationsRead), middleware.RequireAnyTenantCapability("supplier"))
 	{
 		operationsGroup.GET("/shifts", operationsController.ListShifts)
 		operationsGroup.GET("/shifts/:id/summary", operationsController.GetShiftSummary)
 		operationsGroup.GET("/shifts/open", operationsController.GetOpenShift)
-		operationsGroup.POST("/shifts", operationsController.OpenShift)
-		operationsGroup.POST("/shifts/:id/close", operationsController.CloseShift)
-		operationsGroup.POST("/shifts/:id/reconcile", operationsController.ReconcileShift)
-		operationsGroup.POST("/shifts/:id/corrections", operationsController.CorrectShift)
-		operationsGroup.POST("/print-jobs", operationsController.QueuePrint)
+		operationsGroup.POST("/shifts", middleware.RequireTenantPermission(authz.PermissionOperationsWrite), operationsController.OpenShift)
+		operationsGroup.POST("/shifts/:id/close", middleware.RequireTenantPermission(authz.PermissionOperationsWrite), operationsController.CloseShift)
+		operationsGroup.POST("/shifts/:id/reconcile", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), operationsController.ReconcileShift)
+		operationsGroup.POST("/shifts/:id/corrections", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), operationsController.CorrectShift)
+		operationsGroup.POST("/print-jobs", middleware.RequireTenantPermission(authz.PermissionOperationsWrite), operationsController.QueuePrint)
 		operationsGroup.GET("/print-jobs", operationsController.ListPrintJobs)
-		operationsGroup.POST("/print-jobs/:id/status", operationsController.UpdatePrintStatus)
-		operationsGroup.POST("/holds", operationsController.CreateHold)
+		operationsGroup.POST("/print-jobs/:id/status", middleware.RequireTenantPermission(authz.PermissionOperationsWrite), operationsController.UpdatePrintStatus)
+		operationsGroup.POST("/holds", middleware.RequireTenantPermission(authz.PermissionOperationsWrite), operationsController.CreateHold)
 		operationsGroup.GET("/holds", operationsController.ListHolds)
-		operationsGroup.POST("/holds/:id/resume", operationsController.ResumeHold)
-		operationsGroup.POST("/holds/:id/cancel", operationsController.CancelHold)
+		operationsGroup.POST("/holds/:id/resume", middleware.RequireTenantPermission(authz.PermissionOperationsWrite), operationsController.ResumeHold)
+		operationsGroup.POST("/holds/:id/cancel", middleware.RequireTenantPermission(authz.PermissionOperationsWrite), operationsController.CancelHold)
 		operationsGroup.GET("/alerts", operationsController.ListAlerts)
 	}
 	otaGroup := apiGroup.Group("/ota")
@@ -334,7 +337,7 @@ func InitRouter(r *gin.Engine) {
 	// Finance Routes
 	financeController := &api.FinanceController{Service: service.FinanceService{}}
 	financeGroup := protected.Group("/finance")
-	financeGroup.Use(middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"))
+	financeGroup.Use(middleware.RequireTenantPermission(authz.PermissionFinanceRead), middleware.RequireAnyTenantCapability("supplier", "distributor"))
 	{
 		financeGroup.GET("/accounts", financeController.ListAccounts)
 		financeGroup.GET("/managed-accounts", financeController.ListManagedAccounts)
@@ -342,26 +345,26 @@ func InitRouter(r *gin.Engine) {
 		financeGroup.GET("/ledger", financeController.ListLedger)
 		financeGroup.GET("/managed-ledger", financeController.ListManagedLedger)
 		financeGroup.GET("/documents", financeController.ListDocuments)
-		financeGroup.POST("/documents", financeController.CreateDocument)
-		financeGroup.POST("/documents/:id/approve", financeController.ApproveDocument)
+		financeGroup.POST("/documents", middleware.RequireTenantPermission(authz.PermissionFinanceWrite), financeController.CreateDocument)
+		financeGroup.POST("/documents/:id/approve", middleware.RequireTenantPermission(authz.PermissionFinanceWrite), financeController.ApproveDocument)
 	}
 
 	settlementController := &api.SettlementController{Service: service.SettlementService{}}
 	settlementGroup := protected.Group("/settlements")
-	settlementGroup.Use(middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"))
+	settlementGroup.Use(middleware.RequireTenantPermission(authz.PermissionSettlementsRead), middleware.RequireAnyTenantCapability("supplier", "distributor"))
 	{
 		settlementGroup.GET("", settlementController.List)
 		settlementGroup.GET("/:id", settlementController.Get)
 		settlementGroup.GET("/:id/export", settlementController.Export)
-		settlementGroup.POST("/generate", settlementController.Generate)
-		settlementGroup.PATCH("/:id/status", settlementController.SetStatus)
-		settlementGroup.POST("/:id/adjustments", settlementController.Adjust)
+		settlementGroup.POST("/generate", middleware.RequireTenantPermission(authz.PermissionSettlementsWrite), settlementController.Generate)
+		settlementGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionSettlementsWrite), settlementController.SetStatus)
+		settlementGroup.POST("/:id/adjustments", middleware.RequireTenantPermission(authz.PermissionSettlementsWrite), settlementController.Adjust)
 	}
 
 	// Report Routes
 	reportController := &api.ReportController{Service: service.ReportService{}}
 	reportGroup := protected.Group("/reports")
-	reportGroup.Use(middleware.RequireAnyRole("admin", "super_admin"))
+	reportGroup.Use(middleware.RequireTenantPermission(authz.PermissionReportsRead))
 	{
 		reportGroup.GET("/sales", middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"), reportController.GetSales)
 		reportGroup.GET("/products", middleware.RequireAnyTenantCapability("supplier", "distributor"), reportController.GetProducts)
@@ -389,18 +392,18 @@ func InitRouter(r *gin.Engine) {
 
 	paymentGroup := protected.Group("/payments")
 	{
-		paymentGroup.POST("/pay", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), paymentController.Pay)
-		paymentGroup.GET("/orders/:orderNo", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), paymentController.OrderProgress)
-		paymentGroup.POST("/orders/:orderNo/cancel-partial-cash", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier"), paymentController.CancelPartialCash)
-		paymentGroup.POST("/refunds/cash", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier"), refundController.CreateCash)
-		paymentGroup.POST("/refunds/mixed", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.CreateMixed)
-		paymentGroup.GET("/refunds/:id", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"), refundController.GetGroup)
-		paymentGroup.POST("/refunds/digital", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.CreateDigital)
-		paymentGroup.GET("/refund-tasks", middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.ListDigitalTasks)
-		paymentGroup.POST("/refund-tasks/:id/retry", middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.RetryDigitalTask)
-		paymentGroup.GET("/configs", middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.GetConfigs)
-		paymentGroup.GET("/configs/readiness", middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.GetReadiness)
-		paymentGroup.POST("/configs", middleware.RequireAnyRole("admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.SaveConfig)
-		paymentGroup.GET("/:id", middleware.RequireAnyRole("seller", "admin", "super_admin"), middleware.RequireAnyTenantCapability("supplier", "distributor"), paymentController.Query)
+		paymentGroup.POST("/pay", middleware.RequireTenantPermission(authz.PermissionPaymentsWrite), middleware.RequireAnyTenantCapability("supplier", "distributor"), paymentController.Pay)
+		paymentGroup.GET("/orders/:orderNo", middleware.RequireTenantPermission(authz.PermissionPaymentsRead), middleware.RequireAnyTenantCapability("supplier", "distributor"), paymentController.OrderProgress)
+		paymentGroup.POST("/orders/:orderNo/cancel-partial-cash", middleware.RequireTenantPermission(authz.PermissionPaymentsWrite), middleware.RequireAnyTenantCapability("supplier"), paymentController.CancelPartialCash)
+		paymentGroup.POST("/refunds/cash", middleware.RequireTenantPermission(authz.PermissionRefundsWrite), middleware.RequireAnyTenantCapability("supplier"), refundController.CreateCash)
+		paymentGroup.POST("/refunds/mixed", middleware.RequireTenantPermission(authz.PermissionRefundsWrite), middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"), refundController.CreateMixed)
+		paymentGroup.GET("/refunds/:id", middleware.RequireTenantPermission(authz.PermissionRefundsRead), middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"), refundController.GetGroup)
+		paymentGroup.POST("/refunds/digital", middleware.RequireTenantPermission(authz.PermissionRefundsWrite), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.CreateDigital)
+		paymentGroup.GET("/refund-tasks", middleware.RequireTenantPermission(authz.PermissionRefundsRead), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.ListDigitalTasks)
+		paymentGroup.POST("/refund-tasks/:id/retry", middleware.RequireTenantPermission(authz.PermissionRefundsWrite), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.RetryDigitalTask)
+		paymentGroup.GET("/configs", middleware.RequireTenantPermission(authz.PermissionPaymentConfig), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.GetConfigs)
+		paymentGroup.GET("/configs/readiness", middleware.RequireTenantPermission(authz.PermissionPaymentConfig), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.GetReadiness)
+		paymentGroup.POST("/configs", middleware.RequireTenantPermission(authz.PermissionPaymentConfig), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.SaveConfig)
+		paymentGroup.GET("/:id", middleware.RequireTenantPermission(authz.PermissionPaymentsRead), middleware.RequireAnyTenantCapability("supplier", "distributor"), paymentController.Query)
 	}
 }

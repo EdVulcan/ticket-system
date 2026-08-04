@@ -92,3 +92,21 @@ func TestRequirePlatformScopeRejectsTenantTokens(t *testing.T) {
 		t.Fatalf("platform scope status = %d, want 204", allowed.Code)
 	}
 }
+
+func TestRequireTenantPermissionUsesFixedRoleMatrix(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/allowed", func(ctx *gin.Context) { ctx.Set("scope", "tenant"); ctx.Set("role", "team_operator") }, RequireTenantPermission("teams.write"), func(ctx *gin.Context) { ctx.Status(http.StatusNoContent) })
+	engine.GET("/denied", func(ctx *gin.Context) { ctx.Set("scope", "tenant"); ctx.Set("role", "viewer") }, RequireTenantPermission("teams.write"), func(ctx *gin.Context) { ctx.Status(http.StatusNoContent) })
+
+	allowed := httptest.NewRecorder()
+	engine.ServeHTTP(allowed, httptest.NewRequest(http.MethodGet, "/allowed", nil))
+	if allowed.Code != http.StatusNoContent {
+		t.Fatalf("team operator status=%d", allowed.Code)
+	}
+	denied := httptest.NewRecorder()
+	engine.ServeHTTP(denied, httptest.NewRequest(http.MethodGet, "/denied", nil))
+	if denied.Code != http.StatusForbidden {
+		t.Fatalf("viewer write status=%d", denied.Code)
+	}
+}

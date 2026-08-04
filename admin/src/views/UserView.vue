@@ -5,20 +5,21 @@
       <el-button type="primary" @click="dialogVisible = true">新增管理账号</el-button>
     </div>
 
-    <el-alert title="这里可创建多个租户后台管理账号，均拥有本租户管理权限。售票员、验票员及其景区/设备范围请在“员工管理”中配置。" type="info" show-icon class="mb-4" :closable="false" />
+    <el-alert title="后台账号按固定岗位授权；售票员、验票员及其景区/设备范围仍在“员工管理”中配置。" type="info" show-icon class="mb-4" :closable="false" />
 
     <el-table :data="userList" style="width: 100%" v-loading="loading">
       <el-table-column prop="username" label="登录用户名" width="180" />
       <el-table-column prop="role" label="角色">
         <template #default="scope">
-          <el-tag :type="scope.row.role === 'admin' ? 'danger' : 'success'">
-            {{ roleMap[scope.row.role] || '其他角色' }}
+          <el-tag :type="scope.row.role === 'admin' || scope.row.role === 'super_admin' ? 'danger' : 'success'">
+            {{ tenantRoleLabel(scope.row.role) }}
           </el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="created_at" label="创建时间" />
-      <el-table-column label="操作" width="200">
+      <el-table-column label="操作" width="280">
         <template #default="scope">
+          <el-button size="small" type="primary" plain :disabled="scope.row.is_initial_admin || scope.row.id === currentUser.id" @click="handleRoleChange(scope.row)">调整岗位</el-button>
           <el-button size="small" type="warning" :disabled="scope.row.is_initial_admin || scope.row.id === currentUser.id" :title="scope.row.is_initial_admin ? '初始管理员只能自行修改密码' : (scope.row.id === currentUser.id ? '请从右上角修改自己的密码' : '')" @click="handleResetPassword(scope.row)">重置密码</el-button>
           <el-button 
             size="small" 
@@ -44,8 +45,9 @@
         </el-form-item>
         <el-form-item label="角色">
           <el-select v-model="form.role" class="w-full">
-            <el-option label="租户管理员" value="admin" />
+            <el-option v-for="role in tenantRoleOptions" :key="role.value" :label="role.label" :value="role.value" />
           </el-select>
+          <div class="mt-1 text-xs text-gray-500">{{ tenantRoleOptions.find(item => item.value === form.role)?.description }}</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -55,6 +57,19 @@
         </span>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="roleDialogVisible" title="调整账号岗位" width="460px">
+      <el-form label-position="top">
+        <el-form-item label="账号"><el-input :model-value="roleTarget?.username" disabled /></el-form-item>
+        <el-form-item label="岗位">
+          <el-select v-model="selectedRole" class="w-full">
+            <el-option v-for="role in tenantRoleOptions" :key="role.value" :label="role.label" :value="role.value" />
+          </el-select>
+          <div class="mt-2 text-sm text-gray-500">{{ tenantRoleOptions.find(item => item.value === selectedRole)?.description }}</div>
+        </el-form-item>
+      </el-form>
+      <template #footer><el-button @click="roleDialogVisible = false">取消</el-button><el-button type="primary" @click="saveRoleChange">确认调整</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
@@ -62,16 +77,14 @@
 import { ref, reactive, onMounted } from 'vue'
 import request from '@/utils/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { tenantRoleLabel, tenantRoleOptions } from '@/utils/permissions'
 
 const userList = ref([])
 const loading = ref(false)
 const dialogVisible = ref(false)
-
-const roleMap: Record<string, string> = {
-  super_admin: '商户最高管理员',
-  admin: '商户管理员',
-  staff: '员工'
-}
+const roleDialogVisible = ref(false)
+const roleTarget = ref<any>(null)
+const selectedRole = ref('viewer')
 
 const form = reactive({
   username: '',
@@ -150,6 +163,22 @@ const handleResetPassword = (row: any) => {
       ElMessage.error('重置失败')
     }
   })
+}
+
+const handleRoleChange = (row: any) => {
+  roleTarget.value = row
+  selectedRole.value = row.role
+  roleDialogVisible.value = true
+}
+
+const saveRoleChange = async () => {
+  if (!roleTarget.value) return
+  try {
+    await request.put(`/users/${roleTarget.value.id}/role`, { role: selectedRole.value })
+    roleDialogVisible.value = false
+    ElMessage.success('岗位已调整，该账号需要重新登录')
+    await fetchUsers()
+  } catch (error: any) { ElMessage.error(error.response?.data?.error || '岗位调整失败') }
 }
 
 onMounted(() => {

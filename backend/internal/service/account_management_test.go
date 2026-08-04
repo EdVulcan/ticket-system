@@ -140,3 +140,38 @@ func TestTenantInitialAdminCannotBeResetByDelegatedAdmin(t *testing.T) {
 		t.Fatalf("self reset error=%v", err)
 	}
 }
+
+func TestTenantRoleChangeRevokesSessionsAndProtectsRootAndSelf(t *testing.T) {
+	resetBusinessData(t)
+	tenant := model.Tenant{Name: "Role Tenant", SystemCode: "ROLE-TENANT", SecretKey: "secret", Status: "active"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&tenant).Error }); err != nil {
+		t.Fatal(err)
+	}
+	root := model.User{Username: "root-role", Role: "super_admin", TenantID: tenant.ID, IsInitialAdmin: true}
+	admin := model.User{Username: "admin-role", Role: "admin", TenantID: tenant.ID}
+	operator := model.User{Username: "operator-role", Role: "viewer", TenantID: tenant.ID, TokenVersion: 2}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&root).Error }); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&admin).Error }); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&operator).Error }); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateTenantUserRole(tenant.ID, operator.ID, admin.ID, "team_operator"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.First(&operator, operator.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if operator.Role != "team_operator" || operator.TokenVersion != 3 {
+		t.Fatalf("updated operator=%+v", operator)
+	}
+	if err := UpdateTenantUserRole(tenant.ID, root.ID, admin.ID, "viewer"); !errors.Is(err, ErrInitialTenantAdmin) {
+		t.Fatalf("root role error=%v", err)
+	}
+	if err := UpdateTenantUserRole(tenant.ID, admin.ID, admin.ID, "viewer"); !errors.Is(err, ErrOwnTenantAccount) {
+		t.Fatalf("self role error=%v", err)
+	}
+}

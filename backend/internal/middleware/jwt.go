@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"strings"
+	"ticket-backend/internal/authz"
 	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
@@ -113,6 +114,16 @@ func RequireAnyRole(allowed ...string) gin.HandlerFunc {
 			}
 		}
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "permission denied"})
+	}
+}
+
+func RequireTenantPermission(permission string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.GetString("scope") != "tenant" || !authz.HasTenantPermission(c.GetString("role"), permission) {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前账号没有执行此操作的权限"})
+			return
+		}
+		c.Next()
 	}
 }
 

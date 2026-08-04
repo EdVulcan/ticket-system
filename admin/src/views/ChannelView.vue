@@ -7,7 +7,7 @@
       </div>
       <div class="flex gap-2">
         <el-button :icon="Refresh" circle title="刷新" @click="load" />
-        <el-button type="primary" :icon="Plus" @click="createDialog = true">新增渠道</el-button>
+        <el-button v-if="canWrite" type="primary" :icon="Plus" @click="createDialog = true">新增渠道</el-button>
       </div>
     </div>
 
@@ -19,12 +19,12 @@
       <el-table-column prop="permissions_json" label="权限" min-width="220" show-overflow-tooltip />
       <el-table-column label="操作" width="530" fixed="right">
         <template #default="{row}">
-          <el-button link type="primary" @click="openMapping(row)">商品映射</el-button>
+          <el-button v-if="canWrite" link type="primary" @click="openMapping(row)">商品映射</el-button>
           <el-button link type="primary" @click="openOrders(row)">渠道订单</el-button>
           <el-button link type="primary" @click="openRequests(row)">请求日志</el-button>
           <el-button link type="primary" @click="openReconciliations(row)">账单对账</el-button>
-          <el-button link type="warning" @click="toggleStatus(row)">{{ row.status === 'disabled' ? '启用' : '停用' }}</el-button>
-          <el-button link type="danger" @click="rotate(row)">轮换密钥</el-button>
+          <el-button v-if="canWrite" link type="warning" @click="toggleStatus(row)">{{ row.status === 'disabled' ? '启用' : '停用' }}</el-button>
+          <el-button v-if="canWrite" link type="danger" @click="rotate(row)">轮换密钥</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -47,7 +47,7 @@
         <el-select v-model="mapping.product_id" filterable placeholder="选择本商户产品" style="min-width: 260px">
           <el-option v-for="product in products" :key="product.id" :label="product.name" :value="product.id" />
         </el-select>
-        <el-button type="primary" @click="addMapping">添加</el-button>
+        <el-button v-if="canWrite" type="primary" @click="addMapping">添加</el-button>
       </div>
       <el-table :data="mappings" stripe><el-table-column prop="external_code" label="外部编码"/><el-table-column label="本地产品"><template #default="{ row }">{{ productName(row.product_id) }}</template></el-table-column><el-table-column label="状态"><template #default="{ row }">{{ mappingStatusText(row.status) }}</template></el-table-column></el-table>
     </el-dialog>
@@ -75,7 +75,7 @@
         <el-table-column label="最后尝试" width="180"><template #default="{ row }">{{ dateTime(row.last_attempt_at || row.created_at) }}</template></el-table-column>
         <el-table-column prop="response_json" label="响应摘要" min-width="220" show-overflow-tooltip />
         <el-table-column label="操作" width="110" fixed="right">
-          <template #default="{ row }"><el-button v-if="row.status === 'failed'" link type="warning" @click="authorizeRetry(row)">授权重试</el-button></template>
+          <template #default="{ row }"><el-button v-if="canWrite && row.status === 'failed'" link type="warning" @click="authorizeRetry(row)">授权重试</el-button></template>
         </el-table-column>
       </el-table>
       <template #footer><el-button @click="requestsDialog = false">关闭</el-button></template>
@@ -158,7 +158,7 @@
     <el-dialog v-model="reconciliationsDialog" :title="`渠道账单对账：${selectedAccount?.code || ''}`" width="1000px" :close-on-click-modal="false">
       <div class="mb-4 flex justify-between">
         <div class="text-sm text-gray-500">导入渠道销售、支付、取消或退款账单，与本系统订单资金事实逐笔核对。</div>
-        <el-button type="primary" :icon="Plus" @click="billImportDialog = true">导入账单</el-button>
+        <el-button v-if="canWrite" type="primary" :icon="Plus" @click="billImportDialog = true">导入账单</el-button>
       </div>
       <el-table :data="reconciliations" v-loading="reconciliationsLoading" stripe height="430" empty-text="暂无对账批次">
         <el-table-column prop="idempotency_key" label="批次号" min-width="180" />
@@ -205,6 +205,10 @@ import { Plus, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { localizeDisplayText } from '@/utils/localize'
+import { hasPermission } from '@/utils/permissions'
+
+const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
+const canWrite = hasPermission(currentUser, 'channels.write')
 
 const accounts = ref<any[]>([])
 const mappings = ref<any[]>([])
@@ -271,7 +275,7 @@ const requestStatusText = (status: string) => ({ processing: '处理中', comple
 const requestStatusType = (status: string) => status === 'completed' ? 'success' : status === 'failed' ? 'danger' : status === 'retryable' ? 'warning' : 'primary'
 const orderStatusText = (status: string) => ({ unpaid: '待支付', paid: '已支付', completed: '已完成', partial_refunded: '部分退款', refunded: '已退款', cancelled: '已取消' } as Record<string, string>)[status] || '未知状态'
 const ticketStatusText = (status: string) => ({ unused: '未使用', active: '可使用', issued: '已出票', used: '已核销', refunded: '已退款', expired: '已过期', void: '已作废' } as Record<string, string>)[status] || '未知状态'
-const paymentMethodText = (method: string) => ({ cash: '现金', wechat: '微信支付', alipay: '支付宝', touch: '碰一碰支付', balance: '账户余额', credit: '授信挂账' } as Record<string, string>)[method] || '其他方式'
+const paymentMethodText = (method: string) => ({ cash: '现金', wechat: '微信支付', alipay: '支付宝', touch: '碰一碰支付', balance: '账户余额', credit: '授信挂账', team_account: '团队预付款/授信' } as Record<string, string>)[method] || '其他方式'
 const paymentStatusText = (status: string) => ({ pending: '等待支付', processing: '支付处理中', paid: '支付成功', succeeded: '支付成功', failed: '支付失败', cancelled: '已取消', refunded: '已退款', partial_refunded: '部分退款' } as Record<string, string>)[status] || '未知状态'
 const refundStatusText = (status: string) => ({ pending: '等待退款', processing: '退款处理中', succeeded: '退款成功', completed: '退款成功', failed: '退款失败', manual_review: '人工复核' } as Record<string, string>)[status] || '未知状态'
 const checkInResultText = (result: string) => ({ success: '核销成功', failed: '核销失败', rejected: '已拒绝' } as Record<string, string>)[result] || '未知结果'

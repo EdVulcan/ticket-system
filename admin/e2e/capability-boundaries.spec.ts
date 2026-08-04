@@ -47,22 +47,21 @@ test('distributor cannot see or enter supplier onsite business', async ({ page }
   }
 })
 
-test('travel agency only receives team and common business surfaces', async ({ page }) => {
-  await openAs(page, 'travel_agency', '/operations')
+test('travel agency only receives team, order and report surfaces', async ({ page }) => {
+  await openAs(page, 'travel_agency', '/teams')
 
-  for (const label of ['线上订单', '旅行社团队', '运营工作台', '经营数据', '售后工作台', '管理账号']) {
+  for (const label of ['线上订单', '旅行社团队', '经营数据', '售后工作台', '管理账号']) {
     await expect(page.getByRole('menuitem', { name: label })).toBeVisible()
   }
-  for (const label of ['线上门票', '窗口门票', '线下/窗口订单', '分销商管理', '渠道连接', '财务报表', '退款待办', '政策知识库', '终端设备', '检票点位', '员工管理', '支付参数配置']) {
+  for (const label of ['线上门票', '窗口门票', '线下/窗口订单', '分销商管理', '渠道连接', '运营工作台', '财务报表', '退款待办', '政策知识库', '终端设备', '检票点位', '员工管理', '支付参数配置']) {
     await expect(page.getByRole('menuitem', { name: label })).toHaveCount(0)
   }
 
-  await expect(page.getByRole('tab', { name: '团队' })).toBeVisible()
-  for (const label of ['景区', '渠道', '结算', '总账', '班次', '打印', '告警']) {
-    await expect(page.getByRole('tab', { name: label })).toHaveCount(0)
-  }
+  await expect(page.getByRole('tab', { name: '团队计划' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '旅行社合同' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '双方结算' })).toBeVisible()
 
-  for (const path of ['/product', '/offline-order', '/distribution', '/channels', '/finance', '/device', '/payment-config', '/staff']) {
+  for (const path of ['/product', '/offline-order', '/distribution', '/channels', '/operations', '/finance', '/device', '/payment-config', '/staff']) {
     await page.goto(path)
     await expect(page).toHaveURL('http://127.0.0.1:4173/')
   }

@@ -62,7 +62,7 @@
             </div>
             <div class="flex gap-2">
               <el-button link type="primary" @click="fetchBundles"><el-icon><Refresh /></el-icon></el-button>
-              <el-button type="primary" @click="openBundleForm()">新建组合产品</el-button>
+              <el-button v-if="canWrite" type="primary" @click="openBundleForm()">新建组合产品</el-button>
             </div>
           </div>
           <el-table :data="bundles" v-loading="loadingBundles" stripe>
@@ -87,9 +87,9 @@
             </el-table-column>
             <el-table-column label="操作" width="190" fixed="right">
               <template #default="{ row }">
-                <el-button link type="primary" @click="openBundleForm(row)">编辑</el-button>
-                <el-button v-if="row.status !== 'online'" link type="success" :disabled="!row.available" @click="changeBundleStatus(row, 'online')">上架</el-button>
-                <el-button v-else link type="warning" @click="changeBundleStatus(row, 'offline')">下架</el-button>
+                <el-button v-if="canWrite" link type="primary" @click="openBundleForm(row)">编辑</el-button>
+                <el-button v-if="canWrite && row.status !== 'online'" link type="success" :disabled="!row.available" @click="changeBundleStatus(row, 'online')">上架</el-button>
+                <el-button v-else-if="canWrite" link type="warning" @click="changeBundleStatus(row, 'offline')">下架</el-button>
               </template>
             </el-table-column>
           </el-table>
@@ -122,12 +122,12 @@
                 <el-table-column label="操作" width="200" fixed="right" align="center">
                 <template #default="{ row }">
                     <div v-if="row.status === 'pending'">
-                        <el-button type="success" size="small" @click="handleAudit(row, 'active')">通过</el-button>
-                        <el-button type="danger" size="small" @click="handleAudit(row, 'rejected')">拒绝</el-button>
+                        <el-button v-if="canWrite" type="success" size="small" @click="handleAudit(row, 'active')">通过</el-button>
+                        <el-button v-if="canWrite" type="danger" size="small" @click="handleAudit(row, 'rejected')">拒绝</el-button>
                     </div>
                     <div v-else>
-                         <el-button type="primary" size="small" @click="handleOffers(row)">产品结算价</el-button>
-                         <el-button type="warning" size="small" @click="handleRecharge(row)">充值</el-button>
+                         <el-button v-if="canWrite" type="primary" size="small" @click="handleOffers(row)">产品结算价</el-button>
+                         <el-button v-if="canWrite" type="warning" size="small" @click="handleRecharge(row)">充值</el-button>
                     </div>
                 </template>
                 </el-table-column>
@@ -338,7 +338,7 @@
             <span class="text-sm text-gray-500">这里的每一行同时决定该分销商可以销售的产品和对应结算价。</span>
             <div class="flex gap-2">
                 <el-button size="small" @click="loadOffers">刷新</el-button>
-                <el-button type="primary" size="small" @click="openOfferForm()">添加产品价格</el-button>
+                <el-button v-if="canWrite" type="primary" size="small" @click="openOfferForm()">添加产品价格</el-button>
             </div>
         </div>
         <el-table :data="offers" v-loading="loadingOffers" height="360" stripe>
@@ -350,10 +350,10 @@
             <el-table-column label="状态" width="100"><template #default="{ row }">{{ offerStatusText(row.status) }}</template></el-table-column>
             <el-table-column label="操作" width="220" fixed="right">
                 <template #default="{ row }">
-                    <el-button link type="primary" @click="openOfferForm(row)">修改价格</el-button>
-                    <el-button v-if="row.status === 'active'" link type="warning" @click="handleOfferStatus(row, 'suspended')">暂停</el-button>
-                    <el-button v-else-if="row.status === 'suspended'" link type="success" @click="handleOfferStatus(row, 'active')">恢复</el-button>
-                    <el-button v-if="row.status !== 'expired'" link type="danger" @click="handleOfferStatus(row, 'expired')">终止</el-button>
+                    <el-button v-if="canWrite" link type="primary" @click="openOfferForm(row)">修改价格</el-button>
+                    <el-button v-if="canWrite && row.status === 'active'" link type="warning" @click="handleOfferStatus(row, 'suspended')">暂停</el-button>
+                    <el-button v-else-if="canWrite && row.status === 'suspended'" link type="success" @click="handleOfferStatus(row, 'active')">恢复</el-button>
+                    <el-button v-if="canWrite && row.status !== 'expired'" link type="danger" @click="handleOfferStatus(row, 'expired')">终止</el-button>
                 </template>
             </el-table-column>
         </el-table>
@@ -441,12 +441,14 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { Connection, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { hasPermission } from '@/utils/permissions'
 import request from '@/utils/request'
 
 const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
 const activeCapabilities = new Set((currentUser.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability))
+const canWrite = hasPermission(currentUser, 'distribution.write')
 const canSupply = computed(() => activeCapabilities.has('supplier'))
-const canDistribute = computed(() => activeCapabilities.has('distributor'))
+const canDistribute = computed(() => activeCapabilities.has('distributor') && canWrite)
 const activeTab = ref(canDistribute.value ? 'suppliers' : 'agents')
 
 // Suppliers State
