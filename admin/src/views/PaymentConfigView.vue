@@ -1,8 +1,11 @@
 <template>
-  <div class="max-w-5xl mx-auto p-6">
-    <div class="mb-6 flex justify-between items-center">
-      <h2 class="text-2xl font-bold text-gray-800">支付参数配置</h2>
-      <el-tag type="info">当前模式：普通商户直连</el-tag>
+  <div class="payment-config-page">
+    <div class="page-heading">
+      <div>
+        <h2>支付参数配置</h2>
+        <p>分别维护微信与支付宝商户参数，窗口收款时自动识别支付渠道。</p>
+      </div>
+      <el-tag type="info" effect="plain">普通商户直连</el-tag>
     </div>
 
     <el-card class="shadow-sm border-0">
@@ -14,14 +17,19 @@
 
             <div class="readiness-panel">
               <div class="readiness-head">
-                <strong>接入状态</strong>
+                <div>
+                  <strong>接入状态</strong>
+                  <span>保存完整参数后，系统会逐项检查可用能力</span>
+                </div>
                 <el-tag :type="readinessType(wechatReadiness)">{{ readinessText(wechatReadiness) }}</el-tag>
               </div>
               <div class="capability-list">
-                <div v-for="item in wechatReadiness?.capabilities || []" :key="item.code" class="capability-item">
-                  <span>{{ item.name }}</span>
+                <div v-for="item in wechatReadiness?.capabilities || []" :key="item.code" class="capability-item" :class="{ available: item.available }">
+                  <div class="capability-copy">
+                    <span>{{ item.name }}</span>
+                    <small>{{ item.note || '配置完成后可用于窗口收款' }}</small>
+                  </div>
                   <el-tag size="small" :type="item.available ? 'success' : 'info'">{{ item.available ? '已具备配置' : '暂不可用' }}</el-tag>
-                  <small v-if="item.note">{{ item.note }}</small>
                 </div>
               </div>
               <el-alert v-if="wechatReadiness?.issues?.length" :title="wechatReadiness.issues.join('；')" type="warning" :closable="false" show-icon />
@@ -85,12 +93,18 @@
 
             <div class="readiness-panel">
               <div class="readiness-head">
-                <strong>接入状态</strong>
+                <div>
+                  <strong>接入状态</strong>
+                  <span>保存完整参数后，系统会逐项检查可用能力</span>
+                </div>
                 <el-tag :type="readinessType(alipayReadiness)">{{ readinessText(alipayReadiness) }}</el-tag>
               </div>
               <div class="capability-list">
-                <div v-for="item in alipayReadiness?.capabilities || []" :key="item.code" class="capability-item">
-                  <span>{{ item.name }}</span>
+                <div v-for="item in alipayReadiness?.capabilities || []" :key="item.code" class="capability-item" :class="{ available: item.available }">
+                  <div class="capability-copy">
+                    <span>{{ item.name }}</span>
+                    <small>{{ item.note || '配置完成后可用于窗口收款' }}</small>
+                  </div>
                   <el-tag size="small" :type="item.available ? 'success' : 'info'">{{ item.available ? '已具备配置' : '暂不可用' }}</el-tag>
                 </div>
               </div>
@@ -197,10 +211,28 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.readiness-panel { margin-bottom: 20px; padding: 16px; border: 1px solid #e5e7eb; border-radius: 6px; background: #f8fafc; }
-.readiness-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.capability-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin-bottom: 12px; }
-.capability-item { display: grid; grid-template-columns: minmax(100px, 1fr) auto; align-items: center; min-height: 28px; gap: 8px; }
-.capability-item small { grid-column: 1 / -1; color: #6b7280; }
-@media (max-width: 720px) { .capability-list { grid-template-columns: 1fr; } }
+.payment-config-page { width: min(1040px, 100%); margin: 0 auto; padding: 20px 24px 32px; }
+.page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 18px; }
+.page-heading h2 { margin: 0; color: #1f2937; font-size: 24px; line-height: 32px; }
+.page-heading p { margin: 5px 0 0; color: #6b7280; font-size: 13px; line-height: 20px; }
+.readiness-panel { margin-bottom: 22px; padding: 18px; border: 1px solid #dfe5e2; border-radius: 6px; background: #f8faf9; }
+.readiness-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.readiness-head > div { display: flex; flex-direction: column; gap: 3px; }
+.readiness-head strong { color: #1f2937; font-size: 16px; line-height: 22px; }
+.readiness-head span { color: #7b847e; font-size: 12px; line-height: 18px; }
+.capability-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.capability-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 62px; padding: 10px 12px; border: 1px solid #e4e9e6; border-radius: 5px; background: #fff; }
+.capability-item.available { border-color: #cae5d5; background: #f6fbf8; }
+.capability-copy { min-width: 0; }
+.capability-copy > span { display: block; color: #26312b; font-size: 14px; font-weight: 600; line-height: 20px; }
+.capability-copy small { display: block; margin-top: 3px; color: #7b847e; font-size: 12px; line-height: 17px; }
+:deep(.el-card__body) { padding: 18px 20px 24px; }
+:deep(.el-tabs__header) { margin-bottom: 18px; }
+@media (max-width: 720px) {
+  .payment-config-page { padding: 16px 12px 24px; }
+  .page-heading { align-items: flex-start; gap: 12px; }
+  .page-heading p { max-width: 250px; }
+  .capability-list { grid-template-columns: 1fr; }
+  .readiness-panel { padding: 14px; }
+}
 </style>
