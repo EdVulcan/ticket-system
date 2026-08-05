@@ -4,6 +4,7 @@ import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
   root: resolve('src/renderer'),
+  envDir: resolve('.'),
   base: './',
   resolve: {
     alias: {

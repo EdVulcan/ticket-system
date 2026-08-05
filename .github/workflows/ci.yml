@@ -152,6 +152,15 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
       - name: Build Windows POS
         run: wails build -clean -webview2 embed
+      - name: Verify Windows POS endpoint
+        shell: pwsh
+        run: |
+          $assets = Get-ChildItem -Path dist/assets -Filter *.js
+          $productionEndpoint = Select-String -Path $assets.FullName -Pattern 'https://ymsq.edvulcan.top/api/v1' -SimpleMatch -Quiet
+          $localEndpoint = Select-String -Path $assets.FullName -Pattern 'http://127.0.0.1:8080/api/v1' -SimpleMatch -Quiet
+          if (-not $productionEndpoint -or $localEndpoint) {
+            throw 'Windows POS was not built with the production API endpoint'
+          }
       - name: Upload Windows POS
         uses: actions/upload-artifact@v4
         with:
