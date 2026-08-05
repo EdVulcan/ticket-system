@@ -10,6 +10,12 @@ import (
 
 func Cors() gin.HandlerFunc {
 	allowed := make(map[string]struct{})
+	// Wails serves the bundled frontend from fixed local application origins.
+	// Keep these first-party desktop origins available even when production
+	// environment variables replace the configurable browser-origin list.
+	for _, origin := range []string{"http://wails.localhost", "wails://wails.localhost"} {
+		allowed[origin] = struct{}{}
+	}
 	for _, origin := range strings.Split(config.GlobalConfig.Server.CORSAllowedOrigins, ",") {
 		if origin = strings.TrimSpace(origin); origin != "" {
 			allowed[origin] = struct{}{}

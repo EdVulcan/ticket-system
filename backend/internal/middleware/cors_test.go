@@ -12,7 +12,7 @@ import (
 func TestCorsAllowsWailsDesktopAndRejectsUnknownOrigins(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	previous := config.GlobalConfig.Server.CORSAllowedOrigins
-	config.GlobalConfig.Server.CORSAllowedOrigins = "http://wails.localhost,wails://wails.localhost"
+	config.GlobalConfig.Server.CORSAllowedOrigins = "https://admin.example"
 	t.Cleanup(func() { config.GlobalConfig.Server.CORSAllowedOrigins = previous })
 
 	engine := gin.New()
