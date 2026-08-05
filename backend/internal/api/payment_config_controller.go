@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
 	"ticket-backend/internal/utils"
@@ -58,12 +60,33 @@ func (c *PaymentConfigController) GetConfigs(ctx *gin.Context) {
 }
 
 func (c *PaymentConfigController) GetReadiness(ctx *gin.Context) {
-	items, err := c.Service.GetConfigReadiness(ctx.GetUint("tenant_id"))
+	tenantID := ctx.GetUint("tenant_id")
+	items, err := c.Service.GetConfigReadiness(tenantID)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	for i := range items {
+		callbackURL, err := paymentNotifyURL(items[i].Provider, tenantID)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		items[i].CallbackURL = callbackURL
+	}
 	ctx.JSON(http.StatusOK, gin.H{"data": items})
+}
+
+func paymentNotifyURL(provider string, tenantID uint) (string, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(config.GlobalConfig.Server.PublicBaseURL), "/")
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("系统公网地址未配置为有效的 HTTPS 地址")
+	}
+	if strings.TrimRight(parsed.Path, "/") != "" {
+		return "", fmt.Errorf("系统公网地址不能包含路径")
+	}
+	return fmt.Sprintf("%s/api/v1/payments/notify/%s/%d", baseURL, provider, tenantID), nil
 }
 
 // SaveConfig 保存或更新配置
@@ -120,7 +143,6 @@ func (c *PaymentConfigController) SaveWechatConfig(ctx *gin.Context) {
 		SerialNo:            strings.TrimSpace(ctx.PostForm("serial_no")),
 		PlatformPublicKey:   strings.TrimSpace(ctx.PostForm("platform_public_key")),
 		PlatformPublicKeyID: strings.TrimSpace(ctx.PostForm("platform_public_key_id")),
-		NotifyURL:           strings.TrimSpace(ctx.PostForm("notify_url")),
 		Status:              status,
 	}
 	certPEM, hasCert, err := readPaymentUpload(ctx, "merchant_certificate")
@@ -173,6 +195,13 @@ func (c *PaymentConfigController) saveConfig(ctx *gin.Context, req *model.Paymen
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported payment provider"})
 		return
 	}
+	notifyURL, err := paymentNotifyURL(req.Provider, tenantID)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// Provider callbacks are system-owned. Never trust a client-supplied URL.
+	req.NotifyURL = notifyURL
 	if req.Status {
 		var existing model.PaymentConfig
 		err := model.DB.Where("tenant_id = ? AND provider = ?", tenantID, req.Provider).First(&existing).Error

@@ -31,9 +31,12 @@ func TestSaveWechatConfigEncryptsUploadedPrivateKey(t *testing.T) {
 	model.DB = db
 	model.InitWriter(db, 5*time.Second)
 	oldEncryptionKey := config.GlobalConfig.Security.EncryptionKey
+	oldPublicBaseURL := config.GlobalConfig.Server.PublicBaseURL
 	config.GlobalConfig.Security.EncryptionKey = strings.Repeat("e", 32)
+	config.GlobalConfig.Server.PublicBaseURL = "https://tickets.example.com"
 	t.Cleanup(func() {
 		config.GlobalConfig.Security.EncryptionKey = oldEncryptionKey
+		config.GlobalConfig.Server.PublicBaseURL = oldPublicBaseURL
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = model.CloseWriter(ctx)
@@ -74,6 +77,7 @@ func TestSaveWechatConfigEncryptsUploadedPrivateKey(t *testing.T) {
 		"app_id":                 "wx-test",
 		"key":                    "0123456789abcdef0123456789abcdef",
 		"platform_public_key_id": "PUB_KEY_ID_123",
+		"notify_url":             "https://attacker.example/collect",
 		"status":                 "false",
 	} {
 		if err := writer.WriteField(key, value); err != nil {
@@ -108,6 +112,9 @@ func TestSaveWechatConfigEncryptsUploadedPrivateKey(t *testing.T) {
 	}
 	if stored.MchID != "1602588787" || stored.SerialNo != "1234" || stored.PrivateKey == "" || strings.Contains(stored.PrivateKey, "PRIVATE KEY") {
 		t.Fatalf("unexpected stored config: mch=%s serial=%s private_plaintext=%v", stored.MchID, stored.SerialNo, strings.Contains(stored.PrivateKey, "PRIVATE KEY"))
+	}
+	if stored.NotifyURL != "https://tickets.example.com/api/v1/payments/notify/wechat/7" {
+		t.Fatalf("client-controlled callback URL was stored: %s", stored.NotifyURL)
 	}
 	if stored.Key == "0123456789abcdef0123456789abcdef" || strings.Contains(stored.PlatformPublicKey, "PUBLIC KEY") {
 		t.Fatal("payment secrets were stored as plaintext")

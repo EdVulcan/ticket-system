@@ -84,8 +84,8 @@
                 </el-upload>
               </el-form-item>
 
-              <el-form-item label="支付结果通知地址">
-                <el-input v-model="wechatForm.notify_url" placeholder="https://你的域名/api/v1/payments/notify/wechat/租户编号" />
+              <el-form-item label="支付结果通知地址（系统生成）">
+                <el-input :model-value="wechatReadiness?.callback_url || '由系统自动生成'" readonly />
               </el-form-item>
 
               <el-form-item>
@@ -148,8 +148,8 @@
                 />
               </el-form-item>
 
-              <el-form-item label="支付结果通知地址">
-                <el-input v-model="alipayForm.notify_url" placeholder="https://你的域名/api/v1/payments/notify/alipay/租户编号" />
+              <el-form-item label="支付结果通知地址（系统生成）">
+                <el-input :model-value="alipayReadiness?.callback_url || '由系统自动生成'" readonly />
               </el-form-item>
 
               <el-form-item>
@@ -171,8 +171,8 @@ import request from '@/utils/request'
 
 const activeTab = ref('wechat')
 
-const wechatForm = ref({ provider: 'wechat', app_id: '', mch_id: '', key: '', serial_no: '', private_key: '', platform_public_key_id: '', platform_public_key: '', notify_url: '', status: false })
-const alipayForm = ref({ provider: 'alipay', app_id: '', private_key: '', public_key: '', notify_url: '', status: false })
+const wechatForm = ref({ provider: 'wechat', app_id: '', mch_id: '', key: '', serial_no: '', private_key: '', platform_public_key_id: '', platform_public_key: '', status: false })
+const alipayForm = ref({ provider: 'alipay', app_id: '', private_key: '', public_key: '', status: false })
 const wechatMerchantCertFiles = ref<UploadUserFile[]>([])
 const wechatMerchantKeyFiles = ref<UploadUserFile[]>([])
 const wechatPlatformKeyFiles = ref<UploadUserFile[]>([])
@@ -193,10 +193,17 @@ const fetchConfigs = async () => {
         const configs = res.data.data || []
         
         const wc = configs.find((c: any) => c.provider === 'wechat')
-        if (wc) wechatForm.value = { ...wc }
+        if (wc) wechatForm.value = {
+            provider: 'wechat', app_id: wc.app_id || '', mch_id: wc.mch_id || '', key: wc.key || '',
+            serial_no: wc.serial_no || '', private_key: wc.private_key || '', platform_public_key_id: wc.platform_public_key_id || '',
+            platform_public_key: wc.platform_public_key || '', status: Boolean(wc.status)
+        }
 
         const ali = configs.find((c: any) => c.provider === 'alipay')
-        if (ali) alipayForm.value = { ...ali }
+        if (ali) alipayForm.value = {
+            provider: 'alipay', app_id: ali.app_id || '', private_key: ali.private_key || '',
+            public_key: ali.public_key || '', status: Boolean(ali.status)
+        }
         await fetchReadiness()
     } catch (e) {
         ElMessage.error('加载配置失败')

@@ -1,6 +1,9 @@
 server:
   port: 8080
   mode: debug
+  # Public HTTPS origin used to generate provider callback URLs. Override with
+  # TICKET_SERVER_PUBLIC_BASE_URL for another deployment.
+  public_base_url: "https://ymsq.edvulcan.top"
   cors_allowed_origins: "http://127.0.0.1:5173,http://localhost:5173"
   admin_static_dir: "../admin/dist"
 
