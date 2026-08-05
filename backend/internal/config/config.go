@@ -118,7 +118,7 @@ func InitConfig() error {
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.mode", "release")
 	viper.SetDefault("server.public_base_url", "")
-	viper.SetDefault("server.cors_allowed_origins", "http://127.0.0.1:5173,http://localhost:5173")
+	viper.SetDefault("server.cors_allowed_origins", "http://127.0.0.1:5173,http://localhost:5173,http://wails.localhost,wails://wails.localhost")
 	viper.SetDefault("server.admin_static_dir", "../admin/dist")
 	viper.SetDefault("server.trusted_proxy_cidrs", "127.0.0.1/32,::1/128")
 	viper.SetDefault("database.driver", "postgres")
