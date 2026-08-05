@@ -84,10 +84,6 @@
                 </el-upload>
               </el-form-item>
 
-              <el-form-item label="支付结果通知地址（系统生成）">
-                <el-input :model-value="wechatReadiness?.callback_url || '由系统自动生成'" readonly />
-              </el-form-item>
-
               <el-form-item>
                 <el-button type="primary" @click="saveConfig('wechat')">保存微信配置</el-button>
               </el-form-item>
@@ -146,10 +142,6 @@
                     placeholder="MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA..." 
                     class="font-mono text-xs"
                 />
-              </el-form-item>
-
-              <el-form-item label="支付结果通知地址（系统生成）">
-                <el-input :model-value="alipayReadiness?.callback_url || '由系统自动生成'" readonly />
               </el-form-item>
 
               <el-form-item>
