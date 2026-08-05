@@ -95,7 +95,7 @@ func (s *PaymentService) ProcessPaymentReconciliationTasks(ctx context.Context, 
 			return processed, err
 		}
 		processed++
-		if err := s.processPaymentTask(task); err != nil {
+		if err := s.processPaymentTask(task, now); err != nil {
 			if rescheduleErr := reschedulePaymentTask(task, err, now); rescheduleErr != nil {
 				return processed, rescheduleErr
 			}
@@ -126,7 +126,7 @@ func claimPaymentTask(now time.Time) (*model.PaymentReconciliationTask, error) {
 	return &task, nil
 }
 
-func (s *PaymentService) processPaymentTask(task *model.PaymentReconciliationTask) error {
+func (s *PaymentService) processPaymentTask(task *model.PaymentReconciliationTask, now time.Time) error {
 	var payment model.Payment
 	if err := model.DB.Where("id = ? AND tenant_id = ?", task.PaymentID, task.TenantID).First(&payment).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -137,7 +137,7 @@ func (s *PaymentService) processPaymentTask(task *model.PaymentReconciliationTas
 	if payment.Status != "pending" {
 		return completePaymentTask(task.ID, "")
 	}
-	if err := s.refreshProviderStatus(&payment); err != nil {
+	if err := s.refreshProviderStatus(&payment, now); err != nil {
 		return err
 	}
 	switch payment.Status {

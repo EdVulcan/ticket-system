@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 65
+const CurrentPostgresSchemaVersion = 66
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -74,7 +74,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "PostgreSQL current schema baseline",
+		Name:      "WeChat payment-code credentials",
 		AppliedAt: time.Now(),
 	}).Error
 }

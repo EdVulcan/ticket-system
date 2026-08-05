@@ -69,6 +69,11 @@
                 <el-input v-model="wechatForm.key" type="password" show-password placeholder="在微信支付接口安全设置中配置的32位密钥" />
               </el-form-item>
 
+              <el-form-item label="第二版接口密钥（付款码收款，32位）">
+                <el-input v-model="wechatForm.wechat_v2_key" type="password" show-password placeholder="在微信支付商户平台的 API 安全设置中配置" />
+                <div class="upload-tip">付款码支付使用独立的第二版接口密钥，与第三版接口密钥不是同一个参数。</div>
+              </el-form-item>
+
               <el-form-item label="证书序列号">
                 <el-input v-model="wechatForm.serial_no" readonly placeholder="上传商户接口证书后自动获取" />
               </el-form-item>
@@ -163,7 +168,7 @@ import request from '@/utils/request'
 
 const activeTab = ref('wechat')
 
-const wechatForm = ref({ provider: 'wechat', app_id: '', mch_id: '', key: '', serial_no: '', private_key: '', platform_public_key_id: '', platform_public_key: '', status: false })
+const wechatForm = ref({ provider: 'wechat', app_id: '', mch_id: '', key: '', wechat_v2_key: '', serial_no: '', private_key: '', platform_public_key_id: '', platform_public_key: '', status: false })
 const alipayForm = ref({ provider: 'alipay', app_id: '', private_key: '', public_key: '', status: false })
 const wechatMerchantCertFiles = ref<UploadUserFile[]>([])
 const wechatMerchantKeyFiles = ref<UploadUserFile[]>([])
@@ -186,7 +191,7 @@ const fetchConfigs = async () => {
         
         const wc = configs.find((c: any) => c.provider === 'wechat')
         if (wc) wechatForm.value = {
-            provider: 'wechat', app_id: wc.app_id || '', mch_id: wc.mch_id || '', key: wc.key || '',
+            provider: 'wechat', app_id: wc.app_id || '', mch_id: wc.mch_id || '', key: wc.key || '', wechat_v2_key: wc.wechat_v2_key || '',
             serial_no: wc.serial_no || '', private_key: wc.private_key || '', platform_public_key_id: wc.platform_public_key_id || '',
             platform_public_key: wc.platform_public_key || '', status: Boolean(wc.status)
         }

@@ -76,6 +76,7 @@ func TestSaveWechatConfigEncryptsUploadedPrivateKey(t *testing.T) {
 	for key, value := range map[string]string{
 		"app_id":                 "wx-test",
 		"key":                    "0123456789abcdef0123456789abcdef",
+		"wechat_v2_key":          "abcdef0123456789abcdef0123456789",
 		"platform_public_key_id": "PUB_KEY_ID_123",
 		"notify_url":             "https://attacker.example/collect",
 		"status":                 "false",
@@ -127,6 +128,14 @@ func TestSaveWechatConfigEncryptsUploadedPrivateKey(t *testing.T) {
 	if err != nil || decryptedAPIKey != "0123456789abcdef0123456789abcdef" {
 		t.Fatalf("stored API v3 key did not decrypt correctly: %v", err)
 	}
+	decryptedV2Key, err := utils.DecryptAES(stored.WechatV2Key)
+	if err != nil || decryptedV2Key != "abcdef0123456789abcdef0123456789" {
+		t.Fatalf("stored API v2 key did not decrypt correctly: %v", err)
+	}
+	decryptedCertificate, err := utils.DecryptAES(stored.MerchantCertificate)
+	if err != nil || decryptedCertificate != strings.TrimSpace(string(certPEM)) {
+		t.Fatalf("stored merchant certificate did not decrypt correctly: %v", err)
+	}
 	decryptedPlatformKey, err := utils.DecryptAES(stored.PlatformPublicKey)
 	if err != nil || decryptedPlatformKey != strings.TrimSpace(string(platformPublicKeyPEM)) {
 		t.Fatalf("stored platform public key did not decrypt correctly: %v", err)
@@ -138,7 +147,9 @@ func TestSaveWechatConfigEncryptsUploadedPrivateKey(t *testing.T) {
 	(&PaymentConfigController{}).GetConfigs(getContext)
 	if strings.Contains(getResponse.Body.String(), "PRIVATE KEY") ||
 		!strings.Contains(getResponse.Body.String(), `"key":"******"`) ||
+		!strings.Contains(getResponse.Body.String(), `"wechat_v2_key":"******"`) ||
 		!strings.Contains(getResponse.Body.String(), `"private_key":"******"`) ||
+		!strings.Contains(getResponse.Body.String(), `"merchant_certificate":"******"`) ||
 		!strings.Contains(getResponse.Body.String(), `"platform_public_key":"******"`) {
 		t.Fatalf("config response exposed or failed to mask payment secrets: %s", getResponse.Body.String())
 	}

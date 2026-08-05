@@ -178,14 +178,14 @@ test('现金找零正确且打印未配置时保留订单与购物清单', async
   await expect(page.locator('.cart-item').getByText('标准成人票', { exact: true })).toBeVisible()
 })
 
-test('付款码入口自动识别渠道并对未联调微信保持明确失败', async ({ page }) => {
+test('付款码入口自动识别微信并完成收款', async ({ page }) => {
   await preparePOS(page, true)
   let paymentPayload: any
   await page.route('**/api/v1/orders', route => json(route, { id: 52, order_no: 'POS-E2E-CODE', total_amount: 80, status: 'unpaid' }))
   await page.route('**/api/v1/payments/orders/POS-E2E-CODE', route => json(route, { has_partial_cash: false, payments: [] }))
   await page.route('**/api/v1/payments/pay', async route => {
     paymentPayload = route.request().postDataJSON()
-    await json(route, { error: 'WeChat payment-code collection is not configured; use Alipay or customer-scan mode' }, 500)
+    await json(route, { id: 71, order_no: 'POS-E2E-CODE', method: 'wechat', pay_type: 'bscanc', status: 'paid', amount_cents: 8000 }, 201)
   })
 
   await page.goto('/#/')
@@ -199,5 +199,5 @@ test('付款码入口自动识别渠道并对未联调微信保持明确失败',
   await expect.poll(() => paymentPayload).toMatchObject({
     method: 'auto', pay_type: 'bscanc', auth_code: '100000000000000000', amount_cents: 8000,
   })
-  await expect(payment.getByText('微信付款码收款尚未完成协议联调，请改用微信扫码或其他支付方式。')).toBeVisible()
+  await expect(payment).not.toBeVisible()
 })

@@ -245,8 +245,7 @@ const doPay = async () => {
     await beginProviderWait(payment)
   } catch (error: any) {
     resetProviderAttempt()
-    const rawMessage = error.response?.data?.error || error.message || '支付请求失败'
-    const message = rawMessage.includes('WeChat payment-code collection is not configured') ? '微信付款码收款尚未完成协议联调，请改用微信扫码或其他支付方式。' : rawMessage
+    const message = error.response?.data?.error || error.message || '支付请求失败'
     const restored = paymentMode.value === 'combined' ? await restorePendingAttempt() : false
     errorMsg.value = restored ? '数字支付结果待确认，系统正在持续查询，请勿重复收款。' : message
   }

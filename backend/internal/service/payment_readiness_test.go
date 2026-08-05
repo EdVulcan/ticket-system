@@ -25,6 +25,19 @@ func TestPaymentConfigIssuesRequiresProviderCallbackFacts(t *testing.T) {
 	}
 }
 
+func TestWechatPaymentCodeCapabilityRequiresV2KeyAndCertificate(t *testing.T) {
+	cfg := &model.PaymentConfig{WechatV2Key: "12345678901234567890123456789012", MerchantCertificate: "certificate"}
+	capabilities := paymentCapabilities("wechat", true, true, cfg)
+	if !capabilities[1].Available {
+		t.Fatalf("complete payment-code credentials should be ready: %+v", capabilities[1])
+	}
+	cfg.MerchantCertificate = ""
+	capabilities = paymentCapabilities("wechat", true, true, cfg)
+	if capabilities[1].Available || capabilities[1].Note != "请重新上传商户证书和私钥" {
+		t.Fatalf("missing merchant certificate was not reported: %+v", capabilities[1])
+	}
+}
+
 func TestPaymentConfigIssuesRejectsUnsafeOrWrongTenantCallback(t *testing.T) {
 	cfg := model.PaymentConfig{
 		TenantID: 7, Provider: "alipay", AppID: "ali-app", PrivateKey: "private", PublicKey: "public",

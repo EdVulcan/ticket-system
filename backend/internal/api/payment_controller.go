@@ -42,7 +42,7 @@ func (c *PaymentController) Pay(ctx *gin.Context) {
 			return
 		}
 	}
-	req := model.Payment{OrderNo: body.OrderNo, Method: body.Method, PayType: body.PayType, AuthCode: body.AuthCode, ShiftID: body.ShiftID, DeviceID: body.DeviceID, OperatorID: ctx.GetUint("user_id"), AmountCents: body.AmountCents, TenderedCents: body.CashTenderedCents, IdempotencyKey: body.IdempotencyKey}
+	req := model.Payment{OrderNo: body.OrderNo, Method: body.Method, PayType: body.PayType, AuthCode: body.AuthCode, ClientIP: ctx.ClientIP(), ShiftID: body.ShiftID, DeviceID: body.DeviceID, OperatorID: ctx.GetUint("user_id"), AmountCents: body.AmountCents, TenderedCents: body.CashTenderedCents, IdempotencyKey: body.IdempotencyKey}
 
 	tenantID := ctx.GetUint("tenant_id")
 	if err := c.Service.CreatePayment(tenantID, &req); err != nil {

@@ -45,6 +45,9 @@ func (c *PaymentConfigController) GetConfigs(ctx *gin.Context) {
 		if configs[i].Key != "" {
 			configs[i].Key = "******"
 		}
+		if configs[i].WechatV2Key != "" {
+			configs[i].WechatV2Key = "******"
+		}
 		if configs[i].PrivateKey != "" {
 			configs[i].PrivateKey = "******"
 		}
@@ -53,6 +56,9 @@ func (c *PaymentConfigController) GetConfigs(ctx *gin.Context) {
 		}
 		if configs[i].PlatformPublicKey != "" {
 			configs[i].PlatformPublicKey = "******"
+		}
+		if configs[i].MerchantCertificate != "" {
+			configs[i].MerchantCertificate = "******"
 		}
 	}
 
@@ -139,6 +145,7 @@ func (c *PaymentConfigController) SaveWechatConfig(ctx *gin.Context) {
 		AppID:               strings.TrimSpace(ctx.PostForm("app_id")),
 		MchID:               strings.TrimSpace(ctx.PostForm("mch_id")),
 		Key:                 strings.TrimSpace(ctx.PostForm("key")),
+		WechatV2Key:         strings.TrimSpace(ctx.PostForm("wechat_v2_key")),
 		PrivateKey:          strings.TrimSpace(ctx.PostForm("private_key")),
 		SerialNo:            strings.TrimSpace(ctx.PostForm("serial_no")),
 		PlatformPublicKey:   strings.TrimSpace(ctx.PostForm("platform_public_key")),
@@ -172,6 +179,7 @@ func (c *PaymentConfigController) SaveWechatConfig(ctx *gin.Context) {
 		req.MchID = certificate.MerchantID
 		req.SerialNo = certificate.SerialNo
 		req.PrivateKey = certificate.PrivateKey
+		req.MerchantCertificate = strings.TrimSpace(string(certPEM))
 	}
 	platformPublicKey, hasPlatformPublicKey, err := readPaymentUpload(ctx, "platform_public_key_file")
 	if err != nil {
@@ -210,6 +218,9 @@ func (c *PaymentConfigController) saveConfig(ctx *gin.Context, req *model.Paymen
 			if candidate.Key == "" || candidate.Key == "******" {
 				candidate.Key = savedSecretMarker(existing.Key)
 			}
+			if candidate.WechatV2Key == "" || candidate.WechatV2Key == "******" {
+				candidate.WechatV2Key = savedSecretMarker(existing.WechatV2Key)
+			}
 			if candidate.PrivateKey == "" || candidate.PrivateKey == "******" {
 				candidate.PrivateKey = savedSecretMarker(existing.PrivateKey)
 			}
@@ -218,6 +229,9 @@ func (c *PaymentConfigController) saveConfig(ctx *gin.Context, req *model.Paymen
 			}
 			if candidate.PlatformPublicKey == "" || candidate.PlatformPublicKey == "******" {
 				candidate.PlatformPublicKey = savedSecretMarker(existing.PlatformPublicKey)
+			}
+			if candidate.MerchantCertificate == "" || candidate.MerchantCertificate == "******" {
+				candidate.MerchantCertificate = savedSecretMarker(existing.MerchantCertificate)
 			}
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -237,6 +251,14 @@ func (c *PaymentConfigController) saveConfig(ctx *gin.Context, req *model.Paymen
 			return
 		}
 		req.Key = enc
+	}
+	if req.WechatV2Key != "" && req.WechatV2Key != "******" {
+		enc, err := utils.EncryptAES(req.WechatV2Key)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("encrypt WeChat API v2 key: %v", err)})
+			return
+		}
+		req.WechatV2Key = enc
 	}
 	if req.PrivateKey != "" && req.PrivateKey != "******" {
 		enc, err := utils.EncryptAES(req.PrivateKey)
@@ -262,6 +284,14 @@ func (c *PaymentConfigController) saveConfig(ctx *gin.Context, req *model.Paymen
 		}
 		req.PlatformPublicKey = enc
 	}
+	if req.MerchantCertificate != "" && req.MerchantCertificate != "******" {
+		enc, err := utils.EncryptAES(req.MerchantCertificate)
+		if err != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("encrypt merchant certificate: %v", err)})
+			return
+		}
+		req.MerchantCertificate = enc
+	}
 
 	if err := model.Write(func(tx *gorm.DB) error {
 		var existing model.PaymentConfig
@@ -276,6 +306,9 @@ func (c *PaymentConfigController) saveConfig(ctx *gin.Context, req *model.Paymen
 		if req.Key == "******" || req.Key == "" {
 			req.Key = existing.Key
 		}
+		if req.WechatV2Key == "******" || req.WechatV2Key == "" {
+			req.WechatV2Key = existing.WechatV2Key
+		}
 		if req.PrivateKey == "******" || req.PrivateKey == "" {
 			req.PrivateKey = existing.PrivateKey
 		}
@@ -285,11 +318,15 @@ func (c *PaymentConfigController) saveConfig(ctx *gin.Context, req *model.Paymen
 		if req.PlatformPublicKey == "******" || req.PlatformPublicKey == "" {
 			req.PlatformPublicKey = existing.PlatformPublicKey
 		}
+		if req.MerchantCertificate == "******" || req.MerchantCertificate == "" {
+			req.MerchantCertificate = existing.MerchantCertificate
+		}
 		req.ID = existing.ID
 		return tx.Model(&existing).Updates(map[string]interface{}{
-			"app_id": req.AppID, "mch_id": req.MchID, "key": req.Key,
+			"app_id": req.AppID, "mch_id": req.MchID, "key": req.Key, "wechat_v2_key": req.WechatV2Key,
 			"private_key": req.PrivateKey, "public_key": req.PublicKey,
-			"serial_no": req.SerialNo, "notify_url": req.NotifyURL, "status": req.Status,
+			"merchant_certificate": req.MerchantCertificate,
+			"serial_no":            req.SerialNo, "notify_url": req.NotifyURL, "status": req.Status,
 			"platform_public_key": req.PlatformPublicKey, "platform_public_key_id": req.PlatformPublicKeyID,
 		}).Error
 	}); err != nil {
@@ -298,8 +335,10 @@ func (c *PaymentConfigController) saveConfig(ctx *gin.Context, req *model.Paymen
 	}
 
 	req.Key = "******"
+	req.WechatV2Key = "******"
 	req.PrivateKey = "******"
 	req.PublicKey = "******"
 	req.PlatformPublicKey = "******"
+	req.MerchantCertificate = "******"
 	ctx.JSON(http.StatusOK, req)
 }

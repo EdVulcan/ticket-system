@@ -76,7 +76,7 @@ func (s *PaymentService) GetConfigReadiness(tenantID uint) ([]PaymentProviderRea
 				return nil, err
 			}
 			item.Issues = []string{"尚未保存配置"}
-			item.Capabilities = paymentCapabilities(provider, false, false)
+			item.Capabilities = paymentCapabilities(provider, false, false, nil)
 			result = append(result, item)
 			continue
 		}
@@ -85,7 +85,7 @@ func (s *PaymentService) GetConfigReadiness(tenantID uint) ([]PaymentProviderRea
 		item.CallbackURL = cfg.NotifyURL
 		if err := decryptPaymentConfig(&cfg); err != nil {
 			item.Issues = []string{"密钥无法解密，请重新保存配置"}
-			item.Capabilities = paymentCapabilities(provider, false, false)
+			item.Capabilities = paymentCapabilities(provider, false, false, nil)
 			result = append(result, item)
 			continue
 		}
@@ -93,7 +93,7 @@ func (s *PaymentService) GetConfigReadiness(tenantID uint) ([]PaymentProviderRea
 		baseReady := paymentBaseReady(&cfg)
 		callbackReady := len(item.Issues) == 0
 		item.ConfigurationReady = item.Enabled && callbackReady
-		item.Capabilities = paymentCapabilities(provider, item.Enabled && baseReady, item.Enabled && callbackReady)
+		item.Capabilities = paymentCapabilities(provider, item.Enabled && baseReady, item.Enabled && callbackReady, &cfg)
 		result = append(result, item)
 	}
 	return result, nil
@@ -109,7 +109,7 @@ func paymentBaseReady(cfg *model.PaymentConfig) bool {
 	return cfg.Provider == "alipay" && strings.TrimSpace(cfg.PublicKey) != ""
 }
 
-func paymentCapabilities(provider string, baseReady, callbackReady bool) []PaymentCapabilityReadiness {
+func paymentCapabilities(provider string, baseReady, callbackReady bool, cfg *model.PaymentConfig) []PaymentCapabilityReadiness {
 	items := []PaymentCapabilityReadiness{
 		{Code: "customer_scan", Name: "顾客扫码支付", Available: baseReady},
 		{Code: "payment_code", Name: "付款码收款", Available: baseReady},
@@ -118,8 +118,17 @@ func paymentCapabilities(provider string, baseReady, callbackReady bool) []Payme
 		{Code: "callback", Name: "支付结果通知", Available: callbackReady},
 	}
 	if provider == "wechat" {
-		items[1].Available = false
-		items[1].Note = "等待微信付款码或现场收款设备协议联调"
+		items[1].Available = baseReady && cfg != nil && len(strings.TrimSpace(cfg.WechatV2Key)) == 32 && strings.TrimSpace(cfg.MerchantCertificate) != ""
+		switch {
+		case cfg == nil || strings.TrimSpace(cfg.WechatV2Key) == "":
+			items[1].Note = "缺少 API v2 密钥"
+		case len(strings.TrimSpace(cfg.WechatV2Key)) != 32:
+			items[1].Note = "API v2 密钥必须为 32 个字符"
+		case strings.TrimSpace(cfg.MerchantCertificate) == "":
+			items[1].Note = "请重新上传商户证书和私钥"
+		default:
+			items[1].Note = "已具备配置，仍需真实商户小额联调"
+		}
 	}
 	return items
 }

@@ -92,12 +92,12 @@ test('支付配置页展示各渠道真实接入状态', async ({ page }) => {
   await prepareSupplier(page)
   let submittedPaymentConfig = ''
   await page.route('**/api/v1/payments/configs', route => json(route, { data: [
-    { provider: 'wechat', app_id: 'wx-app', mch_id: 'merchant', key: '******', private_key: '******', public_key: '', serial_no: 'serial', platform_public_key: '', platform_public_key_id: '', status: false },
+    { provider: 'wechat', app_id: 'wx-app', mch_id: 'merchant', key: '******', wechat_v2_key: '******', private_key: '******', merchant_certificate: '******', public_key: '', serial_no: 'serial', platform_public_key: '', platform_public_key_id: '', status: false },
   ] }))
   await page.route('**/api/v1/payments/configs/readiness', route => json(route, { data: [
     { provider: 'wechat', name: '微信支付', configured: true, enabled: false, configuration_ready: false, issues: ['缺少微信支付平台公钥'], capabilities: [
       { code: 'customer_scan', name: '顾客扫码支付', available: false },
-      { code: 'payment_code', name: '付款码收款', available: false, note: '等待微信付款码或现场收款设备协议联调' },
+      { code: 'payment_code', name: '付款码收款', available: true, note: '已具备配置，仍需真实商户小额联调' },
     ] },
     { provider: 'alipay', name: '支付宝', configured: false, enabled: false, configuration_ready: false, issues: ['尚未保存配置'], capabilities: [] },
   ] }))
@@ -109,8 +109,9 @@ test('支付配置页展示各渠道真实接入状态', async ({ page }) => {
   await page.goto('/payment-config')
   await expect(page.getByText('尚未启用').first()).toBeVisible()
   await expect(page.getByText('缺少微信支付平台公钥')).toBeVisible()
-  await expect(page.getByText('付款码收款')).toBeVisible()
-  await expect(page.getByText('等待微信付款码或现场收款设备协议联调')).toBeVisible()
+  await expect(page.getByText('付款码收款', { exact: true })).toBeVisible()
+  await expect(page.getByText('已具备配置，仍需真实商户小额联调')).toBeVisible()
+  await expect(page.getByLabel('第二版接口密钥（付款码收款，32位）')).toHaveValue('******')
   await expect(page.getByLabel('支付结果通知地址')).toHaveCount(0)
   await page.getByRole('button', { name: '保存微信配置' }).click()
   await expect.poll(() => submittedPaymentConfig).not.toContain('notify_url')

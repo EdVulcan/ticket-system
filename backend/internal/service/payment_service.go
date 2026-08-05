@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,7 +20,8 @@ import (
 
 	"github.com/go-pay/gopay"
 	"github.com/go-pay/gopay/alipay"
-	"github.com/go-pay/gopay/wechat/v3"
+	wechatv2 "github.com/go-pay/gopay/wechat"
+	wechatv3 "github.com/go-pay/gopay/wechat/v3"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -29,6 +31,10 @@ type PaymentService struct {
 }
 
 var ErrCashTenderInsufficient = errors.New("cash tender is less than the amount due")
+
+type permanentProviderError struct{ message string }
+
+func (e permanentProviderError) Error() string { return e.message }
 
 type OrderPaymentProgress struct {
 	OrderNo         string          `json:"order_no"`
@@ -69,6 +75,12 @@ func decryptPaymentConfig(paymentConfig *model.PaymentConfig) error {
 			return fmt.Errorf("decrypt payment key: %w", err)
 		}
 	}
+	if paymentConfig.WechatV2Key != "" {
+		paymentConfig.WechatV2Key, err = utils.DecryptAES(paymentConfig.WechatV2Key)
+		if err != nil {
+			return fmt.Errorf("decrypt WeChat API v2 key: %w", err)
+		}
+	}
 	if paymentConfig.PrivateKey != "" {
 		paymentConfig.PrivateKey, err = utils.DecryptAES(paymentConfig.PrivateKey)
 		if err != nil {
@@ -85,6 +97,12 @@ func decryptPaymentConfig(paymentConfig *model.PaymentConfig) error {
 		paymentConfig.PlatformPublicKey, err = utils.DecryptAES(paymentConfig.PlatformPublicKey)
 		if err != nil {
 			return fmt.Errorf("decrypt payment platform public key: %w", err)
+		}
+	}
+	if paymentConfig.MerchantCertificate != "" {
+		paymentConfig.MerchantCertificate, err = utils.DecryptAES(paymentConfig.MerchantCertificate)
+		if err != nil {
+			return fmt.Errorf("decrypt merchant certificate: %w", err)
 		}
 	}
 	return nil
@@ -290,6 +308,10 @@ func providerRequestMayHaveBeenAccepted(method string, cause error) bool {
 	if cause == nil || method == "cash" {
 		return false
 	}
+	var permanent permanentProviderError
+	if errors.As(cause, &permanent) {
+		return false
+	}
 	message := strings.ToLower(cause.Error())
 	// These errors are produced before a provider request can be accepted.
 	// All other provider failures are treated as ambiguous and reconciled.
@@ -305,14 +327,14 @@ func providerRequestMayHaveBeenAccepted(method string, cause error) bool {
 }
 
 func (s *PaymentService) payWeChat(req *model.Payment) error {
-	if req.PayType == "bscanc" {
-		return fmt.Errorf("WeChat payment-code collection is not configured; use Alipay or customer-scan mode")
-	}
 	cfg, err := s.GetConfig(req.TenantID, "wechat")
 	if err != nil {
 		return fmt.Errorf("WeChat payment is not configured")
 	}
-	client, err := wechat.NewClientV3(cfg.MchID, cfg.SerialNo, cfg.Key, cfg.PrivateKey)
+	if req.PayType == "bscanc" {
+		return s.payWeChatPaymentCode(req, cfg)
+	}
+	client, err := wechatv3.NewClientV3(cfg.MchID, cfg.SerialNo, cfg.Key, cfg.PrivateKey)
 	if err != nil {
 		return err
 	}
@@ -334,6 +356,70 @@ func (s *PaymentService) payWeChat(req *model.Payment) error {
 	}
 	req.CodeURL = res.Response.CodeUrl
 	return nil
+}
+
+func (s *PaymentService) payWeChatPaymentCode(req *model.Payment, cfg *model.PaymentConfig) error {
+	if len(strings.TrimSpace(cfg.WechatV2Key)) != 32 {
+		return permanentProviderError{message: "微信付款码收款缺少有效的 API v2 密钥"}
+	}
+	if getProviderType(strings.TrimSpace(req.AuthCode)) != "wechat" {
+		return permanentProviderError{message: "无效的微信付款码"}
+	}
+	client := wechatv2.NewClient(cfg.AppID, cfg.MchID, cfg.WechatV2Key, true)
+	bm := make(gopay.BodyMap)
+	clientIP := strings.TrimSpace(req.ClientIP)
+	if net.ParseIP(clientIP) == nil {
+		clientIP = "127.0.0.1"
+	}
+	bm.Set("nonce_str", randomPaymentNonce()).
+		Set("body", "景区窗口门票").
+		Set("out_trade_no", req.PaymentNo).
+		Set("total_fee", moneyCents(req.Amount)).
+		Set("spbill_create_ip", clientIP).
+		Set("auth_code", strings.TrimSpace(req.AuthCode))
+	if req.DeviceID != 0 {
+		bm.Set("device_info", strconv.FormatUint(uint64(req.DeviceID), 10))
+	}
+	res, err := client.Micropay(context.Background(), bm)
+	if err != nil {
+		return err
+	}
+	return applyWechatMicropayResponse(req, res)
+}
+
+func applyWechatMicropayResponse(req *model.Payment, res *wechatv2.MicropayResponse) error {
+	if res == nil {
+		return fmt.Errorf("微信付款码支付返回为空")
+	}
+	if res.ReturnCode == "SUCCESS" && res.ResultCode == "SUCCESS" {
+		req.Status = "paid"
+		req.TransactionID = res.TransactionId
+		return nil
+	}
+	message := strings.TrimSpace(res.ErrCodeDes)
+	if message == "" {
+		message = strings.TrimSpace(res.ReturnMsg)
+	}
+	if message == "" {
+		message = res.ErrCode
+	}
+	if res.ErrCode == "USERPAYING" {
+		req.Status = "pending"
+		req.ErrorMessage = "顾客正在输入支付密码，系统正在确认结果"
+		return nil
+	}
+	if res.ErrCode == "SYSTEMERROR" || res.ErrCode == "BANKERROR" {
+		return fmt.Errorf("微信付款结果待确认：%s", message)
+	}
+	return permanentProviderError{message: "微信付款失败：" + message}
+}
+
+func randomPaymentNonce() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 10)
+	}
+	return hex.EncodeToString(buf)
 }
 
 func (s *PaymentService) alipayClient(tenantID uint) (*alipay.Client, error) {
@@ -473,7 +559,7 @@ func (s *PaymentService) GetStatus(paymentID, tenantID uint) (*model.Payment, er
 	if payment.Status != "pending" {
 		return &payment, nil
 	}
-	if err := s.refreshProviderStatus(&payment); err != nil {
+	if err := s.refreshProviderStatus(&payment, time.Now()); err != nil {
 		return &payment, nil
 	}
 	if payment.Status == "paid" {
@@ -714,7 +800,7 @@ func parseRSAPublicKey(value string) (*rsa.PublicKey, error) {
 // HandleWeChatNotify verifies and decrypts a WeChat Pay V3 callback. The
 // tenant is taken from the configured callback URL path, never from JSON.
 func (s *PaymentService) HandleWeChatNotify(tenantID uint, req *http.Request) error {
-	notify, err := wechat.V3ParseNotify(req)
+	notify, err := wechatv3.V3ParseNotify(req)
 	if err != nil {
 		return err
 	}
@@ -736,13 +822,13 @@ func (s *PaymentService) HandleWeChatNotify(tenantID uint, req *http.Request) er
 	if err != nil {
 		return err
 	}
-	if result.TradeState == wechat.TradeStateSuccess {
+	if result.TradeState == wechatv3.TradeStateSuccess {
 		if result.Amount == nil {
 			return fmt.Errorf("WeChat callback has no amount")
 		}
 		return s.CompleteNotification(tenantID, result.OutTradeNo, "wechat", result.TransactionId, float64(result.Amount.Total)/100)
 	}
-	if result.TradeState == wechat.TradeStateClosed || result.TradeState == wechat.TradeStatePayError || result.TradeState == wechat.TradeStateRevoked {
+	if result.TradeState == wechatv3.TradeStateClosed || result.TradeState == wechatv3.TradeStatePayError || result.TradeState == wechatv3.TradeStateRevoked {
 		return s.FailNotification(tenantID, result.OutTradeNo, "wechat", result.TradeStateDesc)
 	}
 	return nil
@@ -784,25 +870,28 @@ func (s *PaymentService) HandleAlipayNotify(tenantID uint, req *http.Request) er
 	return nil
 }
 
-func (s *PaymentService) refreshProviderStatus(payment *model.Payment) error {
+func (s *PaymentService) refreshProviderStatus(payment *model.Payment, now time.Time) error {
 	switch payment.Method {
 	case "wechat":
 		cfg, err := s.GetConfig(payment.TenantID, "wechat")
 		if err != nil {
 			return err
 		}
-		client, err := wechat.NewClientV3(cfg.MchID, cfg.SerialNo, cfg.Key, cfg.PrivateKey)
+		if payment.PayType == "bscanc" {
+			return s.refreshWeChatPaymentCode(payment, cfg, now)
+		}
+		client, err := wechatv3.NewClientV3(cfg.MchID, cfg.SerialNo, cfg.Key, cfg.PrivateKey)
 		if err != nil {
 			return err
 		}
-		res, err := client.V3TransactionQueryOrder(context.Background(), wechat.OutTradeNo, payment.PaymentNo)
+		res, err := client.V3TransactionQueryOrder(context.Background(), wechatv3.OutTradeNo, payment.PaymentNo)
 		if err != nil || res.Response == nil {
 			return err
 		}
-		if res.Response.TradeState == wechat.TradeStateSuccess {
+		if res.Response.TradeState == wechatv3.TradeStateSuccess {
 			payment.Status = "paid"
 			payment.TransactionID = res.Response.TransactionId
-		} else if res.Response.TradeState == wechat.TradeStateClosed || res.Response.TradeState == wechat.TradeStatePayError || res.Response.TradeState == wechat.TradeStateRevoked {
+		} else if res.Response.TradeState == wechatv3.TradeStateClosed || res.Response.TradeState == wechatv3.TradeStatePayError || res.Response.TradeState == wechatv3.TradeStateRevoked {
 			payment.Status = "failed"
 			payment.ErrorMessage = res.Response.TradeStateDesc
 			return model.Write(func(tx *gorm.DB) error {
@@ -833,4 +922,57 @@ func (s *PaymentService) refreshProviderStatus(payment *model.Payment) error {
 		return errors.New("unsupported payment provider")
 	}
 	return nil
+}
+
+func (s *PaymentService) refreshWeChatPaymentCode(payment *model.Payment, cfg *model.PaymentConfig, now time.Time) error {
+	if len(strings.TrimSpace(cfg.WechatV2Key)) != 32 {
+		return permanentProviderError{message: "微信付款码收款缺少有效的 API v2 密钥"}
+	}
+	client := wechatv2.NewClient(cfg.AppID, cfg.MchID, cfg.WechatV2Key, true)
+	bm := make(gopay.BodyMap)
+	bm.Set("nonce_str", randomPaymentNonce()).Set("out_trade_no", payment.PaymentNo)
+	res, _, err := client.QueryOrder(context.Background(), bm)
+	if err == nil && res != nil && res.ReturnCode == "SUCCESS" && res.ResultCode == "SUCCESS" {
+		switch res.TradeState {
+		case "SUCCESS":
+			payment.Status = "paid"
+			payment.TransactionID = res.TransactionId
+			return nil
+		case "REVOKED", "CLOSED", "PAYERROR":
+			return markPaymentFailed(payment, res.TradeStateDesc)
+		}
+	}
+	if now.Sub(payment.CreatedAt) < 45*time.Second {
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("微信付款结果仍在确认中")
+	}
+	if strings.TrimSpace(cfg.MerchantCertificate) == "" || strings.TrimSpace(cfg.PrivateKey) == "" {
+		return fmt.Errorf("微信付款超时，但缺少撤销所需的商户证书")
+	}
+	if err := client.AddCertPemFileContent([]byte(cfg.MerchantCertificate), []byte(cfg.PrivateKey)); err != nil {
+		return fmt.Errorf("加载微信商户证书失败: %w", err)
+	}
+	reverse := make(gopay.BodyMap)
+	reverse.Set("nonce_str", randomPaymentNonce()).Set("out_trade_no", payment.PaymentNo)
+	reverseRes, reverseErr := client.Reverse(context.Background(), reverse)
+	if reverseErr != nil {
+		return reverseErr
+	}
+	if reverseRes == nil || reverseRes.ReturnCode != "SUCCESS" || reverseRes.ResultCode != "SUCCESS" {
+		if reverseRes != nil && reverseRes.Recall == "Y" {
+			return fmt.Errorf("微信要求继续重试撤销")
+		}
+		return fmt.Errorf("微信付款撤销未确认")
+	}
+	return markPaymentFailed(payment, "付款结果超时未确认，系统已自动撤销")
+}
+
+func markPaymentFailed(payment *model.Payment, message string) error {
+	payment.Status = "failed"
+	payment.ErrorMessage = strings.TrimSpace(message)
+	return model.Write(func(tx *gorm.DB) error {
+		return tx.Model(payment).Updates(map[string]interface{}{"status": payment.Status, "error_message": payment.ErrorMessage}).Error
+	})
 }

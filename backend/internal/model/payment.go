@@ -12,7 +12,9 @@ type PaymentConfig struct {
 
 	// Keys & Certs
 	Key                 string `gorm:"size:255" json:"key"`                    // WeChat: ApiV3Key
+	WechatV2Key         string `gorm:"size:255" json:"wechat_v2_key"`          // WeChat payment-code API v2 key
 	PrivateKey          string `gorm:"type:text" json:"private_key"`           // WeChat: PrivateKey PEM; Alipay: PrivateKey
+	MerchantCertificate string `gorm:"type:text" json:"merchant_certificate"`  // WeChat merchant certificate PEM
 	PublicKey           string `gorm:"type:text" json:"public_key"`            // Alipay: PublicKey
 	SerialNo            string `gorm:"size:100" json:"serial_no"`              // WeChat: SerialNo
 	PlatformPublicKey   string `gorm:"type:text" json:"platform_public_key"`   // WeChat V3 platform public key/certificate
@@ -46,6 +48,7 @@ type Payment struct {
 	CodeURL             string     `gorm:"type:text" json:"code_url,omitempty"`
 	PayType             string     `gorm:"size:20" json:"pay_type"` // bscanc (被扫), cscanb (主扫), jsapi
 	AuthCode            string     `gorm:"-" json:"-"`              // 付款码仅用于本次请求，不落库
+	ClientIP            string     `gorm:"-" json:"-"`
 	ErrorMessage        string     `gorm:"size:255" json:"error_message"`
 	ShiftID             uint       `gorm:"index" json:"shift_id,omitempty"`
 	DeviceID            uint       `gorm:"index" json:"device_id,omitempty"`
