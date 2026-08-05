@@ -39,6 +39,23 @@
               <el-form-item label="启用微信支付">
                 <el-switch v-model="wechatForm.status" active-text="启用" inactive-text="停用" />
               </el-form-item>
+
+              <div class="credential-upload-grid">
+                <el-form-item label="商户接口证书">
+                  <el-upload v-model:file-list="wechatMerchantCertFiles" :auto-upload="false" :limit="1" accept=".pem">
+                    <el-button :icon="UploadFilled">选择 apiclient_cert.pem</el-button>
+                    <template #tip><div class="upload-tip">自动提取商户号和证书序列号，并校验证书有效期</div></template>
+                  </el-upload>
+                </el-form-item>
+                <el-form-item label="商户接口私钥">
+                  <el-upload v-model:file-list="wechatMerchantKeyFiles" :auto-upload="false" :limit="1" accept=".pem">
+                    <el-button :icon="UploadFilled">选择 apiclient_key.pem</el-button>
+                    <template #tip><div class="upload-tip">仅在保存时上传，后端校验后加密入库</div></template>
+                  </el-upload>
+                </el-form-item>
+              </div>
+              <el-alert title="首次配置或更换证书时请同时选择证书和私钥；已经保存过的配置无需重复上传。" type="info" :closable="false" show-icon class="mb-4" />
+
               <div class="grid grid-cols-2 gap-4">
                 <el-form-item label="应用编号">
                   <el-input v-model="wechatForm.app_id" placeholder="wx..." />
@@ -72,6 +89,10 @@
               </el-form-item>
 
               <el-form-item label="微信支付平台公钥（PEM格式）">
+                <el-upload v-model:file-list="wechatPlatformKeyFiles" :auto-upload="false" :limit="1" accept=".pem" class="mb-2">
+                  <el-button :icon="UploadFilled">上传微信支付平台公钥</el-button>
+                  <template #tip><div class="upload-tip">也可以继续在下方手工粘贴 PEM 内容</div></template>
+                </el-upload>
                 <el-input v-model="wechatForm.platform_public_key" type="textarea" :rows="5" placeholder="-----BEGIN PUBLIC KEY----- ..." class="font-mono text-xs" />
               </el-form-item>
 
@@ -156,13 +177,17 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, type UploadUserFile } from 'element-plus'
+import { UploadFilled } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 
 const activeTab = ref('wechat')
 
 const wechatForm = ref({ provider: 'wechat', app_id: '', mch_id: '', key: '', serial_no: '', private_key: '', platform_public_key_id: '', platform_public_key: '', notify_url: '', status: false })
 const alipayForm = ref({ provider: 'alipay', app_id: '', private_key: '', public_key: '', notify_url: '', status: false })
+const wechatMerchantCertFiles = ref<UploadUserFile[]>([])
+const wechatMerchantKeyFiles = ref<UploadUserFile[]>([])
+const wechatPlatformKeyFiles = ref<UploadUserFile[]>([])
 const readiness = ref<any[]>([])
 const wechatReadiness = computed(() => readiness.value.find(item => item.provider === 'wechat'))
 const alipayReadiness = computed(() => readiness.value.find(item => item.provider === 'alipay'))
@@ -196,7 +221,22 @@ const saveConfig = async (provider: string) => {
     if (!data.app_id) return ElMessage.warning('应用编号不能为空')
 
     try {
-        await request.post('/payments/configs', data)
+        if (provider === 'wechat') {
+            const form = new FormData()
+            Object.entries(wechatForm.value).forEach(([key, value]) => form.append(key, String(value ?? '')))
+            const merchantCert = wechatMerchantCertFiles.value[0]?.raw
+            const merchantKey = wechatMerchantKeyFiles.value[0]?.raw
+            const platformKey = wechatPlatformKeyFiles.value[0]?.raw
+            if (merchantCert) form.append('merchant_certificate', merchantCert)
+            if (merchantKey) form.append('merchant_private_key', merchantKey)
+            if (platformKey) form.append('platform_public_key_file', platformKey)
+            await request.post('/payments/configs/wechat', form)
+            wechatMerchantCertFiles.value = []
+            wechatMerchantKeyFiles.value = []
+            wechatPlatformKeyFiles.value = []
+        } else {
+            await request.post('/payments/configs', data)
+        }
         ElMessage.success('保存成功')
         await fetchConfigs()
     } catch (e: any) {
@@ -226,6 +266,8 @@ onMounted(() => {
 .capability-copy { min-width: 0; }
 .capability-copy > span { display: block; color: #26312b; font-size: 14px; font-weight: 600; line-height: 20px; }
 .capability-copy small { display: block; margin-top: 3px; color: #7b847e; font-size: 12px; line-height: 17px; }
+.credential-upload-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 14px 16px 0; margin-bottom: 16px; border: 1px solid #e2e8e4; border-radius: 6px; background: #fafcfb; }
+.upload-tip { margin-top: 5px; color: #7b847e; font-size: 12px; line-height: 18px; }
 :deep(.el-card__body) { padding: 18px 20px 24px; }
 :deep(.el-tabs__header) { margin-bottom: 18px; }
 @media (max-width: 720px) {
@@ -233,6 +275,7 @@ onMounted(() => {
   .page-heading { align-items: flex-start; gap: 12px; }
   .page-heading p { max-width: 250px; }
   .capability-list { grid-template-columns: 1fr; }
+  .credential-upload-grid { grid-template-columns: 1fr; gap: 0; }
   .readiness-panel { padding: 14px; }
 }
 </style>

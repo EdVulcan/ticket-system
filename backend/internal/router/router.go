@@ -410,6 +410,7 @@ func InitRouter(r *gin.Engine) {
 		paymentGroup.GET("/configs", middleware.RequireTenantPermission(authz.PermissionPaymentConfig), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.GetConfigs)
 		paymentGroup.GET("/configs/readiness", middleware.RequireTenantPermission(authz.PermissionPaymentConfig), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.GetReadiness)
 		paymentGroup.POST("/configs", middleware.RequireTenantPermission(authz.PermissionPaymentConfig), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.SaveConfig)
+		paymentGroup.POST("/configs/wechat", middleware.RequireTenantPermission(authz.PermissionPaymentConfig), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.SaveWechatConfig)
 		paymentGroup.GET("/:id", middleware.RequireTenantPermission(authz.PermissionPaymentsRead), middleware.RequireAnyTenantCapability("supplier", "distributor"), paymentController.Query)
 	}
 }
