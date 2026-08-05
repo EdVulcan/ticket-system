@@ -71,8 +71,7 @@ var rolePermissions = map[string][]string{
 	},
 	"seller": {
 		PermissionCatalogRead, PermissionOrdersRead, PermissionOrdersWrite,
-		PermissionAfterSalesRead, PermissionAfterSalesWrite, PermissionTeamsRead,
-		PermissionTeamsWrite, PermissionOnsiteRead, PermissionOperationsRead,
+		PermissionTeamsRead, PermissionTeamsWrite, PermissionOnsiteRead, PermissionOperationsRead,
 		PermissionOperationsWrite, PermissionPaymentsRead, PermissionPaymentsWrite,
 	},
 	"checker": {PermissionCatalogRead, PermissionOnsiteRead, PermissionTicketsVerify},

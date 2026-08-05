@@ -24,6 +24,29 @@ func TestFixedTenantRolePermissions(t *testing.T) {
 	}
 }
 
+func TestFrontlineStaffCannotOperateAfterSalesOrRefunds(t *testing.T) {
+	for _, role := range []string{"seller", "checker", "seller,checker"} {
+		for _, permission := range []string{
+			PermissionAfterSalesRead,
+			PermissionAfterSalesWrite,
+			PermissionAfterSalesApprove,
+			PermissionRefundsRead,
+			PermissionRefundsWrite,
+		} {
+			if HasTenantPermission(role, permission) {
+				t.Fatalf("frontline role %s must not have %s", role, permission)
+			}
+		}
+	}
+
+	if !HasTenantPermission("seller", PermissionOrdersWrite) || !HasTenantPermission("seller", PermissionPaymentsWrite) {
+		t.Fatal("seller should retain ticket sales and collection permissions")
+	}
+	if !HasTenantPermission("checker", PermissionTicketsVerify) {
+		t.Fatal("checker should retain ticket verification permission")
+	}
+}
+
 func TestOnlyFixedDelegatedRolesCanBeCreated(t *testing.T) {
 	for _, role := range []string{RoleTenantAdmin, RoleProductOperator, RoleTeamOperator, RoleSettlementOperator, RoleViewer} {
 		if !IsDelegatedTenantRole(role) {
