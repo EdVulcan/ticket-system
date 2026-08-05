@@ -152,6 +152,13 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
       - name: Build Windows POS
         run: wails build -clean -webview2 embed
+      - name: Upload Windows POS
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-ticket-pos
+          path: desktop/build/bin/ticket-pos.exe
+          retention-days: 14
+          if-no-files-found: error
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
