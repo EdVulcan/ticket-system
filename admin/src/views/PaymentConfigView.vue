@@ -70,18 +70,7 @@
               </el-form-item>
 
               <el-form-item label="证书序列号">
-                <el-input v-model="wechatForm.serial_no" placeholder="商户接口证书序列号" />
-              </el-form-item>
-
-              <el-form-item label="商户接口私钥（PEM格式）">
-                <el-input 
-                    v-model="wechatForm.private_key" 
-                    type="textarea" 
-                    :rows="5" 
-                    placeholder="-----BEGIN PRIVATE KEY----- ... " 
-                    class="font-mono text-xs"
-                />
-                <div class="text-xs text-gray-400 mt-1">请复制 apiclient_key.pem 文件的全部内容</div>
+                <el-input v-model="wechatForm.serial_no" readonly placeholder="上传商户接口证书后自动获取" />
               </el-form-item>
 
               <el-form-item label="微信支付平台公钥编号">
@@ -91,9 +80,8 @@
               <el-form-item label="微信支付平台公钥（PEM格式）">
                 <el-upload v-model:file-list="wechatPlatformKeyFiles" :auto-upload="false" :limit="1" accept=".pem" class="mb-2">
                   <el-button :icon="UploadFilled">上传微信支付平台公钥</el-button>
-                  <template #tip><div class="upload-tip">也可以继续在下方手工粘贴 PEM 内容</div></template>
+                  <template #tip><div class="upload-tip">公钥文件在保存时上传并加密入库</div></template>
                 </el-upload>
-                <el-input v-model="wechatForm.platform_public_key" type="textarea" :rows="5" placeholder="-----BEGIN PUBLIC KEY----- ..." class="font-mono text-xs" />
               </el-form-item>
 
               <el-form-item label="支付结果通知地址">
