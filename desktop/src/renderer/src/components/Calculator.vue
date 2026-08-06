@@ -3,7 +3,7 @@
     <!-- Display -->
     <div class="bg-gray-100 rounded mb-4 p-2 text-right">
       <div class="text-xs text-gray-500 h-4">{{ expression }}</div>
-      <div class="text-2xl font-mono font-bold text-gray-900 truncate">{{ displayValue }}</div>
+      <div data-testid="calculator-display" class="text-2xl font-mono font-bold text-gray-900 truncate">{{ displayValue }}</div>
     </div>
 
     <!-- Keypad -->
@@ -37,15 +37,41 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
 
+const props = defineProps<{ active?: boolean }>()
+
 const expression = ref('')
 const displayValue = ref('0')
 const resetNext = ref(false)
+const storedValue = ref<number | null>(null)
+const pendingOperator = ref<'+' | '-' | '*' | '/' | null>(null)
+
+const operatorLabel = (operator: string) => operator === '*' ? '×' : operator === '/' ? '÷' : operator
+
+const parseDisplay = () => {
+  const value = Number(displayValue.value)
+  return Number.isFinite(value) ? value : null
+}
+
+const applyOperation = (left: number, right: number, operator: '+' | '-' | '*' | '/') => {
+  switch (operator) {
+    case '+': return left + right
+    case '-': return left - right
+    case '*': return left * right
+    case '/': return right === 0 ? null : left / right
+  }
+}
+
+const showResult = (value: number) => {
+  displayValue.value = String(Math.round((value + Number.EPSILON) * 100) / 100)
+}
 
 const appendNumber = (num: string) => {
-  if (resetNext.value) {
+  if (resetNext.value || !Number.isFinite(Number(displayValue.value))) {
     displayValue.value = ''
     resetNext.value = false
   }
+  if (num === '.' && displayValue.value.includes('.')) return
+  if (num === '.' && displayValue.value === '') displayValue.value = '0'
   if (displayValue.value === '0' && num !== '.') {
     displayValue.value = num
   } else {
@@ -53,39 +79,51 @@ const appendNumber = (num: string) => {
   }
 }
 
-const appendOperator = (op: string) => {
-  calculate()
-  expression.value = displayValue.value + ' ' + op
+const appendOperator = (op: '+' | '-' | '*' | '/') => {
+  const current = parseDisplay()
+  if (current === null) return
+  if (pendingOperator.value && storedValue.value !== null && !resetNext.value) {
+    const result = applyOperation(storedValue.value, current, pendingOperator.value)
+    if (result === null) {
+      displayValue.value = '不能除以零'
+      expression.value = ''
+      storedValue.value = null
+      pendingOperator.value = null
+      resetNext.value = true
+      return
+    }
+    showResult(result)
+    storedValue.value = result
+  } else {
+    storedValue.value = current
+  }
+  pendingOperator.value = op
+  expression.value = `${displayValue.value} ${operatorLabel(op)}`
   resetNext.value = true
 }
 
 const calculate = () => {
-  if (!expression.value || resetNext.value) return
-
-  try {
-    // Safe eval alternative or simple parsing
-    // For simple calc, eval is acceptable in client-side blocked env if clearly limited,
-    // but better to use Function
-    const fullExp = expression.value + ' ' + displayValue.value
-    // Replace visual operators
-    const evalExp = fullExp.replace(/×/g, '*').replace(/÷/g, '/')
-    
-    // Simple evaluation
-    const result = new Function('return ' + evalExp)()
-    
-    displayValue.value = String(Number(result.toFixed(2))) // Fix floating point
-    expression.value = ''
-    resetNext.value = true
-  } catch (e) {
-    displayValue.value = 'Error'
-    resetNext.value = true
+  if (!pendingOperator.value || storedValue.value === null || resetNext.value) return
+  const current = parseDisplay()
+  if (current === null) return
+  const result = applyOperation(storedValue.value, current, pendingOperator.value)
+  if (result === null) {
+    displayValue.value = '不能除以零'
+  } else {
+    showResult(result)
   }
+  expression.value = ''
+  storedValue.value = null
+  pendingOperator.value = null
+  resetNext.value = true
 }
 
 const clear = () => {
   displayValue.value = '0'
   expression.value = ''
   resetNext.value = false
+  storedValue.value = null
+  pendingOperator.value = null
 }
 
 const backspace = () => {
@@ -95,6 +133,11 @@ const backspace = () => {
 
 // Keyboard Support
 const handleKeydown = (e: KeyboardEvent) => {
+  if (!props.active) return
+  const supported = /^[0-9.+\-*/=]$/.test(e.key) || ['Enter', 'Backspace', 'Escape'].includes(e.key)
+  if (!supported) return
+  e.preventDefault()
+  e.stopPropagation()
   if (e.key >= '0' && e.key <= '9') appendNumber(e.key)
   else if (e.key === '.') appendNumber('.')
   else if (e.key === '+') appendOperator('+')

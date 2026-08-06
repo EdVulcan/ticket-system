@@ -317,6 +317,7 @@ func InitRouter(r *gin.Engine) {
 	operationsGroup := protected.Group("/operations")
 	operationsGroup.Use(middleware.RequireTenantPermission(authz.PermissionOperationsRead), middleware.RequireAnyTenantCapability("supplier"))
 	{
+		operationsGroup.GET("/terminals", operationsController.ListPOSTerminals)
 		operationsGroup.GET("/shifts", operationsController.ListShifts)
 		operationsGroup.GET("/shifts/:id/summary", operationsController.GetShiftSummary)
 		operationsGroup.GET("/shifts/open", operationsController.GetOpenShift)

@@ -330,6 +330,10 @@ func serveAdminUI(engine *gin.Engine, directory string) {
 		return
 	}
 	engine.StaticFS("/assets", http.Dir(filepath.Join(absDirectory, "assets")))
+	downloadsDirectory := filepath.Join(absDirectory, "downloads")
+	if info, err := os.Stat(downloadsDirectory); err == nil && info.IsDir() {
+		engine.StaticFS("/downloads", http.Dir(downloadsDirectory))
+	}
 	engine.GET("/", func(ctx *gin.Context) { ctx.File(indexPath) })
 	engine.NoRoute(func(ctx *gin.Context) {
 		if strings.HasPrefix(ctx.Request.URL.Path, "/api/") || ctx.Request.Method != http.MethodGet {

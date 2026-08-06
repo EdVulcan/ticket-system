@@ -15,6 +15,15 @@ import (
 
 type OperationsController struct{ Service service.OperationsService }
 
+func (c *OperationsController) ListPOSTerminals(ctx *gin.Context) {
+	rows, err := c.Service.ListPOSTerminals(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), ctx.GetString("role"))
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": rows})
+}
+
 func (c *OperationsController) ListShifts(ctx *gin.Context) {
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))

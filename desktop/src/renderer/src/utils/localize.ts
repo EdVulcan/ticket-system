@@ -3,6 +3,8 @@ const englishErrorRules: Array<[RegExp, string]> = [
   [/timeout|deadline exceeded/i, '请求超时，请稍后重试'],
   [/invalid credentials|incorrect password|authentication failed/i, '工号或密码错误'],
   [/unauthorized|invalid token|token.*expired/i, '登录状态已失效，请重新登录'],
+  [/staff resource scope denied/i, '当前工号尚未获授权使用该终端，请让管理员分配售票终端'],
+  [/POS device not found|device not found/i, '所选售票终端不存在或不属于当前商户'],
   [/forbidden|permission denied|access denied/i, '当前工号无权执行此操作'],
   [/not found|record not found/i, '未找到相关数据'],
   [/duplicate|already exists|unique constraint/i, '相同记录已经存在，请勿重复提交'],

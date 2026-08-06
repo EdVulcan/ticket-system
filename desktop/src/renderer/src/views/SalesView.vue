@@ -49,11 +49,23 @@
           </div>
 
           <div class="catalog-toolbar">
-            <el-input ref="searchInput" v-model="searchQuery" size="large" clearable placeholder="搜索票种名称或标签" :prefix-icon="Search" />
-            <div class="catalog-count">可售 {{ filteredProducts.length }} 种</div>
+            <el-input ref="searchInput" v-model="searchQuery" size="large" clearable placeholder="按票名搜索" aria-label="票名搜索" :prefix-icon="Search" />
+            <el-select v-model="priceFilter" aria-label="价格范围" class="price-filter" size="large">
+              <el-option label="全部价格" value="all" />
+              <el-option label="50元以下" value="under50" />
+              <el-option label="50至100元" value="50to100" />
+              <el-option label="100至200元" value="100to200" />
+              <el-option label="200元以上" value="over200" />
+            </el-select>
+            <div class="catalog-count">{{ filteredProducts.length }} / {{ products.length }} 种</div>
             <el-tooltip content="刷新商品与库存" placement="bottom">
               <el-button :icon="Refresh" circle aria-label="刷新商品与库存" @click="fetchProducts" />
             </el-tooltip>
+          </div>
+
+          <div v-if="productCategories.length" class="category-strip custom-scrollbar" aria-label="票种分类">
+            <button :class="{ active: categoryFilter === '' }" @click="categoryFilter = ''">全部</button>
+            <button v-for="category in productCategories" :key="category" :class="{ active: categoryFilter === category }" @click="categoryFilter = category">{{ category }}</button>
           </div>
 
           <div class="product-grid custom-scrollbar">
@@ -72,8 +84,9 @@
             </button>
             <div v-if="filteredProducts.length === 0" class="empty-state">
               <el-icon :size="36"><Search /></el-icon>
-              <strong>没有匹配的票种</strong>
-              <span>调整搜索内容后再试</span>
+              <strong>{{ products.length === 0 ? '尚未配置窗口票种' : '没有匹配的票种' }}</strong>
+              <span>{{ products.length === 0 ? '请在管理后台将可售票种设置为窗口售票' : '调整票名、分类或价格后再试' }}</span>
+              <el-button v-if="products.length > 0" text type="primary" @click="clearProductFilters">清除筛选</el-button>
             </div>
           </div>
 
@@ -199,7 +212,12 @@
             <div class="section-heading"><el-icon><Place /></el-icon><div><h2>窗口归属</h2><p>核销与售票操作将记录到所选设备</p></div></div>
             <el-form label-position="top">
               <el-form-item label="当前检票点"><el-select v-model="currentCheckPointId" placeholder="请选择检票点" class="w-full" @change="saveSettings"><el-option v-for="cp in checkpoints" :key="cp.id" :label="cp.name" :value="cp.id" /></el-select></el-form-item>
-              <el-form-item label="售票终端编号"><el-input-number v-model="posDeviceId" :min="1" class="w-full" controls-position="right" @change="saveSettings" /></el-form-item>
+              <el-form-item label="当前售票终端">
+                <el-select v-model="posDeviceId" placeholder="请选择已授权终端" class="w-full" :disabled="shiftState.isOpen" @change="selectPOSTerminal">
+                  <el-option v-for="terminal in posTerminals" :key="terminal.id" :label="terminal.name" :value="terminal.id" />
+                </el-select>
+                <div v-if="posTerminals.length === 0" class="terminal-empty">当前工号尚未分配售票终端，请让管理员在员工管理中分配终端。</div>
+              </el-form-item>
             </el-form>
           </section>
           <section class="settings-section">
@@ -216,7 +234,7 @@
         </div>
       </section>
 
-      <el-dialog v-model="showCalc" title="计算器" width="320px" :modal="false" draggable align-center><Calculator /></el-dialog>
+      <el-dialog v-model="showCalc" title="计算器" width="320px" :modal="false" draggable align-center><Calculator :active="showCalc" /></el-dialog>
       <el-dialog v-model="showPayment" title="收款" width="520px" align-center :close-on-click-modal="false" :close-on-press-escape="!paymentLocked" :show-close="!paymentLocked">
         <PaymentModal v-if="showPayment" :amount="currentOrder?.total_amount || 0" :order-no="currentOrder?.order_no || ''" :shift-id="shiftState.shiftId || 0" :device-id="posDeviceId || 0" @success="handlePaymentSuccess" @cancelled="handlePaymentCancelled" @lock-change="paymentLocked = $event" />
       </el-dialog>
@@ -339,10 +357,13 @@ import Calculator from '../components/Calculator.vue'
 import PolicyModal from '../components/PolicyModal.vue'
 import PaymentModal from '../components/PaymentModal.vue'
 import { printTicket } from '../services/hardwareBridge'
+import { checkDesktopUpdate, installDesktopUpdate } from '../services/desktopUpdateBridge'
 
 // --- State ---
 const currentView = ref('pos')
 const searchQuery = ref('')
+const categoryFilter = ref('')
+const priceFilter = ref('all')
 const products = ref<any[]>([])
 const cart = ref<any[]>([])
 const searchInput = ref()
@@ -380,6 +401,7 @@ const verifyInput = ref('')
 const verifyHistory = ref<any[]>([])
 const verifyInputRef = ref()
 const checkpoints = ref<any[]>([])
+const posTerminals = ref<any[]>([])
 const currentCheckPointId = ref<number | null>(null)
 const posDeviceId = ref<number | null>(null)
 
@@ -414,6 +436,57 @@ const fetchCheckPoints = async () => {
   }
 }
 
+const selectPOSTerminal = (deviceId: number | null, notify = true) => {
+  posDeviceId.value = deviceId
+  const terminal = posTerminals.value.find((item: any) => item.id === deviceId)
+  if (!terminal) {
+    localStorage.removeItem('pos_device_id')
+    return
+  }
+  localStorage.setItem('pos_device_id', String(terminal.id))
+  if (terminal.check_point_id) {
+    currentCheckPointId.value = terminal.check_point_id
+    localStorage.setItem('pos_checkpoint_id', String(terminal.check_point_id))
+  }
+  if (notify) ElMessage.success('售票终端已切换')
+}
+
+const fetchPOSTerminals = async () => {
+  try {
+    const { data } = await axios.get('/operations/terminals')
+    posTerminals.value = data.data || []
+    const selected = posTerminals.value.find((item: any) => item.id === posDeviceId.value)
+    if (!selected) {
+      posDeviceId.value = posTerminals.value.length > 0 ? posTerminals.value[0].id : null
+      localStorage.removeItem('pos_shift_state')
+      shiftState.value = { isOpen: false, shiftId: null, startTime: null, operator: currentStaff.value.name || '当前员工', openingCents: 0 }
+    }
+    if (posDeviceId.value) selectPOSTerminal(posDeviceId.value, false)
+    else localStorage.removeItem('pos_device_id')
+  } catch (error: any) {
+    posTerminals.value = []
+    posDeviceId.value = null
+    localStorage.removeItem('pos_device_id')
+    ElMessage.error(error.response?.data?.error || '获取可用售票终端失败')
+  }
+}
+
+const offerDesktopUpdate = async () => {
+  const update = await checkDesktopUpdate()
+  if (!update?.available || sessionStorage.getItem(`pos_update_skipped_${update.version}`)) return
+  try {
+    await ElMessageBox.confirm('发现窗口端新版本。现在更新将自动下载、校验并重启窗口端。', '窗口端更新', {
+      confirmButtonText: '立即更新',
+      cancelButtonText: '本次稍后',
+      type: 'info',
+    })
+    const result = await installDesktopUpdate()
+    if (!result.success) ElMessage.error(result.message)
+  } catch (reason) {
+    if (reason === 'cancel' || reason === 'close') sessionStorage.setItem(`pos_update_skipped_${update.version}`, '1')
+  }
+}
+
 const saveSettings = () => {
   if (currentCheckPointId.value) {
     localStorage.setItem('pos_checkpoint_id', currentCheckPointId.value.toString())
@@ -444,9 +517,8 @@ const loadSettings = () => {
 }
 
 const handleShiftAction = async () => {
-  const deviceId = Number(localStorage.getItem('pos_device_id') || 0)
-  if (!deviceId) {
-    ElMessage.warning('请先在终端配置中设置售票终端编号')
+  if (!posDeviceId.value) {
+    ElMessage.warning('当前工号尚未分配售票终端，请联系管理员')
     return
   }
   if (!shiftState.value.isOpen) {
@@ -659,14 +731,26 @@ const filteredProducts = computed(() => {
   let res = products.value
   if (searchQuery.value) {
     const query = searchQuery.value.toLowerCase()
-    res = res.filter(p => {
-      const nameMatch = p.name.toLowerCase().includes(query)
-      const tagMatch = p.parsedTags && p.parsedTags.some((t: string) => t.toLowerCase().includes(query))
-      return nameMatch || tagMatch
-    })
+    res = res.filter(p => p.name.toLowerCase().includes(query))
   }
+  if (categoryFilter.value) res = res.filter(p => p.parsedTags?.includes(categoryFilter.value))
+  const ranges: Record<string, (price: number) => boolean> = {
+    under50: price => price < 50,
+    '50to100': price => price >= 50 && price < 100,
+    '100to200': price => price >= 100 && price < 200,
+    over200: price => price >= 200,
+  }
+  if (ranges[priceFilter.value]) res = res.filter(p => ranges[priceFilter.value](Number(p.price)))
   return res
 })
+
+const productCategories = computed(() => Array.from(new Set(products.value.flatMap(product => product.parsedTags || []))) as string[])
+
+const clearProductFilters = () => {
+  searchQuery.value = ''
+  categoryFilter.value = ''
+  priceFilter.value = 'all'
+}
 
 const totalAmount = computed(() => cart.value.reduce((sum, item) => sum + item.price * item.quantity, 0))
 const closeDifferenceCents = computed(() => Math.round(closingAmount.value * 100) - Number(closeSummary.value?.cash_expected_cents || 0))
@@ -864,12 +948,14 @@ onMounted(async () => {
   }
   if (!canSell.value && canVerify.value) currentView.value = 'verify'
   if (canSell.value) {
-    await Promise.all([fetchProducts(), restoreOpenShift()])
+    await Promise.all([fetchProducts(), fetchPOSTerminals()])
+    await restoreOpenShift()
   }
   await fetchCheckPoints()
   timer = setInterval(updateTime, 1000)
   updateTime()
   window.addEventListener('keydown', handleGlobalKeydown)
+  void offerDesktopUpdate()
 })
 
 import { watch } from 'vue'
@@ -962,8 +1048,13 @@ onUnmounted(() => {
 .readiness-banner button { border: 0; background: transparent; color: #8e4b08; font-weight: 700; cursor: pointer; }
 .catalog-toolbar { gap: 10px; margin-bottom: 12px; }
 .catalog-toolbar :deep(.el-input) { flex: 1; }
+.price-filter { width: 140px; flex: 0 0 140px; }
 .catalog-toolbar :deep(.el-input__wrapper) { min-height: 42px; border-radius: 7px; box-shadow: 0 0 0 1px #ccd2ca inset; }
 .catalog-toolbar :deep(.el-input__wrapper.is-focus) { box-shadow: 0 0 0 2px #278157 inset; }
+.category-strip { display: flex; flex: 0 0 auto; gap: 7px; margin: -2px 0 12px; overflow-x: auto; padding-bottom: 3px; }
+.category-strip button { min-width: 58px; height: 32px; padding: 0 13px; border: 1px solid #d7ddd5; border-radius: 5px; background: #fff; color: #4d554d; white-space: nowrap; }
+.category-strip button:hover { border-color: #78a98e; color: var(--green); }
+.category-strip button.active { border-color: var(--green); background: #e8f4ed; color: var(--green); font-weight: 700; }
 .catalog-count { white-space: nowrap; color: var(--muted); font-size: 13px; }
 
 .product-grid { min-height: 0; flex: 1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-content: start; gap: 10px; overflow-y: auto; padding: 1px 5px 12px 1px; }
@@ -1059,6 +1150,7 @@ onUnmounted(() => {
 .section-heading > .el-icon { margin-top: 2px; color: var(--green); font-size: 20px; }
 .section-heading h2 { margin: 0; font-size: 17px; }
 .section-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; line-height: 18px; }
+.terminal-empty { margin-top: 8px; color: #b5473b; font-size: 12px; line-height: 18px; }
 .hardware-row, .shift-summary { justify-content: space-between; min-height: 46px; border-top: 1px solid #ecefeb; }
 .hardware-row:last-child { border-bottom: 1px solid #ecefeb; }
 .shift-summary:last-of-type { margin-bottom: 16px; }

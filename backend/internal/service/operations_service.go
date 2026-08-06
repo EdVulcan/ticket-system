@@ -16,6 +16,25 @@ import (
 
 type OperationsService struct{}
 
+// ListPOSTerminals returns only POS devices the current operator may use.
+// Tenant administrators may select any POS device in their tenant; staff are
+// restricted to explicit device assignments.
+func (s *OperationsService) ListPOSTerminals(tenantID, operatorID uint, role string) ([]model.Device, error) {
+	if tenantID == 0 || operatorID == 0 {
+		return nil, errors.New("tenant and operator are required")
+	}
+	query := model.DB.Model(&model.Device{}).
+		Where("devices.tenant_id = ? AND devices.type = ?", tenantID, "pos")
+	if role != "admin" && role != "super_admin" {
+		query = query.Joins("JOIN staff_resource_scopes ON staff_resource_scopes.tenant_id = devices.tenant_id AND staff_resource_scopes.resource_type = ? AND staff_resource_scopes.resource_id = devices.id AND staff_resource_scopes.staff_id = ?", "device", operatorID)
+	}
+	var devices []model.Device
+	if err := query.Preload("CheckPoint").Order("devices.name ASC, devices.id ASC").Find(&devices).Error; err != nil {
+		return nil, err
+	}
+	return devices, nil
+}
+
 type POSHoldView struct {
 	model.POSHold
 	Items []model.POSHoldLine `json:"items"`

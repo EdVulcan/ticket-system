@@ -19,6 +19,46 @@ func (f refundProviderFunc) Process(ctx context.Context, refund *model.Refund, p
 	return f(ctx, refund, payment)
 }
 
+func TestListPOSTerminalsRespectsStaffDeviceScope(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	var area model.ScenicArea
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint model.CheckPoint
+	if err := model.DB.Where("tenant_id = ? AND scenic_area_id = ?", tenantID, area.ID).First(&checkpoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	checkpointID := checkpoint.ID
+	staff := model.Staff{TenantID: tenantID, Name: "Scoped Seller", JobNumber: "POS-SCOPED", Password: "unused", Roles: "seller", Status: "active", TokenVersion: 1}
+	devices := []model.Device{
+		{TenantID: tenantID, ScenicAreaID: area.ID, CheckPointID: &checkpointID, Name: "East Window", SerialNumber: "POS-SCOPE-1", Type: "pos", Status: "online"},
+		{TenantID: tenantID, ScenicAreaID: area.ID, CheckPointID: &checkpointID, Name: "West Window", SerialNumber: "POS-SCOPE-2", Type: "pos", Status: "online"},
+		{TenantID: tenantID, ScenicAreaID: area.ID, CheckPointID: &checkpointID, Name: "East Gate", SerialNumber: "GATE-SCOPE-1", Type: "gate", Status: "online"},
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create(&staff).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&devices).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.StaffResourceScope{TenantID: tenantID, StaffID: staff.ID, ResourceType: "device", ResourceID: devices[1].ID}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	scoped, err := (&OperationsService{}).ListPOSTerminals(tenantID, staff.ID, "seller")
+	if err != nil || len(scoped) != 1 || scoped[0].ID != devices[1].ID {
+		t.Fatalf("scoped terminals=%+v err=%v", scoped, err)
+	}
+	all, err := (&OperationsService{}).ListPOSTerminals(tenantID, staff.ID, "admin")
+	if err != nil || len(all) != 2 {
+		t.Fatalf("admin terminals=%+v err=%v", all, err)
+	}
+}
+
 func TestLedgerRecordsDistributionReservationAndRelease(t *testing.T) {
 	resetBusinessData(t)
 	scenario := seedDistributionScenario(t)

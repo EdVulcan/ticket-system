@@ -93,3 +93,5 @@ go test ./internal/backup -run TestPostgresBackupAndRestore -count=1
 ```
 
 管理端和窗口端构建、Playwright E2E 已接入 CI；只有前端代码或依赖变化时才需要在本地重复构建。
+
+`main` 部署通过后，CI 会同时发布 Windows 窗口端及带 SHA-256 的版本清单。启用自动更新后的窗口端会在登录后检查新版本，由员工确认后自动下载、校验、替换并重启；员工不需要在售票电脑上安装编译环境。早于自动更新功能的旧窗口端需要最后手工替换一次，之后即可自动更新。

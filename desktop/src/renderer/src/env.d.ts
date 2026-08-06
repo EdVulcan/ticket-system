@@ -23,6 +23,13 @@ interface Window {
       App?: {
         PrintTicket?: (payload: unknown) => Promise<HardwareBridgeResult>
         ReadCard?: () => Promise<HardwareBridgeResult>
+        CheckForUpdate?: () => Promise<{
+          available: boolean
+          current_version: string
+          version: string
+          message: string
+        }>
+        InstallUpdate?: () => Promise<HardwareBridgeResult>
       }
     }
   }

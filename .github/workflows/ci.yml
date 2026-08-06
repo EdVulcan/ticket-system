@@ -156,7 +156,7 @@ jobs:
       - name: Install pinned Wails CLI
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.13.0
       - name: Build Windows POS
-        run: wails build -clean -webview2 embed
+        run: wails build -clean -webview2 embed -ldflags "-X main.buildVersion=${{ github.sha }}"
       - name: Verify Windows POS endpoint
         shell: pwsh
         run: |
@@ -193,12 +193,19 @@ jobs:
         with:
           name: admin-web
           path: release/admin/dist
+      - name: Download Windows POS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-ticket-pos
+          path: release/admin/dist/downloads
       - name: Assemble release
         shell: bash
         run: |
           install -d release/backend/config
           install -m 0644 backend/config/config.yaml release/backend/config/config.yaml
           chmod 0755 release/backend/ticket-backend
+          pos_sha256="$(sha256sum release/admin/dist/downloads/ticket-pos.exe | awk '{print $1}')"
+          printf '{"version":"%s","download_url":"https://ymsq.edvulcan.top/downloads/ticket-pos.exe","sha256":"%s"}\n' "$GITHUB_SHA" "$pos_sha256" > release/admin/dist/downloads/pos-version.json
           tar -czf "ticket-system-${GITHUB_SHA}.tar.gz" -C release .
       - name: Configure deployment SSH
         shell: bash
