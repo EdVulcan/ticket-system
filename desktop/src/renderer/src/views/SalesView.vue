@@ -218,7 +218,7 @@
             <div class="section-heading"><el-icon><Printer /></el-icon><div><h2>本机硬件</h2><p>硬件适配器未配置时不会伪报成功</p></div></div>
             <div class="hardware-row"><span>小票打印机</span><el-tag type="warning">待配置</el-tag></div>
             <div class="hardware-row"><span>证件阅读器</span><el-tag type="info">待配置</el-tag></div>
-            <div class="hardware-row"><span>窗口端版本</span><el-button size="small" :loading="updateChecking" @click="offerDesktopUpdate(true)">检查更新</el-button></div>
+            <div class="hardware-row"><span>窗口端版本</span><div class="version-action"><code>{{ desktopVersion || '检测中' }}</code><el-button size="small" :loading="updateChecking" @click="offerDesktopUpdate(true)">检查更新</el-button></div></div>
           </section>
           <section v-if="canSell" class="settings-section">
             <div class="section-heading"><el-icon><Notebook /></el-icon><div><h2>当前班次</h2><p>{{ shiftState.isOpen ? `开始于 ${new Date(shiftState.startTime!).toLocaleString()}` : '开班后才能进行窗口收款' }}</p></div></div>
@@ -381,6 +381,7 @@ const showHolds = ref(false)
 const holds = ref<any[]>([])
 const holdsLoading = ref(false)
 const updateChecking = ref(false)
+const desktopVersion = ref('')
 
 // --- Orders State ---
 const orders = ref<any[]>([])
@@ -477,6 +478,12 @@ const offerDesktopUpdate = async (force = false) => {
       if (force) ElMessage.warning('当前窗口端无法连接更新服务')
       return
     }
+    desktopVersion.value = update.current_version ? update.current_version.slice(0, 7) : '未知'
+    const pendingVersion = localStorage.getItem('pos_update_pending_version')
+    if (pendingVersion && pendingVersion === update.current_version) {
+      localStorage.removeItem('pos_update_pending_version')
+      ElMessage.success(`窗口端已更新至 ${desktopVersion.value}`)
+    }
     if (!update.available) {
       if (force) ElMessage.success(update.message || '当前已是最新版本')
       return
@@ -488,8 +495,14 @@ const offerDesktopUpdate = async (force = false) => {
       cancelButtonText: '本次稍后',
       type: 'info',
     })
+    localStorage.setItem('pos_update_pending_version', update.version)
+    const progressMessage = ElMessage({ message: '正在下载并校验更新，请勿关闭窗口端', type: 'info', duration: 0 })
     const result = await installDesktopUpdate()
-    if (!result.success) ElMessage.error(result.message)
+    if (!result.success) {
+      progressMessage.close()
+      localStorage.removeItem('pos_update_pending_version')
+      ElMessage.error(result.message)
+    }
   } catch (reason) {
     if ((reason === 'cancel' || reason === 'close') && offeredVersion) sessionStorage.setItem(`pos_update_skipped_${offeredVersion}`, '1')
   } finally {
@@ -1166,6 +1179,8 @@ onUnmounted(() => {
 .terminal-empty { margin-top: 8px; color: #b5473b; font-size: 12px; line-height: 18px; }
 .hardware-row, .shift-summary { justify-content: space-between; min-height: 46px; border-top: 1px solid #ecefeb; }
 .hardware-row:last-child { border-bottom: 1px solid #ecefeb; }
+.version-action { display: flex; align-items: center; gap: 8px; }
+.version-action code { color: #596159; font-size: 12px; }
 .shift-summary:last-of-type { margin-bottom: 16px; }
 .shift-dialog-intro { margin-bottom: 18px; padding: 10px 12px; border: 1px solid #dfe4dc; border-radius: 6px; background: #f6f8f5; color: #626a62; font-size: 13px; line-height: 20px; }
 .money-input { width: 100%; }

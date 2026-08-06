@@ -52,6 +52,19 @@ test('窗口运行期间发布新版本后重新聚焦会提示更新', async ({
   await expect(page.getByRole('dialog', { name: '窗口端更新' })).toBeVisible()
 })
 
+test('窗口更新重启后明确显示完成版本', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('pos_update_pending_version', 'new-version')
+    ;(window as any).go = { main: { App: {
+      CheckForUpdate: async () => ({ available: false, current_version: 'new-version', version: 'new-version', message: '当前已是最新版本' }),
+      InstallUpdate: async () => ({ success: true, message: '正在安装更新并重启' }),
+    } } }
+  })
+  await preparePOS(page, true)
+  await page.goto('/#/')
+  await expect(page.getByText('窗口端已更新至 new-ver')).toBeVisible()
+})
+
 test('未获终端授权时不允许手填设备编号', async ({ page }) => {
   await page.addInitScript(({ staff }) => {
     sessionStorage.setItem('token', 'staff-token')
