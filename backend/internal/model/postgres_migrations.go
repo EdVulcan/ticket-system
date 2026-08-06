@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 68
+const CurrentPostgresSchemaVersion = 69
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -77,7 +77,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "channel replay protection and encrypted device keys",
+		Name:      "active device serial uniqueness",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -121,7 +121,7 @@ func backfillPendingRefundReservations(db *gorm.DB) error {
 }
 
 func applyPostgresIndexes(db *gorm.DB) error {
-	for _, index := range []string{"idx_settlement_fulfillment_unique", "idx_settlement_lines_fulfillment_order_id", "idx_team_settlement_statements_group_id", "idx_team_settlement_group_id"} {
+	for _, index := range []string{"idx_settlement_fulfillment_unique", "idx_settlement_lines_fulfillment_order_id", "idx_team_settlement_statements_group_id", "idx_team_settlement_group_id", "idx_devices_serial_number"} {
 		if err := db.Exec("DROP INDEX IF EXISTS " + index).Error; err != nil {
 			return fmt.Errorf("drop obsolete PostgreSQL index: %w", err)
 		}
@@ -144,6 +144,7 @@ func applyPostgresIndexes(db *gorm.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_ctrip_app_id ON channel_accounts(type, app_id) WHERE type = 'ctrip' AND app_id != ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_settlement_statement_fulfillment ON settlement_lines(statement_id, fulfillment_order_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_product_revision_unique ON product_revisions(product_id, version)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_active_serial ON devices(serial_number) WHERE deleted_at IS NULL`,
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {

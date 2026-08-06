@@ -73,9 +73,9 @@ type CheckPoint struct {
 type Device struct {
 	Base
 	Name              string      `gorm:"size:100;not null" json:"name"`
-	SerialNumber      string      `gorm:"size:100;uniqueIndex;not null" json:"serial_number"` // 设备序列号
-	Type              string      `gorm:"size:20;not null" json:"type"`                       // gate, handheld, pos
-	Status            string      `gorm:"size:20;default:'offline'" json:"status"`            // online, offline, fault
+	SerialNumber      string      `gorm:"size:100;not null" json:"serial_number"`  // 仅未删除设备要求序列号唯一
+	Type              string      `gorm:"size:20;not null" json:"type"`            // gate, handheld, pos
+	Status            string      `gorm:"size:20;default:'offline'" json:"status"` // online, offline, fault
 	LastHeartbeat     *time.Time  `json:"last_heartbeat"`
 	IPAddress         string      `gorm:"size:50" json:"ip_address"`
 	MACAddress        string      `gorm:"size:50" json:"mac_address"`

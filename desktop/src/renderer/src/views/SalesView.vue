@@ -50,13 +50,7 @@
 
           <div class="catalog-toolbar">
             <el-input ref="searchInput" v-model="searchQuery" size="large" clearable placeholder="按票名搜索" aria-label="票名搜索" :prefix-icon="Search" />
-            <el-select v-model="priceFilter" aria-label="价格范围" class="price-filter" size="large">
-              <el-option label="全部价格" value="all" />
-              <el-option label="50元以下" value="under50" />
-              <el-option label="50至100元" value="50to100" />
-              <el-option label="100至200元" value="100to200" />
-              <el-option label="200元以上" value="over200" />
-            </el-select>
+            <el-input-number v-model="priceSearch" aria-label="票价搜索" class="price-filter" size="large" :min="0" :precision="2" :controls="false" placeholder="输入票价" />
             <div class="catalog-count">{{ filteredProducts.length }} / {{ products.length }} 种</div>
             <el-tooltip content="刷新商品与库存" placement="bottom">
               <el-button :icon="Refresh" circle aria-label="刷新商品与库存" @click="fetchProducts" />
@@ -363,7 +357,7 @@ import { checkDesktopUpdate, installDesktopUpdate } from '../services/desktopUpd
 const currentView = ref('pos')
 const searchQuery = ref('')
 const categoryFilter = ref('')
-const priceFilter = ref('all')
+const priceSearch = ref<number | undefined>(undefined)
 const products = ref<any[]>([])
 const cart = ref<any[]>([])
 const searchInput = ref()
@@ -734,13 +728,10 @@ const filteredProducts = computed(() => {
     res = res.filter(p => p.name.toLowerCase().includes(query))
   }
   if (categoryFilter.value) res = res.filter(p => p.parsedTags?.includes(categoryFilter.value))
-  const ranges: Record<string, (price: number) => boolean> = {
-    under50: price => price < 50,
-    '50to100': price => price >= 50 && price < 100,
-    '100to200': price => price >= 100 && price < 200,
-    over200: price => price >= 200,
+  if (priceSearch.value !== undefined && priceSearch.value !== null) {
+    const targetCents = Math.round(Number(priceSearch.value) * 100)
+    res = res.filter(p => Math.round(Number(p.price) * 100) === targetCents)
   }
-  if (ranges[priceFilter.value]) res = res.filter(p => ranges[priceFilter.value](Number(p.price)))
   return res
 })
 
@@ -749,7 +740,7 @@ const productCategories = computed(() => Array.from(new Set(products.value.flatM
 const clearProductFilters = () => {
   searchQuery.value = ''
   categoryFilter.value = ''
-  priceFilter.value = 'all'
+  priceSearch.value = undefined
 }
 
 const totalAmount = computed(() => cart.value.reduce((sum, item) => sum + item.price * item.quantity, 0))

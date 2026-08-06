@@ -64,10 +64,11 @@ test('售票员可以按票名、分类和价格快速筛选票种', async ({ pa
   await page.getByRole('textbox', { name: '票名搜索' }).clear()
   await page.getByRole('button', { name: '成人票', exact: true }).click()
   await expect(page.locator('.product-tile')).toHaveCount(2)
-  await page.locator('.price-filter').click()
-  await page.getByRole('option', { name: '200元以上' }).click()
+  await page.getByRole('spinbutton', { name: '票价搜索' }).fill('260')
   await expect(page.locator('.product-tile')).toHaveCount(1)
   await expect(page.getByRole('button', { name: /成人年票/ })).toBeVisible()
+  await page.getByRole('spinbutton', { name: '票价搜索' }).fill('')
+  await expect(page.locator('.product-tile')).toHaveCount(2)
 })
 
 test('组合产品在窗口按一个商品销售并提交组合标识', async ({ page }) => {

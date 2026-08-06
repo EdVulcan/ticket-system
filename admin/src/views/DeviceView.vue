@@ -204,7 +204,7 @@ const handleEdit = (row: any) => {
 }
 
 const handleDelete = (row: any) => {
-  ElMessageBox.confirm('确认删除该设备吗？', '警告', {
+  ElMessageBox.confirm('删除后会保留设备历史记录，序列号可以重新用于新设备，但员工授权不会自动转移。确认删除吗？', '删除设备', {
     confirmButtonText: '确定',
     cancelButtonText: '取消',
     type: 'warning',

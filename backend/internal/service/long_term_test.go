@@ -59,6 +59,40 @@ func TestListPOSTerminalsRespectsStaffDeviceScope(t *testing.T) {
 	}
 }
 
+func TestDeletedDeviceSerialCanBeReusedWithoutLosingHistory(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	var area model.ScenicArea
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	original := model.Device{TenantID: tenantID, ScenicAreaID: area.ID, Name: "East Window", SerialNumber: "REUSABLE-POS-1", Type: "pos", Status: "offline"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&original).Error }); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&DeviceService{}).Delete(original.ID, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	replacement := model.Device{TenantID: tenantID, ScenicAreaID: area.ID, Name: original.Name, SerialNumber: original.SerialNumber, Type: "pos", Status: "offline"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&replacement).Error }); err != nil {
+		t.Fatalf("reuse deleted device serial: %v", err)
+	}
+	var historical, active int64
+	if err := model.DB.Unscoped().Model(&model.Device{}).Where("serial_number = ?", original.SerialNumber).Count(&historical).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&model.Device{}).Where("serial_number = ?", original.SerialNumber).Count(&active).Error; err != nil {
+		t.Fatal(err)
+	}
+	if historical != 2 || active != 1 {
+		t.Fatalf("device counts historical=%d active=%d", historical, active)
+	}
+	duplicate := model.Device{TenantID: tenantID, ScenicAreaID: area.ID, Name: "Duplicate", SerialNumber: original.SerialNumber, Type: "pos", Status: "offline"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&duplicate).Error }); err == nil {
+		t.Fatal("two active devices accepted the same serial number")
+	}
+}
+
 func TestLedgerRecordsDistributionReservationAndRelease(t *testing.T) {
 	resetBusinessData(t)
 	scenario := seedDistributionScenario(t)
