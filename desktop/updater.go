@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -154,7 +153,7 @@ func (a *App) InstallUpdate() HardwareResult {
 		_ = os.Remove(updatePath)
 		return HardwareResult{Success: false, Message: "无法准备更新安装程序"}
 	}
-	if err := exec.Command("cmd", "/C", "start", "", "/MIN", scriptPath).Start(); err != nil {
+	if err := startUpdateScript(scriptPath); err != nil {
 		_ = os.Remove(updatePath)
 		_ = os.Remove(scriptPath)
 		return HardwareResult{Success: false, Message: "无法启动更新安装程序"}

@@ -1226,6 +1226,15 @@ func TestStaffResourceScopesFailClosed(t *testing.T) {
 	if err := ReplaceStaffResourceScopes(tenantID, staff.ID, []model.StaffResourceScope{{ResourceType: "scenic_area", ResourceID: area.ID}}); err != nil {
 		t.Fatal(err)
 	}
+	if err := ReplaceStaffResourceScopes(tenantID, staff.ID, []model.StaffResourceScope{{ResourceType: "scenic_area", ResourceID: area.ID}}); err != nil {
+		t.Fatalf("saving the same resource scope must be idempotent: %v", err)
+	}
+	if err := ReplaceStaffResourceScopes(tenantID, staff.ID, nil); err != nil {
+		t.Fatalf("clear resource scopes: %v", err)
+	}
+	if err := ReplaceStaffResourceScopes(tenantID, staff.ID, []model.StaffResourceScope{{ResourceType: "scenic_area", ResourceID: area.ID}}); err != nil {
+		t.Fatalf("rebind a previously removed resource scope: %v", err)
+	}
 	if err := RequireStaffResource(tenantID, staff.ID, "checker", "scenic_area", area.ID); err != nil {
 		t.Fatal(err)
 	}

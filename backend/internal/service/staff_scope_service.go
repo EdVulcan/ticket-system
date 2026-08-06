@@ -30,6 +30,12 @@ func ReplaceStaffResourceScopes(tenantID, staffID uint, scopes []model.StaffReso
 		if err := tx.Where("id = ? AND tenant_id = ?", staffID, tenantID).First(&staff).Error; err != nil {
 			return err
 		}
+		type scopeKey struct {
+			resourceType string
+			resourceID   uint
+		}
+		normalized := make([]model.StaffResourceScope, 0, len(scopes))
+		seen := make(map[scopeKey]struct{}, len(scopes))
 		for i := range scopes {
 			scopes[i].Base = model.Base{}
 			scopes[i].TenantID = tenantID
@@ -54,12 +60,29 @@ func ReplaceStaffResourceScopes(tenantID, staffID uint, scopes []model.StaffReso
 			if count == 0 {
 				return ErrResourceScopeDenied
 			}
+			key := scopeKey{resourceType: scopes[i].ResourceType, resourceID: scopes[i].ResourceID}
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+			normalized = append(normalized, scopes[i])
 		}
 		if err := tx.Where("tenant_id = ? AND staff_id = ?", tenantID, staffID).Delete(&model.StaffResourceScope{}).Error; err != nil {
 			return err
 		}
-		if len(scopes) > 0 {
-			return tx.Create(&scopes).Error
+		for i := range normalized {
+			scope := &normalized[i]
+			result := tx.Unscoped().Model(&model.StaffResourceScope{}).
+				Where("tenant_id = ? AND staff_id = ? AND resource_type = ? AND resource_id = ?", tenantID, staffID, scope.ResourceType, scope.ResourceID).
+				Update("deleted_at", nil)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				if err := tx.Create(scope).Error; err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	})
