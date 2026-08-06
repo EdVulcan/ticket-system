@@ -34,6 +34,24 @@ test('计算器支持回车求值且不依赖动态代码执行', async ({ page 
   await expect(calculator.getByTestId('calculator-display')).toHaveText('不能除以零')
 })
 
+test('窗口运行期间发布新版本后重新聚焦会提示更新', async ({ page }) => {
+  await page.addInitScript(() => {
+    ;(window as any).__updateChecks = 0
+    ;(window as any).go = { main: { App: {
+      CheckForUpdate: async () => {
+        const checks = (window as any).__updateChecks++
+        return { available: checks > 0, current_version: 'old', version: 'new', message: checks > 0 ? '发现窗口端新版本' : '当前已是最新版本' }
+      },
+      InstallUpdate: async () => ({ success: true, message: '正在安装更新并重启' }),
+    } } }
+  })
+  await preparePOS(page, true)
+  await page.goto('/#/')
+  await expect.poll(() => page.evaluate(() => (window as any).__updateChecks)).toBe(1)
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(page.getByRole('dialog', { name: '窗口端更新' })).toBeVisible()
+})
+
 test('未获终端授权时不允许手填设备编号', async ({ page }) => {
   await page.addInitScript(({ staff }) => {
     sessionStorage.setItem('token', 'staff-token')

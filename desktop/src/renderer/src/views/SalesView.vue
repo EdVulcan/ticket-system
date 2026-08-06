@@ -218,6 +218,7 @@
             <div class="section-heading"><el-icon><Printer /></el-icon><div><h2>本机硬件</h2><p>硬件适配器未配置时不会伪报成功</p></div></div>
             <div class="hardware-row"><span>小票打印机</span><el-tag type="warning">待配置</el-tag></div>
             <div class="hardware-row"><span>证件阅读器</span><el-tag type="info">待配置</el-tag></div>
+            <div class="hardware-row"><span>窗口端版本</span><el-button size="small" :loading="updateChecking" @click="offerDesktopUpdate(true)">检查更新</el-button></div>
           </section>
           <section v-if="canSell" class="settings-section">
             <div class="section-heading"><el-icon><Notebook /></el-icon><div><h2>当前班次</h2><p>{{ shiftState.isOpen ? `开始于 ${new Date(shiftState.startTime!).toLocaleString()}` : '开班后才能进行窗口收款' }}</p></div></div>
@@ -379,6 +380,7 @@ const currentOrder = ref<any>(null)
 const showHolds = ref(false)
 const holds = ref<any[]>([])
 const holdsLoading = ref(false)
+const updateChecking = ref(false)
 
 // --- Orders State ---
 const orders = ref<any[]>([])
@@ -465,10 +467,22 @@ const fetchPOSTerminals = async () => {
   }
 }
 
-const offerDesktopUpdate = async () => {
-  const update = await checkDesktopUpdate()
-  if (!update?.available || sessionStorage.getItem(`pos_update_skipped_${update.version}`)) return
+const offerDesktopUpdate = async (force = false) => {
+  if (updateChecking.value) return
+  updateChecking.value = true
+  let offeredVersion = ''
   try {
+    const update = await checkDesktopUpdate()
+    if (!update) {
+      if (force) ElMessage.warning('当前窗口端无法连接更新服务')
+      return
+    }
+    if (!update.available) {
+      if (force) ElMessage.success(update.message || '当前已是最新版本')
+      return
+    }
+    if (!force && sessionStorage.getItem(`pos_update_skipped_${update.version}`)) return
+    offeredVersion = update.version
     await ElMessageBox.confirm('发现窗口端新版本。现在更新将自动下载、校验并重启窗口端。', '窗口端更新', {
       confirmButtonText: '立即更新',
       cancelButtonText: '本次稍后',
@@ -477,7 +491,9 @@ const offerDesktopUpdate = async () => {
     const result = await installDesktopUpdate()
     if (!result.success) ElMessage.error(result.message)
   } catch (reason) {
-    if (reason === 'cancel' || reason === 'close') sessionStorage.setItem(`pos_update_skipped_${update.version}`, '1')
+    if ((reason === 'cancel' || reason === 'close') && offeredVersion) sessionStorage.setItem(`pos_update_skipped_${offeredVersion}`, '1')
+  } finally {
+    updateChecking.value = false
   }
 }
 
@@ -920,6 +936,8 @@ const searchOrders = () => {
 
 // --- Lifecycle ---
 let timer: any
+let updateTimer: any
+const handleWindowFocus = () => { void offerDesktopUpdate() }
 const handleGlobalKeydown = (e: KeyboardEvent) => {
   if (e.key === 'F2' && canSell.value) { e.preventDefault(); searchInput.value?.focus() }
   if (e.key === 'F3' || (e.ctrlKey && e.key === 'f')) { e.preventDefault(); showPolicy.value = true }
@@ -946,6 +964,8 @@ onMounted(async () => {
   timer = setInterval(updateTime, 1000)
   updateTime()
   window.addEventListener('keydown', handleGlobalKeydown)
+  window.addEventListener('focus', handleWindowFocus)
+  updateTimer = setInterval(() => void offerDesktopUpdate(), 5 * 60 * 1000)
   void offerDesktopUpdate()
 })
 
@@ -966,7 +986,9 @@ const handlePaymentCancelled = () => {
 
 onUnmounted(() => {
   clearInterval(timer)
+  clearInterval(updateTimer)
   window.removeEventListener('keydown', handleGlobalKeydown)
+  window.removeEventListener('focus', handleWindowFocus)
 })
 </script>
 
