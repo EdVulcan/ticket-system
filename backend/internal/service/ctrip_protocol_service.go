@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type CtripProtocolService struct {
@@ -161,6 +162,9 @@ func (s *CtripProtocolService) Handle(raw []byte, remoteIP string) ([]byte, erro
 	}
 	if !ctripRequestTimeValid(envelope.Header.RequestTime, time.Now()) {
 		return marshalCtripHeaderOnly("0001", "请求时间无效或已过期"), nil
+	}
+	if !ctripPermissionAllows(account.PermissionsJSON, envelope.Header.ServiceName) {
+		return marshalCtripHeaderOnly("0003", "接口权限未授权"), nil
 	}
 	plainBody, err := decryptCtripBody(envelope.Body, config.AESKey, config.AESIV)
 	if err != nil {
@@ -359,6 +363,29 @@ func ctripIPAllowed(raw, remote string) bool {
 			return true
 		}
 		if _, network, err := net.ParseCIDR(entry); err == nil && network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func ctripPermissionAllows(raw, serviceName string) bool {
+	required := map[string]string{
+		"CreatePreOrder": "orders:create",
+		"PayPreOrder":    "orders:create",
+		"CancelPreOrder": "orders:cancel",
+		"CancelOrder":    "orders:cancel",
+		"QueryOrder":     "orders:query",
+	}[serviceName]
+	if required == "" {
+		return false
+	}
+	var permissions []string
+	if json.Unmarshal([]byte(raw), &permissions) != nil {
+		return false
+	}
+	for _, permission := range permissions {
+		if permission == "*" || permission == required {
 			return true
 		}
 	}
@@ -619,11 +646,22 @@ func (s *CtripProtocolService) payPreOrder(account *model.ChannelAccount, raw []
 	if err := validateCtripPayItems(link.Items, input.Items); err != nil {
 		return nil, err
 	}
-	if err := s.OrderService.MarkAsPaid(order.OrderNo, account.TenantID); err != nil {
-		return nil, err
-	}
 	if err := model.Write(func(tx *gorm.DB) error {
-		return tx.Model(&model.CtripOrderLink{}).Where("id = ?", link.ID).Update("state", "paid").Error
+		var lockedLink model.CtripOrderLink
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND channel_account_id = ?", link.ID, account.ID).First(&lockedLink).Error; err != nil {
+			return err
+		}
+		if lockedLink.State == "pre_cancelled" || lockedLink.State == "cancelled" {
+			return errors.New("ctrip order is cancelled")
+		}
+		var lockedOrder model.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND channel_account_id = ?", order.ID, account.TenantID, account.ID).First(&lockedOrder).Error; err != nil {
+			return err
+		}
+		if err := markOrderAsPaidTx(tx, &lockedOrder); err != nil {
+			return err
+		}
+		return tx.Model(&lockedLink).Update("state", "paid").Error
 	}); err != nil {
 		return nil, err
 	}
@@ -692,11 +730,25 @@ func (s *CtripProtocolService) cancelPreOrder(account *model.ChannelAccount, raw
 	if order.Status != "unpaid" {
 		return nil, &ctripBusinessError{Code: "2100", Message: "该订单已支付，不能按预下单取消"}
 	}
-	if err := s.OrderService.Cancel(order.OrderNo, account.TenantID); err != nil {
-		return nil, err
-	}
 	if err := model.Write(func(tx *gorm.DB) error {
-		return tx.Model(&model.CtripOrderLink{}).Where("id = ?", link.ID).Update("state", "pre_cancelled").Error
+		var lockedLink model.CtripOrderLink
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND channel_account_id = ?", link.ID, account.ID).First(&lockedLink).Error; err != nil {
+			return err
+		}
+		if lockedLink.State == "pre_cancelled" {
+			return nil
+		}
+		var lockedOrder model.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Tickets").Where("id = ? AND tenant_id = ? AND channel_account_id = ?", order.ID, account.TenantID, account.ID).First(&lockedOrder).Error; err != nil {
+			return err
+		}
+		if lockedOrder.Status != "unpaid" && lockedOrder.Status != "cancelled" {
+			return errors.New("paid order cannot be cancelled as a preorder")
+		}
+		if err := cancelOrderTx(tx, &lockedOrder); err != nil {
+			return err
+		}
+		return tx.Model(&lockedLink).Update("state", "pre_cancelled").Error
 	}); err != nil {
 		return nil, err
 	}
@@ -721,15 +773,10 @@ func (s *CtripProtocolService) cancelOrder(account *model.ChannelAccount, raw []
 	if err := validateFullCtripCancellation(link.Items, order.Items, input.Items); err != nil {
 		return nil, err
 	}
-	if err := s.OrderService.Cancel(order.OrderNo, account.TenantID); err != nil {
+	if err := cancelCtripOrderAtomic(account, link.ID, order.ID); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "used") || strings.Contains(err.Error(), "核销") {
 			return nil, &ctripBusinessError{Code: "2002", Message: "该订单已经使用"}
 		}
-		return nil, err
-	}
-	if err := model.Write(func(tx *gorm.DB) error {
-		return tx.Model(&model.CtripOrderLink{}).Where("id = ?", link.ID).Update("state", "cancelled").Error
-	}); err != nil {
 		return nil, err
 	}
 	link.State = "cancelled"
@@ -755,6 +802,29 @@ func validateFullCtripCancellation(protocolItems []model.CtripOrderItem, orderIt
 		}
 	}
 	return nil
+}
+
+func cancelCtripOrderAtomic(account *model.ChannelAccount, linkID, orderID uint) error {
+	return model.Write(func(tx *gorm.DB) error {
+		var link model.CtripOrderLink
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND channel_account_id = ?", linkID, account.ID).First(&link).Error; err != nil {
+			return err
+		}
+		if link.State == "cancelled" {
+			return nil
+		}
+		var order model.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Tickets").Where("id = ? AND tenant_id = ? AND channel_account_id = ?", orderID, account.TenantID, account.ID).First(&order).Error; err != nil {
+			return err
+		}
+		if order.Status != "paid" && order.Status != "cancelled" {
+			return errors.New("channel order is not paid")
+		}
+		if err := cancelOrderTxMode(tx, &order, true); err != nil {
+			return err
+		}
+		return tx.Model(&link).Update("state", "cancelled").Error
+	})
 }
 
 func buildCtripCancelResponse(link *model.CtripOrderLink) (interface{}, error) {

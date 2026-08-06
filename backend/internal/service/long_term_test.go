@@ -374,6 +374,96 @@ func TestDigitalRefundWorkerClaimsTaskBeforeProviderCall(t *testing.T) {
 	}
 }
 
+func TestPendingDigitalRefundReservesTicketAgainstRefundAndAdmission(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{TenantID: tenantID, Channel: "online", Items: []model.OrderItem{{ProductID: productID, Quantity: 2}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{TenantID: tenantID, OrderNo: order.OrderNo, PaymentNo: "PAY-REFUND-RESERVE", Amount: order.TotalAmount, Method: "wechat", Status: "paid"}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create(&payment).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.Order{}).Where("id = ?", order.ID).Update("status", "paid").Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var tickets []model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).Order("id").Find(&tickets).Error; err != nil || len(tickets) != 2 {
+		t.Fatalf("tickets=%+v err=%v", tickets, err)
+	}
+	amount := roundMoney(order.TotalAmount / 2)
+	refund, err := (&RefundService{}).CreateDigitalRefund(tenantID, order.OrderNo, "reserve-first", amount, []string{tickets[0].TicketCode}, "visitor request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.First(&tickets[0], tickets[0].ID).Error; err != nil || tickets[0].PendingRefundID != refund.ID {
+		t.Fatalf("ticket reservation=%d refund=%d err=%v", tickets[0].PendingRefundID, refund.ID, err)
+	}
+	if _, err := (&RefundService{}).CreateDigitalRefund(tenantID, order.OrderNo, "reserve-overlap", amount, []string{tickets[0].TicketCode}, "duplicate request"); err == nil {
+		t.Fatal("same ticket was accepted by a second pending refund")
+	}
+	var checkpoint model.CheckPoint
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&checkpoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := (&TicketService{}).Verify(tickets[0].TicketCode, checkpoint.ID, verificationDeviceID(t, tenantID, checkpoint.ID), tenantID); !errors.Is(err, ErrTicketUnavailable) {
+		t.Fatalf("pending-refund ticket admission error=%v", err)
+	}
+}
+
+func TestFailedDigitalRefundRetryMustReacquireTicket(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{TenantID: tenantID, Channel: "online", Items: []model.OrderItem{{ProductID: productID, Quantity: 2}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{TenantID: tenantID, OrderNo: order.OrderNo, PaymentNo: "PAY-REFUND-RETRY-LOCK", Amount: order.TotalAmount, Method: "wechat", Status: "paid"}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create(&payment).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.Order{}).Where("id = ?", order.ID).Update("status", "paid").Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var tickets []model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).Order("id").Find(&tickets).Error; err != nil || len(tickets) != 2 {
+		t.Fatalf("tickets=%+v err=%v", tickets, err)
+	}
+	amount := roundMoney(order.TotalAmount / 2)
+	first, err := (&RefundService{}).CreateDigitalRefund(tenantID, order.OrderNo, "retry-old", amount, []string{tickets[0].TicketCode}, "first request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := &RefundService{Provider: refundProviderFunc(func(context.Context, *model.Refund, *model.Payment) (RefundProviderResult, error) {
+		return RefundProviderResult{Status: "failed", ProviderRefundID: "DECLINED-1"}, nil
+	})}
+	if processed, err := worker.ProcessDigitalRefundTasks(context.Background(), time.Now().Add(time.Second), 1); err != nil || processed != 1 {
+		t.Fatalf("processed=%d err=%v", processed, err)
+	}
+	if err := model.DB.First(&tickets[0], tickets[0].ID).Error; err != nil || tickets[0].PendingRefundID != 0 {
+		t.Fatalf("failed refund kept reservation=%d err=%v", tickets[0].PendingRefundID, err)
+	}
+	second, err := (&RefundService{}).CreateDigitalRefund(tenantID, order.OrderNo, "retry-new", amount, []string{tickets[0].TicketCode}, "new request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var task model.DigitalRefundTask
+	if err := model.DB.Where("refund_id = ?", first.ID).First(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := (&RefundService{}).RetryDigitalRefundTask(tenantID, task.ID, 1, "admin", "retry old provider task"); err == nil {
+		t.Fatal("old failed refund stole a ticket reserved by a newer refund")
+	}
+	if err := model.DB.First(&tickets[0], tickets[0].ID).Error; err != nil || tickets[0].PendingRefundID != second.ID {
+		t.Fatalf("new reservation=%d want=%d err=%v", tickets[0].PendingRefundID, second.ID, err)
+	}
+}
+
 func TestDigitalPartialRefundUpdatesPaymentAndOrderState(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)

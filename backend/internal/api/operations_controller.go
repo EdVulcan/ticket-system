@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
+	"ticket-backend/internal/authz"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
 	"time"
@@ -16,7 +18,11 @@ type OperationsController struct{ Service service.OperationsService }
 func (c *OperationsController) ListShifts(ctx *gin.Context) {
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
-	rows, total, err := c.Service.ListShifts(ctx.GetUint("tenant_id"), page, pageSize)
+	operatorID := uint(0)
+	if strings.HasPrefix(ctx.GetString("subject"), "staff:") && !authz.HasTenantPermission(ctx.GetString("role"), authz.PermissionOnsiteManage) {
+		operatorID = ctx.GetUint("user_id")
+	}
+	rows, total, err := c.Service.ListShiftsForOperator(ctx.GetUint("tenant_id"), operatorID, page, pageSize)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -33,6 +39,10 @@ func (c *OperationsController) GetShiftSummary(ctx *gin.Context) {
 	summary, err := c.Service.GetShiftSummary(ctx.GetUint("tenant_id"), uint(id))
 	if err != nil {
 		ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if strings.HasPrefix(ctx.GetString("subject"), "staff:") && !authz.HasTenantPermission(ctx.GetString("role"), authz.PermissionOnsiteManage) && summary.Shift.OperatorID != ctx.GetUint("user_id") {
+		ctx.JSON(http.StatusForbidden, gin.H{"error": "无权查看其他收银员班次"})
 		return
 	}
 	ctx.JSON(http.StatusOK, summary)

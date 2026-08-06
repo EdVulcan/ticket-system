@@ -23,6 +23,7 @@ type Config struct {
 }
 
 type ServerConfig struct {
+	Host               string `mapstructure:"host"`
 	Port               int    `mapstructure:"port"`
 	Mode               string `mapstructure:"mode"`
 	PublicBaseURL      string `mapstructure:"public_base_url"`
@@ -115,6 +116,7 @@ func InitConfig() error {
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 
+	viper.SetDefault("server.host", "127.0.0.1")
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.mode", "release")
 	viper.SetDefault("server.public_base_url", "")

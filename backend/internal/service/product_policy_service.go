@@ -134,7 +134,7 @@ func countPriorQuantity(tx *gorm.DB, productID uint, value, field string) (int, 
 		column = "visitor_id"
 	}
 	var total int64
-	query := fmt.Sprintf("SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.fulfillment_product_id = ? AND oi.%s = ? AND o.status NOT IN ?", column)
+	query := fmt.Sprintf("SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi JOIN orders o ON o.id = oi.order_id WHERE oi.fulfillment_product_id = ? AND oi.%s = ? AND o.environment = 'production' AND o.status NOT IN ?", column)
 	if err := tx.Raw(query, productID, strings.TrimSpace(value), []string{"cancelled", "refunded"}).Scan(&total).Error; err != nil {
 		return 0, err
 	}

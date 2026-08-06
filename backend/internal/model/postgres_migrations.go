@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 66
+const CurrentPostgresSchemaVersion = 68
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -24,7 +24,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&DistributorRelationship{}, &CapitalAccount{}, &TransactionRecord{}, &LedgerEntry{},
 		&Policy{}, &PaymentConfig{}, &Payment{}, &Refund{}, &PaymentReconciliationTask{}, &DigitalRefundTask{},
 		&AuditLog{}, &OTANonce{}, &FinancialDocument{},
-		&ChannelAccount{}, &ChannelProductMapping{}, &ChannelRequest{}, &ChannelReservation{},
+		&ChannelAccount{}, &ChannelProductMapping{}, &ChannelRequest{}, &ChannelNonce{}, &ChannelReservation{},
 		&CtripOrderLink{}, &CtripOrderItem{}, &CtripOutboundTask{},
 		&ChannelBillRecord{}, &ChannelReconciliation{}, &ChannelReconciliationLine{},
 		&TravelContract{}, &TravelAgent{}, &TourGuide{}, &TravelVehicle{}, &TourGroup{}, &TourGroupMember{},
@@ -44,6 +44,9 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	if err := db.Model(&TeamSettlementStatement{}).Where("sequence IS NULL OR sequence = 0").Updates(map[string]interface{}{"sequence": 1, "kind": "original"}).Error; err != nil {
 		return fmt.Errorf("backfill team settlement sequence: %w", err)
+	}
+	if err := backfillPendingRefundReservations(db); err != nil {
+		return err
 	}
 	if !hadSettlementSource {
 		if err := db.Model(&SettlementLine{}).Where("source = ?", "verification").Update("source", "legacy_sale").Error; err != nil {
@@ -74,9 +77,47 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "WeChat payment-code credentials",
+		Name:      "channel replay protection and encrypted device keys",
 		AppliedAt: time.Now(),
 	}).Error
+}
+
+func backfillPendingRefundReservations(db *gorm.DB) error {
+	var conflicts int64
+	if err := db.Raw(`
+		WITH active_reservations AS (
+			SELECT r.id AS refund_id, jsonb_array_elements_text(r.ticket_codes_json::jsonb) AS ticket_code
+			FROM refunds r
+			WHERE r.parent_refund_id = 0
+			  AND r.status IN ('pending', 'group_pending')
+			  AND COALESCE(r.ticket_codes_json, '') != ''
+		), conflicts AS (
+			SELECT ticket_code FROM active_reservations GROUP BY ticket_code HAVING COUNT(*) > 1
+		)
+		SELECT COUNT(*) FROM conflicts
+	`).Scan(&conflicts).Error; err != nil {
+		return fmt.Errorf("inspect pending refund reservations: %w", err)
+	}
+	if conflicts > 0 {
+		return fmt.Errorf("pending refund migration found %d ticket conflicts requiring manual reconciliation", conflicts)
+	}
+	if err := db.Exec(`
+		WITH active_reservations AS (
+			SELECT r.id AS refund_id, jsonb_array_elements_text(r.ticket_codes_json::jsonb) AS ticket_code
+			FROM refunds r
+			WHERE r.parent_refund_id = 0
+			  AND r.status IN ('pending', 'group_pending')
+			  AND COALESCE(r.ticket_codes_json, '') != ''
+		)
+		UPDATE tickets t
+		SET pending_refund_id = active_reservations.refund_id
+		FROM active_reservations
+		WHERE t.ticket_code = active_reservations.ticket_code
+		  AND t.status != 'refunded'
+	`).Error; err != nil {
+		return fmt.Errorf("backfill pending refund reservations: %w", err)
+	}
+	return nil
 }
 
 func applyPostgresIndexes(db *gorm.DB) error {

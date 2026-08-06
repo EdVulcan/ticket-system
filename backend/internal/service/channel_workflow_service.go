@@ -57,12 +57,21 @@ func (s *ChannelWorkflowService) Reserve(tenantID, accountID uint, channel strin
 		if err := validateTimeSlot(fulfillment.TimeSlotConfig, probe); err != nil {
 			return err
 		}
-		if err := reserveStock(tx, fulfillment, useDate, probe.StockSlot, quantity); err != nil {
-			return err
+		environment := account.Environment
+		if account.Status == "sandbox" {
+			environment = "sandbox"
+		}
+		if environment == "" {
+			environment = "production"
+		}
+		if environment == "production" {
+			if err := reserveStock(tx, fulfillment, useDate, probe.StockSlot, quantity); err != nil {
+				return err
+			}
 		}
 		reservation = model.ChannelReservation{
 			TenantID: tenantID, ChannelAccountID: accountID, ExternalNo: strings.TrimSpace(externalNo), ProductID: productID,
-			UseDate: useDate, StockSlot: probe.StockSlot, Quantity: quantity, Status: "held", ExpiresAt: time.Now().Add(ttl),
+			UseDate: useDate, StockSlot: probe.StockSlot, Quantity: quantity, Status: "held", Environment: environment, ExpiresAt: time.Now().Add(ttl),
 		}
 		return tx.Create(&reservation).Error
 	})
@@ -81,7 +90,17 @@ func (s *ChannelWorkflowService) Confirm(tenantID, accountID uint, channel strin
 		return nil, err
 	}
 	if reservation.Status == "converted" && reservation.OrderNo != "" {
-		return s.OrderService.GetByOrderNo(reservation.OrderNo, tenantID)
+		order, err := s.OrderService.GetByOrderNo(reservation.OrderNo, tenantID)
+		if err != nil {
+			return nil, err
+		}
+		if order.Status == "unpaid" {
+			if err := s.OrderService.MarkAsPaid(order.OrderNo, tenantID); err != nil {
+				return nil, err
+			}
+			order.Status = "paid"
+		}
+		return order, nil
 	}
 	if reservation.Status != "held" || !time.Now().Before(reservation.ExpiresAt) {
 		return nil, errors.New("channel reservation is expired or unavailable")
@@ -121,8 +140,10 @@ func (s *ChannelWorkflowService) Release(tenantID, accountID, reservationID uint
 			}
 			fulfillment = &model.Product{Base: model.Base{ID: listing.FulfillmentProductID}, TenantID: listing.FulfillmentTenantID, StockType: listing.StockType, Name: listing.Name, DailyStock: listing.DailyStock}
 		}
-		if err := releaseStock(tx, fulfillment, reservation.UseDate, reservation.StockSlot, reservation.Quantity); err != nil {
-			return err
+		if reservation.Environment != "sandbox" {
+			if err := releaseStock(tx, fulfillment, reservation.UseDate, reservation.StockSlot, reservation.Quantity); err != nil {
+				return err
+			}
 		}
 		return tx.Model(&reservation).Updates(map[string]interface{}{"status": "released", "order_no": "", "updated_at": time.Now()}).Error
 	})

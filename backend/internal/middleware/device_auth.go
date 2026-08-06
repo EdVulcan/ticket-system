@@ -9,6 +9,7 @@ import (
 	"strings"
 	"ticket-backend/internal/deviceauth"
 	"ticket-backend/internal/model"
+	"ticket-backend/internal/utils"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -62,8 +63,9 @@ func DeviceAuth() gin.HandlerFunc {
 			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "设备未登记"})
 			return
 		}
-		key, err := deviceauth.DecodeStoredKey(device.AuthKeyHash)
-		if err != nil || !deviceauth.Verify(key, signature, ctx.Request.Method, ctx.Request.URL.Path, timestamp, nonce, requestID, body) {
+		rawKey, err := utils.DecryptAES(device.AuthKeyCiphertext)
+		key := deviceauth.DeriveKey(rawKey)
+		if err != nil || rawKey == "" || !deviceauth.Verify(key, signature, ctx.Request.Method, ctx.Request.URL.Path, timestamp, nonce, requestID, body) {
 			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "设备签名无效"})
 			return
 		}

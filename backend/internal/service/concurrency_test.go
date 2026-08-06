@@ -12,12 +12,22 @@ import (
 	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/testdb"
+	"ticket-backend/internal/utils"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+func encryptedDeviceKeyForTest(t *testing.T, key string) string {
+	t.Helper()
+	value, err := utils.EncryptAES(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
 
 func TestExternalOrderUniqueViolationDetection(t *testing.T) {
 	externalOrderConflict := fmt.Errorf("create order: %w", &pgconn.PgError{
@@ -39,6 +49,7 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	config.GlobalConfig.Database = database
+	config.GlobalConfig.Security.EncryptionKey = strings.Repeat("e", 32)
 	if err := model.InitDB(); err != nil {
 		panic(err)
 	}
@@ -634,7 +645,7 @@ func TestTicketCannotCrossScenicAreaWithinSameSupplier(t *testing.T) {
 			return err
 		}
 		checkpointID := secondCheckpoint.ID
-		secondDevice = model.Device{Name: "Park B Device", SerialNumber: fmt.Sprintf("PARK-B-%d", time.Now().UnixNano()), Type: "gate", Status: "online", TenantID: tenantID, ScenicAreaID: secondArea.ID, CheckPointID: &checkpointID, AuthKeyHash: hashDeviceKey("test-device-key")}
+		secondDevice = model.Device{Name: "Park B Device", SerialNumber: fmt.Sprintf("PARK-B-%d", time.Now().UnixNano()), Type: "gate", Status: "online", TenantID: tenantID, ScenicAreaID: secondArea.ID, CheckPointID: &checkpointID, AuthKeyCiphertext: encryptedDeviceKeyForTest(t, "test-device-key")}
 		return tx.Create(&secondDevice).Error
 	}); err != nil {
 		t.Fatal(err)
@@ -711,7 +722,7 @@ func seedSellableProduct(t *testing.T, stockType string, stock int) (uint, uint)
 			return err
 		}
 		checkpointID := checkpoint.ID
-		if err := tx.Create(&model.Device{Name: "Main Gate Device", SerialNumber: fmt.Sprintf("DEV-%d", time.Now().UnixNano()), Type: "gate", Status: "online", TenantID: tenant.ID, ScenicAreaID: area.ID, CheckPointID: &checkpointID, AuthKeyHash: hashDeviceKey("test-device-key")}).Error; err != nil {
+		if err := tx.Create(&model.Device{Name: "Main Gate Device", SerialNumber: fmt.Sprintf("DEV-%d", time.Now().UnixNano()), Type: "gate", Status: "online", TenantID: tenant.ID, ScenicAreaID: area.ID, CheckPointID: &checkpointID, AuthKeyCiphertext: encryptedDeviceKeyForTest(t, "test-device-key")}).Error; err != nil {
 			return err
 		}
 		rule := model.TicketRule{Name: "Single Entry", TenantID: tenant.ID, ValidityType: "date"}
@@ -1000,7 +1011,7 @@ func seedDistributionScenario(t *testing.T) distributionScenario {
 			return err
 		}
 		checkpointID := checkpoint.ID
-		device := model.Device{Name: "Supplier Gate Device", SerialNumber: fmt.Sprintf("SUP-DEV-%d", time.Now().UnixNano()), Type: "gate", Status: "online", TenantID: supplier.ID, ScenicAreaID: area.ID, CheckPointID: &checkpointID, AuthKeyHash: hashDeviceKey("test-device-key")}
+		device := model.Device{Name: "Supplier Gate Device", SerialNumber: fmt.Sprintf("SUP-DEV-%d", time.Now().UnixNano()), Type: "gate", Status: "online", TenantID: supplier.ID, ScenicAreaID: area.ID, CheckPointID: &checkpointID, AuthKeyCiphertext: encryptedDeviceKeyForTest(t, "test-device-key")}
 		if err := tx.Create(&device).Error; err != nil {
 			return err
 		}

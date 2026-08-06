@@ -521,6 +521,10 @@ func (s *OperationsService) RecoverStalePrintJobs(now time.Time, age time.Durati
 }
 
 func (s *OperationsService) ListShifts(tenantID uint, page, pageSize int) ([]model.POSShift, int64, error) {
+	return s.ListShiftsForOperator(tenantID, 0, page, pageSize)
+}
+
+func (s *OperationsService) ListShiftsForOperator(tenantID, operatorID uint, page, pageSize int) ([]model.POSShift, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -531,6 +535,9 @@ func (s *OperationsService) ListShifts(tenantID uint, page, pageSize int) ([]mod
 		pageSize = 100
 	}
 	query := model.DB.Model(&model.POSShift{}).Where("tenant_id = ?", tenantID)
+	if operatorID != 0 {
+		query = query.Where("operator_id = ?", operatorID)
+	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err

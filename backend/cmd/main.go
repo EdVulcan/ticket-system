@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"ticket-backend/internal/backup"
@@ -88,6 +90,16 @@ func main() {
 	// 4. Init Router
 	gin.SetMode(config.GlobalConfig.Server.Mode)
 	r := gin.Default()
+	trustedProxies := make([]string, 0)
+	for _, value := range strings.Split(config.GlobalConfig.Server.TrustedProxyCIDRs, ",") {
+		if value = strings.TrimSpace(value); value != "" {
+			trustedProxies = append(trustedProxies, value)
+		}
+	}
+	if err := r.SetTrustedProxies(trustedProxies); err != nil {
+		logger.Log.Error(fmt.Sprintf("Invalid trusted proxy configuration: %v", err))
+		return
+	}
 
 	// Register Routes
 	router.InitRouter(r)
@@ -99,9 +111,21 @@ func main() {
 	})
 	serveAdminUI(r, config.GlobalConfig.Server.AdminStaticDir)
 
-	addr := fmt.Sprintf(":%d", config.GlobalConfig.Server.Port)
+	host := strings.TrimSpace(config.GlobalConfig.Server.Host)
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	addr := net.JoinHostPort(host, strconv.Itoa(config.GlobalConfig.Server.Port))
 	logger.Log.Info(fmt.Sprintf("Server starting on %s", addr))
-	server := &http.Server{Addr: addr, Handler: r}
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           r,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    1 << 20,
+	}
 	serverError := make(chan error, 1)
 	go func() {
 		serverError <- server.ListenAndServe()

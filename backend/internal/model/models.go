@@ -72,19 +72,20 @@ type CheckPoint struct {
 // Device 终端设备
 type Device struct {
 	Base
-	Name          string      `gorm:"size:100;not null" json:"name"`
-	SerialNumber  string      `gorm:"size:100;uniqueIndex;not null" json:"serial_number"` // 设备序列号
-	Type          string      `gorm:"size:20;not null" json:"type"`                       // gate, handheld, pos
-	Status        string      `gorm:"size:20;default:'offline'" json:"status"`            // online, offline, fault
-	LastHeartbeat *time.Time  `json:"last_heartbeat"`
-	IPAddress     string      `gorm:"size:50" json:"ip_address"`
-	MACAddress    string      `gorm:"size:50" json:"mac_address"`
-	TenantID      uint        `json:"tenant_id"`
-	ScenicAreaID  uint        `gorm:"index" json:"scenic_area_id"`
-	CheckPointID  *uint       `json:"check_point_id"` // 绑定检票点 (可选)
-	CheckPoint    *CheckPoint `json:"check_point,omitempty"`
-	AuthKeyHash   string      `gorm:"size:64" json:"-"`
-	AuthKey       string      `gorm:"-" json:"auth_key,omitempty"`
+	Name              string      `gorm:"size:100;not null" json:"name"`
+	SerialNumber      string      `gorm:"size:100;uniqueIndex;not null" json:"serial_number"` // 设备序列号
+	Type              string      `gorm:"size:20;not null" json:"type"`                       // gate, handheld, pos
+	Status            string      `gorm:"size:20;default:'offline'" json:"status"`            // online, offline, fault
+	LastHeartbeat     *time.Time  `json:"last_heartbeat"`
+	IPAddress         string      `gorm:"size:50" json:"ip_address"`
+	MACAddress        string      `gorm:"size:50" json:"mac_address"`
+	TenantID          uint        `json:"tenant_id"`
+	ScenicAreaID      uint        `gorm:"index" json:"scenic_area_id"`
+	CheckPointID      *uint       `json:"check_point_id"` // 绑定检票点 (可选)
+	CheckPoint        *CheckPoint `json:"check_point,omitempty"`
+	AuthKeyHash       string      `gorm:"size:64" json:"-"`
+	AuthKeyCiphertext string      `gorm:"type:text" json:"-"`
+	AuthKey           string      `gorm:"-" json:"auth_key,omitempty"`
 }
 
 // TicketRule 检票规则 (M选N核心)
@@ -186,6 +187,7 @@ type Order struct {
 	VisitorID            string      `gorm:"size:50" json:"visitor_id,omitempty"`
 	VisitorRegion        string      `gorm:"size:50" json:"visitor_region,omitempty"`
 	Channel              string      `gorm:"size:50;default:'online';uniqueIndex:idx_order_external,priority:2" json:"channel"` // online, ota, window
+	Environment          string      `gorm:"size:20;not null;default:'production';index" json:"environment"`                    // production, sandbox
 	ChannelAccountID     uint        `gorm:"index" json:"channel_account_id"`
 	ChannelReservationID uint        `gorm:"index" json:"channel_reservation_id,omitempty"`
 	ExternalNo           *string     `gorm:"size:100;uniqueIndex:idx_order_external,priority:3" json:"external_no,omitempty"`
@@ -258,8 +260,10 @@ type Ticket struct {
 	VisitorRegion string `gorm:"size:50" json:"visitor_region"`
 
 	// Usage Tracking
-	CheckInCount  int    `gorm:"default:0" json:"check_in_count"` // 总核销次数
-	GateVoiceCode string `gorm:"size:100" json:"gate_voice_code"`
+	CheckInCount    int    `gorm:"default:0" json:"check_in_count"` // 总核销次数
+	GateVoiceCode   string `gorm:"size:100" json:"gate_voice_code"`
+	Environment     string `gorm:"size:20;not null;default:'production';index" json:"environment"`
+	PendingRefundID uint   `gorm:"not null;default:0;index" json:"-"`
 }
 
 // CheckInRecord 核销记录

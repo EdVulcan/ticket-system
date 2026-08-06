@@ -54,6 +54,18 @@ func TestCtripQueryStatusIsCalculatedPerOrderItem(t *testing.T) {
 	}
 }
 
+func TestCtripPermissionsAreOperationSpecific(t *testing.T) {
+	if !ctripPermissionAllows(`["orders:create"]`, "CreatePreOrder") || !ctripPermissionAllows(`["orders:create"]`, "PayPreOrder") {
+		t.Fatal("create permission did not cover the preorder payment lifecycle")
+	}
+	if ctripPermissionAllows(`["orders:create"]`, "QueryOrder") || ctripPermissionAllows(`["orders:query"]`, "CancelOrder") {
+		t.Fatal("Ctrip operation accepted an unrelated permission")
+	}
+	if !ctripPermissionAllows(`["*"]`, "CancelOrder") || ctripPermissionAllows(`["*"]`, "UnknownOperation") {
+		t.Fatal("wildcard permission handling is incorrect")
+	}
+}
+
 func TestCtripPreOrderPaymentQueryAndCancellation(t *testing.T) {
 	resetBusinessData(t)
 	previousKey := config.GlobalConfig.Security.EncryptionKey
@@ -174,6 +186,13 @@ func TestCtripPreOrderPaymentQueryAndCancellation(t *testing.T) {
 	payResult := decodeCtripTestResponse(t, payResponse, aesKey, aesIV)
 	if payResult.Code != "0000" || payResult.Body["supplierConfirmType"].(float64) != 1 {
 		t.Fatalf("pay response=%+v", payResult)
+	}
+	var sandboxOrder model.Order
+	if err := model.DB.Preload("Items.Tickets").Where("order_no = ?", supplierOrderID).First(&sandboxOrder).Error; err != nil {
+		t.Fatal(err)
+	}
+	if sandboxOrder.Environment != "sandbox" || len(sandboxOrder.Items) != 1 || len(sandboxOrder.Items[0].Tickets) != 1 || sandboxOrder.Items[0].Tickets[0].Environment != "sandbox" {
+		t.Fatalf("Ctrip sandbox order was not isolated: %+v", sandboxOrder)
 	}
 	var vouchers []interface{}
 	if values, ok := payResult.Body["vouchers"].([]interface{}); ok {

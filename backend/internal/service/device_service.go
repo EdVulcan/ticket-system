@@ -1,9 +1,7 @@
 package service
 
 import (
-	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -554,7 +552,12 @@ func (s *DeviceService) validateCheckPoint(db *gorm.DB, tenantID uint, checkPoin
 
 func (s *DeviceService) Create(device *model.Device, tenantID uint) error {
 	device.AuthKey = utils.GenerateRandomString(40)
-	device.AuthKeyHash = hashDeviceKey(device.AuthKey)
+	ciphertext, err := utils.EncryptAES(device.AuthKey)
+	if err != nil {
+		return fmt.Errorf("encrypt device key: %w", err)
+	}
+	device.AuthKeyCiphertext = ciphertext
+	device.AuthKeyHash = ""
 	return model.Write(func(tx *gorm.DB) error {
 		if err := requireActiveTenantCapability(tx, tenantID, "supplier"); err != nil {
 			return err
@@ -587,7 +590,7 @@ func (s *DeviceService) Update(id, tenantID uint, device *model.Device) error {
 		}
 		device.ScenicAreaID = areaID
 		result := tx.Model(&model.Device{}).Where("id = ? AND tenant_id = ?", id, tenantID).
-			Omit("tenant_id", "serial_number", "auth_key_hash", "ScenicAreaID").Updates(device)
+			Omit("tenant_id", "serial_number", "auth_key_hash", "auth_key_ciphertext", "ScenicAreaID").Updates(device)
 		if result.Error == nil {
 			result = tx.Model(&model.Device{}).Where("id = ? AND tenant_id = ?", id, tenantID).Update("scenic_area_id", areaID)
 		}
@@ -623,8 +626,12 @@ func scenicAreaForCheckpoint(db *gorm.DB, tenantID uint, checkpointID *uint, req
 
 func (s *DeviceService) RotateKey(id, tenantID uint) (string, error) {
 	key := utils.GenerateRandomString(40)
+	ciphertext, encryptErr := utils.EncryptAES(key)
+	if encryptErr != nil {
+		return "", fmt.Errorf("encrypt device key: %w", encryptErr)
+	}
 	err := model.Write(func(tx *gorm.DB) error {
-		result := tx.Model(&model.Device{}).Where("id = ? AND tenant_id = ?", id, tenantID).Update("auth_key_hash", hashDeviceKey(key))
+		result := tx.Model(&model.Device{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(map[string]interface{}{"auth_key_ciphertext": ciphertext, "auth_key_hash": ""})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -636,17 +643,15 @@ func (s *DeviceService) RotateKey(id, tenantID uint) (string, error) {
 	return key, err
 }
 
-func hashDeviceKey(key string) string {
-	sum := sha256.Sum256([]byte(key))
-	return hex.EncodeToString(sum[:])
-}
-
 func validDeviceKey(device *model.Device, key string) bool {
-	if device.AuthKeyHash == "" || key == "" {
+	if device.AuthKeyCiphertext == "" || key == "" {
 		return false
 	}
-	provided := hashDeviceKey(key)
-	return subtle.ConstantTimeCompare([]byte(device.AuthKeyHash), []byte(provided)) == 1
+	stored, err := utils.DecryptAES(device.AuthKeyCiphertext)
+	if err != nil || len(stored) != len(key) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(stored), []byte(key)) == 1
 }
 
 func (s *DeviceService) Delete(id, tenantID uint) error {

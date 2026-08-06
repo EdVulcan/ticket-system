@@ -48,11 +48,11 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "channel code is required"})
 			return
 		}
-		timestamp := ctx.GetHeader("X-Channel-Timestamp")
-		nonce := ctx.GetHeader("X-Channel-Nonce")
-		requestID := ctx.GetHeader("X-Channel-Request-Id")
-		provided := ctx.GetHeader("X-Channel-Signature")
-		if timestamp == "" || nonce == "" || requestID == "" || provided == "" {
+		timestamp := strings.TrimSpace(ctx.GetHeader("X-Channel-Timestamp"))
+		nonce := strings.TrimSpace(ctx.GetHeader("X-Channel-Nonce"))
+		requestID := strings.TrimSpace(ctx.GetHeader("X-Channel-Request-Id"))
+		provided := strings.TrimSpace(ctx.GetHeader("X-Channel-Signature"))
+		if timestamp == "" || nonce == "" || requestID == "" || provided == "" || len(nonce) > 120 || len(requestID) > 120 || len(provided) > 128 {
 			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "missing channel authentication headers"})
 			return
 		}
@@ -80,14 +80,21 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 			ctx.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "channel permission denied"})
 			return
 		}
+		ctx.Request.Body = http.MaxBytesReader(ctx.Writer, ctx.Request.Body, 2<<20)
 		body, err := io.ReadAll(ctx.Request.Body)
 		if err != nil {
+			var maxBytesError *http.MaxBytesError
+			if errors.As(err, &maxBytesError) {
+				ctx.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": "channel request body is too large"})
+				return
+			}
 			ctx.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "cannot read request body"})
 			return
 		}
 		ctx.Request.Body = io.NopCloser(bytes.NewReader(body))
 		bodyHash := sha256.Sum256(body)
-		canonical := strings.Join([]string{timestamp, nonce, ctx.Request.Method, ctx.Request.URL.Path, hex.EncodeToString(bodyHash[:])}, "\n")
+		canonicalQuery := ctx.Request.URL.Query().Encode()
+		canonical := strings.Join([]string{timestamp, nonce, requestID, ctx.Request.Method, ctx.Request.URL.Path, canonicalQuery, hex.EncodeToString(bodyHash[:])}, "\n")
 		mac := hmac.New(sha256.New, []byte(secret))
 		_, _ = mac.Write([]byte(canonical))
 		calculated := hex.EncodeToString(mac.Sum(nil))
@@ -100,10 +107,13 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 		var requestLeaseAt *time.Time
 		if err := model.Write(func(tx *gorm.DB) error {
 			now := time.Now()
+			if err := tx.Where("channel_account_id = ? AND expires_at < ?", account.ID, now).Delete(&model.ChannelNonce{}).Error; err != nil {
+				return err
+			}
 			var existing model.ChannelRequest
 			err := tx.Where("channel_account_id = ? AND request_id = ?", account.ID, requestID).First(&existing).Error
 			if err == nil {
-				if existing.BodyHash != hex.EncodeToString(bodyHash[:]) || existing.Endpoint != ctx.Request.URL.Path {
+				if existing.BodyHash != hex.EncodeToString(bodyHash[:]) || existing.Endpoint != ctx.Request.URL.Path || (existing.Nonce != "" && existing.Nonce != nonce) {
 					return errors.New("channel request id reused with different data")
 				}
 				if existing.Status == "completed" && existing.ResponseJSON != "" {
@@ -132,6 +142,12 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
 			}
+			var nonceRecord model.ChannelNonce
+			if err := tx.Where("channel_account_id = ? AND nonce = ?", account.ID, nonce).First(&nonceRecord).Error; err == nil {
+				return errors.New("channel nonce has already been used")
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
 			if account.RateLimitPerMin > 0 {
 				var recent int64
 				if err := tx.Model(&model.ChannelRequest{}).Where("channel_account_id = ? AND created_at >= ?", account.ID, now.Add(-time.Minute)).Count(&recent).Error; err != nil {
@@ -141,8 +157,11 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 					return errors.New("channel rate limit exceeded")
 				}
 			}
+			if err := tx.Create(&model.ChannelNonce{ChannelAccountID: account.ID, Nonce: nonce, RequestID: requestID, ExpiresAt: now.Add(maxSkew)}).Error; err != nil {
+				return errors.New("channel nonce has already been used")
+			}
 			requestLeaseAt = &now
-			return tx.Create(&model.ChannelRequest{ChannelAccountID: account.ID, RequestID: requestID, Endpoint: ctx.Request.URL.Path, BodyHash: hex.EncodeToString(bodyHash[:]), Status: "processing", ResponseStatus: http.StatusOK, RemoteIP: remoteIP, AttemptCount: 1, LastAttemptAt: &now, LockedAt: requestLeaseAt}).Error
+			return tx.Create(&model.ChannelRequest{ChannelAccountID: account.ID, RequestID: requestID, Nonce: nonce, Endpoint: ctx.Request.URL.Path, BodyHash: hex.EncodeToString(bodyHash[:]), Status: "processing", ResponseStatus: http.StatusOK, RemoteIP: remoteIP, AttemptCount: 1, LastAttemptAt: &now, LockedAt: requestLeaseAt}).Error
 		}); err != nil {
 			ctx.AbortWithStatusJSON(http.StatusConflict, gin.H{"error": err.Error()})
 			return

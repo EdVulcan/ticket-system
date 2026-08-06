@@ -33,7 +33,7 @@ func (c *AuthController) Login(ctx *gin.Context) {
 
 	token, user, err := c.Service.Login(req.SystemCode, req.Username, req.Password)
 	if err != nil {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "系统编号、账号或密码错误"})
 		return
 	}
 
@@ -69,7 +69,7 @@ func (c *AuthController) StaffLogin(ctx *gin.Context) {
 
 	token, staff, err := c.Service.StaffLogin(req.SystemCode, req.JobNumber, req.Password)
 	if err != nil {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "系统编号、员工工号或密码错误"})
 		return
 	}
 
@@ -92,7 +92,7 @@ func (c *AuthController) PlatformLogin(ctx *gin.Context) {
 	}
 	token, user, err := c.Service.PlatformLogin(req.Username, req.Password)
 	if err != nil {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "账号或密码错误"})
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"token": token, "user": gin.H{"id": user.ID, "username": user.Username, "role": user.Role, "scope": "platform", "is_initial_admin": user.IsInitialAdmin}})

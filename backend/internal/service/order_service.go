@@ -79,12 +79,27 @@ func roundMoney(value float64) float64 {
 }
 
 func (s *OrderService) Create(req *model.Order) error {
+	if req != nil && req.Channel == "window" && (req.ChannelAccountID != 0 || req.ChannelReservationID != 0 || req.ExternalNo != nil) {
+		return errors.New("window orders cannot contain channel ownership fields")
+	}
 	if err := validateOrder(req); err != nil {
 		return err
 	}
 	err := model.Write(func(tx *gorm.DB) error {
 		if err := requireActiveTenant(tx, req.TenantID); err != nil {
 			return err
+		}
+		req.Environment = "production"
+		var channelAccount *model.ChannelAccount
+		if req.ChannelAccountID != 0 {
+			var account model.ChannelAccount
+			if err := tx.Where("id = ? AND tenant_id = ? AND status != ?", req.ChannelAccountID, req.TenantID, "disabled").First(&account).Error; err != nil {
+				return errors.New("channel account is unavailable")
+			}
+			if account.Environment == "sandbox" || account.Status == "sandbox" {
+				req.Environment = "sandbox"
+			}
+			channelAccount = &account
 		}
 		if err := expandBundleOrderItemsTx(tx, req); err != nil {
 			return err
@@ -126,7 +141,9 @@ func (s *OrderService) Create(req *model.Order) error {
 			item := &req.Items[i]
 			item.Base = model.Base{}
 			item.OrderID = 0
+			item.Product = model.Product{}
 			item.Tickets = nil
+			item.VisitorRecords = nil
 
 			var listing model.Product
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -138,11 +155,7 @@ func (s *OrderService) Create(req *model.Order) error {
 			listingForResolution := listing
 			var channelCostCents int64
 			channelPricing := false
-			if req.ChannelAccountID != 0 {
-				var channelAccount model.ChannelAccount
-				if err := tx.Where("id = ? AND tenant_id = ? AND status != ?", req.ChannelAccountID, req.TenantID, "disabled").First(&channelAccount).Error; err != nil {
-					return errors.New("channel account is unavailable")
-				}
+			if channelAccount != nil {
 				if channelAccount.Type == "ctrip" {
 					var mapping model.ChannelProductMapping
 					if err := tx.Where("channel_account_id = ? AND product_id = ? AND status = ?", channelAccount.ID, listing.ID, "active").First(&mapping).Error; err != nil {
@@ -220,8 +233,10 @@ func (s *OrderService) Create(req *model.Order) error {
 				}
 			}
 			if channelReservation == nil {
-				if err := reserveStock(tx, fulfillment, item.UseDate, item.StockSlot, item.Quantity); err != nil {
-					return err
+				if req.Environment == "production" {
+					if err := reserveStock(tx, fulfillment, item.UseDate, item.StockSlot, item.Quantity); err != nil {
+						return err
+					}
 				}
 			} else {
 				if len(req.Items) != 1 || channelReservation.ProductID != item.ProductID || channelReservation.Quantity != item.Quantity || !sameOptionalDate(channelReservation.UseDate, item.UseDate) || channelReservation.StockSlot != item.StockSlot {
@@ -303,7 +318,7 @@ func createFulfillmentProjections(tx *gorm.DB, service *OrderService, order *mod
 				FulfillmentNo: service.GenerateFulfillmentNo(), SalesOrderID: order.ID,
 				SalesOrderNo: order.OrderNo, SalesTenantID: order.TenantID,
 				SupplierTenantID: item.FulfillmentTenantID, ScenicAreaID: item.FulfillmentScenicAreaID,
-				Status: "reserved", SettlementStatus: "open",
+				Status: "reserved", SettlementStatus: "open", Environment: order.Environment,
 			}
 			fulfillments[key] = fulfillment
 			if err := tx.Create(fulfillment).Error; err != nil {
@@ -800,6 +815,7 @@ func buildTickets(service *OrderService, product *model.Product, quantity int, o
 	for i := range tickets {
 		tickets[i] = model.Ticket{
 			TicketCode: service.GenerateTicketCode(), Status: "unused", TenantID: order.TenantID,
+			Environment:          order.Environment,
 			FulfillmentProductID: product.ID, FulfillmentTenantID: product.TenantID,
 			ScenicAreaID: product.ScenicAreaID, FulfillmentScenicAreaID: product.ScenicAreaID,
 			RuleSnapshot: string(ruleSnapshot), CodeMode: product.CodeMode,
@@ -994,6 +1010,20 @@ func (s *OrderService) Cancel(orderNo string, tenantID uint) error {
 	})
 }
 
+func (s *OrderService) CancelChannelOrder(orderNo string, tenantID, channelAccountID uint) error {
+	if channelAccountID == 0 {
+		return errors.New("channel account is required")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var order model.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Tickets").
+			Where("order_no = ? AND tenant_id = ? AND channel_account_id = ?", orderNo, tenantID, channelAccountID).First(&order).Error; err != nil {
+			return err
+		}
+		return cancelOrderTxMode(tx, &order, true)
+	})
+}
+
 // ExpireUnpaid releases every due reservation in one serialized write
 // transaction. The status transition is the idempotency key: a retry sees a
 // cancelled order and cannot release the same stock or funds twice.
@@ -1020,10 +1050,14 @@ func (s *OrderService) ExpireUnpaid(now time.Time) (int, error) {
 }
 
 func cancelOrderTx(tx *gorm.DB, order *model.Order) error {
+	return cancelOrderTxMode(tx, order, false)
+}
+
+func cancelOrderTxMode(tx *gorm.DB, order *model.Order, allowPaidChannel bool) error {
 	if order.Status == "cancelled" {
 		return nil
 	}
-	if order.Status != "unpaid" && !(order.Status == "paid" && order.ChannelAccountID > 0) {
+	if order.Status != "unpaid" && !(allowPaidChannel && order.Status == "paid" && order.ChannelAccountID > 0) {
 		return fmt.Errorf("paid orders must use the refund workflow")
 	}
 	var pendingPayments int64
@@ -1048,30 +1082,32 @@ func cancelOrderTx(tx *gorm.DB, order *model.Order) error {
 		}
 	}
 
-	for i := range order.Items {
-		item := &order.Items[i]
-		var listing model.Product
-		if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", item.ProductID, order.TenantID).First(&listing).Error; err != nil {
-			return err
-		}
-		stockProduct, distributed, err := loadStoredFulfillmentProduct(tx, &listing, item, order.TenantID)
-		if err != nil {
-			return err
-		}
-		if distributed {
-			if err := refundDistributionAccount(tx, order, item, order.TenantID, stockProduct.TenantID, listing.Name); err != nil {
+	if order.Environment != "sandbox" {
+		for i := range order.Items {
+			item := &order.Items[i]
+			var listing model.Product
+			if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", item.ProductID, order.TenantID).First(&listing).Error; err != nil {
 				return err
 			}
-			quotaQuantity := item.OfferReservedQuantity
-			if quotaQuantity == 0 {
-				quotaQuantity = item.Quantity
-			}
-			if err := releaseOfferQuotaTx(tx, item.ProductOfferID, quotaQuantity); err != nil {
+			stockProduct, distributed, err := loadStoredFulfillmentProduct(tx, &listing, item, order.TenantID)
+			if err != nil {
 				return err
 			}
-		}
-		if err := releaseStock(tx, stockProduct, item.UseDate, item.StockSlot, item.Quantity); err != nil {
-			return err
+			if distributed {
+				if err := refundDistributionAccount(tx, order, item, order.TenantID, stockProduct.TenantID, listing.Name); err != nil {
+					return err
+				}
+				quotaQuantity := item.OfferReservedQuantity
+				if quotaQuantity == 0 {
+					quotaQuantity = item.Quantity
+				}
+				if err := releaseOfferQuotaTx(tx, item.ProductOfferID, quotaQuantity); err != nil {
+					return err
+				}
+			}
+			if err := releaseStock(tx, stockProduct, item.UseDate, item.StockSlot, item.Quantity); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -1136,15 +1172,20 @@ func (s *OrderService) MarkAsPaid(orderNo string, tenantID uint) error {
 			Where("order_no = ? AND tenant_id = ?", orderNo, tenantID).First(&order).Error; err != nil {
 			return err
 		}
-		if order.Status == "paid" {
-			return nil
-		}
-		if order.Status != "unpaid" {
-			return fmt.Errorf("order cannot be paid from status %s", order.Status)
-		}
-		if err := tx.Model(&order).Update("status", "paid").Error; err != nil {
-			return err
-		}
-		return updateFulfillmentOrdersTx(tx, order.ID, "paid")
+		return markOrderAsPaidTx(tx, &order)
 	})
+}
+
+func markOrderAsPaidTx(tx *gorm.DB, order *model.Order) error {
+	if order.Status == "paid" {
+		return nil
+	}
+	if order.Status != "unpaid" {
+		return fmt.Errorf("order cannot be paid from status %s", order.Status)
+	}
+	if err := tx.Model(order).Update("status", "paid").Error; err != nil {
+		return err
+	}
+	order.Status = "paid"
+	return updateFulfillmentOrdersTx(tx, order.ID, "paid")
 }

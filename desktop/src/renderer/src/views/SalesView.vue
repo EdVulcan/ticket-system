@@ -739,8 +739,6 @@ const handleCheckout = async () => {
     const orderData = {
       contact_name: '窗口散客',
       contact_phone: '',
-      channel: 'window',
-      total_amount: totalAmount.value,
       items: cart.value.map(orderLinePayload)
     }
     const res = await axios.post('/orders', orderData)

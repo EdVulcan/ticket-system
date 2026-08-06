@@ -3,14 +3,16 @@ package middleware
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
+	"ticket-backend/internal/config"
 	"ticket-backend/internal/deviceauth"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/testdb"
+	"ticket-backend/internal/utils"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -37,7 +39,12 @@ func TestDeviceAuthRejectsReplay(t *testing.T) {
 	if err := model.DB.Create(&model.TenantCapability{TenantID: tenant.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	device := model.Device{Name: "一号闸机", SerialNumber: "GATE-1", Type: "gate", Status: "online", TenantID: tenant.ID, ScenicAreaID: 1, AuthKeyHash: fmt.Sprintf("%x", deviceauth.DeriveKey("secret"))}
+	config.GlobalConfig.Security.EncryptionKey = strings.Repeat("k", 32)
+	ciphertext, err := utils.EncryptAES("secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := model.Device{Name: "一号闸机", SerialNumber: "GATE-1", Type: "gate", Status: "online", TenantID: tenant.ID, ScenicAreaID: 1, AuthKeyCiphertext: ciphertext}
 	if err := model.DB.Create(&device).Error; err != nil {
 		t.Fatal(err)
 	}

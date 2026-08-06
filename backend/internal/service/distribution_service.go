@@ -383,7 +383,7 @@ func (s *DistributionService) ListFulfillmentOrders(supplierTenantID, distributo
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
-	query := model.DB.Model(&model.FulfillmentOrder{}).Where("supplier_tenant_id = ?", supplierTenantID)
+	query := model.DB.Model(&model.FulfillmentOrder{}).Where("supplier_tenant_id = ? AND environment = ?", supplierTenantID, "production")
 	if distributorTenantID > 0 {
 		query = query.Where("sales_tenant_id = ?", distributorTenantID)
 	}

@@ -63,6 +63,9 @@ func (s *TicketService) VerifyDeviceRequest(code string, checkPointID, deviceID,
 			return err
 		}
 		ticketID = ticket.ID
+		if ticket.Environment == "sandbox" {
+			return ErrInvalidTicket
+		}
 
 		var order model.Order
 		salesTenantID := ticket.TenantID
@@ -77,6 +80,9 @@ func (s *TicketService) VerifyDeviceRequest(code string, checkPointID, deviceID,
 		}
 		if ticket.Status != "unused" && ticket.Status != "active" {
 			return fmt.Errorf("%w: %s", ErrTicketUnavailable, ticket.Status)
+		}
+		if ticket.PendingRefundID != 0 {
+			return fmt.Errorf("%w: refund pending", ErrTicketUnavailable)
 		}
 
 		now := time.Now()

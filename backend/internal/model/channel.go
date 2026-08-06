@@ -67,6 +67,7 @@ type ChannelRequest struct {
 	Base
 	ChannelAccountID uint       `gorm:"uniqueIndex:idx_channel_request,priority:1;not null" json:"channel_account_id"`
 	RequestID        string     `gorm:"size:120;uniqueIndex:idx_channel_request,priority:2;not null" json:"request_id"`
+	Nonce            string     `gorm:"size:120" json:"-"`
 	Endpoint         string     `gorm:"size:120;not null" json:"endpoint"`
 	BodyHash         string     `gorm:"size:64;not null" json:"body_hash"`
 	ResponseJSON     string     `gorm:"type:text" json:"response_json,omitempty"`
@@ -77,6 +78,16 @@ type ChannelRequest struct {
 	LastAttemptAt    *time.Time `gorm:"index" json:"last_attempt_at,omitempty"`
 	CompletedAt      *time.Time `json:"completed_at,omitempty"`
 	LockedAt         *time.Time `gorm:"index" json:"-"`
+}
+
+// ChannelNonce gives replay protection an independent database-enforced key.
+// The request id is retained so an exact idempotent retry may reuse its nonce.
+type ChannelNonce struct {
+	Base
+	ChannelAccountID uint      `gorm:"uniqueIndex:idx_channel_nonce,priority:1;not null" json:"-"`
+	Nonce            string    `gorm:"size:120;uniqueIndex:idx_channel_nonce,priority:2;not null" json:"-"`
+	RequestID        string    `gorm:"size:120;not null" json:"-"`
+	ExpiresAt        time.Time `gorm:"index;not null" json:"-"`
 }
 
 // CtripOrderLink keeps Ctrip protocol identifiers outside the core order

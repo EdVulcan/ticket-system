@@ -34,7 +34,7 @@ func addBundleSupplier(t *testing.T, distributorID uint, name string, settlement
 			return err
 		}
 		checkpointID := checkpoint.ID
-		device := model.Device{TenantID: supplier.ID, ScenicAreaID: area.ID, CheckPointID: &checkpointID, Name: name + " Device", SerialNumber: fmt.Sprintf("BUNDLE-DEV-%d", time.Now().UnixNano()), Type: "gate", Status: "online", AuthKeyHash: hashDeviceKey("test-device-key")}
+		device := model.Device{TenantID: supplier.ID, ScenicAreaID: area.ID, CheckPointID: &checkpointID, Name: name + " Device", SerialNumber: fmt.Sprintf("BUNDLE-DEV-%d", time.Now().UnixNano()), Type: "gate", Status: "online", AuthKeyCiphertext: encryptedDeviceKeyForTest(t, "test-device-key")}
 		if err := tx.Create(&device).Error; err != nil {
 			return err
 		}

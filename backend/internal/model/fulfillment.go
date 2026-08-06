@@ -15,6 +15,7 @@ type FulfillmentOrder struct {
 	SettlementAmount  float64 `gorm:"type:decimal(10,2);not null" json:"settlement_amount"`
 	SettlementStatus  string  `gorm:"size:20;not null;default:'open';index" json:"settlement_status"`
 	Status            string  `gorm:"size:20;not null;default:'reserved';index" json:"status"` // reserved, paid, fulfilled, cancelled
+	Environment       string  `gorm:"size:20;not null;default:'production';index" json:"environment"`
 }
 
 // TicketEntitlement is the immutable supplier-owned projection of a sold

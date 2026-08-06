@@ -368,6 +368,69 @@ func TestAmbiguousProviderFailureIsReconciled(t *testing.T) {
 	}
 }
 
+func TestWindowOrderRejectsChannelFieldsAndNestedAssociationWrites(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	externalNo := "FORGED-EXTERNAL"
+	forgedChannel := model.Order{
+		TenantID: tenantID, Channel: "window", ChannelAccountID: 99, ExternalNo: &externalNo,
+		Items: []model.OrderItem{{ProductID: productID, Quantity: 1}},
+	}
+	if err := (&OrderService{}).Create(&forgedChannel); err == nil {
+		t.Fatal("window order accepted channel ownership fields")
+	}
+
+	var original model.Product
+	if err := model.DB.First(&original, productID).Error; err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{
+		ProductID: productID, Quantity: 1,
+		Product:        model.Product{Base: model.Base{ID: productID}, TenantID: tenantID, Name: "forged product"},
+		VisitorRecords: []model.OrderVisitor{{TenantID: tenantID, Name: "forged visitor", TicketID: 999}},
+	}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	var stored model.Product
+	if err := model.DB.First(&stored, productID).Error; err != nil || stored.Name != original.Name {
+		t.Fatalf("product name=%q want=%q err=%v", stored.Name, original.Name, err)
+	}
+	var forgedVisitors int64
+	if err := model.DB.Model(&model.OrderVisitor{}).Where("order_id = ?", order.ID).Count(&forgedVisitors).Error; err != nil || forgedVisitors != 0 {
+		t.Fatalf("forged visitor rows=%d err=%v", forgedVisitors, err)
+	}
+}
+
+func TestPaidChannelOrderRequiresChannelScopedCancellation(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	account := model.ChannelAccount{TenantID: tenantID, Code: "scoped-cancel", Type: "travel-agency", Status: "active"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&account).Error }); err != nil {
+		t.Fatal(err)
+	}
+	externalNo := "SCOPED-CANCEL-1"
+	order := model.Order{
+		TenantID: tenantID, Channel: account.Code, ChannelAccountID: account.ID, ExternalNo: &externalNo,
+		Items: []model.OrderItem{{ProductID: productID, Quantity: 1}},
+	}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Model(&order).Update("status", "paid").Error }); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).Cancel(order.OrderNo, tenantID); err == nil {
+		t.Fatal("generic tenant cancellation accepted a paid channel order")
+	}
+	if err := (&OrderService{}).CancelChannelOrder(order.OrderNo, tenantID, account.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.First(&order, order.ID).Error; err != nil || order.Status != "cancelled" {
+		t.Fatalf("order status=%s err=%v", order.Status, err)
+	}
+}
+
 func TestDigitalRefundTaskIsBoundedAndCanBeAuditedForRetry(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
@@ -1218,6 +1281,41 @@ func TestHardwareCommandRequiresDeviceAndAckToken(t *testing.T) {
 	}
 }
 
+func TestDeviceKeyRotationStoresOnlyEncryptedCredential(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	var device model.Device
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&device).Error; err != nil {
+		t.Fatal(err)
+	}
+	key, err := (&DeviceService{}).RotateKey(device.ID, tenantID)
+	if err != nil || key == "" {
+		t.Fatalf("rotate key=%q err=%v", key, err)
+	}
+	if err := model.DB.First(&device, device.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if device.AuthKeyCiphertext == "" || device.AuthKeyHash != "" || !validDeviceKey(&device, key) || validDeviceKey(&device, "wrong-key") {
+		t.Fatalf("device credential was not stored securely: ciphertext=%t legacy_hash=%q", device.AuthKeyCiphertext != "", device.AuthKeyHash)
+	}
+}
+
+func TestCashierShiftListIsScopedToItsOperator(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	rows := []model.POSShift{
+		{TenantID: tenantID, ShiftNo: "SHIFT-OP-1", DeviceID: 1, OperatorID: 101, Status: "closed"},
+		{TenantID: tenantID, ShiftNo: "SHIFT-OP-2", DeviceID: 1, OperatorID: 202, Status: "closed"},
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&rows).Error }); err != nil {
+		t.Fatal(err)
+	}
+	visible, total, err := (&OperationsService{}).ListShiftsForOperator(tenantID, 101, 1, 20)
+	if err != nil || total != 1 || len(visible) != 1 || visible[0].OperatorID != 101 {
+		t.Fatalf("operator shift scope total=%d rows=%+v err=%v", total, visible, err)
+	}
+}
+
 func TestChannelReservationConvertsWithoutDoubleBookingStock(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "daily", 2)
@@ -1254,6 +1352,83 @@ func TestChannelReservationConvertsWithoutDoubleBookingStock(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestChannelConfirmationRecoversConvertedUnpaidOrder(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	account := model.ChannelAccount{TenantID: tenantID, Code: "channel-recovery", Type: "test", Status: "active", Environment: "production", PermissionsJSON: `["inventory:reserve","orders:create"]`}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&account).Error }); err != nil {
+		t.Fatal(err)
+	}
+	date := startOfDay(time.Now().AddDate(0, 0, 1))
+	workflow := &ChannelWorkflowService{OrderService: &OrderService{}}
+	reservation, err := workflow.Reserve(tenantID, account.ID, "channel-recovery", productID, "EXT-RECOVERY-1", 1, &date, "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	order, err := workflow.Confirm(tenantID, account.ID, "channel-recovery", reservation.ID, "游客", "13800000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.Order{}).Where("id = ?", order.ID).Update("status", "unpaid").Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.FulfillmentOrder{}).Where("sales_order_id = ?", order.ID).Update("status", "reserved").Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := workflow.Confirm(tenantID, account.ID, "channel-recovery", reservation.ID, "游客", "13800000000")
+	if err != nil || recovered.Status != "paid" {
+		t.Fatalf("recovered=%+v err=%v", recovered, err)
+	}
+}
+
+func TestSandboxChannelDoesNotConsumeProductionStockOrReports(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "daily", 1)
+	account := model.ChannelAccount{TenantID: tenantID, Code: "channel-sandbox", Type: "test", Status: "sandbox", Environment: "sandbox", PermissionsJSON: `["inventory:reserve","orders:create"]`}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&account).Error }); err != nil {
+		t.Fatal(err)
+	}
+	date := startOfDay(time.Now().AddDate(0, 0, 1))
+	workflow := &ChannelWorkflowService{OrderService: &OrderService{}}
+	reservation, err := workflow.Reserve(tenantID, account.ID, "channel-sandbox", productID, "EXT-SANDBOX-1", 1, &date, "", time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inventoryCount int64
+	if err := model.DB.Model(&model.ProductInventory{}).Where("tenant_id = ? AND product_id = ?", tenantID, productID).Count(&inventoryCount).Error; err != nil || inventoryCount != 0 {
+		t.Fatalf("sandbox inventory rows=%d err=%v", inventoryCount, err)
+	}
+	order, err := workflow.Confirm(tenantID, account.ID, "channel-sandbox", reservation.ID, "测试游客", "13800000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if order.Environment != "sandbox" || len(order.Items) != 1 || len(order.Items[0].Tickets) != 1 || order.Items[0].Tickets[0].Environment != "sandbox" {
+		t.Fatalf("sandbox order was not marked consistently: %+v", order)
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Create(&model.Payment{
+			TenantID: tenantID, PaymentNo: "SANDBOX-CASH-1", OrderNo: order.OrderNo,
+			Amount: order.TotalAmount, AmountCents: moneyCents(order.TotalAmount), Method: "cash", Status: "paid",
+		}).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&RefundService{}).CreateCashRefund(tenantID, order.OrderNo, "sandbox-refund-1", order.TotalAmount, []string{order.Items[0].Tickets[0].TicketCode}, "sandbox refund"); err == nil || !strings.Contains(err.Error(), "sandbox orders") {
+		t.Fatalf("sandbox refund was not rejected: %v", err)
+	}
+	start, end := time.Now().AddDate(0, 0, -1).Format("2006-01-02"), time.Now().AddDate(0, 0, 1).Format("2006-01-02")
+	stats, err := (&ReportService{}).GetSalesStats(tenantID, start, end)
+	if err != nil || len(stats) != 0 {
+		t.Fatalf("sandbox order entered sales report: stats=%+v err=%v", stats, err)
+	}
+	rows, total, err := (&DistributionService{}).ListFulfillmentOrders(tenantID, 0, "", 1, 20)
+	if err != nil || total != 0 || len(rows) != 0 {
+		t.Fatalf("sandbox fulfillment entered supplier workbench: total=%d rows=%+v err=%v", total, rows, err)
 	}
 }
 

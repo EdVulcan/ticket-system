@@ -21,7 +21,7 @@ func main() {
 	if listen == "" {
 		listen = "127.0.0.1:19300"
 	}
-	client, err := gateclient.New(gateclient.Config{ServerURL: serverURL, SystemCode: os.Getenv("GATE_SYSTEM_CODE"), SerialNumber: os.Getenv("GATE_SERIAL_NUMBER"), DeviceKey: os.Getenv("GATE_DEVICE_KEY"), DriverURL: os.Getenv("GATE_DRIVER_URL"), ListenAddr: listen, ScanToken: os.Getenv("GATE_SCAN_TOKEN")})
+	client, err := gateclient.New(gateclient.Config{ServerURL: serverURL, SystemCode: os.Getenv("GATE_SYSTEM_CODE"), SerialNumber: os.Getenv("GATE_SERIAL_NUMBER"), DeviceKey: os.Getenv("GATE_DEVICE_KEY"), DriverURL: os.Getenv("GATE_DRIVER_URL"), ListenAddr: listen, ScanToken: os.Getenv("GATE_SCAN_TOKEN"), StateFile: os.Getenv("GATE_STATE_FILE")})
 	if err != nil {
 		log.Fatal(err)
 	}

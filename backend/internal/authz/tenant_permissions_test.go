@@ -42,6 +42,11 @@ func TestFrontlineStaffCannotOperateAfterSalesOrRefunds(t *testing.T) {
 	if !HasTenantPermission("seller", PermissionOrdersWrite) || !HasTenantPermission("seller", PermissionPaymentsWrite) {
 		t.Fatal("seller should retain ticket sales and collection permissions")
 	}
+	for _, permission := range []string{PermissionTeamsRead, PermissionTeamsWrite, PermissionOnsiteManage} {
+		if HasTenantPermission("seller", permission) {
+			t.Fatalf("seller must not have management permission %s", permission)
+		}
+	}
 	if !HasTenantPermission("checker", PermissionTicketsVerify) {
 		t.Fatal("checker should retain ticket verification permission")
 	}

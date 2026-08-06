@@ -15,6 +15,7 @@ type ChannelReservation struct {
 	StockSlot        string     `gorm:"size:50" json:"stock_slot,omitempty"`
 	Quantity         int        `gorm:"not null" json:"quantity"`
 	Status           string     `gorm:"size:20;not null;default:'held';index" json:"status"` // held, converted, released, expired
+	Environment      string     `gorm:"size:20;not null;default:'production';index" json:"environment"`
 	ExpiresAt        time.Time  `gorm:"index;not null" json:"expires_at"`
 	OrderNo          string     `gorm:"size:50;index" json:"order_no,omitempty"`
 }

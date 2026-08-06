@@ -12,15 +12,16 @@ import (
 
 func InitRouter(r *gin.Engine) {
 	// Global Middleware
-	r.Use(middleware.Cors())
+	r.Use(middleware.SecurityHeaders(), middleware.RequestBodyLimit(8<<20), middleware.Cors())
 
 	apiGroup := r.Group("/api/v1")
 
 	// Public Routes
 	authController := &api.AuthController{Service: service.AuthService{}}
-	apiGroup.POST("/auth/login", authController.Login)
-	apiGroup.POST("/auth/staff/login", authController.StaffLogin)
-	apiGroup.POST("/auth/platform/login", authController.PlatformLogin)
+	loginLimit := middleware.LoginRateLimit()
+	apiGroup.POST("/auth/login", loginLimit, authController.Login)
+	apiGroup.POST("/auth/staff/login", loginLimit, authController.StaffLogin)
+	apiGroup.POST("/auth/platform/login", loginLimit, authController.PlatformLogin)
 
 	// Protected Routes
 	protected := apiGroup.Group("")
@@ -111,7 +112,7 @@ func InitRouter(r *gin.Engine) {
 		deviceGroup.DELETE("/:id", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), deviceController.Delete)
 	}
 	hardwareCommandGroup := protected.Group("/hardware-commands")
-	hardwareCommandGroup.Use(middleware.RequireTenantPermission(authz.PermissionOperationsWrite), middleware.RequireAnyTenantCapability("supplier"))
+	hardwareCommandGroup.Use(middleware.RequireTenantPermission(authz.PermissionOnsiteManage), middleware.RequireAnyTenantCapability("supplier"))
 	{
 		hardwareCommandGroup.POST("", deviceController.QueueCommand)
 	}
@@ -238,8 +239,9 @@ func InitRouter(r *gin.Engine) {
 	ctripController := &api.CtripController{Service: service.CtripProtocolService{OrderService: service.OrderService{}}}
 	apiGroup.POST("/integrations/ctrip/order", ctripController.HandleOrder)
 
-	// Independently credentialed channel routes. The legacy /ota routes remain
-	// available for migration and continue using the tenant OTA secret.
+	// Independently credentialed channel routes are the only generic external
+	// sales surface. The weaker tenant-secret /ota compatibility route is not
+	// registered in this new-system deployment.
 	channelGroup := apiGroup.Group("/channels/:code")
 	channelGroup.Use(middleware.ChannelAuthMiddleware())
 	{
@@ -331,15 +333,6 @@ func InitRouter(r *gin.Engine) {
 		operationsGroup.POST("/holds/:id/cancel", middleware.RequireTenantPermission(authz.PermissionOperationsWrite), operationsController.CancelHold)
 		operationsGroup.GET("/alerts", operationsController.ListAlerts)
 	}
-	otaGroup := apiGroup.Group("/ota")
-	otaGroup.Use(middleware.OTASignMiddleware())
-	{
-		otaGroup.POST("/products", otaController.ListProducts)
-		otaGroup.POST("/orders/create", otaController.CreateOrder)
-		otaGroup.POST("/orders/cancel", otaController.CancelOrder)
-		otaGroup.POST("/orders/query", otaController.QueryOrder)
-	}
-
 	// Finance Routes
 	financeController := &api.FinanceController{Service: service.FinanceService{}}
 	financeGroup := protected.Group("/finance")

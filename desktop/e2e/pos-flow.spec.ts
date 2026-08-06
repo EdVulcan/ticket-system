@@ -34,9 +34,10 @@ test('组合产品在窗口按一个商品销售并提交组合标识', async ({
   await page.getByRole('button', { name: '收款' }).click()
 
   await expect.poll(() => orderPayload).toMatchObject({
-    channel: 'window', total_amount: 150,
     items: [{ bundle_product_id: 21, quantity: 1 }],
   })
+  expect(orderPayload).not.toHaveProperty('channel')
+  expect(orderPayload).not.toHaveProperty('total_amount')
 })
 
 async function preparePOS(page: Page, openShift: boolean, sessionStaff = staff) {

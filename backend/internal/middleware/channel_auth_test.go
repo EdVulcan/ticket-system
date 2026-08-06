@@ -22,7 +22,7 @@ import (
 
 func TestChannelSignatureCoversBodyAndRejectsConflict(t *testing.T) {
 	db := testdb.Open(t)
-	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.ChannelAccount{}, &model.ChannelRequest{}, &model.AuditLog{}); err != nil {
+	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.ChannelAccount{}, &model.ChannelRequest{}, &model.ChannelNonce{}, &model.AuditLog{}); err != nil {
 		t.Fatal(err)
 	}
 	model.DB = db
@@ -69,7 +69,7 @@ func TestChannelSignatureCoversBodyAndRejectsConflict(t *testing.T) {
 		req.Header.Set("X-Channel-Timestamp", timestamp)
 		req.Header.Set("X-Channel-Nonce", nonce)
 		req.Header.Set("X-Channel-Request-Id", requestID)
-		req.Header.Set("X-Channel-Signature", channelSignature(secret, timestamp, nonce, "POST", "/channels/travel-test/orders/create", payload))
+		req.Header.Set("X-Channel-Signature", channelSignature(secret, timestamp, nonce, requestID, "POST", "/channels/travel-test/orders/create", "", payload))
 		resp := httptest.NewRecorder()
 		engine.ServeHTTP(resp, req)
 		return resp
@@ -82,6 +82,10 @@ func TestChannelSignatureCoversBodyAndRejectsConflict(t *testing.T) {
 	}
 	if resp := request([]byte(`{"product_id":2}`)); resp.Code != http.StatusConflict {
 		t.Fatalf("conflicting channel request status=%d body=%s", resp.Code, resp.Body.String())
+	}
+	requestID = "request-reused-nonce"
+	if resp := request(body); resp.Code != http.StatusConflict {
+		t.Fatalf("reused nonce status=%d body=%s", resp.Code, resp.Body.String())
 	}
 	requestID = "request-rate-limited"
 	nonce = "nonce-rate-limited"
@@ -106,7 +110,7 @@ func TestChannelSignatureCoversBodyAndRejectsConflict(t *testing.T) {
 	bodyHash := sha256.Sum256(body)
 	if err := db.Create(&model.ChannelRequest{
 		ChannelAccountID: account.ID, RequestID: "request-stale", Endpoint: "/channels/travel-test/orders/create",
-		BodyHash: hex.EncodeToString(bodyHash[:]), Status: "processing", LockedAt: &staleLock,
+		Nonce: "nonce-stale", BodyHash: hex.EncodeToString(bodyHash[:]), Status: "processing", LockedAt: &staleLock,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -186,9 +190,9 @@ func TestRequestRemoteIPOnlyTrustsConfiguredProxy(t *testing.T) {
 	}
 }
 
-func channelSignature(secret, timestamp, nonce, method, path string, body []byte) string {
+func channelSignature(secret, timestamp, nonce, requestID, method, path, query string, body []byte) string {
 	hash := sha256.Sum256(body)
-	canonical := strings.Join([]string{timestamp, nonce, method, path, hex.EncodeToString(hash[:])}, "\n")
+	canonical := strings.Join([]string{timestamp, nonce, requestID, method, path, query, hex.EncodeToString(hash[:])}, "\n")
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write([]byte(canonical))
 	return hex.EncodeToString(mac.Sum(nil))

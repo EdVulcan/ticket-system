@@ -118,7 +118,7 @@ func (s *ReportService) GetBusinessSummary(tenantID uint, filter FormalReportFil
 			       CASE WHEN p.amount_cents != 0 THEN p.amount_cents ELSE CAST(ROUND(p.amount * 100.0) AS INTEGER) END AS gross_cents,
 			       0 AS refund_cents
 			FROM payments p JOIN orders o ON o.tenant_id = p.tenant_id AND o.order_no = p.order_no
-			WHERE p.tenant_id = ? AND p.status IN ('paid', 'partial_refunded', 'refunded')
+			WHERE p.tenant_id = ? AND o.environment = 'production' AND p.status IN ('paid', 'partial_refunded', 'refunded')
 			  AND COALESCE(p.paid_at, p.created_at) BETWEEN ? AND ?
 			  AND (? = '' OR o.channel = ?) AND (? = '' OR p.method = ?)
 			UNION ALL
@@ -126,7 +126,7 @@ func (s *ReportService) GetBusinessSummary(tenantID uint, filter FormalReportFil
 			       0 AS payment_count, 1 AS refund_count, 0 AS gross_cents,
 			       CASE WHEN r.amount_cents != 0 THEN r.amount_cents ELSE CAST(ROUND(r.amount * 100.0) AS INTEGER) END AS refund_cents
 			FROM refunds r JOIN orders o ON o.tenant_id = r.tenant_id AND o.order_no = r.order_no
-			WHERE r.tenant_id = ? AND r.status = 'succeeded'
+			WHERE r.tenant_id = ? AND o.environment = 'production' AND r.status = 'succeeded'
 			  AND (r.parent_refund_id != 0 OR NOT EXISTS (SELECT 1 FROM refunds child WHERE child.parent_refund_id = r.id))
 			  AND COALESCE(r.updated_at, r.created_at) BETWEEN ? AND ?
 			  AND (? = '' OR o.channel = ?) AND (? = '' OR r.method = ?)
@@ -165,7 +165,7 @@ func (s *ReportService) GetBusinessDetails(tenantID uint, filter FormalReportFil
 			       (SELECT %s FROM order_items oi WHERE oi.order_id = o.id) AS product_names,
 			       o.contact_name, o.contact_phone, p.operator_id, '' AS reason
 			FROM payments p JOIN orders o ON o.tenant_id = p.tenant_id AND o.order_no = p.order_no
-			WHERE p.tenant_id = ? AND p.status IN ('paid', 'partial_refunded', 'refunded')
+			WHERE p.tenant_id = ? AND o.environment = 'production' AND p.status IN ('paid', 'partial_refunded', 'refunded')
 			  AND COALESCE(p.paid_at, p.created_at) BETWEEN ? AND ?
 			  AND (? = '' OR o.channel = ?) AND (? = '' OR p.method = ?) AND (? = '' OR o.order_no LIKE ?)
 			UNION ALL
@@ -175,7 +175,7 @@ func (s *ReportService) GetBusinessDetails(tenantID uint, filter FormalReportFil
 			       (SELECT %s FROM order_items oi WHERE oi.order_id = o.id) AS product_names,
 			       o.contact_name, o.contact_phone, r.authorized_by AS operator_id, r.reason
 			FROM refunds r JOIN orders o ON o.tenant_id = r.tenant_id AND o.order_no = r.order_no
-			WHERE r.tenant_id = ? AND r.parent_refund_id = 0 AND r.status IN ('succeeded', 'group_succeeded')
+			WHERE r.tenant_id = ? AND o.environment = 'production' AND r.parent_refund_id = 0 AND r.status IN ('succeeded', 'group_succeeded')
 			  AND COALESCE(r.updated_at, r.created_at) BETWEEN ? AND ?
 			  AND (? = '' OR o.channel = ?) AND (? = '' OR r.method = ?) AND (? = '' OR o.order_no LIKE ?)
 		)`, productNamesExpression, productNamesExpression)
@@ -224,7 +224,7 @@ func (s *ReportService) GetVerificationSummary(tenantID uint, filter FormalRepor
 		LEFT JOIN products p ON p.id = oi.product_id
 		JOIN scenic_areas sa ON sa.id = c.scenic_area_id AND sa.tenant_id = ?
 		JOIN tenants seller ON seller.id = o.tenant_id
-		WHERE c.tenant_id = ? AND c.result = 'success' AND c.reversed_at IS NULL
+		WHERE c.tenant_id = ? AND o.environment = 'production' AND c.result = 'success' AND c.reversed_at IS NULL
 		  AND c.check_in_time BETWEEN ? AND ?
 		  AND c.id = (SELECT MIN(first.id) FROM check_in_records first
 		              WHERE first.ticket_id = c.ticket_id AND first.result = 'success' AND first.reversed_at IS NULL)
@@ -262,7 +262,7 @@ func (s *ReportService) GetVerificationDetails(tenantID uint, filter FormalRepor
 		JOIN scenic_areas sa ON sa.id = c.scenic_area_id AND sa.tenant_id = ?
 		JOIN tenants seller ON seller.id = o.tenant_id
 		LEFT JOIN check_points cp ON cp.id = c.check_point_id AND cp.tenant_id = ?
-		WHERE c.tenant_id = ? AND c.result = 'success' AND c.reversed_at IS NULL
+		WHERE c.tenant_id = ? AND o.environment = 'production' AND c.result = 'success' AND c.reversed_at IS NULL
 		  AND c.check_in_time BETWEEN ? AND ?
 		  AND c.id = (SELECT MIN(first.id) FROM check_in_records first
 		              WHERE first.ticket_id = c.ticket_id AND first.result = 'success' AND first.reversed_at IS NULL)

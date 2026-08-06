@@ -73,7 +73,7 @@ func JWTAuth() gin.HandlerFunc {
 func sessionIsActive(claims *service.Claims) bool {
 	if claims.Scope == "platform" {
 		var user model.PlatformUser
-		return model.DB.Select("id", "status", "role", "token_version").Where("id = ?", claims.PlatformUserID).First(&user).Error == nil && user.Status == "active" && user.Role == claims.Role && (claims.TokenVersion == 0 || user.TokenVersion == claims.TokenVersion)
+		return claims.TokenVersion > 0 && model.DB.Select("id", "status", "role", "token_version").Where("id = ?", claims.PlatformUserID).First(&user).Error == nil && user.Status == "active" && user.Role == claims.Role && user.TokenVersion == claims.TokenVersion
 	}
 	var tenant model.Tenant
 	if err := model.DB.Select("id", "status").First(&tenant, claims.TenantID).Error; err != nil {
@@ -84,10 +84,10 @@ func sessionIsActive(claims *service.Claims) bool {
 	}
 	if strings.HasPrefix(claims.Subject, "staff:") {
 		var staff model.Staff
-		return model.DB.Select("id", "tenant_id", "status", "roles", "token_version").Where("id = ? AND tenant_id = ?", claims.UserID, claims.TenantID).First(&staff).Error == nil && staff.Status == "active" && strings.TrimSpace(staff.Roles) == strings.TrimSpace(claims.Role) && (claims.TokenVersion == 0 || staff.TokenVersion == claims.TokenVersion)
+		return claims.TokenVersion > 0 && model.DB.Select("id", "tenant_id", "status", "roles", "token_version").Where("id = ? AND tenant_id = ?", claims.UserID, claims.TenantID).First(&staff).Error == nil && staff.Status == "active" && strings.TrimSpace(staff.Roles) == strings.TrimSpace(claims.Role) && staff.TokenVersion == claims.TokenVersion
 	}
 	var user model.User
-	return model.DB.Select("id", "tenant_id", "role", "token_version").Where("id = ? AND tenant_id = ?", claims.UserID, claims.TenantID).First(&user).Error == nil && user.Role == claims.Role && (claims.TokenVersion == 0 || user.TokenVersion == claims.TokenVersion)
+	return claims.TokenVersion > 0 && model.DB.Select("id", "tenant_id", "role", "token_version").Where("id = ? AND tenant_id = ?", claims.UserID, claims.TenantID).First(&user).Error == nil && user.Role == claims.Role && user.TokenVersion == claims.TokenVersion
 }
 
 func RequirePlatformScope() gin.HandlerFunc {

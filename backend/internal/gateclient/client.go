@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,6 +28,7 @@ type Config struct {
 	DriverURL    string
 	ListenAddr   string
 	ScanToken    string
+	StateFile    string
 	HTTPClient   *http.Client
 }
 
@@ -48,15 +51,26 @@ type ScanResult struct {
 	Allowed     bool   `json:"allowed"`
 	Opened      bool   `json:"opened"`
 	DisplayText string `json:"display_text"`
+	VoiceFile   string `json:"voice_file,omitempty"`
+	VoiceCode   string `json:"voice_code,omitempty"`
 	Error       string `json:"error,omitempty"`
 }
 
+type pendingScan struct {
+	RequestID    string            `json:"request_id"`
+	Body         map[string]string `json:"body"`
+	Stage        string            `json:"stage"`
+	Verification VerifyResponse    `json:"verification"`
+}
+
 type Client struct {
-	config Config
-	base   *url.URL
-	http   *http.Client
-	key    []byte
-	mu     sync.Mutex
+	config  Config
+	base    *url.URL
+	http    *http.Client
+	key     []byte
+	mu      sync.Mutex
+	stateMu sync.Mutex
+	pending map[string]pendingScan
 }
 
 func New(config Config) (*Client, error) {
@@ -70,7 +84,11 @@ func New(config Config) (*Client, error) {
 	if config.HTTPClient == nil {
 		config.HTTPClient = &http.Client{Timeout: 8 * time.Second}
 	}
-	return &Client{config: config, base: base, http: config.HTTPClient, key: deviceauth.DeriveKey(config.DeviceKey)}, nil
+	client := &Client{config: config, base: base, http: config.HTTPClient, key: deviceauth.DeriveKey(config.DeviceKey), pending: make(map[string]pendingScan)}
+	if err := client.loadState(); err != nil {
+		return nil, fmt.Errorf("load gate recovery state: %w", err)
+	}
+	return client, nil
 }
 
 func (c *Client) Scan(ctx context.Context, input ScanRequest) ScanResult {
@@ -81,50 +99,133 @@ func (c *Client) Scan(ctx context.Context, input ScanRequest) ScanResult {
 	if input.MediaType == "" {
 		input.MediaType = "qr_code"
 	}
-	requestID := randomID()
-	body := map[string]string{"ticket_code": input.TicketCode, "media_type": input.MediaType, "scan_time": time.Now().Format(time.RFC3339)}
-	var verification VerifyResponse
+	stateKey := input.MediaType + ":" + input.TicketCode
+	pending, stateErr := c.getOrCreatePending(stateKey, input)
+	if stateErr != nil {
+		return ScanResult{Error: stateErr.Error(), DisplayText: "闸机本地状态保存失败"}
+	}
+	requestID, body := pending.RequestID, pending.Body
+	verification := pending.Verification
 	var err error
-	for attempt := 0; attempt < 5; attempt++ {
-		status, callErr := c.post(ctx, "/api/v1/hardware/verify", requestID, body, &verification)
-		err = callErr
-		if status != http.StatusConflict || callErr == nil {
-			break
+	if pending.Stage == "verifying" {
+		for attempt := 0; attempt < 5; attempt++ {
+			status, callErr := c.post(ctx, "/api/v1/hardware/verify", requestID, body, &verification)
+			err = callErr
+			if status != http.StatusConflict || callErr == nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return ScanResult{RequestID: requestID, Error: ctx.Err().Error(), DisplayText: "验票超时"}
+			case <-time.After(120 * time.Millisecond):
+			}
 		}
-		select {
-		case <-ctx.Done():
-			return ScanResult{RequestID: requestID, Error: ctx.Err().Error(), DisplayText: "验票超时"}
-		case <-time.After(120 * time.Millisecond):
+		if err != nil {
+			return ScanResult{RequestID: requestID, Error: err.Error(), DisplayText: "无法连接验票服务"}
+		}
+		pending.Verification, pending.Stage = verification, "verified"
+		if err := c.storePending(stateKey, pending); err != nil {
+			return ScanResult{RequestID: requestID, Error: err.Error(), DisplayText: "闸机本地状态保存失败"}
 		}
 	}
-	if err != nil {
-		return ScanResult{RequestID: requestID, Error: err.Error(), DisplayText: "无法连接验票服务"}
-	}
-	result := ScanResult{RequestID: requestID, Allowed: verification.Result == "allow", DisplayText: verification.DisplayText}
+	result := ScanResult{RequestID: requestID, Allowed: verification.Result == "allow", DisplayText: verification.DisplayText, VoiceFile: verification.VoiceFile, VoiceCode: verification.VoiceCode}
 	if !result.Allowed {
+		_ = c.clearPending(stateKey)
 		return result
 	}
 
-	openErr := c.openGate(ctx, requestID, verification)
-	openStatus := "opened"
-	if openErr != nil {
-		openStatus = "failed"
-		result.Error = openErr.Error()
-	} else {
-		result.Opened = true
+	if pending.Stage == "opening" {
+		result.Error = "上次开闸结果未知，请现场确认后处理"
+		return result
 	}
-	report := map[string]string{"verification_request_id": requestID, "status": openStatus, "occurred_at": time.Now().Format(time.RFC3339)}
-	if openErr != nil {
-		report["error"] = openErr.Error()
-	}
-	if _, err := c.post(ctx, "/api/v1/hardware/open-result", randomID(), report, nil); err != nil {
-		if result.Error == "" {
-			result.Error = "开闸结果回报失败：" + err.Error()
-		} else {
-			result.Error += "；开闸结果回报失败：" + err.Error()
+	if pending.Stage == "verified" {
+		pending.Stage = "opening"
+		if err := c.storePending(stateKey, pending); err != nil {
+			result.Error = err.Error()
+			return result
+		}
+		if openErr := c.openGate(ctx, requestID, verification); openErr != nil {
+			result.Error = openErr.Error()
+			return result
+		}
+		pending.Stage = "opened"
+		if err := c.storePending(stateKey, pending); err != nil {
+			return ScanResult{RequestID: requestID, Allowed: true, Opened: true, DisplayText: verification.DisplayText, VoiceFile: verification.VoiceFile, VoiceCode: verification.VoiceCode, Error: err.Error()}
 		}
 	}
+	result.Opened = true
+	report := map[string]string{"verification_request_id": requestID, "status": "opened", "occurred_at": time.Now().Format(time.RFC3339)}
+	if _, err := c.post(ctx, "/api/v1/hardware/open-result", randomID(), report, nil); err != nil {
+		result.Error = "开闸结果回报失败：" + err.Error()
+		return result
+	}
+	if err := c.clearPending(stateKey); err != nil {
+		result.Error = err.Error()
+	}
 	return result
+}
+
+func (c *Client) getOrCreatePending(key string, input ScanRequest) (pendingScan, error) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	if value, ok := c.pending[key]; ok {
+		return value, nil
+	}
+	value := pendingScan{RequestID: randomID(), Stage: "verifying", Body: map[string]string{"ticket_code": input.TicketCode, "media_type": input.MediaType, "scan_time": time.Now().Format(time.RFC3339)}}
+	c.pending[key] = value
+	if err := c.saveStateLocked(); err != nil {
+		delete(c.pending, key)
+		return pendingScan{}, err
+	}
+	return value, nil
+}
+
+func (c *Client) storePending(key string, value pendingScan) error {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	c.pending[key] = value
+	return c.saveStateLocked()
+}
+
+func (c *Client) clearPending(key string) error {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	delete(c.pending, key)
+	return c.saveStateLocked()
+}
+
+func (c *Client) loadState() error {
+	if strings.TrimSpace(c.config.StateFile) == "" {
+		return nil
+	}
+	data, err := os.ReadFile(c.config.StateFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, &c.pending)
+}
+
+func (c *Client) saveStateLocked() error {
+	path := strings.TrimSpace(c.config.StateFile)
+	if path == "" {
+		return nil
+	}
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	data, err := json.Marshal(c.pending)
+	if err != nil {
+		return err
+	}
+	temporary := path + ".tmp"
+	if err := os.WriteFile(temporary, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(temporary, path)
 }
 
 func (c *Client) Heartbeat(ctx context.Context, status string) error {
@@ -244,7 +345,55 @@ func (c *Client) Handler() http.Handler {
 		}
 		writeJSON(w, status, result)
 	})
+	mux.HandleFunc("/recovery", func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅支持 POST"})
+			return
+		}
+		if c.config.ScanToken == "" || req.Header.Get("Authorization") != "Bearer "+c.config.ScanToken {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "本机恢复接口认证失败"})
+			return
+		}
+		var input struct {
+			TicketCode string `json:"ticket_code"`
+			MediaType  string `json:"media_type"`
+			Action     string `json:"action"`
+		}
+		if err := json.NewDecoder(io.LimitReader(req.Body, 16<<10)).Decode(&input); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "恢复请求格式错误"})
+			return
+		}
+		input.TicketCode = strings.TrimSpace(input.TicketCode)
+		if input.MediaType == "" {
+			input.MediaType = "qr_code"
+		}
+		key := input.MediaType + ":" + input.TicketCode
+		if err := c.resolveOpeningState(key, input.Action); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "已更新，请重新扫描原票码以继续"})
+	})
 	return mux
+}
+
+func (c *Client) resolveOpeningState(key, action string) error {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	value, ok := c.pending[key]
+	if !ok || value.Stage != "opening" {
+		return errors.New("没有需要人工确认的开闸记录")
+	}
+	switch strings.TrimSpace(action) {
+	case "confirm_opened":
+		value.Stage = "opened"
+	case "confirm_not_opened":
+		value.Stage = "verified"
+	default:
+		return errors.New("恢复动作必须是确认已开或确认未开")
+	}
+	c.pending[key] = value
+	return c.saveStateLocked()
 }
 
 func writeJSON(w http.ResponseWriter, status int, value interface{}) {
