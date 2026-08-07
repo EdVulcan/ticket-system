@@ -231,7 +231,7 @@ const form = reactive({
   id: 0,
   product: {
     name: '',
-    scenic_area_id: 0,
+    scenic_area_id: null as number | null,
     price: 0,
     settlement_price: 0,
     type: 'offline', // Force Offline
@@ -297,7 +297,7 @@ const handleAdd = () => {
   isEdit.value = false
   form.id = 0
   form.product.name = ''
-  form.product.scenic_area_id = activeScenicAreas.value.length === 1 ? activeScenicAreas.value[0].id : 0
+  form.product.scenic_area_id = activeScenicAreas.value.length === 1 ? activeScenicAreas.value[0].id : null
   form.product.price = 0
   form.product.settlement_price = 0
   form.product.validity_type = 'days'

@@ -93,10 +93,13 @@ test('供应商可以为票种配置闸机本地语音编号', async ({ page }) 
 test('发布票种时按所属景区区分检票点', async ({ page }) => {
   await prepareSupplier(page)
   await page.route('**/api/v1/products?*', route => json(route, { data: [], total: 0 }))
-  await page.route('**/api/v1/scenic-areas', route => json(route, { data: [
-    { id: 11, name: '青云景区', status: 'active' },
-    { id: 12, name: '云谷乐园', status: 'active' },
-  ] }))
+  await page.route('**/api/v1/scenic-areas', async route => {
+    await new Promise(resolve => setTimeout(resolve, 300))
+    await json(route, { data: [
+      { id: 11, name: '青云景区', status: 'active' },
+      { id: 12, name: '云谷乐园', status: 'active' },
+    ] })
+  })
   await page.route('**/api/v1/checkpoints?*', route => json(route, { data: [
     { id: 31, name: '青云东门', scenic_area_id: 11 },
     { id: 32, name: '云谷南门', scenic_area_id: 12 },
@@ -106,6 +109,8 @@ test('发布票种时按所属景区区分检票点', async ({ page }) => {
   await page.getByRole('button', { name: '发布窗口票' }).click()
   const dialog = page.getByRole('dialog', { name: '发布窗口票' })
   const scenicSelect = dialog.getByRole('combobox', { name: '所属景区' })
+  await expect(scenicSelect).toHaveValue('')
+  await expect(scenicSelect.locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]')).not.toContainText('0')
   await scenicSelect.locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]').click()
   await page.getByRole('option', { name: '青云景区' }).click()
   const checkpointSelect = dialog.getByRole('combobox', { name: '检票点' }).first()

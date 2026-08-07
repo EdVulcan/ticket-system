@@ -363,7 +363,7 @@ const form = reactive({
   id: 0,
   product: {
     name: '',
-    scenic_area_id: 0,
+    scenic_area_id: null as number | null,
     price: 0,
     settlement_price: 0,
     type: 'online',
@@ -445,7 +445,7 @@ const handleAdd = () => {
   // Reset Form
   form.id = 0
   form.product = { 
-    name: '', scenic_area_id: activeScenicAreas.value.length === 1 ? activeScenicAreas.value[0].id : 0,
+    name: '', scenic_area_id: activeScenicAreas.value.length === 1 ? activeScenicAreas.value[0].id : null,
     price: 0, settlement_price: 0, type: 'online', status: 'online', code_mode: 'order',
     validity_type: 'date', validity_days: 0, validity_start_date: null, validity_end_date: null,
     stock_type: 'unlimited', daily_stock: 0, time_slot_config: '',
