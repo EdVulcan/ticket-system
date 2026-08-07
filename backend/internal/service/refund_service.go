@@ -493,10 +493,29 @@ func selectRefundTickets(order *model.Order, cleanCodes []string, allowUsed bool
 	refundableAmount := 0.0
 	for itemIndex := range order.Items {
 		item := &order.Items[itemIndex]
+		policyChecked := false
 		for ticketIndex := range item.Tickets {
 			ticket := &item.Tickets[ticketIndex]
 			if _, ok := wanted[ticket.TicketCode]; !ok {
 				continue
+			}
+			if !policyChecked {
+				refundType := strings.TrimSpace(item.RefundType)
+				if refundType == "" {
+					// Legacy rows predate sale-time policy snapshots. Preserve their
+					// historical refundable behavior; all new orders snapshot a policy.
+					refundType = "free"
+				}
+				switch refundType {
+				case "free":
+				case "no_refund":
+					return nil, 0, fmt.Errorf("product %s does not allow refunds", item.ProductName)
+				case "ladder":
+					return nil, 0, fmt.Errorf("product %s has a ladder refund policy that is not configured", item.ProductName)
+				default:
+					return nil, 0, fmt.Errorf("product %s has an invalid refund policy", item.ProductName)
+				}
+				policyChecked = true
 			}
 			if ticket.PendingRefundID != 0 && ticket.PendingRefundID != allowedPendingRefundID {
 				return nil, 0, fmt.Errorf("ticket %s already has a pending refund", ticket.TicketCode)
@@ -1071,7 +1090,7 @@ func applyRefundBusinessFactsTx(tx *gorm.DB, order *model.Order, refund *model.R
 			}
 		}
 		if stockQuantity > 0 {
-			if err := releaseStock(tx, stockProduct, item.UseDate, item.StockSlot, stockQuantity); err != nil {
+			if err := releaseStock(tx, stockProductForRelease(stockProduct, item.ReservedStockType), item.UseDate, item.StockSlot, stockQuantity); err != nil {
 				return err
 			}
 		}

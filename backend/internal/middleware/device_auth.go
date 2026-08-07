@@ -59,7 +59,7 @@ func DeviceAuth() gin.HandlerFunc {
 			return
 		}
 		var device model.Device
-		if err := model.DB.Where("tenant_id = ? AND serial_number = ?", tenant.ID, serial).First(&device).Error; err != nil {
+		if err := model.DB.Where("tenant_id = ? AND serial_number = ? AND status != ?", tenant.ID, serial, "disabled").First(&device).Error; err != nil {
 			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "设备未登记"})
 			return
 		}

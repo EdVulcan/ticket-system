@@ -323,7 +323,7 @@ func (s *DeviceService) Heartbeat(req HeartbeatRequest) error {
 func (s *DeviceService) HeartbeatDirect(tenantID, deviceID uint, ip, status string) error {
 	return model.Write(func(tx *gorm.DB) error {
 		var device model.Device
-		if err := tx.Where("id = ? AND tenant_id = ?", deviceID, tenantID).First(&device).Error; err != nil {
+		if err := tx.Where("id = ? AND tenant_id = ? AND status != ?", deviceID, tenantID, "disabled").First(&device).Error; err != nil {
 			return errors.New("设备未登记")
 		}
 		status = strings.TrimSpace(status)
@@ -354,7 +354,7 @@ func (s *DeviceService) Verify(req VerifyRequest) (*VerifyResponse, error) {
 
 	// 2. Validate Device
 	var device model.Device
-	if err := s.DB.Where("serial_number = ? AND tenant_id = ?", req.SerialNumber, tenant.ID).First(&device).Error; err != nil {
+	if err := s.DB.Where("serial_number = ? AND tenant_id = ? AND status != ?", req.SerialNumber, tenant.ID, "disabled").First(&device).Error; err != nil {
 		return &VerifyResponse{Code: 403, Result: "deny", DisplayText: "Unauthorized Device"}, nil
 	}
 	if !validDeviceKey(&device, req.DeviceKey) {

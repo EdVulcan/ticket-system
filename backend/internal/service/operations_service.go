@@ -693,6 +693,16 @@ func (s *OperationsService) QueuePrint(tenantID, deviceID, operatorID, shiftID u
 		if order.Status != "paid" && order.Status != "completed" && order.Status != "partial_refunded" {
 			return fmt.Errorf("order cannot be printed from status %s", order.Status)
 		}
+		var paymentCount int64
+		if err := tx.Model(&model.Payment{}).Where(
+			"tenant_id = ? AND order_no = ? AND shift_id = ? AND device_id = ? AND operator_id = ? AND status IN ?",
+			tenantID, orderNo, shiftID, deviceID, operatorID, []string{"paid", "partial_refunded", "refunded"},
+		).Count(&paymentCount).Error; err != nil {
+			return err
+		}
+		if paymentCount == 0 {
+			return errors.New("order was not sold by this operator, device and shift")
+		}
 		if strings.TrimSpace(ticketCode) != "" {
 			var count int64
 			if err := tx.Model(&model.Ticket{}).Where("order_id = ? AND ticket_code = ?", order.ID, strings.TrimSpace(ticketCode)).Count(&count).Error; err != nil {
@@ -701,6 +711,15 @@ func (s *OperationsService) QueuePrint(tenantID, deviceID, operatorID, shiftID u
 			if count == 0 {
 				return errors.New("ticket does not belong to order")
 			}
+		}
+		var printedCount int64
+		if err := tx.Model(&model.PrintJob{}).Where(
+			"tenant_id = ? AND order_no = ? AND ticket_code = ? AND status = ?", tenantID, orderNo, strings.TrimSpace(ticketCode), "printed",
+		).Count(&printedCount).Error; err != nil {
+			return err
+		}
+		if printedCount > 0 {
+			return errors.New("ticket was already printed; use the supervised reissue workflow")
 		}
 		job = model.PrintJob{TenantID: tenantID, DeviceID: deviceID, OperatorID: operatorID, ShiftID: shiftID, OrderNo: orderNo, TicketCode: strings.TrimSpace(ticketCode), Status: "queued"}
 		return tx.Create(&job).Error

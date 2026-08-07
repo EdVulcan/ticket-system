@@ -52,7 +52,7 @@ func addBundleSupplier(t *testing.T, distributorID uint, name string, settlement
 		product := model.Product{
 			TenantID: supplier.ID, ScenicAreaID: area.ID, RuleID: rule.ID, Name: name + " Ticket",
 			Price: settlement + 30, SettlementPrice: settlement, Type: "online", Status: "online", IsDistributable: true,
-			ValidityType: "date", StockType: "total", DailyStock: stock, CodeMode: "ticket",
+			ValidityType: "date", StockType: "total", DailyStock: stock, CodeMode: "ticket", RefundType: "free",
 		}
 		if err := tx.Omit("Rule").Create(&product).Error; err != nil {
 			return err

@@ -110,7 +110,6 @@
             </el-select>
           </el-form-item>
           <el-form-item label="计划人数" required><el-input-number v-model="groupForm.expected_count" :min="1" class="w-full" /></el-form-item>
-		  <el-form-item label="已付预款（元）"><el-input-number v-model="groupForm.deposit_yuan" :min="0" :precision="2" :step="100" class="w-full" /></el-form-item>
         </div>
         <el-form-item label="游玩日期" required><el-date-picker v-model="groupForm.visit_date" type="date" value-format="YYYY-MM-DD" class="w-full" /></el-form-item>
       </el-form>
@@ -477,7 +476,7 @@ const refreshActiveTab = () => activeTab.value === 'contracts' ? loadContracts()
 
 const saving = ref(false)
 const groupDialog = ref(false)
-const groupForm = reactive({ name: '', supplier_tenant_id: 0, scenic_area_id: 0, contract_id: 0, visit_date: '', expected_count: 1, deposit_yuan: 0 })
+const groupForm = reactive({ name: '', supplier_tenant_id: 0, scenic_area_id: 0, contract_id: 0, visit_date: '', expected_count: 1 })
 const selectedGroupContract = computed(() => contracts.value.find((contract: any) => Number(contract.id) === Number(groupForm.contract_id)))
 const groupScenicOptions = computed(() => {
   const seen = new Set<number>()
@@ -494,13 +493,13 @@ const applyGroupContract = () => {
 }
 const openGroupDialog = async () => {
   if (!contracts.value.length) await loadContracts()
-  Object.assign(groupForm, { name: '', supplier_tenant_id: 0, scenic_area_id: 0, contract_id: 0, visit_date: '', expected_count: 1, deposit_yuan: 0 })
+  Object.assign(groupForm, { name: '', supplier_tenant_id: 0, scenic_area_id: 0, contract_id: 0, visit_date: '', expected_count: 1 })
   groupDialog.value = true
 }
 const createGroup = async () => {
   if (!groupForm.name.trim() || !groupForm.supplier_tenant_id || !groupForm.scenic_area_id || !groupForm.contract_id || !groupForm.visit_date) { ElMessage.warning('团队名称、供应商、景区、合同和日期均必填'); return }
   saving.value = true
-  try { await request.post('/teams', { ...groupForm, deposit_cents: Math.round(groupForm.deposit_yuan * 100) }); groupDialog.value = false; ElMessage.success('团队已创建'); await loadGroups() }
+  try { await request.post('/teams', groupForm); groupDialog.value = false; ElMessage.success('团队已创建'); await loadGroups() }
   catch (e: any) { ElMessage.error(e.response?.data?.error || '团队创建失败') }
   finally { saving.value = false }
 }

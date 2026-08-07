@@ -206,8 +206,14 @@ func (s *OrderService) Create(req *model.Order) error {
 			item.ProductName = listing.Name
 			item.Price = roundMoney(listingForResolution.Price)
 			item.SettlementPrice = roundMoney(fulfillment.SettlementPrice)
-			if channelPricing {
+			if channelPricing && !distributed {
 				item.SettlementPrice = centsMoney(channelCostCents)
+			}
+			item.RefundType = strings.TrimSpace(fulfillment.RefundType)
+			item.RefundRule = fulfillment.RefundRule
+			item.ReservedStockType = fulfillment.StockType
+			if channelReservation != nil && channelReservation.ReservedStockType != "" {
+				item.ReservedStockType = channelReservation.ReservedStockType
 			}
 			item.ValidityType = fulfillment.ValidityType
 			item.FulfillmentProductID = fulfillment.ID
@@ -648,6 +654,15 @@ func releaseStock(tx *gorm.DB, product *model.Product, useDate *time.Time, stock
 	default:
 		return fmt.Errorf("invalid stock type for %s", product.Name)
 	}
+}
+
+func stockProductForRelease(product *model.Product, reservedStockType string) *model.Product {
+	if product == nil || strings.TrimSpace(reservedStockType) == "" || product.StockType == reservedStockType {
+		return product
+	}
+	copy := *product
+	copy.StockType = reservedStockType
+	return &copy
 }
 
 func chargeDistributionAccount(tx *gorm.DB, order *model.Order, item *model.OrderItem, sellerTenantID, supplierTenantID uint, productName string) error {
@@ -1105,7 +1120,7 @@ func cancelOrderTxMode(tx *gorm.DB, order *model.Order, allowPaidChannel bool) e
 					return err
 				}
 			}
-			if err := releaseStock(tx, stockProduct, item.UseDate, item.StockSlot, item.Quantity); err != nil {
+			if err := releaseStock(tx, stockProductForRelease(stockProduct, item.ReservedStockType), item.UseDate, item.StockSlot, item.Quantity); err != nil {
 				return err
 			}
 		}

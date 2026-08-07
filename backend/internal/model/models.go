@@ -219,6 +219,9 @@ type OrderItem struct {
 	ProductOfferID          uint       `json:"product_offer_id" gorm:"index"`
 	FulfillmentOrderID      uint       `json:"fulfillment_order_id" gorm:"index"`
 	ProductRevisionID       uint       `gorm:"index" json:"product_revision_id"`
+	RefundType              string     `gorm:"size:20" json:"refund_type"`
+	RefundRule              string     `gorm:"type:text" json:"refund_rule,omitempty"`
+	ReservedStockType       string     `gorm:"size:20" json:"reserved_stock_type"`
 	CashCostCents           int64      `json:"cash_cost_cents"`
 	CreditCostCents         int64      `json:"credit_cost_cents"`
 	OfferReservedQuantity   int        `json:"offer_reserved_quantity"`

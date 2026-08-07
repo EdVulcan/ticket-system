@@ -75,7 +75,7 @@ func (s *TicketService) VerifyDeviceRequest(code string, checkPointID, deviceID,
 		if err := tx.Where("id = ? AND tenant_id = ?", ticket.OrderItem.OrderID, salesTenantID).First(&order).Error; err != nil {
 			return ErrInvalidTicket
 		}
-		if order.Status != "paid" && order.Status != "completed" {
+		if order.Status != "paid" && order.Status != "completed" && order.Status != "partial_refunded" {
 			return ErrOrderNotPaid
 		}
 		if ticket.Status != "unused" && ticket.Status != "active" {

@@ -687,7 +687,7 @@ func TestPOSShiftsAndPrintJobsStayTerminalScoped(t *testing.T) {
 		return order, payment, ticket
 	}
 	order1, _, ticket1 := makeSale(shift1, devices[0].ID, 101)
-	order2, _, ticket2 := makeSale(shift2, devices[1].ID, 202)
+	order2, _, _ := makeSale(shift2, devices[1].ID, 202)
 	if _, err := (&RefundService{}).CreateCashRefund(tenantID, order1.OrderNo, "pos-refund", order1.TotalAmount, []string{ticket1.TicketCode}, "same shift refund"); err != nil {
 		t.Fatal(err)
 	}
@@ -728,7 +728,11 @@ func TestPOSShiftsAndPrintJobsStayTerminalScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := ops.QueuePrint(tenantID, devices[0].ID, 101, shift3.ID, order2.OrderNo, ticket2.TicketCode)
+	if _, err := ops.QueuePrint(tenantID, devices[0].ID, 101, shift3.ID, order2.OrderNo, ""); err == nil {
+		t.Fatal("seller printed an order from another operator and device")
+	}
+	printOrder, _, printTicket := makeSale(shift3, devices[0].ID, 101)
+	job, err := ops.QueuePrint(tenantID, devices[0].ID, 101, shift3.ID, printOrder.OrderNo, printTicket.TicketCode)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -750,7 +754,8 @@ func TestPOSShiftsAndPrintJobsStayTerminalScoped(t *testing.T) {
 	if err != nil || printed.Status != "printed" || printed.AttemptCount != 2 {
 		t.Fatalf("printed=%+v err=%v", printed, err)
 	}
-	stale, err := restarted.QueuePrint(tenantID, devices[0].ID, 101, shift3.ID, order2.OrderNo, ticket2.TicketCode)
+	staleOrder, _, staleTicket := makeSale(shift3, devices[0].ID, 101)
+	stale, err := restarted.QueuePrint(tenantID, devices[0].ID, 101, shift3.ID, staleOrder.OrderNo, staleTicket.TicketCode)
 	if err != nil {
 		t.Fatal(err)
 	}

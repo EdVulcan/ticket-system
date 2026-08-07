@@ -739,7 +739,7 @@ func seedSellableProduct(t *testing.T, stockType string, stock int) (uint, uint)
 		product := model.Product{
 			Name: "Adult Ticket", Price: 99.50, SettlementPrice: 60,
 			TenantID: tenant.ID, ScenicAreaID: area.ID, RuleID: rule.ID, Type: "online", Status: "online",
-			ValidityType: "date", StockType: stockType, DailyStock: stock, CodeMode: "ticket",
+			ValidityType: "date", StockType: stockType, DailyStock: stock, CodeMode: "ticket", RefundType: "free",
 		}
 		if err := tx.Omit("Rule").Create(&product).Error; err != nil {
 			return err
@@ -1029,7 +1029,7 @@ func seedDistributionScenario(t *testing.T) distributionScenario {
 		source := model.Product{
 			Name: "Supplier Ticket", Price: 100, SettlementPrice: 60,
 			TenantID: supplier.ID, ScenicAreaID: area.ID, RuleID: rule.ID, Type: "online", Status: "online",
-			IsDistributable: true, ValidityType: "date", StockType: "total", DailyStock: 1, CodeMode: "ticket",
+			IsDistributable: true, ValidityType: "date", StockType: "total", DailyStock: 1, CodeMode: "ticket", RefundType: "free",
 		}
 		if err := tx.Omit("Rule").Create(&source).Error; err != nil {
 			return err

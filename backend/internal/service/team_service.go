@@ -396,8 +396,8 @@ func (s *TeamService) CreateGroup(tenantID uint, group *model.TourGroup) error {
 	if tenantID == 0 || strings.TrimSpace(group.Name) == "" || group.SupplierTenantID == 0 || group.ScenicAreaID == 0 || group.VisitDate.IsZero() {
 		return errors.New("group name, supplier, scenic area and visit date are required")
 	}
-	if group.DepositCents < 0 {
-		return errors.New("team deposit cannot be negative")
+	if group.DepositCents != 0 {
+		return errors.New("team deposit must be recorded through a verified payment workflow")
 	}
 	return model.Write(func(tx *gorm.DB) error {
 		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
@@ -665,6 +665,18 @@ func (s *TeamService) EnterBatch(tenantID, groupID, deviceID, operatorID uint, m
 			if ticket.OrderItem.UseDate == nil || !sameTeamDate(*ticket.OrderItem.UseDate, group.VisitDate) {
 				return fmt.Errorf("member %d ticket visit date does not match team", memberID)
 			}
+			if ticket.Environment == "sandbox" || ticket.PendingRefundID != 0 {
+				return fmt.Errorf("member %d ticket entitlement is unavailable", memberID)
+			}
+			if ticket.OrderItem.ValidityStart != nil && now.Before(*ticket.OrderItem.ValidityStart) {
+				return fmt.Errorf("member %d ticket entitlement is not valid yet", memberID)
+			}
+			if ticket.OrderItem.ValidityEnd != nil && now.After(*ticket.OrderItem.ValidityEnd) {
+				return fmt.Errorf("member %d ticket entitlement has expired", memberID)
+			}
+			if ticket.CheckInCount != 0 {
+				return fmt.Errorf("member %d ticket entitlement was already admitted", memberID)
+			}
 			if ticket.CodeMode == "order" {
 				return errors.New("team admission requires one ticket entitlement per member")
 			}
@@ -672,8 +684,21 @@ func (s *TeamService) EnterBatch(tenantID, groupID, deviceID, operatorID uint, m
 			if ticket.RuleSnapshot == "" || json.Unmarshal([]byte(ticket.RuleSnapshot), &rule) != nil {
 				return errors.New("ticket entitlement has no valid rule snapshot")
 			}
-			if groupMatch, itemMatch := matchRule(rule, checkpointID); groupMatch == nil || itemMatch == nil {
+			groupMatch, itemMatch := matchRule(rule, checkpointID)
+			if groupMatch == nil || itemMatch == nil {
 				return errors.New("entry checkpoint is not allowed by ticket entitlement")
+			}
+			var records []model.CheckInRecord
+			if err := tx.Where("ticket_id = ? AND result = ?", ticket.ID, "success").Find(&records).Error; err != nil {
+				return err
+			}
+			product := model.Product{CodeMode: ticket.CodeMode, Rule: rule}
+			limit := admissionLimit(&product, &ticket.OrderItem, itemMatch)
+			if limit <= 0 || countAtCheckpoint(records, checkpointID) >= limit {
+				return errors.New("ticket checkpoint admission limit reached")
+			}
+			if !groupAllowsCheckpoint(records, groupMatch, checkpointID) {
+				return errors.New("ticket benefit group admission limit reached")
 			}
 			if err := tx.Create(&model.CheckInRecord{TenantID: group.SupplierTenantID, ScenicAreaID: group.ScenicAreaID, TicketCode: ticket.TicketCode, TicketID: ticket.ID, CheckPointID: checkpointID, DeviceID: device.ID, CheckInTime: now, Result: "success", Message: "team admission"}).Error; err != nil {
 				return err

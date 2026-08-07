@@ -71,6 +71,7 @@ func (s *ChannelWorkflowService) Reserve(tenantID, accountID uint, channel strin
 		}
 		reservation = model.ChannelReservation{
 			TenantID: tenantID, ChannelAccountID: accountID, ExternalNo: strings.TrimSpace(externalNo), ProductID: productID,
+			FulfillmentProductID: fulfillment.ID, FulfillmentTenantID: fulfillment.TenantID, ReservedStockType: fulfillment.StockType,
 			UseDate: useDate, StockSlot: probe.StockSlot, Quantity: quantity, Status: "held", Environment: environment, ExpiresAt: time.Now().Add(ttl),
 		}
 		return tx.Create(&reservation).Error
@@ -127,18 +128,27 @@ func (s *ChannelWorkflowService) Release(tenantID, accountID, reservationID uint
 		if reservation.Status != "held" {
 			return nil
 		}
-		var listing model.Product
-		if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", reservation.ProductID, tenantID).First(&listing).Error; err != nil {
-			return err
-		}
-		fulfillment, _, err := resolveFulfillmentProduct(tx, &listing, tenantID, "ota")
-		if err != nil {
-			// A retired listing still has enough ownership data to release its
-			// reservation; use the stored source projection as a fallback.
-			if listing.FulfillmentProductID == 0 || listing.FulfillmentTenantID == 0 {
+		var fulfillment *model.Product
+		if reservation.FulfillmentProductID != 0 && reservation.FulfillmentTenantID != 0 {
+			var stored model.Product
+			if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", reservation.FulfillmentProductID, reservation.FulfillmentTenantID).First(&stored).Error; err != nil {
 				return err
 			}
-			fulfillment = &model.Product{Base: model.Base{ID: listing.FulfillmentProductID}, TenantID: listing.FulfillmentTenantID, StockType: listing.StockType, Name: listing.Name, DailyStock: listing.DailyStock}
+			fulfillment = stockProductForRelease(&stored, reservation.ReservedStockType)
+		} else {
+			// Compatibility for reservations created before fulfillment snapshots.
+			var listing model.Product
+			if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", reservation.ProductID, tenantID).First(&listing).Error; err != nil {
+				return err
+			}
+			resolved, _, err := resolveFulfillmentProduct(tx, &listing, tenantID, "ota")
+			if err != nil {
+				if listing.FulfillmentProductID == 0 || listing.FulfillmentTenantID == 0 {
+					return err
+				}
+				resolved = &model.Product{Base: model.Base{ID: listing.FulfillmentProductID}, TenantID: listing.FulfillmentTenantID, StockType: listing.StockType, Name: listing.Name, DailyStock: listing.DailyStock}
+			}
+			fulfillment = resolved
 		}
 		if reservation.Environment != "sandbox" {
 			if err := releaseStock(tx, fulfillment, reservation.UseDate, reservation.StockSlot, reservation.Quantity); err != nil {

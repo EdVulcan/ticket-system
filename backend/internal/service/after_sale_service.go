@@ -208,25 +208,25 @@ func (s *AfterSaleService) Execute(tenantID, requestID uint, actor uint, roles .
 		switch req.Type {
 		case "reschedule":
 			if err := executeRescheduleTx(tx, &req); err != nil {
-				return failAfterSaleTx(tx, &req, actor, err)
+				return &afterSaleExecutionError{cause: err}
 			}
 			return completeAfterSaleTx(tx, &req, actor)
 		case "void":
 			var order model.Order
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Tickets").Where("order_no = ? AND tenant_id = ?", req.OrderNo, tenantID).First(&order).Error; err != nil {
-				return failAfterSaleTx(tx, &req, actor, err)
+				return &afterSaleExecutionError{cause: err}
 			}
 			if err := cancelOrderTx(tx, &order); err != nil {
-				return failAfterSaleTx(tx, &req, actor, err)
+				return &afterSaleExecutionError{cause: err}
 			}
 			return completeAfterSaleTx(tx, &req, actor)
 		case "exchange":
 			difference, settlementDifference, err := calculateExchangeDifferencesTx(tx, &req)
 			if err != nil {
-				return failAfterSaleTx(tx, &req, actor, err)
+				return &afterSaleExecutionError{cause: err}
 			}
 			if settlementDifference != 0 && !req.SettlementExceptionApproved {
-				return failAfterSaleTx(tx, &req, actor, errors.New("exchange changes supplier settlement; supervisor exception approval is required"))
+				return &afterSaleExecutionError{cause: errors.New("exchange changes supplier settlement; supervisor exception approval is required")}
 			}
 			req.DifferenceCents = difference
 			if difference > 0 {
@@ -243,12 +243,12 @@ func (s *AfterSaleService) Execute(tenantID, requestID uint, actor uint, roles .
 				return err
 			}
 			if err := executeExchangeTx(tx, &req); err != nil {
-				return failAfterSaleTx(tx, &req, actor, err)
+				return &afterSaleExecutionError{cause: err}
 			}
 			if difference < 0 {
 				refund, err := createExchangeDifferenceRefundTx(tx, &req, -difference)
 				if err != nil {
-					return failAfterSaleTx(tx, &req, actor, err)
+					return &afterSaleExecutionError{cause: err}
 				}
 				req.DifferenceRefundID = refund.ID
 				if err := tx.Model(&req).Update("difference_refund_id", refund.ID).Error; err != nil {
@@ -270,10 +270,22 @@ func (s *AfterSaleService) Execute(tenantID, requestID uint, actor uint, roles .
 			// in processing and link the resulting durable refund below.
 			return nil
 		default:
-			return failAfterSaleTx(tx, &req, actor, errors.New("unsupported after-sale type"))
+			return &afterSaleExecutionError{cause: errors.New("unsupported after-sale type")}
 		}
 	})
 	if err != nil {
+		var executionErr *afterSaleExecutionError
+		if errors.As(err, &executionErr) {
+			if failErr := model.Write(func(tx *gorm.DB) error {
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", requestID, tenantID).First(&req).Error; err != nil {
+					return err
+				}
+				return failAfterSaleTx(tx, &req, actor, executionErr.cause)
+			}); failErr != nil {
+				return nil, failErr
+			}
+			return s.Get(tenantID, requestID)
+		}
 		return nil, err
 	}
 	if req.Type == "refund" {
@@ -300,6 +312,11 @@ func (s *AfterSaleService) Execute(tenantID, requestID uint, actor uint, roles .
 	}
 	return s.Get(tenantID, requestID)
 }
+
+type afterSaleExecutionError struct{ cause error }
+
+func (e *afterSaleExecutionError) Error() string { return e.cause.Error() }
+func (e *afterSaleExecutionError) Unwrap() error { return e.cause }
 
 type exchangeDifferences struct {
 	RetailCents     int64
@@ -341,6 +358,13 @@ func calculateExchangeDifferencesTx(tx *gorm.DB, req *model.AfterSaleRequest) (i
 			continue
 		}
 		matched += selected
+		sourceCodeMode := item.Product.CodeMode
+		if len(item.Tickets) > 0 && item.Tickets[0].CodeMode != "" {
+			sourceCodeMode = item.Tickets[0].CodeMode
+		}
+		if sourceCodeMode != target.CodeMode {
+			return 0, 0, errors.New("exchange cannot change ticket code mode")
+		}
 		if selected != len(item.Tickets) && len(item.Tickets) != item.Quantity {
 			return 0, 0, errors.New("partial operation requires one ticket code per visitor")
 		}
@@ -352,6 +376,9 @@ func calculateExchangeDifferencesTx(tx *gorm.DB, req *model.AfterSaleRequest) (i
 		}
 		differences.RetailCents += (moneyCents(targetListing.Price) - moneyCents(item.Price)) * int64(selected)
 		settlementDelta := (moneyCents(target.SettlementPrice) - moneyCents(item.SettlementPrice)) * int64(selected)
+		if settlementDelta != 0 && (item.ProductOfferID != 0 || (item.FulfillmentTenantID != 0 && item.FulfillmentTenantID != req.TenantID)) {
+			return 0, 0, errors.New("distributed exchange cannot change supplier settlement")
+		}
 		differences.SettlementCents += settlementDelta
 		if settlementDelta != 0 && item.FulfillmentOrderID > 0 {
 			var statementLines int64
@@ -475,7 +502,7 @@ func executeExchangeTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 		if err != nil {
 			return err
 		}
-		if err := releaseStock(tx, oldProduct, selectedItem.UseDate, selectedItem.StockSlot, selectedItem.Quantity); err != nil {
+		if err := releaseStock(tx, stockProductForRelease(oldProduct, selectedItem.ReservedStockType), selectedItem.UseDate, selectedItem.StockSlot, selectedItem.Quantity); err != nil {
 			return err
 		}
 		if err := reserveStock(tx, target, targetDate, stockSlot, selectedItem.Quantity); err != nil {
@@ -499,7 +526,8 @@ func executeExchangeTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 			"validity_end": target.ValidityEndDate, "fulfillment_product_id": target.ID,
 			"fulfillment_tenant_id": target.TenantID, "fulfillment_scenic_area_id": target.ScenicAreaID,
 			"product_offer_id": targetListing.ProductOfferID, "product_revision_id": target.CurrentRevisionID,
-			"offer_reserved_quantity": selectedItem.Quantity,
+			"offer_reserved_quantity": selectedItem.Quantity, "refund_type": target.RefundType,
+			"refund_rule": target.RefundRule, "reserved_stock_type": target.StockType,
 		}
 		if targetListing.ProductOfferID == 0 {
 			updates["offer_reserved_quantity"] = 0
@@ -621,7 +649,7 @@ func executeRescheduleTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 		if err := validateTimeSlot(product.TimeSlotConfig, &model.OrderItem{UseDate: req.TargetDate, StockSlot: stockSlot}); err != nil {
 			return err
 		}
-		if err := releaseStock(tx, &product, selectedItem.UseDate, selectedItem.StockSlot, selectedItem.Quantity); err != nil {
+		if err := releaseStock(tx, stockProductForRelease(&product, selectedItem.ReservedStockType), selectedItem.UseDate, selectedItem.StockSlot, selectedItem.Quantity); err != nil {
 			return err
 		}
 		selectedItem.UseDate = req.TargetDate
@@ -807,20 +835,29 @@ func (s *AfterSaleService) List(tenantID uint, status, orderNo string, page, pag
 func (s *AfterSaleService) ReconcileRefunds() error {
 	return model.Write(func(tx *gorm.DB) error {
 		var requests []model.AfterSaleRequest
-		if err := tx.Where("type = ? AND status = ? AND refund_id > 0", "refund", "processing").Find(&requests).Error; err != nil {
+		if err := tx.Where("type = ? AND status = ?", "refund", "processing").Find(&requests).Error; err != nil {
 			return err
 		}
 		for i := range requests {
 			var refund model.Refund
-			if err := tx.Where("id = ? AND tenant_id = ?", requests[i].RefundID, requests[i].TenantID).First(&refund).Error; err != nil {
+			if requests[i].RefundID == 0 {
+				key := "after-sale:" + requests[i].IdempotencyKey
+				if err := tx.Where("tenant_id = ? AND idempotency_key = ? AND parent_refund_id = 0", requests[i].TenantID, key).Order("id DESC").First(&refund).Error; err != nil {
+					continue
+				}
+				requests[i].RefundID = refund.ID
+				if err := tx.Model(&requests[i]).Update("refund_id", refund.ID).Error; err != nil {
+					return err
+				}
+			} else if err := tx.Where("id = ? AND tenant_id = ?", requests[i].RefundID, requests[i].TenantID).First(&refund).Error; err != nil {
 				continue
 			}
 			switch refund.Status {
-			case "succeeded":
+			case "succeeded", "group_succeeded":
 				if err := completeAfterSaleTx(tx, &requests[i], requests[i].OperatorID); err != nil {
 					return err
 				}
-			case "failed":
+			case "failed", "group_failed":
 				if err := failAfterSaleTx(tx, &requests[i], requests[i].OperatorID, errors.New(refund.Reason)); err != nil {
 					return err
 				}
