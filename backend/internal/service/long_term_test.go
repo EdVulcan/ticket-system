@@ -1633,7 +1633,7 @@ func TestSupplierProductLifecycleSynchronizesDistributorListings(t *testing.T) {
 func TestSupplierFulfillmentWorklistIsScopedAndCountsEntitlements(t *testing.T) {
 	resetBusinessData(t)
 	scenario := seedDistributionScenario(t)
-	order := model.Order{TenantID: scenario.distributorID, Channel: "window", Items: []model.OrderItem{{
+	order := model.Order{TenantID: scenario.distributorID, Channel: "online", Items: []model.OrderItem{{
 		ProductID: scenario.listingID, Quantity: 1,
 		Visitors: []model.VisitorInput{{Name: "Fulfillment Visitor", Phone: "13800138000", IdentityNo: "ID-FULFILLMENT-1", Region: "CN"}},
 	}}}

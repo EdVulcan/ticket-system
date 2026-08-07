@@ -515,6 +515,21 @@ func validateOrder(req *model.Order) error {
 	if req.Channel == "" {
 		req.Channel = "online"
 	}
+	if req.Channel == "window" {
+		// Window sales are deliberately non-real-name. Discard personal data even
+		// when an outdated or modified client still submits it.
+		req.ContactName = ""
+		req.ContactPhone = ""
+		req.VisitorID = ""
+		req.VisitorRegion = ""
+		for i := range req.Items {
+			req.Items[i].VisitorName = ""
+			req.Items[i].VisitorPhone = ""
+			req.Items[i].VisitorID = ""
+			req.Items[i].VisitorRegion = ""
+			req.Items[i].Visitors = nil
+		}
+	}
 	if req.ChannelAccountID == 0 && req.Channel != "online" && req.Channel != "ota" && req.Channel != "window" {
 		return fmt.Errorf("invalid order channel")
 	}

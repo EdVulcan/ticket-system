@@ -87,7 +87,7 @@ func (s *CheckPointService) Delete(id, tenantID uint) error {
 	})
 }
 
-func (s *CheckPointService) List(page, pageSize int, tenantID uint) ([]model.CheckPoint, int64, error) {
+func (s *CheckPointService) List(page, pageSize int, tenantID, scenicAreaID uint) ([]model.CheckPoint, int64, error) {
 	var checkpoints []model.CheckPoint
 	var total int64
 
@@ -107,6 +107,9 @@ func (s *CheckPointService) List(page, pageSize int, tenantID uint) ([]model.Che
 
 	query := model.DB.Model(&model.CheckPoint{})
 	query = query.Where("tenant_id = ?", tenantID)
+	if scenicAreaID != 0 {
+		query = query.Where("scenic_area_id = ?", scenicAreaID)
+	}
 
 	err := query.Count(&total).Error
 	if err != nil {

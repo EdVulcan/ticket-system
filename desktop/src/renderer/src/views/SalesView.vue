@@ -663,8 +663,7 @@ const handleHold = async () => {
     await axios.post('/operations/holds', {
       device_id: posDeviceId.value,
       shift_id: shiftState.value.shiftId,
-      items: cart.value.map(orderLinePayload),
-      contact_name: '窗口散客'
+      items: cart.value.map(orderLinePayload)
     })
     cart.value = []
     ElMessage.success('挂单已保存')
@@ -790,7 +789,9 @@ const fetchProducts = async () => {
       axios.get('/products', { params: { page_size: 100, type: 'offline' } }),
       axios.get('/bundle-catalog', { params: { type: 'offline' } })
     ])
-    const ordinary = productResponse.data.data.map((p: any) => {
+    const ordinary = productResponse.data.data.filter((p: any) => (
+      !p.real_name_required && Number(p.limit_per_phone || 0) === 0 && Number(p.limit_per_id || 0) === 0 && !String(p.region_limit || '').trim()
+    )).map((p: any) => {
       try {
         p.parsedTags = p.tags ? JSON.parse(p.tags) : []
       } catch (e) {
@@ -841,15 +842,13 @@ const handleCheckout = async () => {
   }
   try {
     const orderData = {
-      contact_name: '窗口散客',
-      contact_phone: '',
       items: cart.value.map(orderLinePayload)
     }
     const res = await axios.post('/orders', orderData)
     currentOrder.value = res.data
     showPayment.value = true
-  } catch (e) {
-    ElMessage.error('下单失败')
+  } catch (e: any) {
+    ElMessage.error(e.response?.data?.error || '下单失败')
   }
 }
 

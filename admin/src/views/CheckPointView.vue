@@ -10,6 +10,9 @@
     <el-table :data="tableData" style="width: 100%" v-loading="loading">
       <el-table-column prop="id" label="编号" width="80" />
       <el-table-column prop="name" label="检票点名称" min-width="150" />
+      <el-table-column label="所属景区" min-width="150">
+        <template #default="{ row }">{{ scenicAreaName(row.scenic_area_id) }}</template>
+      </el-table-column>
       <el-table-column prop="location" label="位置/区域" min-width="150" />
       <el-table-column label="操作" width="150" fixed="right">
         <template #default="{ row }">
@@ -84,6 +87,8 @@ const rules = {
   scenic_area_id: [{ required: true, type: 'number', min: 1, message: '请选择所属景区', trigger: 'change' }],
   name: [{ required: true, message: '请输入检票点名称', trigger: 'blur' }]
 }
+
+const scenicAreaName = (id: number) => scenicAreas.value.find(area => area.id === id)?.name || '未归属'
 
 const fetchData = async () => {
   loading.value = true

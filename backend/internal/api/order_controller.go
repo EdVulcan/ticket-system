@@ -17,24 +17,15 @@ type OrderController struct {
 }
 
 type windowOrderItemRequest struct {
-	ProductID       uint                 `json:"product_id"`
-	BundleProductID uint                 `json:"bundle_product_id"`
-	Quantity        int                  `json:"quantity"`
-	UseDate         *time.Time           `json:"use_date"`
-	StockSlot       string               `json:"stock_slot"`
-	VisitorName     string               `json:"visitor_name"`
-	VisitorPhone    string               `json:"visitor_phone"`
-	VisitorID       string               `json:"visitor_id"`
-	VisitorRegion   string               `json:"visitor_region"`
-	Visitors        []model.VisitorInput `json:"visitors"`
+	ProductID       uint       `json:"product_id"`
+	BundleProductID uint       `json:"bundle_product_id"`
+	Quantity        int        `json:"quantity"`
+	UseDate         *time.Time `json:"use_date"`
+	StockSlot       string     `json:"stock_slot"`
 }
 
 type windowOrderRequest struct {
-	ContactName   string                   `json:"contact_name"`
-	ContactPhone  string                   `json:"contact_phone"`
-	VisitorID     string                   `json:"visitor_id"`
-	VisitorRegion string                   `json:"visitor_region"`
-	Items         []windowOrderItemRequest `json:"items" binding:"required,min=1"`
+	Items []windowOrderItemRequest `json:"items" binding:"required,min=1"`
 }
 
 func (c *OrderController) Create(ctx *gin.Context) {
@@ -45,8 +36,6 @@ func (c *OrderController) Create(ctx *gin.Context) {
 	}
 	req := model.Order{
 		TenantID: ctx.GetUint("tenant_id"), Channel: "window",
-		ContactName: body.ContactName, ContactPhone: body.ContactPhone,
-		VisitorID: body.VisitorID, VisitorRegion: body.VisitorRegion,
 		Items: make([]model.OrderItem, len(body.Items)),
 	}
 	for i := range body.Items {
@@ -54,8 +43,6 @@ func (c *OrderController) Create(ctx *gin.Context) {
 		req.Items[i] = model.OrderItem{
 			ProductID: item.ProductID, BundleProductID: item.BundleProductID, Quantity: item.Quantity,
 			UseDate: item.UseDate, StockSlot: item.StockSlot,
-			VisitorName: item.VisitorName, VisitorPhone: item.VisitorPhone,
-			VisitorID: item.VisitorID, VisitorRegion: item.VisitorRegion, Visitors: item.Visitors,
 		}
 	}
 

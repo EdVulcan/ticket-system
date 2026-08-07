@@ -32,6 +32,9 @@
           </div>
         </template>
       </el-table-column>
+      <el-table-column label="所属景区" min-width="150">
+        <template #default="{ row }">{{ scenicAreaName(row.scenic_area_id) }}</template>
+      </el-table-column>
       <el-table-column label="价格管理" width="150">
         <template #default="{ row }">
           <div class="text-sm">售价: <span class="font-bold text-orange-500">¥{{ row.price }}</span></div>
@@ -87,6 +90,12 @@
             <div class="grid grid-cols-2 gap-4">
               <el-form-item label="门票名称" prop="product.name" class="col-span-2">
                 <el-input v-model="form.product.name" placeholder="例如：成人全天通票" />
+              </el-form-item>
+              <el-form-item label="所属景区" prop="product.scenic_area_id" class="col-span-2">
+                <el-select v-model="form.product.scenic_area_id" aria-label="所属景区" placeholder="请选择门票所属景区" class="w-full" @change="handleScenicAreaChange">
+                  <el-option v-for="area in scenicAreaOptions" :key="area.id" :label="area.status === 'active' ? area.name : `${area.name}（已停用）`" :value="area.id" />
+                </el-select>
+                <div class="text-xs text-gray-400 mt-1">切换景区会清空已选检票点；已售门票仍按售票时的景区核销。</div>
               </el-form-item>
               <el-form-item label="销售价格" prop="product.price">
                 <el-input-number v-model="form.product.price" :precision="2" :step="1" :min="0" class="w-full" />
@@ -239,9 +248,9 @@
 
               <div class="space-y-2 pl-4 border-l-2 border-slate-200">
                 <div v-for="(item, iIdx) in group.items" :key="iIdx" class="flex items-center gap-2">
-                  <el-select v-model="item.check_point_id" placeholder="选择检票点" class="flex-1">
+                  <el-select v-model="item.check_point_id" aria-label="检票点" :placeholder="form.product.scenic_area_id ? '选择检票点' : '请先选择所属景区'" class="flex-1" :disabled="!form.product.scenic_area_id">
                     <el-option 
-                      v-for="cp in checkpoints" 
+                      v-for="cp in filteredCheckpoints"
                       :key="cp.id" 
                       :label="cp.name" 
                       :value="cp.id" 
@@ -320,7 +329,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { Plus, Minus } from '@element-plus/icons-vue'
@@ -333,6 +342,7 @@ const loading = ref(false)
 const submitting = ref(false)
 const tableData = ref([])
 const checkpoints = ref<any[]>([])
+const scenicAreas = ref<any[]>([])
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const activeTab = ref('basic')
@@ -353,6 +363,7 @@ const form = reactive({
   id: 0,
   product: {
     name: '',
+    scenic_area_id: 0,
     price: 0,
     settlement_price: 0,
     type: 'online',
@@ -393,17 +404,27 @@ const form = reactive({
 const rules = {
   'product.name': [{ required: true, message: '请输入门票名称', trigger: 'blur' }],
   'product.price': [{ required: true, message: '请输入售价', trigger: 'blur' }],
-  'product.settlement_price': [{ required: true, message: '请输入结算价', trigger: 'blur' }]
+  'product.settlement_price': [{ required: true, message: '请输入结算价', trigger: 'blur' }],
+  'product.scenic_area_id': [{ required: true, type: 'number', min: 1, message: '请选择所属景区', trigger: 'change' }]
 }
 
-const fetchCheckPoints = async () => {
+const fetchReferences = async () => {
   try {
-    const res = await request.get('/checkpoints', { params: { page_size: 100 } })
-    checkpoints.value = res.data.data
+    const [checkpointRes, scenicRes] = await Promise.all([
+      request.get('/checkpoints', { params: { page_size: 100 } }),
+      request.get('/scenic-areas')
+    ])
+    checkpoints.value = checkpointRes.data.data || []
+    scenicAreas.value = scenicRes.data.data || []
   } catch (e) {
     console.error(e)
   }
 }
+
+const activeScenicAreas = computed(() => scenicAreas.value.filter(area => area.status === 'active'))
+const scenicAreaOptions = computed(() => scenicAreas.value.filter(area => area.status === 'active' || area.id === form.product.scenic_area_id))
+const filteredCheckpoints = computed(() => checkpoints.value.filter(cp => cp.scenic_area_id === form.product.scenic_area_id))
+const scenicAreaName = (id: number) => scenicAreas.value.find(area => area.id === id)?.name || '未归属'
 
 const fetchData = async () => {
   loading.value = true
@@ -424,7 +445,8 @@ const handleAdd = () => {
   // Reset Form
   form.id = 0
   form.product = { 
-    name: '', price: 0, settlement_price: 0, type: 'online', status: 'online', code_mode: 'order',
+    name: '', scenic_area_id: activeScenicAreas.value.length === 1 ? activeScenicAreas.value[0].id : 0,
+    price: 0, settlement_price: 0, type: 'online', status: 'online', code_mode: 'order',
     validity_type: 'date', validity_days: 0, validity_start_date: null, validity_end_date: null,
     stock_type: 'unlimited', daily_stock: 0, time_slot_config: '',
     real_name_required: false, region_limit: '', limit_per_phone: 0, limit_per_id: 0,
@@ -517,6 +539,12 @@ const removeItem = (gIdx: number, iIdx: number) => {
   form.rule.groups[gIdx].items.splice(iIdx, 1)
 }
 
+const handleScenicAreaChange = () => {
+  for (const group of form.rule.groups) {
+    for (const item of group.items) item.check_point_id = null
+  }
+}
+
 const handleDelete = (row: any) => {
   ElMessageBox.confirm('确认删除该门票吗？', '警告', {
     confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning',
@@ -604,8 +632,8 @@ const handleSubmit = async () => {
         }
         dialogVisible.value = false
         fetchData()
-      } catch (error) {
-        ElMessage.error('操作失败: ' + (error as any).response?.data?.error || '未知错误')
+      } catch (error: any) {
+        ElMessage.error(error.response?.data?.error || '操作失败')
       } finally {
         submitting.value = false
       }
@@ -615,6 +643,6 @@ const handleSubmit = async () => {
 
 onMounted(() => {
   fetchData()
-  fetchCheckPoints()
+  fetchReferences()
 })
 </script>

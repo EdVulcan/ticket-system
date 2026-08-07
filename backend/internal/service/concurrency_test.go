@@ -669,6 +669,41 @@ func TestTicketCannotCrossScenicAreaWithinSameSupplier(t *testing.T) {
 	}
 }
 
+func TestProductScenicAreaMustMatchEveryCheckpoint(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	var firstArea model.ScenicArea
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&firstArea).Error; err != nil {
+		t.Fatal(err)
+	}
+	secondArea := model.ScenicArea{TenantID: tenantID, Code: "SECOND", Name: "Second Park", Status: "active"}
+	if err := model.DB.Create(&secondArea).Error; err != nil {
+		t.Fatal(err)
+	}
+	secondCheckpoint := model.CheckPoint{TenantID: tenantID, ScenicAreaID: secondArea.ID, Name: "Second Park Gate"}
+	if err := model.DB.Create(&secondCheckpoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	product := model.Product{
+		TenantID: tenantID, ScenicAreaID: firstArea.ID, Name: "Wrong Park Ticket", Price: 80,
+		Type: "online", Status: "online", CodeMode: "ticket", ValidityType: "date", StockType: "unlimited",
+	}
+	rule := model.TicketRule{
+		TenantID: tenantID, Name: "Wrong Park Rule", ValidityType: "date",
+		Groups: []model.RuleGroup{{GroupName: "Gate", MaxTotalCheckIn: 1, Items: []model.RuleItem{{CheckPointID: secondCheckpoint.ID, MaxPerCheckIn: 1}}}},
+	}
+	if err := (&ProductService{}).Create(&product, &rule); err == nil || !strings.Contains(err.Error(), "不属于票种的所属景区") {
+		t.Fatalf("mismatched product/checkpoint scenic area error=%v", err)
+	}
+	checkpoints, total, err := (&CheckPointService{}).List(1, 100, tenantID, secondArea.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(checkpoints) != 1 || checkpoints[0].ID != secondCheckpoint.ID {
+		t.Fatalf("scenic-area checkpoint filter total=%d checkpoints=%+v", total, checkpoints)
+	}
+}
+
 func TestScenicAreaServiceKeepsTenantScopeAndProtectsReferencedAreas(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, _ := seedSellableProduct(t, "unlimited", 0)

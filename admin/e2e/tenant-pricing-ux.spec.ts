@@ -62,6 +62,7 @@ test('供应商可以为票种配置闸机本地语音编号', async ({ page }) 
   await prepareSupplier(page)
   const product = {
     id: 101, name: '青云景区成人票', price: 80, settlement_price: 60,
+    scenic_area_id: 11,
     type: 'online', status: 'online', code_mode: 'ticket', validity_type: 'date', validity_days: 0,
     stock_type: 'unlimited', daily_stock: 0, real_name_required: false, region_limit: '',
     limit_per_phone: 0, limit_per_id: 0, refund_type: 'no_refund', refund_rule: '', tags: '',
@@ -71,7 +72,8 @@ test('供应商可以为票种配置闸机本地语音编号', async ({ page }) 
     ] },
   }
   await page.route('**/api/v1/products?*', route => json(route, { data: [product], total: 1 }))
-  await page.route('**/api/v1/checkpoints?*', route => json(route, { data: [{ id: 31, name: '东门检票点' }], total: 1 }))
+  await page.route('**/api/v1/checkpoints?*', route => json(route, { data: [{ id: 31, name: '东门检票点', scenic_area_id: 11 }], total: 1 }))
+  await page.route('**/api/v1/scenic-areas', route => json(route, { data: [{ id: 11, name: '青云景区', status: 'active' }] }))
   let submitted: any
   await page.route('**/api/v1/products/101', async route => {
     submitted = route.request().postDataJSON()
@@ -86,6 +88,30 @@ test('供应商可以为票种配置闸机本地语音编号', async ({ page }) 
   await voice.press('Enter')
   await dialog.getByRole('button', { name: '保存并发布' }).click()
   await expect.poll(() => submitted?.product?.gate_voice_code).toBe('vip_ticket')
+})
+
+test('发布票种时按所属景区区分检票点', async ({ page }) => {
+  await prepareSupplier(page)
+  await page.route('**/api/v1/products?*', route => json(route, { data: [], total: 0 }))
+  await page.route('**/api/v1/scenic-areas', route => json(route, { data: [
+    { id: 11, name: '青云景区', status: 'active' },
+    { id: 12, name: '云谷乐园', status: 'active' },
+  ] }))
+  await page.route('**/api/v1/checkpoints?*', route => json(route, { data: [
+    { id: 31, name: '青云东门', scenic_area_id: 11 },
+    { id: 32, name: '云谷南门', scenic_area_id: 12 },
+  ], total: 2 }))
+
+  await page.goto('/product/offline')
+  await page.getByRole('button', { name: '发布窗口票' }).click()
+  const dialog = page.getByRole('dialog', { name: '发布窗口票' })
+  const scenicSelect = dialog.getByRole('combobox', { name: '所属景区' })
+  await scenicSelect.locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]').click()
+  await page.getByRole('option', { name: '青云景区' }).click()
+  const checkpointSelect = dialog.getByRole('combobox', { name: '检票点' }).first()
+  await checkpointSelect.locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]').click()
+  await expect(page.getByRole('option', { name: '青云东门' })).toBeVisible()
+  await expect(page.getByRole('option', { name: '云谷南门' })).toHaveCount(0)
 })
 
 test('支付配置页展示各渠道真实接入状态', async ({ page }) => {

@@ -276,6 +276,52 @@ func TestProductSalePolicyRejectsIdentityAndLimitViolations(t *testing.T) {
 	}
 }
 
+func TestWindowOrderDoesNotPersistVisitorInformation(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{
+		TenantID: tenantID, Channel: "window", ContactName: "不应保存", ContactPhone: "13800000000", VisitorID: "ID-WINDOW", VisitorRegion: "CN",
+		Items: []model.OrderItem{{
+			ProductID: productID, Quantity: 1, VisitorName: "不应保存", VisitorPhone: "13800000000", VisitorID: "ID-WINDOW", VisitorRegion: "CN",
+			Visitors: []model.VisitorInput{{Name: "不应保存", Phone: "13800000000", IdentityNo: "ID-WINDOW", Region: "CN"}},
+		}},
+	}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if order.ContactName != "" || order.ContactPhone != "" || order.VisitorID != "" || order.VisitorRegion != "" {
+		t.Fatalf("window order retained personal information: %+v", order)
+	}
+	var visitorCount int64
+	if err := model.DB.Model(&model.OrderVisitor{}).Where("order_id = ?", order.ID).Count(&visitorCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if visitorCount != 0 {
+		t.Fatalf("window order persisted %d visitor records", visitorCount)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ticket.VisitorName != "" || ticket.VisitorPhone != "" || ticket.VisitorID != "" || ticket.VisitorRegion != "" {
+		t.Fatalf("window ticket retained personal information: %+v", ticket)
+	}
+}
+
+func TestWindowOrderRejectsVisitorDependentProduct(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&model.Product{}).Where("id = ?", productID).Update("real_name_required", true).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err == nil || !strings.Contains(err.Error(), "不能通过非实名窗口销售") {
+		t.Fatalf("visitor-dependent product window sale error=%v", err)
+	}
+}
+
 func TestRealNameOrderPersistsPerTicketVisitors(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
@@ -573,7 +619,7 @@ func TestAfterSaleSupportsPartialRescheduleAndRejectsPartialVoid(t *testing.T) {
 	tenantID, productID := seedSellableProduct(t, "daily", 5)
 	firstDate := startOfDay(time.Now().AddDate(0, 0, 1))
 	secondDate := startOfDay(time.Now().AddDate(0, 0, 2))
-	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{
+	order := model.Order{TenantID: tenantID, Channel: "online", Items: []model.OrderItem{{
 		ProductID: productID, Quantity: 2, UseDate: &firstDate,
 		Visitors: []model.VisitorInput{{Name: "Visitor A", IdentityNo: "ID-A"}, {Name: "Visitor B", IdentityNo: "ID-B"}},
 	}}}
@@ -846,7 +892,7 @@ func TestAfterSaleExchangeSupportsSelectedVisitor(t *testing.T) {
 		t.Fatal(err)
 	}
 	visitDate := startOfDay(time.Now().AddDate(0, 0, 1))
-	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{
+	order := model.Order{TenantID: tenantID, Channel: "online", Items: []model.OrderItem{{
 		ProductID: sourceID, Quantity: 2, UseDate: &visitDate,
 		Visitors: []model.VisitorInput{{Name: "Visitor A", IdentityNo: "ID-A"}, {Name: "Visitor B", IdentityNo: "ID-B"}},
 	}}}

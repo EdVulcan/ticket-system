@@ -60,7 +60,8 @@ func (c *CheckPointController) Delete(ctx *gin.Context) {
 func (c *CheckPointController) List(ctx *gin.Context) {
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "10"))
-	cps, total, err := c.Service.List(page, pageSize, ctx.GetUint("tenant_id"))
+	scenicAreaID, _ := strconv.ParseUint(ctx.Query("scenic_area_id"), 10, 64)
+	cps, total, err := c.Service.List(page, pageSize, ctx.GetUint("tenant_id"), uint(scenicAreaID))
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

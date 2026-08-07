@@ -106,7 +106,6 @@ func (s *ProductService) Update(id, tenantID uint, product *model.Product, rule 
 		if err := assignProductScenicArea(tx, tenantID, product, rule); err != nil {
 			return err
 		}
-
 		// 2. Update Product Fields
 		product.ID = id
 		product.RuleID = existingProduct.RuleID // Keep the same Rule ID
@@ -295,7 +294,10 @@ func validateProduct(tx *gorm.DB, tenantID uint, product *model.Product, rule *m
 }
 
 func assignProductScenicArea(tx *gorm.DB, tenantID uint, product *model.Product, rule *model.TicketRule) error {
-	var scenicAreaID uint
+	scenicAreaID, err := normalizeScenicArea(tx, tenantID, product.ScenicAreaID)
+	if err != nil {
+		return err
+	}
 	for _, group := range rule.Groups {
 		for _, item := range group.Items {
 			var checkpoint model.CheckPoint
@@ -305,17 +307,10 @@ func assignProductScenicArea(tx *gorm.DB, tenantID uint, product *model.Product,
 			if checkpoint.ScenicAreaID == 0 {
 				return fmt.Errorf("checkpoint %d has no scenic area", checkpoint.ID)
 			}
-			if scenicAreaID == 0 {
-				scenicAreaID = checkpoint.ScenicAreaID
-				continue
-			}
 			if scenicAreaID != checkpoint.ScenicAreaID {
-				return fmt.Errorf("a product cannot combine checkpoints from different scenic areas")
+				return fmt.Errorf("所选检票点不属于票种的所属景区")
 			}
 		}
-	}
-	if scenicAreaID == 0 {
-		return fmt.Errorf("product must belong to a scenic area")
 	}
 	product.ScenicAreaID = scenicAreaID
 	return nil

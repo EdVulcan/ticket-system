@@ -40,6 +40,9 @@ func validateSalePolicyTx(tx *gorm.DB, product *model.Product, order *model.Orde
 	if product == nil || order == nil || item == nil {
 		return errors.New("product and order are required")
 	}
+	if order.Channel == "window" && (product.RealNameRequired || product.LimitPerPhone > 0 || product.LimitPerID > 0 || strings.TrimSpace(product.RegionLimit) != "") {
+		return fmt.Errorf("票种“%s”需要游客信息，不能通过非实名窗口销售", product.Name)
+	}
 	if item.VisitorName == "" {
 		item.VisitorName = order.ContactName
 	}
