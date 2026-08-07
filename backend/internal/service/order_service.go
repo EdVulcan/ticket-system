@@ -935,15 +935,115 @@ func (s *OrderService) List(page, pageSize int, tenantID uint, status, channel, 
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	err := query.Order("created_at desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&orders).Error
-	return orders, total, err
+	if err := query.Order("created_at desc").Offset((page - 1) * pageSize).Limit(pageSize).Find(&orders).Error; err != nil {
+		return nil, 0, err
+	}
+	if err := hydrateOrderSaleAttribution(model.DB, tenantID, orders); err != nil {
+		return nil, 0, err
+	}
+	return orders, total, nil
 }
 
 func (s *OrderService) GetByOrderNo(orderNo string, tenantID uint) (*model.Order, error) {
 	var order model.Order
-	err := model.DB.Preload("Items").Preload("Items.Tickets").Preload("Items.VisitorRecords").
-		Where("order_no = ? AND tenant_id = ?", orderNo, tenantID).First(&order).Error
-	return &order, err
+	if err := model.DB.Preload("Items").Preload("Items.Tickets").Preload("Items.VisitorRecords").
+		Where("order_no = ? AND tenant_id = ?", orderNo, tenantID).First(&order).Error; err != nil {
+		return &order, err
+	}
+	// The helper works on a slice so list and detail use identical attribution rules.
+	orders := []model.Order{order}
+	if err := hydrateOrderSaleAttribution(model.DB, tenantID, orders); err != nil {
+		return nil, err
+	}
+	return &orders[0], nil
+}
+
+func hydrateOrderSaleAttribution(db *gorm.DB, tenantID uint, orders []model.Order) error {
+	if tenantID == 0 || len(orders) == 0 {
+		return nil
+	}
+	orderNos := make([]string, 0, len(orders))
+	for i := range orders {
+		if orders[i].Channel == "window" {
+			orderNos = append(orderNos, orders[i].OrderNo)
+		}
+	}
+	if len(orderNos) == 0 {
+		return nil
+	}
+	var payments []model.Payment
+	if err := db.Where(
+		"tenant_id = ? AND order_no IN ? AND purpose = ? AND status IN ? AND operator_id != 0 AND device_id != 0",
+		tenantID, orderNos, "order", []string{"paid", "partial_refunded", "refunded"},
+	).Order("paid_at ASC NULLS LAST, id ASC").Find(&payments).Error; err != nil {
+		return err
+	}
+	paymentByOrder := make(map[string]model.Payment, len(payments))
+	operatorIDs := make([]uint, 0, len(payments))
+	deviceIDs := make([]uint, 0, len(payments))
+	shiftIDs := make([]uint, 0, len(payments))
+	for i := range payments {
+		payment := payments[i]
+		if _, exists := paymentByOrder[payment.OrderNo]; exists {
+			continue
+		}
+		paymentByOrder[payment.OrderNo] = payment
+		operatorIDs = append(operatorIDs, payment.OperatorID)
+		deviceIDs = append(deviceIDs, payment.DeviceID)
+		if payment.ShiftID != 0 {
+			shiftIDs = append(shiftIDs, payment.ShiftID)
+		}
+	}
+	if len(paymentByOrder) == 0 {
+		return nil
+	}
+	var staff []model.Staff
+	if err := db.Select("id", "name", "job_number").Where("tenant_id = ? AND id IN ?", tenantID, operatorIDs).Find(&staff).Error; err != nil {
+		return err
+	}
+	var devices []model.Device
+	if err := db.Select("id", "name", "serial_number").Where("tenant_id = ? AND id IN ?", tenantID, deviceIDs).Find(&devices).Error; err != nil {
+		return err
+	}
+	var shifts []model.POSShift
+	if len(shiftIDs) > 0 {
+		if err := db.Select("id", "shift_no").Where("tenant_id = ? AND id IN ?", tenantID, shiftIDs).Find(&shifts).Error; err != nil {
+			return err
+		}
+	}
+	staffByID := make(map[uint]model.Staff, len(staff))
+	for i := range staff {
+		staffByID[staff[i].ID] = staff[i]
+	}
+	deviceByID := make(map[uint]model.Device, len(devices))
+	for i := range devices {
+		deviceByID[devices[i].ID] = devices[i]
+	}
+	shiftByID := make(map[uint]model.POSShift, len(shifts))
+	for i := range shifts {
+		shiftByID[shifts[i].ID] = shifts[i]
+	}
+	for i := range orders {
+		payment, exists := paymentByOrder[orders[i].OrderNo]
+		if !exists {
+			continue
+		}
+		orders[i].SaleOperatorID = payment.OperatorID
+		orders[i].SaleDeviceID = payment.DeviceID
+		orders[i].SaleShiftID = payment.ShiftID
+		if operator, found := staffByID[payment.OperatorID]; found {
+			orders[i].SaleOperatorName = operator.Name
+			orders[i].SaleOperatorJobNumber = operator.JobNumber
+		}
+		if device, found := deviceByID[payment.DeviceID]; found {
+			orders[i].SaleDeviceName = device.Name
+			orders[i].SaleDeviceSerial = device.SerialNumber
+		}
+		if shift, found := shiftByID[payment.ShiftID]; found {
+			orders[i].SaleShiftNo = shift.ShiftNo
+		}
+	}
+	return nil
 }
 
 // GetDetail returns the seller-owned order together with its supplier

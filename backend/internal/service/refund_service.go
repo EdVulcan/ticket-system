@@ -46,10 +46,11 @@ type RefundGroupView struct {
 // RefundActor is resolved from the authenticated request. A zero actor keeps
 // the historical service API fail-closed for tests, jobs and internal callers.
 type RefundActor struct {
-	TenantID           uint
-	UserID             uint
-	OrderTenantID      uint
-	FulfillmentOrderID uint
+	TenantID             uint
+	UserID               uint
+	OrderTenantID        uint
+	FulfillmentOrderID   uint
+	OverrideRefundPolicy bool
 }
 
 func refundOrderTenantID(actor RefundActor) uint {
@@ -171,7 +172,11 @@ func (s *RefundService) CreateCashRefundAs(actor RefundActor, orderNo, idempoten
 		if err != nil {
 			return err
 		}
-		selected, refundableAmount, err := selectRefundTickets(&order, cleanCodes, allowUsed, 0)
+		allowPolicyOverride, err := authorizeRefundPolicyOverrideTx(tx, actor, &order, reason)
+		if err != nil {
+			return err
+		}
+		selected, refundableAmount, err := selectRefundTickets(&order, cleanCodes, allowUsed, allowPolicyOverride, 0)
 		if err != nil {
 			return err
 		}
@@ -194,7 +199,7 @@ func (s *RefundService) CreateCashRefundAs(actor RefundActor, orderNo, idempoten
 			TenantID: tenantID, RefundNo: generateRefundNo(), IdempotencyKey: idempotencyKey,
 			OrderNo: orderNo, PaymentID: payment.ID, Amount: roundMoney(amount), AmountCents: moneyCents(amount), Method: "cash",
 			Status: "succeeded", Reason: strings.TrimSpace(reason), TicketCodesJSON: string(codesJSON),
-			AuthorizedUsedRefund: allowUsed, AuthorizedBy: actor.UserID,
+			AuthorizedUsedRefund: allowUsed, AuthorizedPolicyOverride: allowPolicyOverride, AuthorizedBy: actor.UserID,
 		}
 		if err := tx.Create(&result).Error; err != nil {
 			return err
@@ -294,7 +299,11 @@ func (s *RefundService) CreateDigitalRefundAs(actor RefundActor, orderNo, idempo
 		if err != nil {
 			return err
 		}
-		selected, refundableAmount, err := selectRefundTickets(&order, cleanCodes, allowUsed, 0)
+		allowPolicyOverride, err := authorizeRefundPolicyOverrideTx(tx, actor, &order, reason)
+		if err != nil {
+			return err
+		}
+		selected, refundableAmount, err := selectRefundTickets(&order, cleanCodes, allowUsed, allowPolicyOverride, 0)
 		if err != nil {
 			return err
 		}
@@ -305,7 +314,7 @@ func (s *RefundService) CreateDigitalRefundAs(actor RefundActor, orderNo, idempo
 			TenantID: tenantID, RefundNo: generateRefundNo(), IdempotencyKey: idempotencyKey,
 			OrderNo: orderNo, PaymentID: payment.ID, Amount: roundMoney(amount), AmountCents: moneyCents(amount), Method: payment.Method,
 			Status: "pending", Reason: strings.TrimSpace(reason), TicketCodesJSON: string(codesJSON),
-			AuthorizedUsedRefund: allowUsed, AuthorizedBy: actor.UserID,
+			AuthorizedUsedRefund: allowUsed, AuthorizedPolicyOverride: allowPolicyOverride, AuthorizedBy: actor.UserID,
 		}
 		if err := tx.Create(&result).Error; err != nil {
 			return err
@@ -381,7 +390,11 @@ func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempote
 		if err != nil {
 			return err
 		}
-		selected, refundableAmount, err := selectRefundTickets(&order, cleanCodes, allowUsed, 0)
+		allowPolicyOverride, err := authorizeRefundPolicyOverrideTx(tx, actor, &order, reason)
+		if err != nil {
+			return err
+		}
+		selected, refundableAmount, err := selectRefundTickets(&order, cleanCodes, allowUsed, allowPolicyOverride, 0)
 		if err != nil {
 			return err
 		}
@@ -403,7 +416,7 @@ func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempote
 			TenantID: tenantID, RefundNo: generateRefundNo(), IdempotencyKey: idempotencyKey,
 			OrderNo: orderNo, Amount: centsMoney(amountCents), AmountCents: amountCents,
 			Method: "mixed", Status: "group_pending", Reason: strings.TrimSpace(reason), TicketCodesJSON: string(codesJSON),
-			AuthorizedUsedRefund: allowUsed, AuthorizedBy: actor.UserID,
+			AuthorizedUsedRefund: allowUsed, AuthorizedPolicyOverride: allowPolicyOverride, AuthorizedBy: actor.UserID,
 		}
 		if err := tx.Create(&root).Error; err != nil {
 			return err
@@ -487,7 +500,7 @@ func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempote
 	return &root, nil
 }
 
-func selectRefundTickets(order *model.Order, cleanCodes []string, allowUsed bool, allowedPendingRefundID uint) (map[string]*model.Ticket, float64, error) {
+func selectRefundTickets(order *model.Order, cleanCodes []string, allowUsed, allowPolicyOverride bool, allowedPendingRefundID uint) (map[string]*model.Ticket, float64, error) {
 	wanted := codeSet(cleanCodes)
 	selected := make(map[string]*model.Ticket, len(cleanCodes))
 	refundableAmount := 0.0
@@ -509,7 +522,9 @@ func selectRefundTickets(order *model.Order, cleanCodes []string, allowUsed bool
 				switch refundType {
 				case "free":
 				case "no_refund":
-					return nil, 0, fmt.Errorf("product %s does not allow refunds", item.ProductName)
+					if !allowPolicyOverride {
+						return nil, 0, fmt.Errorf("product %s does not allow refunds", item.ProductName)
+					}
 				case "ladder":
 					return nil, 0, fmt.Errorf("product %s has a ladder refund policy that is not configured", item.ProductName)
 				default:
@@ -601,7 +616,7 @@ func reacquireFailedRefundTx(tx *gorm.DB, refund *model.Refund) error {
 		Where("order_no = ? AND tenant_id = ?", refund.OrderNo, refund.TenantID).First(&order).Error; err != nil {
 		return err
 	}
-	selected, amount, err := selectRefundTickets(&order, codes, refund.AuthorizedUsedRefund, 0)
+	selected, amount, err := selectRefundTickets(&order, codes, refund.AuthorizedUsedRefund, refund.AuthorizedPolicyOverride, 0)
 	if err != nil {
 		return err
 	}
@@ -645,6 +660,26 @@ func authorizeUsedTicketRefundTx(tx *gorm.DB, actor RefundActor, order *model.Or
 	}
 	if err := requireActiveTenantCapability(tx, actor.TenantID, "supplier"); err != nil {
 		return false, errors.New("used ticket refund requires an active scenic supplier")
+	}
+	return true, nil
+}
+
+func authorizeRefundPolicyOverrideTx(tx *gorm.DB, actor RefundActor, order *model.Order, reason string) (bool, error) {
+	if !actor.OverrideRefundPolicy {
+		return false, nil
+	}
+	if strings.TrimSpace(reason) == "" {
+		return false, errors.New("refund policy override requires a reason")
+	}
+	if actor.TenantID == 0 || actor.UserID == 0 || order == nil || order.TenantID != actor.TenantID || actor.OrderTenantID != 0 {
+		return false, errors.New("refund policy override requires the scenic supplier initial administrator")
+	}
+	var user model.User
+	if err := tx.Where("id = ? AND tenant_id = ? AND is_initial_admin = ?", actor.UserID, actor.TenantID, true).First(&user).Error; err != nil {
+		return false, errors.New("refund policy override requires the scenic supplier initial administrator")
+	}
+	if err := requireActiveTenantCapability(tx, actor.TenantID, "supplier"); err != nil {
+		return false, errors.New("refund policy override requires an active scenic supplier")
 	}
 	return true, nil
 }
@@ -696,7 +731,7 @@ func (s *RefundService) CreateSupplierUsedRefund(actor RefundActor, fulfillmentI
 			return nil, errors.New("supplier exception only applies to used tickets in the selected fulfillment order")
 		}
 	}
-	_, amount, err := selectRefundTickets(&order, cleanCodes, true, 0)
+	_, amount, err := selectRefundTickets(&order, cleanCodes, true, false, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -1006,7 +1041,7 @@ func (s *RefundService) completeDigitalRefund(taskID uint, lockedAt *time.Time, 
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Product").Preload("Items.Tickets").Where("order_no = ? AND tenant_id = ?", storedRefund.OrderNo, storedRefund.TenantID).First(&order).Error; err != nil {
 			return err
 		}
-		selected, amount, err := selectRefundTickets(&order, normalizeTicketCodes(codes), storedRefund.AuthorizedUsedRefund, storedRefund.ID)
+		selected, amount, err := selectRefundTickets(&order, normalizeTicketCodes(codes), storedRefund.AuthorizedUsedRefund, storedRefund.AuthorizedPolicyOverride, storedRefund.ID)
 		if err != nil {
 			return err
 		}
@@ -1223,7 +1258,7 @@ func tryCompleteMixedRefundTx(tx *gorm.DB, tenantID, parentRefundID uint) error 
 	if err := json.Unmarshal([]byte(root.TicketCodesJSON), &codes); err != nil {
 		return err
 	}
-	selected, amount, err := selectRefundTickets(&order, normalizeTicketCodes(codes), root.AuthorizedUsedRefund, root.ID)
+	selected, amount, err := selectRefundTickets(&order, normalizeTicketCodes(codes), root.AuthorizedUsedRefund, root.AuthorizedPolicyOverride, root.ID)
 	if err != nil {
 		return err
 	}

@@ -18,6 +18,7 @@ const englishErrorRules: Array<[RegExp, string]> = [
 export const localizeErrorMessage = (message: unknown, fallback = '操作失败，请稍后重试') => {
   const text = String(message || '').trim()
   if (!text) return fallback
+  if (/[\u3400-\u9fff]/.test(text)) return text
   if (!/[A-Za-z]{2,}/.test(text)) return text
   const matched = englishErrorRules.find(([pattern]) => pattern.test(text))
   if (matched) return matched[1]

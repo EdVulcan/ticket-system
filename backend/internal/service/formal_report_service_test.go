@@ -1,10 +1,114 @@
 package service
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"ticket-backend/internal/model"
 	"time"
 )
+
+func TestWindowOrderExposesOriginalCashierDeviceAndShift(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	var product model.Product
+	if err := model.DB.Select("id", "scenic_area_id").First(&product, productID).Error; err != nil {
+		t.Fatal(err)
+	}
+	staff := model.Staff{TenantID: tenantID, Name: "窗口售票员", JobNumber: "SELLER-001", Password: "test", Roles: "seller", Status: "active"}
+	if err := model.DB.Create(&staff).Error; err != nil {
+		t.Fatal(err)
+	}
+	device := model.Device{TenantID: tenantID, ScenicAreaID: product.ScenicAreaID, Name: "一号售票终端", SerialNumber: "POS-ATTRIBUTION-001", Type: "pos", Status: "online"}
+	if err := model.DB.Create(&device).Error; err != nil {
+		t.Fatal(err)
+	}
+	shift := model.POSShift{
+		TenantID: tenantID, ScenicAreaID: product.ScenicAreaID, DeviceID: device.ID, OperatorID: staff.ID,
+		ShiftNo: fmt.Sprintf("SHIFT-ATTRIBUTION-%d", time.Now().UnixNano()), Status: "open", OpenedAt: time.Now(),
+	}
+	if err := model.DB.Create(&shift).Error; err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{
+		OrderNo: order.OrderNo, Method: "cash", ShiftID: shift.ID, DeviceID: device.ID, OperatorID: staff.ID,
+		TenderedCents: int64(order.TotalAmount*100 + 0.5), IdempotencyKey: "sale-attribution-payment",
+	}
+	if err := (&PaymentService{}).CreatePayment(tenantID, &payment); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&payment).Update("status", "refunded").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	orders, total, err := (&OrderService{}).List(1, 10, tenantID, "", "window", "", "", order.OrderNo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(orders) != 1 {
+		t.Fatalf("window order list total=%d rows=%d", total, len(orders))
+	}
+	got := orders[0]
+	if got.SaleOperatorID != staff.ID || got.SaleOperatorName != staff.Name || got.SaleOperatorJobNumber != staff.JobNumber ||
+		got.SaleDeviceID != device.ID || got.SaleDeviceName != device.Name || got.SaleDeviceSerial != device.SerialNumber ||
+		got.SaleShiftID != shift.ID || got.SaleShiftNo != shift.ShiftNo {
+		t.Fatalf("sale attribution=%+v", got)
+	}
+	detail, err := (&OrderService{}).GetDetail(order.OrderNo, tenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.Order.SaleOperatorID != staff.ID || detail.Order.SaleDeviceID != device.ID || detail.Order.SaleShiftID != shift.ID {
+		t.Fatalf("detail sale attribution=%+v", detail.Order)
+	}
+}
+
+func TestRefundPolicyOverrideRequiresInitialSupplierAdminAndReason(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	if err := model.DB.Model(&model.Product{}).Where("id = ?", productID).Update("refund_type", "no_refund").Error; err != nil {
+		t.Fatal(err)
+	}
+	initial := model.User{TenantID: tenantID, Username: "policy-initial", Password: "test", Role: "super_admin", IsInitialAdmin: true}
+	ordinary := model.User{TenantID: tenantID, Username: "policy-ordinary", Password: "test", Role: "admin"}
+	if err := model.DB.Create(&initial).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Create(&ordinary).Error; err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{TenantID: tenantID, Channel: "online", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&PaymentService{}).CreatePayment(tenantID, &model.Payment{OrderNo: order.OrderNo, Method: "cash"}); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	refunds := &RefundService{}
+	_, err := refunds.CreateMixedRefundAs(RefundActor{TenantID: tenantID, UserID: ordinary.ID, OverrideRefundPolicy: true}, order.OrderNo, "policy-ordinary", order.TotalAmount, []string{ticket.TicketCode}, "manager request")
+	if err == nil || !strings.Contains(err.Error(), "initial administrator") {
+		t.Fatalf("ordinary policy override error=%v", err)
+	}
+	_, err = refunds.CreateMixedRefundAs(RefundActor{TenantID: tenantID, UserID: initial.ID, OverrideRefundPolicy: true}, order.OrderNo, "policy-no-reason", order.TotalAmount, []string{ticket.TicketCode}, "")
+	if err == nil || !strings.Contains(err.Error(), "requires a reason") {
+		t.Fatalf("blank-reason policy override error=%v", err)
+	}
+	refund, err := refunds.CreateMixedRefundAs(RefundActor{TenantID: tenantID, UserID: initial.ID, OverrideRefundPolicy: true}, order.OrderNo, "policy-approved", order.TotalAmount, []string{ticket.TicketCode}, "现场核实后例外退款")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !refund.AuthorizedPolicyOverride || refund.AuthorizedBy != initial.ID || refund.Status != "group_succeeded" {
+		t.Fatalf("policy override audit not persisted: %+v", refund)
+	}
+}
 
 func TestUsedTicketRefundRequiresInitialSupplierAdminAndRemovesVerificationFact(t *testing.T) {
 	resetBusinessData(t)

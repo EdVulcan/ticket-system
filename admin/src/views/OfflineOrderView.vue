@@ -32,10 +32,10 @@
 
     <el-table :data="tableData" style="width: 100%" v-loading="loading" border>
       <el-table-column prop="order_no" label="订单号" width="180" />
-      <el-table-column label="联系人" width="150">
+      <el-table-column label="售票归属" width="190">
         <template #default="{ row }">
-          <div>{{ row.contact_name }}</div>
-          <div class="text-xs text-gray-400">{{ row.contact_phone }}</div>
+          <div class="font-medium">{{ saleOperatorText(row) }}</div>
+          <div class="text-xs text-gray-400 mt-1">{{ saleDeviceText(row) }}</div>
         </template>
       </el-table-column>
       <el-table-column label="订单内容" min-width="200">
@@ -89,10 +89,11 @@
           <el-descriptions-item label="状态">
             <el-tag :type="getStatusType(currentOrder.status)">{{ getStatusText(currentOrder.status) }}</el-tag>
           </el-descriptions-item>
-          <el-descriptions-item label="联系人">{{ currentOrder.contact_name }}</el-descriptions-item>
-          <el-descriptions-item label="手机号">{{ currentOrder.contact_phone }}</el-descriptions-item>
+          <el-descriptions-item label="售票员">{{ saleOperatorText(currentOrder) }}</el-descriptions-item>
+          <el-descriptions-item label="出票设备">{{ saleDeviceText(currentOrder) }}</el-descriptions-item>
           <el-descriptions-item label="下单时间">{{ new Date(currentOrder.created_at).toLocaleString() }}</el-descriptions-item>
           <el-descriptions-item label="总金额">¥{{ currentOrder.total_amount }}</el-descriptions-item>
+          <el-descriptions-item label="所属班次" :span="2">{{ currentOrder.sale_shift_no || '暂无班次记录' }}</el-descriptions-item>
         </el-descriptions>
 
         <el-divider content-position="left">票据明细</el-divider>
@@ -147,6 +148,8 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
+
+const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
 
 const loading = ref(false)
 const tableData = ref([])
@@ -234,18 +237,49 @@ const handleDetail = (row: any) => {
 }
 
 const handleRefund = async (row: any) => {
-  ElMessageBox.confirm('确认全额退款吗？此操作不可逆。', '退款确认', {
-    confirmButtonText: '确定退款',
+  const policyOverride = (row.items || []).some((item: any) => item.refund_type === 'no_refund')
+  if (policyOverride && !currentUser.is_initial_admin) {
+    ElMessage.warning('该订单包含不可退票，仅景区初始管理员可以执行例外退款')
+    return
+  }
+  const title = policyOverride ? '初始管理员例外退款' : '退款确认'
+  const message = policyOverride
+    ? '该订单售出时设置为不可退。请输入本次例外退款原因，操作将保留审计记录。'
+    : '请输入退款原因。退款将按原支付方式退回。'
+  ElMessageBox.prompt(message, title, {
+    confirmButtonText: policyOverride ? '确认例外退款' : '确认退款',
     cancelButtonText: '取消',
+    inputType: 'textarea',
+    inputPlaceholder: '请填写具体退款原因',
+    inputValidator: value => value.trim() ? true : '退款原因不能为空',
     type: 'warning'
-  }).then(async () => {
+  }).then(async ({ value }) => {
     const ticketCodes = (row.items || []).flatMap((item: any) => (item.tickets || []).map((ticket: any) => ticket.ticket_code)).filter(Boolean)
     if (!ticketCodes.length) { ElMessage.warning('订单没有可退款的未使用票'); return }
-    const response = await request.post('/payments/refunds/mixed', { order_no: row.order_no, idempotency_key: `admin-${row.order_no}-${Date.now()}`, amount: row.total_amount, ticket_codes: ticketCodes, reason: '管理端全额退款' })
+    const response = await request.post('/payments/refunds/mixed', {
+      order_no: row.order_no,
+      idempotency_key: `admin-${row.order_no}-${Date.now()}`,
+      amount: row.total_amount,
+      ticket_codes: ticketCodes,
+      reason: value.trim(),
+      override_refund_policy: policyOverride
+    })
     if (response.data.status === 'group_pending') ElMessage.info('退款已按原支付方式分摊，等待支付渠道确认')
     else ElMessage.success('退款已完成')
     fetchData()
   }).catch(() => undefined)
+}
+
+const saleOperatorText = (row: any) => {
+  if (!row.sale_operator_id) return '暂无售票员记录'
+  if (row.sale_operator_name && row.sale_operator_job_number) return `${row.sale_operator_name}（${row.sale_operator_job_number}）`
+  return row.sale_operator_name || row.sale_operator_job_number || `员工 #${row.sale_operator_id}`
+}
+
+const saleDeviceText = (row: any) => {
+  if (!row.sale_device_id) return '暂无出票设备记录'
+  if (row.sale_device_name && row.sale_device_serial) return `${row.sale_device_name}（${row.sale_device_serial}）`
+  return row.sale_device_name || row.sale_device_serial || `设备 #${row.sale_device_id}`
 }
 
 const getStatusType = (status: string) => {

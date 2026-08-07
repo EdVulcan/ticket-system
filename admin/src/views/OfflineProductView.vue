@@ -92,6 +92,14 @@
           <el-form-item label="销售价格" prop="product.price">
             <el-input-number v-model="form.product.price" :precision="2" :step="1" :min="0" class="w-full" />
           </el-form-item>
+
+          <el-form-item label="退票规则">
+            <el-radio-group v-model="form.product.refund_type">
+              <el-radio value="free">允许退票</el-radio>
+              <el-radio value="no_refund">不可退票</el-radio>
+            </el-radio-group>
+            <div class="text-xs text-gray-400 mt-1">规则会在售票时保存；后续修改不会改变已经售出的门票。</div>
+          </el-form-item>
           
           <el-form-item label="标签预设" class="col-span-2">
              <el-select
@@ -240,7 +248,7 @@ const form = reactive({
     validity_type: 'days', // Force Days
     validity_days: 0,
     stock_type: 'unlimited', // Force Unlimited
-    refund_type: 'no_refund', // Force No Refund
+    refund_type: 'free',
     // Unused fields
     validity_start_date: null as string | null, validity_end_date: null as string | null, daily_stock: 0, time_slot_config: '',
     real_name_required: false, region_limit: '', limit_per_phone: 0, limit_per_id: 0, refund_rule: '',
@@ -300,6 +308,7 @@ const handleAdd = () => {
   form.product.scenic_area_id = activeScenicAreas.value.length === 1 ? activeScenicAreas.value[0].id : null
   form.product.price = 0
   form.product.settlement_price = 0
+  form.product.refund_type = 'free'
   form.product.validity_type = 'days'
   form.product.validity_days = 0
   form.product.validity_days = 0

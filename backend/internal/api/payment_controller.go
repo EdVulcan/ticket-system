@@ -153,17 +153,20 @@ func (c *RefundController) CreateCash(ctx *gin.Context) {
 
 func (c *RefundController) CreateMixed(ctx *gin.Context) {
 	var body struct {
-		OrderNo        string   `json:"order_no" binding:"required"`
-		IdempotencyKey string   `json:"idempotency_key" binding:"required"`
-		Amount         float64  `json:"amount" binding:"required"`
-		TicketCodes    []string `json:"ticket_codes" binding:"required"`
-		Reason         string   `json:"reason"`
+		OrderNo              string   `json:"order_no" binding:"required"`
+		IdempotencyKey       string   `json:"idempotency_key" binding:"required"`
+		Amount               float64  `json:"amount" binding:"required"`
+		TicketCodes          []string `json:"ticket_codes" binding:"required"`
+		Reason               string   `json:"reason"`
+		OverrideRefundPolicy bool     `json:"override_refund_policy"`
 	}
 	if err := ctx.ShouldBindJSON(&body); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	refund, err := c.Service.CreateMixedRefundAs(service.RefundActor{TenantID: ctx.GetUint("tenant_id"), UserID: ctx.GetUint("user_id")}, body.OrderNo, body.IdempotencyKey, body.Amount, body.TicketCodes, body.Reason)
+	refund, err := c.Service.CreateMixedRefundAs(service.RefundActor{
+		TenantID: ctx.GetUint("tenant_id"), UserID: ctx.GetUint("user_id"), OverrideRefundPolicy: body.OverrideRefundPolicy,
+	}, body.OrderNo, body.IdempotencyKey, body.Amount, body.TicketCodes, body.Reason)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

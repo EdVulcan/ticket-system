@@ -59,22 +59,23 @@ type Payment struct {
 // idempotency key prevents double refunds when a cashier retries a request.
 type Refund struct {
 	Base
-	TenantID             uint    `gorm:"index;not null;uniqueIndex:idx_refund_idempotency,priority:1" json:"tenant_id"`
-	RefundNo             string  `gorm:"size:50;uniqueIndex;not null" json:"refund_no"`
-	IdempotencyKey       string  `gorm:"size:100;uniqueIndex:idx_refund_idempotency,priority:2;not null" json:"idempotency_key"`
-	OrderNo              string  `gorm:"size:50;index;not null" json:"order_no"`
-	Purpose              string  `gorm:"size:30;not null;default:'ticket_refund';index" json:"purpose,omitempty"`
-	ReferenceNo          string  `gorm:"size:60;index" json:"reference_no,omitempty"`
-	PaymentID            uint    `gorm:"index;not null" json:"payment_id"`
-	ParentRefundID       uint    `gorm:"index" json:"parent_refund_id,omitempty"`
-	AllocationSeq        int     `gorm:"not null;default:0" json:"allocation_seq,omitempty"`
-	Amount               float64 `gorm:"type:decimal(10,2);not null" json:"amount"`
-	AmountCents          int64   `gorm:"not null;default:0" json:"amount_cents"`
-	Method               string  `gorm:"size:20;not null" json:"method"`
-	Status               string  `gorm:"size:20;not null;default:'succeeded'" json:"status"` // succeeded, pending, failed, group_pending, group_succeeded
-	Reason               string  `gorm:"size:255" json:"reason"`
-	TicketCodesJSON      string  `gorm:"type:text" json:"ticket_codes,omitempty"`
-	ProviderRefundID     string  `gorm:"size:100" json:"provider_refund_id,omitempty"`
-	AuthorizedUsedRefund bool    `gorm:"not null;default:false" json:"-"`
-	AuthorizedBy         uint    `gorm:"index" json:"-"`
+	TenantID                 uint    `gorm:"index;not null;uniqueIndex:idx_refund_idempotency,priority:1" json:"tenant_id"`
+	RefundNo                 string  `gorm:"size:50;uniqueIndex;not null" json:"refund_no"`
+	IdempotencyKey           string  `gorm:"size:100;uniqueIndex:idx_refund_idempotency,priority:2;not null" json:"idempotency_key"`
+	OrderNo                  string  `gorm:"size:50;index;not null" json:"order_no"`
+	Purpose                  string  `gorm:"size:30;not null;default:'ticket_refund';index" json:"purpose,omitempty"`
+	ReferenceNo              string  `gorm:"size:60;index" json:"reference_no,omitempty"`
+	PaymentID                uint    `gorm:"index;not null" json:"payment_id"`
+	ParentRefundID           uint    `gorm:"index" json:"parent_refund_id,omitempty"`
+	AllocationSeq            int     `gorm:"not null;default:0" json:"allocation_seq,omitempty"`
+	Amount                   float64 `gorm:"type:decimal(10,2);not null" json:"amount"`
+	AmountCents              int64   `gorm:"not null;default:0" json:"amount_cents"`
+	Method                   string  `gorm:"size:20;not null" json:"method"`
+	Status                   string  `gorm:"size:20;not null;default:'succeeded'" json:"status"` // succeeded, pending, failed, group_pending, group_succeeded
+	Reason                   string  `gorm:"size:255" json:"reason"`
+	TicketCodesJSON          string  `gorm:"type:text" json:"ticket_codes,omitempty"`
+	ProviderRefundID         string  `gorm:"size:100" json:"provider_refund_id,omitempty"`
+	AuthorizedUsedRefund     bool    `gorm:"not null;default:false" json:"-"`
+	AuthorizedPolicyOverride bool    `gorm:"not null;default:false" json:"-"`
+	AuthorizedBy             uint    `gorm:"index" json:"-"`
 }

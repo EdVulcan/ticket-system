@@ -192,6 +192,16 @@ type Order struct {
 	ChannelReservationID uint        `gorm:"index" json:"channel_reservation_id,omitempty"`
 	ExternalNo           *string     `gorm:"size:100;uniqueIndex:idx_order_external,priority:3" json:"external_no,omitempty"`
 	Items                []OrderItem `gorm:"foreignKey:OrderID" json:"items,omitempty"`
+	// Sale attribution is resolved from the original successful payment. These
+	// fields are read-only projections so refunds cannot erase the sales fact.
+	SaleOperatorID        uint   `gorm:"-" json:"sale_operator_id,omitempty"`
+	SaleOperatorName      string `gorm:"-" json:"sale_operator_name,omitempty"`
+	SaleOperatorJobNumber string `gorm:"-" json:"sale_operator_job_number,omitempty"`
+	SaleDeviceID          uint   `gorm:"-" json:"sale_device_id,omitempty"`
+	SaleDeviceName        string `gorm:"-" json:"sale_device_name,omitempty"`
+	SaleDeviceSerial      string `gorm:"-" json:"sale_device_serial,omitempty"`
+	SaleShiftID           uint   `gorm:"-" json:"sale_shift_id,omitempty"`
+	SaleShiftNo           string `gorm:"-" json:"sale_shift_no,omitempty"`
 }
 
 // OrderItem 订单明细 (按产品聚合)
