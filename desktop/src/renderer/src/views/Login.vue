@@ -47,10 +47,12 @@ import { localizeErrorMessage } from '../utils/localize'
 const router = useRouter()
 const formRef = ref()
 const loading = ref(false)
+const rememberedSystemCodeKey = 'pos_login_system_code'
+const rememberedJobNumberKey = 'pos_login_job_number'
 
 const form = reactive({
-  system_code: '',
-  job_number: '',
+  system_code: localStorage.getItem(rememberedSystemCodeKey) || '',
+  job_number: localStorage.getItem(rememberedJobNumberKey) || '',
   password: ''
 })
 
@@ -66,9 +68,16 @@ const handleLogin = async () => {
     if (valid) {
       loading.value = true
       try {
-        // Use full URL for Electron dev or configure proxy
-        const res = await axios.post(`${import.meta.env.VITE_API_URL || 'http://127.0.0.1:8080/api/v1'}/auth/staff/login`, form)
+        const systemCode = form.system_code.trim()
+        const jobNumber = form.job_number.trim()
+        const res = await axios.post(`${import.meta.env.VITE_API_URL || 'http://127.0.0.1:8080/api/v1'}/auth/staff/login`, {
+          system_code: systemCode,
+          job_number: jobNumber,
+          password: form.password
+        })
         const { token, staff } = res.data
+        localStorage.setItem(rememberedSystemCodeKey, systemCode)
+        localStorage.setItem(rememberedJobNumberKey, jobNumber)
         sessionStorage.setItem('token', token)
         sessionStorage.setItem('staff', JSON.stringify(staff))
         ElMessage.success('登录成功')

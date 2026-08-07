@@ -420,6 +420,7 @@ const shiftSummaryLoading = ref(false)
 const shiftSubmitting = ref(false)
 const shiftMethods = [
   { key: 'cash', label: '现金' },
+  { key: 'pos', label: 'POS机' },
   { key: 'wechat', label: '微信' },
   { key: 'alipay', label: '支付宝' }
 ]

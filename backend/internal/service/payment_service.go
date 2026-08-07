@@ -121,11 +121,11 @@ func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error 
 			return fmt.Errorf("unrecognized payment auth code")
 		}
 	}
-	if req.Method != "cash" && req.Method != "wechat" && req.Method != "alipay" {
+	if req.Method != "cash" && req.Method != "pos" && req.Method != "wechat" && req.Method != "alipay" {
 		return fmt.Errorf("unsupported payment method")
 	}
-	if req.Method == "cash" {
-		req.PayType = "cash"
+	if req.Method == "cash" || req.Method == "pos" {
+		req.PayType = req.Method
 	} else if req.PayType != "bscanc" && req.PayType != "cscanb" {
 		return fmt.Errorf("unsupported payment type")
 	}
@@ -233,9 +233,9 @@ func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error 
 		return err
 	}
 	if replayed {
-		if req.Method == "cash" && req.Status == "pending" {
+		if (req.Method == "cash" || req.Method == "pos") && req.Status == "pending" {
 			req.Status = "paid"
-			req.TransactionID = "CASH_" + req.PaymentNo
+			req.TransactionID = strings.ToUpper(req.Method) + "_" + req.PaymentNo
 			return s.completePayment(req)
 		}
 		return nil
@@ -246,6 +246,9 @@ func (s *PaymentService) CreatePayment(tenantID uint, req *model.Payment) error 
 	case "cash":
 		req.Status = "paid"
 		req.TransactionID = "CASH_" + req.PaymentNo
+	case "pos":
+		req.Status = "paid"
+		req.TransactionID = "POS_" + req.PaymentNo
 	case "wechat":
 		err = s.payWeChat(req)
 	case "alipay":
@@ -305,7 +308,7 @@ func getProviderType(code string) string {
 }
 
 func providerRequestMayHaveBeenAccepted(method string, cause error) bool {
-	if cause == nil || method == "cash" {
+	if cause == nil || method == "cash" || method == "pos" {
 		return false
 	}
 	var permanent permanentProviderError

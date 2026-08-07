@@ -433,7 +433,7 @@ func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempote
 			}
 			allocationSeq++
 			status := "pending"
-			if payment.Method == "cash" || payment.Method == "team_account" {
+			if payment.Method == "cash" || payment.Method == "pos" || payment.Method == "team_account" {
 				status = "succeeded"
 			} else if payment.Method != "wechat" && payment.Method != "alipay" {
 				return fmt.Errorf("unsupported refund payment method %s", payment.Method)
@@ -449,7 +449,7 @@ func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempote
 			if err := tx.Create(&allocation).Error; err != nil {
 				return err
 			}
-			if payment.Method == "cash" || payment.Method == "team_account" {
+			if payment.Method == "cash" || payment.Method == "pos" || payment.Method == "team_account" {
 				if err := applyRefundPaymentFactTx(tx, payment, &allocation); err != nil {
 					return err
 				}

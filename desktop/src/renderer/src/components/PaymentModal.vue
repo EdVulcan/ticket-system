@@ -4,7 +4,7 @@
 
     <div class="mode-switch">
       <button type="button" :class="{ active: paymentMode === 'single' }" :disabled="partialCashRecorded || loading || !!paymentId" @click="setMode('single')">单一支付</button>
-      <button type="button" :class="{ active: paymentMode === 'combined' }" :disabled="partialCashRecorded || loading || !!paymentId" @click="setMode('combined')">现金 + 数字支付</button>
+      <button type="button" :class="{ active: paymentMode === 'combined' }" :disabled="partialCashRecorded || loading || !!paymentId" @click="setMode('combined')">现金 + 付款码</button>
     </div>
 
     <div v-if="paymentMode === 'combined'" class="split-panel">
@@ -12,7 +12,7 @@
         <label>现金部分</label>
         <el-input-number v-model="cashPortion" :min="0.01" :max="Math.max(0.01, amount - 0.01)" :precision="2" :step="10" :controls="false" :disabled="partialCashRecorded" />
       </div>
-      <div class="split-remainder"><span>数字支付余款</span><strong>¥{{ digitalAmount.toFixed(2) }}</strong></div>
+      <div class="split-remainder"><span>付款码余款</span><strong>¥{{ digitalAmount.toFixed(2) }}</strong></div>
     </div>
 
     <div class="method-grid" :class="{ compact: paymentMode === 'combined' }">
@@ -56,13 +56,9 @@
       <small>系统自动识别支付渠道；尚未完成协议联调的渠道会明确拒绝，不会记录为支付成功。</small>
     </div>
 
-    <div v-if="isQRMethod" class="qr-section">
-      <div class="qr-frame">
-        <img v-if="qrDataURL" :src="qrDataURL" alt="支付二维码" class="w-full h-full" />
-        <el-icon v-else-if="loading" class="is-loading text-gray-500" :size="42"><Loading /></el-icon>
-        <span v-else class="text-sm text-gray-500">点击下方按钮生成二维码</span>
-      </div>
-      <div class="qr-caption">请顾客扫码支付</div>
+    <div v-if="selectedMethod === 'pos'" class="pos-panel">
+      <strong>备用 POS 机收款</strong>
+      <p>请先在外部 POS 机上完成收款，确认设备显示支付成功后，再在这里登记入账。</p>
     </div>
 
     <el-button
@@ -90,23 +86,21 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { Aim, ChatDotRound, Loading, Money, Wallet } from '@element-plus/icons-vue'
+import { Aim, CreditCard, Loading, Money } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import QRCode from 'qrcode'
 import axios from 'axios'
 
 const props = defineProps<{ amount: number; orderNo: string; shiftId: number; deviceId: number }>()
 const emit = defineEmits<{ success: []; cancelled: []; lockChange: [locked: boolean] }>()
 
 const methods = [
-  { key: 'cash', label: '现金', icon: Money },
   { key: 'payment_code', label: '付款码收款', icon: Aim },
-  { key: 'wechat_qr', label: '微信扫码', icon: ChatDotRound },
-  { key: 'alipay_qr', label: '支付宝扫码', icon: Wallet }
+  { key: 'cash', label: '现金', icon: Money },
+  { key: 'pos', label: 'POS机收款', icon: CreditCard }
 ]
-const digitalMethods = methods.filter(method => method.key !== 'cash')
+const digitalMethods = methods.filter(method => method.key === 'payment_code')
 const paymentMode = ref<'single' | 'combined'>('single')
-const selectedMethod = ref('cash')
+const selectedMethod = ref('payment_code')
 const authCode = ref('')
 const cashPortion = ref(Math.max(0.01, Math.floor((props.amount / 2) * 100) / 100))
 const cashTendered = ref(props.amount)
@@ -115,7 +109,6 @@ const scanInputRef = ref()
 const loading = ref(false)
 const cancelling = ref(false)
 const paymentId = ref<number | null>(null)
-const qrDataURL = ref('')
 const errorMsg = ref('')
 const cashRequestKey = ref('')
 const digitalRequestKey = ref('')
@@ -125,17 +118,17 @@ const digitalAmount = computed(() => Math.max(0, Math.round((props.amount - cash
 const cashDue = computed(() => paymentMode.value === 'combined' ? cashPortion.value : props.amount)
 const cashChange = computed(() => cashTendered.value - cashDue.value)
 const showCashPanel = computed(() => selectedMethod.value === 'cash' || (paymentMode.value === 'combined' && !partialCashRecorded.value))
-const isQRMethod = computed(() => selectedMethod.value.endsWith('_qr'))
-const canStartPayment = computed(() => selectedMethod.value === 'cash' || selectedMethod.value === 'payment_code' || (isQRMethod.value && !paymentId.value))
+const canStartPayment = computed(() => ['cash', 'payment_code', 'pos'].includes(selectedMethod.value))
 const payDisabled = computed(() => {
   if (cashChange.value < 0 && showCashPanel.value) return true
   if (paymentMode.value === 'combined' && (cashPortion.value <= 0 || digitalAmount.value <= 0)) return true
   return selectedMethod.value === 'payment_code' && !authCode.value.trim()
 })
 const payButtonLabel = computed(() => {
-  if (paymentMode.value === 'combined') return partialCashRecorded.value ? `收取数字余款 ¥${digitalAmount.value.toFixed(2)}` : `收取现金并继续支付 ¥${digitalAmount.value.toFixed(2)}`
+  if (paymentMode.value === 'combined') return partialCashRecorded.value ? `收取付款码余款 ¥${digitalAmount.value.toFixed(2)}` : `收取现金并继续付款码 ¥${digitalAmount.value.toFixed(2)}`
   if (selectedMethod.value === 'cash') return '确认现金收款'
-  return selectedMethod.value === 'payment_code' ? '确认付款码收款' : '生成支付码'
+  if (selectedMethod.value === 'pos') return '确认POS机已收款'
+  return '确认付款码收款'
 })
 const cashQuickAmounts = computed(() => {
   const due = cashDue.value
@@ -148,13 +141,13 @@ let pollDeadline = 0
 
 const requestKey = (prefix: string) => `${prefix}-${props.orderNo}-${globalThis.crypto?.randomUUID?.() || Date.now()}`
 const stopPolling = () => { if (pollTimer) clearTimeout(pollTimer); pollTimer = undefined }
-const resetProviderAttempt = () => { stopPolling(); paymentId.value = null; qrDataURL.value = ''; loading.value = false }
+const resetProviderAttempt = () => { stopPolling(); paymentId.value = null; loading.value = false }
 
 const setMode = (mode: 'single' | 'combined') => {
   if (partialCashRecorded.value) return
   resetProviderAttempt()
   paymentMode.value = mode
-  selectedMethod.value = mode === 'single' ? 'cash' : 'wechat_qr'
+  selectedMethod.value = 'payment_code'
   cashTendered.value = mode === 'single' ? props.amount : cashPortion.value
   errorMsg.value = ''
 }
@@ -169,11 +162,11 @@ const selectMethod = async (key: string) => {
 
 const createPayment = async (methodKey: string, amountCents: number, idempotencyKey: string, tenderedCents = 0) => {
   const isScan = methodKey === 'payment_code'
-  const method = isScan ? 'auto' : methodKey.replace('_qr', '')
+  const method = isScan ? 'auto' : methodKey
   const response = await axios.post('/payments/pay', {
     order_no: props.orderNo,
     method,
-    pay_type: isScan ? 'bscanc' : methodKey === 'cash' ? 'cash' : 'cscanb',
+    pay_type: isScan ? 'bscanc' : methodKey,
     auth_code: isScan ? authCode.value.trim() : '',
     shift_id: props.shiftId,
     device_id: props.deviceId,
@@ -187,10 +180,6 @@ const createPayment = async (methodKey: string, amountCents: number, idempotency
 const beginProviderWait = async (payment: any) => {
   if (payment.status === 'paid') { finishSuccess(); return }
   paymentId.value = payment.id
-  if (isQRMethod.value) {
-    if (!payment.code_url) throw new Error('支付平台未返回二维码地址')
-    qrDataURL.value = await QRCode.toDataURL(payment.code_url, { width: 220, margin: 1, errorCorrectionLevel: 'M' })
-  }
   loading.value = false
   pollDeadline = Date.now() + 5 * 60 * 1000
   schedulePoll()
@@ -206,13 +195,10 @@ const restorePendingAttempt = async () => {
       paymentMode.value = 'combined'
       cashPortion.value = Number(data.payments?.filter((payment: any) => payment.method === 'cash' && ['paid', 'partial_refunded'].includes(payment.status)).reduce((sum: number, payment: any) => sum + Number(payment.amount_cents || 0), 0) || 0) / 100
       cashTendered.value = cashPortion.value
-      selectedMethod.value = pending?.pay_type === 'bscanc' ? 'payment_code' : `${pending?.method || 'wechat'}_qr`
+      selectedMethod.value = 'payment_code'
     }
     if (pending) {
       paymentId.value = pending.id
-      if (pending.pay_type === 'cscanb' && pending.code_url) {
-        qrDataURL.value = await QRCode.toDataURL(pending.code_url, { width: 220, margin: 1, errorCorrectionLevel: 'M' })
-      }
       pollDeadline = Date.now() + 5 * 60 * 1000
       schedulePoll()
       return true
@@ -235,8 +221,10 @@ const doPay = async () => {
       emit('lockChange', true)
     }
     const amountCents = paymentMode.value === 'combined' ? Math.round(digitalAmount.value * 100) : Math.round(props.amount * 100)
-    if (selectedMethod.value === 'cash') {
-      const payment = await createPayment('cash', amountCents, requestKey('cash-full'), Math.round(cashTendered.value * 100))
+    if (selectedMethod.value === 'cash' || selectedMethod.value === 'pos') {
+      const method = selectedMethod.value
+      const tenderedCents = method === 'cash' ? Math.round(cashTendered.value * 100) : 0
+      const payment = await createPayment(method, amountCents, requestKey(`${method}-full`), tenderedCents)
       if (payment.status === 'paid') finishSuccess()
       return
     }
@@ -302,7 +290,11 @@ const returnCashAndCancel = async () => {
 }
 
 watch(cashPortion, value => { if (!partialCashRecorded.value && paymentMode.value === 'combined') cashTendered.value = value })
-onMounted(async () => { cashTendered.value = props.amount; await restorePendingAttempt() })
+onMounted(async () => {
+  cashTendered.value = props.amount
+  const restored = await restorePendingAttempt()
+  if (!restored && selectedMethod.value === 'payment_code') await nextTick(() => scanInputRef.value?.focus())
+})
 onUnmounted(stopPolling)
 </script>
 
@@ -320,8 +312,8 @@ onUnmounted(stopPolling)
 .split-input :deep(.el-input-number) { width: 100%; }
 .split-input :deep(.el-input__inner) { text-align: left; font-weight: 700; }
 .split-remainder strong { color: #12683f; font-size: 21px; font-variant-numeric: tabular-nums; }
-.method-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
-.method-grid.compact { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.method-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.method-grid.compact { grid-template-columns: 1fr; }
 .method-button { min-height: 64px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; padding: 6px 4px; border: 1px solid #d9ded7; border-radius: 7px; background: #f7f8f6; color: #5e665e; cursor: pointer; }
 .method-button span { font-size: 11px; line-height: 15px; }
 .method-button:hover { border-color: #78a88d; }
@@ -343,9 +335,9 @@ onUnmounted(stopPolling)
 .cash-recorded div { display: flex; justify-content: space-between; }
 .cash-recorded strong { color: #9b5a06; font-size: 18px; }
 .cash-recorded p { margin: 5px 0 0; color: #7b6846; font-size: 12px; }
-.qr-section { width: 100%; display: flex; flex-direction: column; align-items: center; }
-.qr-frame { width: 210px; height: 210px; display: flex; align-items: center; justify-content: center; margin: 0 auto; padding: 8px; border: 1px solid #dfe3dc; border-radius: 7px; background: #fff; }
-.qr-caption { margin-top: 8px; text-align: center; color: #727a72; font-size: 13px; }
+.pos-panel { padding: 13px 14px; border: 1px solid #d8dfd7; border-radius: 7px; background: #f7f9f6; }
+.pos-panel strong { color: #303730; font-size: 14px; }
+.pos-panel p { margin: 6px 0 0; color: #687168; font-size: 12px; line-height: 18px; }
 .pay-button { width: 100%; height: 46px; margin-top: 14px; border-radius: 7px; font-weight: 700; --el-button-bg-color: #16784a; --el-button-border-color: #16784a; --el-button-hover-bg-color: #0d5d38; --el-button-hover-border-color: #0d5d38; }
 .return-button { width: 100%; margin-top: 8px; color: #a53d3d; }
 .query-button { width: 100%; margin-top: 8px; }

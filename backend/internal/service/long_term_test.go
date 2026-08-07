@@ -853,6 +853,56 @@ func TestPOSCashPaymentRecordsTenderAndChange(t *testing.T) {
 	}
 }
 
+func TestPOSDevicePaymentIsPaidWithoutChangingCashExpected(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	var area model.ScenicArea
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	device := model.Device{TenantID: tenantID, ScenicAreaID: area.ID, Name: "Backup POS", SerialNumber: "POS-DEVICE", Type: "pos", Status: "online"}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&device).Error }); err != nil {
+		t.Fatal(err)
+	}
+	shift, err := (&OperationsService{}).OpenShift(tenantID, device.ID, 402, 500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	payment := model.Payment{OrderNo: order.OrderNo, Method: "pos", ShiftID: shift.ID, DeviceID: device.ID, OperatorID: 402}
+	if err := (&PaymentService{}).CreatePayment(tenantID, &payment); err != nil {
+		t.Fatal(err)
+	}
+	if payment.Status != "paid" || payment.PayType != "pos" || payment.TransactionID != "POS_"+payment.PaymentNo || payment.TenderedCents != 0 || payment.ChangeCents != 0 {
+		t.Fatalf("POS device payment=%+v", payment)
+	}
+	summary, err := (&OperationsService{}).GetShiftSummary(tenantID, shift.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.CashExpectedCents != 500 || len(summary.Payments) != 1 || summary.Payments[0].Method != "pos" || summary.Payments[0].GrossCents != moneyCents(order.TotalAmount) {
+		t.Fatalf("POS device shift summary=%+v", summary)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	refund, err := (&RefundService{}).CreateMixedRefund(tenantID, order.OrderNo, "pos-device-refund", order.TotalAmount, []string{ticket.TicketCode}, "external POS refunded")
+	if err != nil || refund.Status != "group_succeeded" {
+		t.Fatalf("POS device refund=%+v err=%v", refund, err)
+	}
+	summary, err = (&OperationsService{}).GetShiftSummary(tenantID, shift.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.CashExpectedCents != 500 || len(summary.Payments) != 1 || summary.Payments[0].Method != "pos" || summary.Payments[0].RefundCents != moneyCents(order.TotalAmount) || summary.Payments[0].NetCents != 0 {
+		t.Fatalf("POS device refunded shift summary=%+v", summary)
+	}
+}
+
 func TestPOSSplitPaymentConvergesAndReplaysCashIdempotently(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)

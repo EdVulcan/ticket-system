@@ -41,12 +41,12 @@ type Payment struct {
 	RefundedAmountCents int64      `gorm:"not null;default:0" json:"refunded_amount_cents"`
 	TenderedCents       int64      `gorm:"not null;default:0" json:"tendered_cents"`
 	ChangeCents         int64      `gorm:"not null;default:0" json:"change_cents"`
-	Method              string     `gorm:"size:20" json:"method"`                   // cash, wechat, alipay, team_account
+	Method              string     `gorm:"size:20" json:"method"`                   // cash, pos, wechat, alipay, team_account
 	Status              string     `gorm:"size:20;default:'pending'" json:"status"` // pending, paid, failed, refunded
 	PaidAt              *time.Time `json:"paid_at,omitempty"`
 	TransactionID       string     `gorm:"size:100" json:"transaction_id"` // 第三方流水号
 	CodeURL             string     `gorm:"type:text" json:"code_url,omitempty"`
-	PayType             string     `gorm:"size:20" json:"pay_type"` // bscanc (被扫), cscanb (主扫), jsapi
+	PayType             string     `gorm:"size:20" json:"pay_type"` // cash, pos, bscanc (被扫), cscanb (主扫), jsapi
 	AuthCode            string     `gorm:"-" json:"-"`              // 付款码仅用于本次请求，不落库
 	ClientIP            string     `gorm:"-" json:"-"`
 	ErrorMessage        string     `gorm:"size:255" json:"error_message"`

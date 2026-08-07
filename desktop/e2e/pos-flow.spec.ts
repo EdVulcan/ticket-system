@@ -145,6 +145,12 @@ test('员工可以登录窗口端', async ({ page }) => {
   await expect(page.getByText('窗口售票', { exact: true })).toBeVisible()
   await expect(page.getByText('测试售票员 · SELLER001', { exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '核销', exact: true })).toHaveCount(0)
+
+  await page.evaluate(() => sessionStorage.clear())
+  await page.goto('/#/login')
+  await expect(page.getByPlaceholder('请输入系统编号')).toHaveValue('SYS001')
+  await expect(page.getByPlaceholder('请输入工号')).toHaveValue('SELLER001')
+  await expect(page.getByPlaceholder('请输入密码')).toHaveValue('')
 })
 
 test('纯验票员工只进入核销工作区', async ({ page }) => {
@@ -189,6 +195,7 @@ test('备用金开班和交班汇总按支付方式展示', async ({ page }) => 
       { method: 'cash', gross_cents: 3000, refund_cents: 500, net_cents: 2500 },
       { method: 'wechat', gross_cents: 2000, refund_cents: 0, net_cents: 2000 },
       { method: 'alipay', gross_cents: 1000, refund_cents: 200, net_cents: 800 },
+      { method: 'pos', gross_cents: 5000, refund_cents: 1000, net_cents: 4000 },
     ],
   }))
   await page.route('**/api/v1/operations/shifts/41/close', async route => {
@@ -207,6 +214,7 @@ test('备用金开班和交班汇总按支付方式展示', async ({ page }) => 
   await expect(dialog.getByText('净收 ¥25.00')).toBeVisible()
   await expect(dialog.getByText('净收 ¥20.00')).toBeVisible()
   await expect(dialog.getByText('净收 ¥8.00')).toBeVisible()
+  await expect(dialog.getByText('净收 ¥40.00')).toBeVisible()
   await expect(dialog.getByText('¥125.00')).toBeVisible()
   await page.getByRole('button', { name: '确认关班' }).click()
   await expect(page.getByRole('button', { name: /未开班/ })).toBeVisible()
@@ -250,6 +258,7 @@ test('现金找零正确且打印未配置时保留订单与购物清单', async
   await page.getByRole('button', { name: /标准成人票/ }).click()
   await page.getByRole('button', { name: '收款' }).click()
   const payment = page.getByRole('dialog', { name: '收款' })
+  await payment.getByRole('button', { name: '现金', exact: true }).click()
   await payment.getByRole('spinbutton').fill('100')
   await expect(payment.getByText('应找零')).toBeVisible()
   await expect(payment.getByText('¥20.00')).toBeVisible()
@@ -276,12 +285,38 @@ test('付款码入口自动识别微信并完成收款', async ({ page }) => {
   await page.getByRole('button', { name: /标准成人票/ }).click()
   await page.getByRole('button', { name: '收款' }).click()
   const payment = page.getByRole('dialog', { name: '收款' })
-  await payment.getByRole('button', { name: '付款码收款' }).click()
+  await expect(payment.locator('.method-button')).toHaveText(['付款码收款', '现金', 'POS机收款'])
+  await expect(payment.locator('.method-button.active')).toContainText('付款码收款')
+  await expect(payment.getByRole('button', { name: '微信扫码' })).toHaveCount(0)
+  await expect(payment.getByRole('button', { name: '支付宝扫码' })).toHaveCount(0)
   await payment.getByPlaceholder('等待扫码').fill('100000000000000000')
   await payment.getByRole('button', { name: '确认付款码收款' }).click()
 
   await expect.poll(() => paymentPayload).toMatchObject({
     method: 'auto', pay_type: 'bscanc', auth_code: '100000000000000000', amount_cents: 8000,
+  })
+  await expect(payment).not.toBeVisible()
+})
+
+test('POS机收款作为线下已收款独立入账', async ({ page }) => {
+  await preparePOS(page, true)
+  let paymentPayload: any
+  await page.route('**/api/v1/orders', route => json(route, { id: 53, order_no: 'POS-E2E-DEVICE', total_amount: 80, status: 'unpaid' }))
+  await page.route('**/api/v1/payments/orders/POS-E2E-DEVICE', route => json(route, { has_partial_cash: false, payments: [] }))
+  await page.route('**/api/v1/payments/pay', async route => {
+    paymentPayload = route.request().postDataJSON()
+    await json(route, { id: 72, order_no: 'POS-E2E-DEVICE', method: 'pos', pay_type: 'pos', status: 'paid', amount_cents: 8000 }, 201)
+  })
+
+  await page.goto('/#/')
+  await page.getByRole('button', { name: /标准成人票/ }).click()
+  await page.getByRole('button', { name: '收款' }).click()
+  const payment = page.getByRole('dialog', { name: '收款' })
+  await payment.getByRole('button', { name: 'POS机收款' }).click()
+  await payment.getByRole('button', { name: '确认POS机已收款' }).click()
+
+  await expect.poll(() => paymentPayload).toMatchObject({
+    method: 'pos', pay_type: 'pos', amount_cents: 8000, cash_tendered_cents: 0, shift_id: 41, device_id: 21,
   })
   await expect(payment).not.toBeVisible()
 })

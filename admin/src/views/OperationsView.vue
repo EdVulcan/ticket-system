@@ -465,8 +465,8 @@ const shiftActionLoading = ref(false)
 const shiftDetail = ref<any>(null)
 const correctionForm = reactive({ amount: 0, reason: '' })
 const reconcileNotes = ref('')
-const methodLabels: Record<string, string> = { cash: '现金', wechat: '微信', alipay: '支付宝' }
-const shiftPaymentRows = computed(() => ['cash', 'wechat', 'alipay'].map(method => {
+const methodLabels: Record<string, string> = { cash: '现金', pos: 'POS机', wechat: '微信', alipay: '支付宝' }
+const shiftPaymentRows = computed(() => ['cash', 'pos', 'wechat', 'alipay'].map(method => {
   const row = shiftDetail.value?.payments?.find((item: any) => item.method === method) || {}
   return { method, label: methodLabels[method], payment_count: 0, gross_cents: 0, refund_cents: 0, net_cents: 0, ...row }
 }))
