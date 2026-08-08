@@ -366,7 +366,7 @@ const settlementActionLoading = ref(false)
 const settlementDetail = ref<any>(null)
 const generateSettlementDialog = ref(false)
 const settlementPartners = ref<any[]>([])
-const settlementGenerate = reactive<{ distributor_tenant_id: number, period: string[] }>({ distributor_tenant_id: 0, period: [] })
+const settlementGenerate = reactive<{ distributor_tenant_id: number | null, period: string[] }>({ distributor_tenant_id: null, period: [] })
 const settlementAdjustmentDialog = ref(false)
 const settlementAdjustment = reactive({ amount: 0, reason: '' })
 const settlementPayable = computed(() => Number(settlementDetail.value?.net_cents || 0) + Number(settlementDetail.value?.adjustment_cents || 0))
@@ -405,7 +405,7 @@ const exportSettlement = async () => {
 }
 
 const openGenerateSettlement = async () => {
-  settlementGenerate.distributor_tenant_id = 0
+  settlementGenerate.distributor_tenant_id = null
   settlementGenerate.period = []
   generateSettlementDialog.value = true
   try { settlementPartners.value = ((await request.get('/distribution/agents')).data.data || []).filter((row: any) => row.status === 'active') }

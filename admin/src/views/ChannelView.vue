@@ -305,7 +305,7 @@ const ctripConfigSaving = ref(false)
 const ctripConfig = reactive({ account_id: '', sign_key: '', aes_key: '', aes_iv: '' })
 const ctripEndpoint = `${window.location.origin}/api/v1/integrations/ctrip/order`
 const form = reactive({ code: '', type: 'core', app_id: '', secret: '', aes_key: '', aes_iv: '', status: 'active', permissions_json: '["products:read","inventory:reserve","orders:create","orders:query","orders:cancel"]', rate_limit_per_min: 600, allowed_ips_json: '' })
-const mapping = reactive({ external_code: '', product_id: 0, channel_sale_yuan: 0, channel_cost_yuan: 0 })
+const mapping = reactive<{ external_code: string; product_id: number | null; channel_sale_yuan: number; channel_cost_yuan: number }>({ external_code: '', product_id: null, channel_sale_yuan: 0, channel_cost_yuan: 0 })
 const ctripSyncTasks = ref<any[]>([])
 const syncingMappingID = ref(0)
 const pricingDialog = ref(false)
@@ -342,7 +342,7 @@ const rotate = async (row: any) => { await ElMessageBox.confirm('轮换后旧密
 const productName = (id: number) => products.value.find((product: any) => Number(product.id) === Number(id))?.name || '已下架或不可见产品'
 const openMapping = async (row: any) => {
   selectedAccount.value = row; selectedID.value = row.id
-  Object.assign(mapping, { external_code: '', product_id: 0, channel_sale_yuan: 0, channel_cost_yuan: 0 })
+  Object.assign(mapping, { external_code: '', product_id: null, channel_sale_yuan: 0, channel_cost_yuan: 0 })
   const [mappingResponse, productResponse] = await Promise.all([
     request.get('/channel-accounts/mappings', { params: { channel_account_id: row.id } }),
     request.get('/products', { params: { page: 1, page_size: 100 } }),
@@ -358,7 +358,7 @@ const addMapping = async () => {
   if (selectedAccount.value?.type === 'ctrip' && (mapping.channel_sale_yuan <= 0 || mapping.channel_cost_yuan < 0 || mapping.channel_cost_yuan > mapping.channel_sale_yuan)) { ElMessage.warning('携程销售价必须大于 0，结算价不能高于销售价'); return }
   const response = await request.post('/channel-accounts/mappings', { channel_account_id: selectedID.value, external_code: mapping.external_code.trim(), product_id: mapping.product_id, channel_sale_cents: Math.round(mapping.channel_sale_yuan * 100), channel_cost_cents: Math.round(mapping.channel_cost_yuan * 100) })
   mappings.value.unshift(response.data)
-  Object.assign(mapping, { external_code: '', product_id: 0, channel_sale_yuan: 0, channel_cost_yuan: 0 })
+  Object.assign(mapping, { external_code: '', product_id: null, channel_sale_yuan: 0, channel_cost_yuan: 0 })
 }
 const loadCtripSyncTasks = async () => {
   if (!selectedAccount.value || selectedAccount.value.type !== 'ctrip') return

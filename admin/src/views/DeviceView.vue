@@ -199,7 +199,11 @@ const handleAdd = () => {
 
 const handleEdit = (row: any) => {
   isEdit.value = true
-  Object.assign(form, row)
+  Object.assign(form, {
+    id: row.id, name: row.name || '', serial_number: row.serial_number || '',
+    check_point_id: row.check_point_id || undefined, type: row.type || 'gate',
+    status: row.status || 'offline', ip_address: row.ip_address || '', mac_address: row.mac_address || '',
+  })
   dialogVisible.value = true
 }
 
@@ -253,10 +257,14 @@ const handleSubmit = async () => {
   await formRef.value.validate(async (valid: boolean) => {
     if (valid) {
       try {
+        const payload = {
+          name: form.name.trim(), serial_number: form.serial_number.trim(), check_point_id: form.check_point_id,
+          type: form.type, status: form.status, ip_address: form.ip_address.trim(), mac_address: form.mac_address.trim(),
+        }
         if (isEdit.value) {
-          await request.put(`/devices/${form.id}`, form)
+          await request.put(`/devices/${form.id}`, payload)
         } else {
-          const response = await request.post('/devices', form)
+          const response = await request.post('/devices', payload)
           showCredential(form.name, response.data.auth_key)
         }
         ElMessage.success(isEdit.value ? '更新成功' : '创建成功')

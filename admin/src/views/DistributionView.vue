@@ -505,7 +505,7 @@ const selectedDistributor = ref<any>(null)
 const activeAgents = computed(() => agents.value.filter((agent: any) => agent.status === 'active'))
 const editingOffer = ref(false)
 const offerForm = reactive({
-    source_product_id: 0,
+    source_product_id: null as number | null,
     settlement_price: 0,
     minimum_retail_price: 0,
     quota: 0,
@@ -581,7 +581,7 @@ const loadBundleComponents = async () => {
   }
 }
 
-const addBundleComponent = () => bundleForm.components.push({ seller_product_id: 0, quantity: 1, allocation: 0 })
+const addBundleComponent = () => bundleForm.components.push({ seller_product_id: null, quantity: 1, allocation: 0 })
 const removeBundleComponent = (index: number | string) => bundleForm.components.splice(Number(index), 1)
 const isBundleComponentSelected = (productID: number, currentIndex: number | string) => bundleForm.components.some((item: any, itemIndex: number) => itemIndex !== Number(currentIndex) && item.seller_product_id === productID)
 
@@ -592,7 +592,7 @@ const openBundleForm = async (row?: any) => {
   bundleForm.retail_price = row ? Number(row.retail_price_cents || 0) / 100 : 0
   bundleForm.components = row
     ? (row.components || []).map((item: any) => ({ seller_product_id: item.seller_product_id, quantity: item.quantity, allocation: Number(item.retail_allocation_cents || 0) / 100 }))
-    : [{ seller_product_id: 0, quantity: 1, allocation: 0 }, { seller_product_id: 0, quantity: 1, allocation: 0 }]
+    : [{ seller_product_id: null, quantity: 1, allocation: 0 }, { seller_product_id: null, quantity: 1, allocation: 0 }]
   await loadBundleComponents()
   bundleFormVisible.value = true
 }
@@ -805,7 +805,7 @@ const loadSourceProducts = async () => {
 
 const openOfferForm = (row?: any) => {
     editingOffer.value = Boolean(row)
-    offerForm.source_product_id = row?.source_product_id || sourceProducts.value[0]?.id || 0
+    offerForm.source_product_id = row?.source_product_id || sourceProducts.value[0]?.id || null
     offerForm.settlement_price = Number(row?.settlement_price || 0)
     offerForm.minimum_retail_price = Number(row?.minimum_retail_price_cents || 0) / 100
     offerForm.quota = Number(row?.quota || 0)

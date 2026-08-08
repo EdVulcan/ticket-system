@@ -76,9 +76,9 @@ const isEdit = ref(false)
 const formRef = ref()
 const scenicAreas = ref<any[]>([])
 
-const form = reactive({
+const form = reactive<{ id: number; scenic_area_id: number | null; name: string; location: string }>({
   id: 0,
-  scenic_area_id: 0,
+  scenic_area_id: null,
   name: '',
   location: ''
 })
@@ -110,13 +110,13 @@ const fetchData = async () => {
 const handleAdd = () => {
   isEdit.value = false
   const activeAreas = scenicAreas.value.filter(area => area.status === 'active')
-  Object.assign(form, { id: 0, scenic_area_id: activeAreas.length === 1 ? activeAreas[0].id : 0, name: '', location: '' })
+  Object.assign(form, { id: 0, scenic_area_id: activeAreas.length === 1 ? activeAreas[0].id : null, name: '', location: '' })
   dialogVisible.value = true
 }
 
 const handleEdit = (row: any) => {
   isEdit.value = true
-  Object.assign(form, row)
+  Object.assign(form, { id: row.id, scenic_area_id: Number(row.scenic_area_id) || null, name: row.name || '', location: row.location || '' })
   dialogVisible.value = true
 }
 
@@ -141,10 +141,11 @@ const handleSubmit = async () => {
   await formRef.value.validate(async (valid: boolean) => {
     if (valid) {
       try {
+        const payload = { scenic_area_id: form.scenic_area_id, name: form.name.trim(), location: form.location.trim() }
         if (isEdit.value) {
-          await request.put(`/checkpoints/${form.id}`, form)
+          await request.put(`/checkpoints/${form.id}`, payload)
         } else {
-          await request.post('/checkpoints', form)
+          await request.post('/checkpoints', payload)
         }
         ElMessage.success(isEdit.value ? '更新成功' : '创建成功')
         dialogVisible.value = false

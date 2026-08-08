@@ -113,7 +113,7 @@ const handleAdd = () => {
 
 const handleEdit = (row: any) => {
     isEdit.value = true
-    Object.assign(form, row)
+    Object.assign(form, { id: row.id, title: row.title || '', category: row.category || 'Admission', content: row.content || '', is_active: Boolean(row.is_active) })
     dialogVisible.value = true
 }
 
@@ -131,10 +131,11 @@ const handleSubmit = async () => {
     await formRef.value.validate(async (valid: boolean) => {
         if (valid) {
             try {
+                const payload = { title: form.title.trim(), category: form.category, content: form.content.trim(), is_active: form.is_active }
                 if (isEdit.value) {
-                    await request.put(`/policies/${form.id}`, form)
+                    await request.put(`/policies/${form.id}`, payload)
                 } else {
-                    await request.post('/policies', form)
+                    await request.post('/policies', payload)
                 }
                 ElMessage.success('保存成功')
                 dialogVisible.value = false

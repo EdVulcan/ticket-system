@@ -476,7 +476,7 @@ const refreshActiveTab = () => activeTab.value === 'contracts' ? loadContracts()
 
 const saving = ref(false)
 const groupDialog = ref(false)
-const groupForm = reactive({ name: '', supplier_tenant_id: 0, scenic_area_id: 0, contract_id: 0, visit_date: '', expected_count: 1 })
+const groupForm = reactive<{ name: string; supplier_tenant_id: number | null; scenic_area_id: number | null; contract_id: number | null; visit_date: string; expected_count: number }>({ name: '', supplier_tenant_id: null, scenic_area_id: null, contract_id: null, visit_date: '', expected_count: 1 })
 const selectedGroupContract = computed(() => contracts.value.find((contract: any) => Number(contract.id) === Number(groupForm.contract_id)))
 const groupScenicOptions = computed(() => {
   const seen = new Set<number>()
@@ -488,18 +488,25 @@ const groupScenicOptions = computed(() => {
   })
 })
 const applyGroupContract = () => {
-  groupForm.supplier_tenant_id = Number(selectedGroupContract.value?.supplier_tenant_id || 0)
-  groupForm.scenic_area_id = groupScenicOptions.value[0]?.id || 0
+  groupForm.supplier_tenant_id = Number(selectedGroupContract.value?.supplier_tenant_id) || null
+  groupForm.scenic_area_id = groupScenicOptions.value[0]?.id || null
 }
 const openGroupDialog = async () => {
   if (!contracts.value.length) await loadContracts()
-  Object.assign(groupForm, { name: '', supplier_tenant_id: 0, scenic_area_id: 0, contract_id: 0, visit_date: '', expected_count: 1 })
+  Object.assign(groupForm, { name: '', supplier_tenant_id: null, scenic_area_id: null, contract_id: null, visit_date: '', expected_count: 1 })
   groupDialog.value = true
 }
 const createGroup = async () => {
   if (!groupForm.name.trim() || !groupForm.supplier_tenant_id || !groupForm.scenic_area_id || !groupForm.contract_id || !groupForm.visit_date) { ElMessage.warning('团队名称、供应商、景区、合同和日期均必填'); return }
   saving.value = true
-  try { await request.post('/teams', groupForm); groupDialog.value = false; ElMessage.success('团队已创建'); await loadGroups() }
+  try {
+    await request.post('/teams', {
+      name: groupForm.name.trim(), supplier_tenant_id: groupForm.supplier_tenant_id,
+      scenic_area_id: groupForm.scenic_area_id, contract_id: groupForm.contract_id,
+      visit_date: groupForm.visit_date, expected_count: groupForm.expected_count,
+    })
+    groupDialog.value = false; ElMessage.success('团队已创建'); await loadGroups()
+  }
   catch (e: any) { ElMessage.error(e.response?.data?.error || '团队创建失败') }
   finally { saving.value = false }
 }
@@ -570,7 +577,7 @@ const memberChanges = ref<any[]>([])
 const devices = ref<any[]>([])
 const guides = ref<any[]>([])
 const vehicles = ref<any[]>([])
-const entryDeviceID = ref(0)
+const entryDeviceID = ref<number | null>(null)
 const entryMemberSelection = ref<any[]>([])
 const entering = ref(false)
 const pendingEntryRequest = ref({ fingerprint: '', key: '' })
@@ -613,7 +620,7 @@ const loadTravelResources = async () => {
 const openGroupDetail = async (row: any) => {
   selectedGroup.value = row
   rosterText.value = ''
-  entryDeviceID.value = 0
+  entryDeviceID.value = null
   pendingEntryRequest.value = { fingerprint: '', key: '' }
   detailDialog.value = true
   await Promise.all([
@@ -661,12 +668,12 @@ const replaceRoster = async () => {
 
 const confirmationDialog = ref(false)
 const confirmationSaving = ref(false)
-const confirmationForm = reactive({ confirmed_count: 1, guide_id: 0, vehicle_id: 0, notes: '' })
+const confirmationForm = reactive<{ confirmed_count: number; guide_id: number | null; vehicle_id: number | null; notes: string }>({ confirmed_count: 1, guide_id: null, vehicle_id: null, notes: '' })
 const openConfirmationDialog = () => {
   Object.assign(confirmationForm, {
     confirmed_count: Number(selectedGroup.value?.expected_count || 1),
-    guide_id: Number(selectedGroup.value?.guide_id || 0),
-    vehicle_id: Number(selectedGroup.value?.vehicle_id || 0),
+    guide_id: Number(selectedGroup.value?.guide_id) || null,
+    vehicle_id: Number(selectedGroup.value?.vehicle_id) || null,
     notes: '',
   })
   confirmationDialog.value = true
@@ -675,7 +682,9 @@ const submitConfirmation = async () => {
   if (!selectedGroup.value || confirmationForm.confirmed_count < 1) return
   confirmationSaving.value = true
   try {
-    await request.post(`/teams/${selectedGroup.value.id}/confirmations`, { ...confirmationForm })
+    await request.post(`/teams/${selectedGroup.value.id}/confirmations`, {
+      ...confirmationForm, guide_id: confirmationForm.guide_id || 0, vehicle_id: confirmationForm.vehicle_id || 0,
+    })
     confirmationDialog.value = false
     ElMessage.success('团队确认单新版本已提交')
     await loadGroupDetail()
@@ -725,7 +734,7 @@ const removeTemporaryMember = async (row: any) => {
 }
 
 const attachOrderDialog = ref(false)
-const attachOrderId = ref(0)
+const attachOrderId = ref<number | null>(null)
 const attachingOrder = ref(false)
 const attachOrdersLoading = ref(false)
 const attachOrders = ref<any[]>([])
@@ -738,7 +747,7 @@ const attachOrderCandidates = computed(() => {
 })
 const openAttachOrder = async (row: any) => {
   selectedGroup.value = row
-  attachOrderId.value = 0
+  attachOrderId.value = null
   attachOrderDialog.value = true
   attachOrdersLoading.value = true
   try { attachOrders.value = (await request.get('/orders', { params: { page: 1, page_size: 100 } })).data.data || [] }
@@ -755,13 +764,13 @@ const attachOrder = async () => {
 
 const contractOrderDialog = ref(false)
 const creatingContractOrder = ref(false)
-const contractOrderForm = reactive({ product_id: 0, contact_name: '', contact_phone: '' })
+const contractOrderForm = reactive<{ product_id: number | null; contact_name: string; contact_phone: string }>({ product_id: null, contact_name: '', contact_phone: '' })
 const selectedOrderContract = computed(() => contracts.value.find((contract: any) => Number(contract.id) === Number(selectedGroup.value?.contract_id)))
 const contractOrderProducts = computed(() => (selectedOrderContract.value?.price_rules || []).filter((rule: any) => Number(rule.scenic_area_id) === Number(selectedGroup.value?.scenic_area_id)))
 const openContractOrder = async (row: any) => {
   selectedGroup.value = row
   if (!contracts.value.length) await loadContracts()
-  Object.assign(contractOrderForm, { product_id: contractOrderProducts.value[0]?.product_id || 0, contact_name: '', contact_phone: '' })
+  Object.assign(contractOrderForm, { product_id: contractOrderProducts.value[0]?.product_id || null, contact_name: '', contact_phone: '' })
   contractOrderDialog.value = true
 }
 const createContractOrder = async () => {
