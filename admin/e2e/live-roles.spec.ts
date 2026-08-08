@@ -30,7 +30,7 @@ test('真实平台账号登录并读取治理总览', async ({ page }) => {
 test('真实景区供应商只能进入供应商工作区', async ({ page }) => {
   await tenantLogin(page, 'SYS001', 'Supplier-E2E-Password-1')
   await expect(page.getByRole('menuitem', { name: '线上门票' })).toBeVisible()
-  await expect(page.getByRole('menuitem', { name: '分销商管理' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '供销合作' })).toBeVisible()
   await expect(page.getByRole('menuitem', { name: '旅行社团队' })).toBeVisible()
   await page.getByRole('menuitem', { name: '旅行社团队' }).click()
   await expect(page.getByRole('heading', { name: '团队业务' })).toBeVisible()
@@ -38,11 +38,11 @@ test('真实景区供应商只能进入供应商工作区', async ({ page }) => 
 
 test('真实分销商只能进入销售与分销工作区', async ({ page }) => {
   await tenantLogin(page, 'E2EDIST', 'Distributor-E2E-Password-3')
-  await expect(page.getByRole('menuitem', { name: '分销商管理' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '供销合作' })).toBeVisible()
   await expect(page.getByRole('menuitem', { name: '线上门票' })).toHaveCount(0)
-  await page.getByRole('menuitem', { name: '分销商管理' }).click()
+  await page.getByRole('menuitem', { name: '供销合作' }).click()
   await expect(page).toHaveURL(/\/distribution$/)
-  await expect(page.getByRole('heading', { name: '分销中心' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '供销合作' })).toBeVisible()
   await page.goto('/teams')
   await expect(page).toHaveURL('http://127.0.0.1:4173/')
 })

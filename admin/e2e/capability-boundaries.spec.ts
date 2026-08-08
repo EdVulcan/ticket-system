@@ -27,7 +27,7 @@ async function openAs(page: Page, capability: Capability, path: string, expiresA
 test('distributor cannot see or enter supplier onsite business', async ({ page }) => {
   await openAs(page, 'distributor', '/operations')
 
-  for (const label of ['线上订单', '分销商管理', '渠道连接', '运营工作台', '财务报表', '经营数据', '退款待办', '售后工作台', '管理账号', '支付参数配置']) {
+  for (const label of ['线上订单', '供销合作', '渠道连接', '运营工作台', '财务报表', '经营数据', '退款待办', '售后工作台', '管理账号', '支付参数配置']) {
     await expect(page.getByRole('menuitem', { name: label })).toBeVisible()
   }
   for (const label of ['线上门票', '窗口门票', '线下/窗口订单', '旅行社团队', '政策知识库', '终端设备', '检票点位', '员工管理']) {
@@ -53,7 +53,7 @@ test('travel agency only receives team, order and report surfaces', async ({ pag
   for (const label of ['线上订单', '旅行社团队', '经营数据', '售后工作台', '管理账号']) {
     await expect(page.getByRole('menuitem', { name: label })).toBeVisible()
   }
-  for (const label of ['线上门票', '窗口门票', '线下/窗口订单', '分销商管理', '渠道连接', '运营工作台', '财务报表', '退款待办', '政策知识库', '终端设备', '检票点位', '员工管理', '支付参数配置']) {
+  for (const label of ['线上门票', '窗口门票', '线下/窗口订单', '供销合作', '渠道连接', '运营工作台', '财务报表', '退款待办', '政策知识库', '终端设备', '检票点位', '员工管理', '支付参数配置']) {
     await expect(page.getByRole('menuitem', { name: label })).toHaveCount(0)
   }
 

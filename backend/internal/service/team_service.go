@@ -49,6 +49,114 @@ type TravelContractPartner struct {
 	RelationshipID uint   `json:"relationship_id"`
 }
 
+type TeamSupplierPartner struct {
+	RelationshipID   uint      `json:"relationship_id"`
+	SupplierTenantID uint      `json:"supplier_tenant_id"`
+	SupplierName     string    `json:"supplier_name"`
+	SupplierCode     string    `json:"supplier_code"`
+	Contact          string    `json:"contact"`
+	Status           string    `json:"status"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+type TeamTravelAgencyPartner struct {
+	RelationshipID uint      `json:"relationship_id"`
+	TravelTenantID uint      `json:"travel_tenant_id"`
+	TravelName     string    `json:"travel_name"`
+	TravelCode     string    `json:"travel_code"`
+	Contact        string    `json:"contact"`
+	Phone          string    `json:"phone"`
+	Status         string    `json:"status"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+func (s *TeamService) SearchSupplierPartner(travelTenantID uint, systemCode string) (*TeamSupplierPartner, error) {
+	if err := requireActiveTenantCapability(model.DB, travelTenantID, "travel_agency"); err != nil {
+		return nil, err
+	}
+	supplier, err := (&DistributionService{}).GetSupplierByCode(systemCode)
+	if err != nil {
+		return nil, err
+	}
+	if supplier.ID == travelTenantID {
+		return nil, errors.New("a tenant cannot partner with itself")
+	}
+	view := &TeamSupplierPartner{
+		SupplierTenantID: supplier.ID, SupplierName: supplier.Name, SupplierCode: supplier.SystemCode,
+		Contact: supplier.Contact,
+	}
+	var relationship model.DistributorRelationship
+	if err := model.DB.Where("agent_tenant_id = ? AND supplier_tenant_id = ?", travelTenantID, supplier.ID).First(&relationship).Error; err == nil {
+		view.RelationshipID = relationship.ID
+		view.Status = relationship.TravelStatus
+		view.CreatedAt = relationship.CreatedAt
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	return view, nil
+}
+
+func (s *TeamService) ApplySupplierPartner(travelTenantID uint, systemCode string) error {
+	return applySupplierRelationship(travelTenantID, systemCode, "travel_agency", 0, "", "")
+}
+
+func (s *TeamService) ApplySupplierPartnerAudited(travelTenantID, operatorID uint, actorRole, systemCode string) error {
+	return applySupplierRelationship(travelTenantID, systemCode, "travel_agency", operatorID, actorRole, "team.partner.apply")
+}
+
+func (s *TeamService) ListSupplierPartners(travelTenantID uint) ([]TeamSupplierPartner, error) {
+	if err := requireActiveTenantCapability(model.DB, travelTenantID, "travel_agency"); err != nil {
+		return nil, err
+	}
+	var relationships []model.DistributorRelationship
+	if err := model.DB.Preload("SupplierTenant").Where("agent_tenant_id = ? AND travel_status != ?", travelTenantID, "none").Order("created_at DESC").Find(&relationships).Error; err != nil {
+		return nil, err
+	}
+	rows := make([]TeamSupplierPartner, 0, len(relationships))
+	for _, relationship := range relationships {
+		if err := requireActiveTenantCapability(model.DB, relationship.SupplierTenantID, "supplier"); err != nil {
+			continue
+		}
+		rows = append(rows, TeamSupplierPartner{
+			RelationshipID: relationship.ID, SupplierTenantID: relationship.SupplierTenantID,
+			SupplierName: relationship.SupplierTenant.Name, SupplierCode: relationship.SupplierTenant.SystemCode,
+			Contact: relationship.SupplierTenant.Contact, Status: relationship.TravelStatus, CreatedAt: relationship.CreatedAt,
+		})
+	}
+	return rows, nil
+}
+
+func (s *TeamService) ListTravelAgencyPartners(supplierTenantID uint) ([]TeamTravelAgencyPartner, error) {
+	if err := requireActiveTenantCapability(model.DB, supplierTenantID, "supplier"); err != nil {
+		return nil, err
+	}
+	var relationships []model.DistributorRelationship
+	if err := model.DB.Preload("AgentTenant").Where("supplier_tenant_id = ? AND travel_status != ?", supplierTenantID, "none").Order("created_at DESC").Find(&relationships).Error; err != nil {
+		return nil, err
+	}
+	rows := make([]TeamTravelAgencyPartner, 0, len(relationships))
+	for _, relationship := range relationships {
+		if err := requireActiveTenantCapability(model.DB, relationship.AgentTenantID, "travel_agency"); err != nil {
+			continue
+		}
+		rows = append(rows, TeamTravelAgencyPartner{
+			RelationshipID: relationship.ID, TravelTenantID: relationship.AgentTenantID,
+			TravelName: relationship.AgentTenant.Name, TravelCode: relationship.AgentTenant.SystemCode,
+			Contact: relationship.AgentTenant.Contact, Phone: relationship.AgentTenant.Phone,
+			Status: relationship.TravelStatus, CreatedAt: relationship.CreatedAt,
+		})
+	}
+	return rows, nil
+}
+
+func (s *TeamService) AuditTravelAgencyPartner(supplierTenantID, relationshipID uint, status string) error {
+	return auditSupplierRelationship(supplierTenantID, relationshipID, "travel_agency", status, 0, "", "")
+}
+
+func (s *TeamService) AuditTravelAgencyPartnerAudited(supplierTenantID, relationshipID, operatorID uint, actorRole, status string) error {
+	return auditSupplierRelationship(supplierTenantID, relationshipID, "travel_agency", status, operatorID, actorRole, "team.partner.audit")
+}
+
 type TeamOrderInput struct {
 	ProductID    uint   `json:"product_id"`
 	ContactName  string `json:"contact_name"`
@@ -165,7 +273,7 @@ func (s *TeamService) CreateContract(supplierTenantID, operatorID uint, input Tr
 			return errors.New("travel agency tenant is unavailable")
 		}
 		var relationship model.DistributorRelationship
-		if err := tx.Where("agent_tenant_id = ? AND supplier_tenant_id = ? AND status = ?", input.TravelTenantID, supplierTenantID, "active").First(&relationship).Error; err != nil {
+		if err := tx.Where("agent_tenant_id = ? AND supplier_tenant_id = ? AND travel_status = ?", input.TravelTenantID, supplierTenantID, "active").First(&relationship).Error; err != nil {
 			return errors.New("active travel agency relationship not found")
 		}
 		normalizedRules, priceJSON, err := normalizeTeamPriceRulesTx(tx, supplierTenantID, input.PriceRules)
@@ -309,7 +417,7 @@ func (s *TeamService) ListContractPartners(supplierTenantID uint) ([]TravelContr
 		return nil, err
 	}
 	var relationships []model.DistributorRelationship
-	if err := model.DB.Preload("AgentTenant").Where("supplier_tenant_id = ? AND status = ?", supplierTenantID, "active").Order("created_at DESC").Find(&relationships).Error; err != nil {
+	if err := model.DB.Preload("AgentTenant").Where("supplier_tenant_id = ? AND travel_status = ?", supplierTenantID, "active").Order("created_at DESC").Find(&relationships).Error; err != nil {
 		return nil, err
 	}
 	rows := make([]TravelContractPartner, 0, len(relationships))
@@ -409,7 +517,7 @@ func (s *TeamService) CreateGroup(tenantID uint, group *model.TourGroup) error {
 		}
 		if group.SupplierTenantID != tenantID {
 			var relationship model.DistributorRelationship
-			if err := tx.Where("agent_tenant_id = ? AND supplier_tenant_id = ? AND status = ?", tenantID, group.SupplierTenantID, "active").First(&relationship).Error; err != nil {
+			if err := tx.Where("agent_tenant_id = ? AND supplier_tenant_id = ? AND travel_status = ?", tenantID, group.SupplierTenantID, "active").First(&relationship).Error; err != nil {
 				return errors.New("active supplier relationship not found")
 			}
 		}

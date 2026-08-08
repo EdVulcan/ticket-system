@@ -22,7 +22,7 @@ async function openAs(page: Page, role: string, capabilities: string[], path = '
 
 test('产品运营只进入产品、订单、分销和渠道工作区', async ({ page }) => {
   await openAs(page, 'product_operator', ['supplier', 'distributor'])
-  for (const label of ['线上门票', '窗口门票', '线上订单', '分销商管理', '渠道连接', '运营工作台', '经营数据', '售后工作台']) {
+  for (const label of ['线上门票', '窗口门票', '线上订单', '供销合作', '渠道连接', '运营工作台', '经营数据', '售后工作台']) {
     await expect(page.getByRole('menuitem', { name: label })).toBeVisible()
   }
   for (const label of ['旅行社团队', '财务报表', '退款待办', '员工管理', '管理账号', '支付参数配置']) {
@@ -37,7 +37,7 @@ test('团队业务员不获得分销、渠道和账号管理权限', async ({ pa
   for (const label of ['线上订单', '旅行社团队', '经营数据', '售后工作台']) {
     await expect(page.getByRole('menuitem', { name: label })).toBeVisible()
   }
-  for (const label of ['线上门票', '分销商管理', '渠道连接', '运营工作台', '财务报表', '退款待办', '管理账号']) {
+  for (const label of ['线上门票', '供销合作', '渠道连接', '运营工作台', '财务报表', '退款待办', '管理账号']) {
     await expect(page.getByRole('menuitem', { name: label })).toHaveCount(0)
   }
   await page.goto('/distribution')
@@ -49,9 +49,19 @@ test('结算对账员能处理对账但不能维护产品和账号', async ({ pa
   for (const label of ['线上订单', '旅行社团队', '财务报表', '经营数据', '退款待办', '售后工作台']) {
     await expect(page.getByRole('menuitem', { name: label })).toBeVisible()
   }
-  for (const label of ['线上门票', '窗口门票', '分销商管理', '渠道连接', '员工管理', '管理账号', '支付参数配置']) {
+  for (const label of ['线上门票', '窗口门票', '供销合作', '渠道连接', '员工管理', '管理账号', '支付参数配置']) {
     await expect(page.getByRole('menuitem', { name: label })).toHaveCount(0)
   }
   await page.goto('/system-user')
   await expect(page).toHaveURL('http://127.0.0.1:4173/')
+})
+
+test('只读分销岗位可以查看合作关系但不能发起申请或上架', async ({ page }) => {
+  await openAs(page, 'viewer', ['distributor'], '/distribution')
+
+  await expect(page.getByRole('heading', { name: '供销合作' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '我的供应商 (我是分销商)' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '寻找供应商' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '采购/上架' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '新建组合产品' })).toHaveCount(0)
 })

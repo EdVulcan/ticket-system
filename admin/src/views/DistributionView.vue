@@ -3,11 +3,11 @@
     <!-- Header -->
     <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100 flex justify-between items-center">
       <div>
-        <h2 class="text-lg font-bold text-gray-900">分销中心</h2>
-        <p class="text-xs text-gray-500 mt-1">连接产业上下游，拓展业务边界</p>
+        <h2 class="text-lg font-bold text-gray-900">供销合作</h2>
+        <p class="text-xs text-gray-500 mt-1">维护供应商授权、分销商铺货和履约关系</p>
       </div>
       <div>
-         <el-button v-if="canDistribute && activeTab === 'suppliers'" type="primary" size="large" @click="dialogVisible = true">
+         <el-button v-if="canDistribute && canWrite && activeTab === 'suppliers'" type="primary" size="large" @click="dialogVisible = true">
             <el-icon class="mr-2"><Connection /></el-icon> 寻找供应商
          </el-button>
       </div>
@@ -47,8 +47,7 @@
                 </el-table-column>
                 <el-table-column label="操作" width="200" fixed="right" align="center">
                 <template #default="{ row }">
-                    <el-button type="primary" size="small" @click="handleSourcing(row)">采购/上架</el-button>
-                    <el-button link type="warning" size="small">充值</el-button>
+                    <el-button v-if="canWrite" type="primary" size="small" @click="handleSourcing(row)">采购/上架</el-button>
                 </template>
                 </el-table-column>
             </el-table>
@@ -448,7 +447,7 @@ const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user'
 const activeCapabilities = new Set((currentUser.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability))
 const canWrite = hasPermission(currentUser, 'distribution.write')
 const canSupply = computed(() => activeCapabilities.has('supplier'))
-const canDistribute = computed(() => activeCapabilities.has('distributor') && canWrite)
+const canDistribute = computed(() => activeCapabilities.has('distributor'))
 const activeTab = ref(canDistribute.value ? 'suppliers' : 'agents')
 
 // Suppliers State

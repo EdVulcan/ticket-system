@@ -1635,7 +1635,7 @@ func TestSupplierControlsTravelContractProductPrices(t *testing.T) {
 				return err
 			}
 		}
-		if err := tx.Create(&model.DistributorRelationship{AgentTenantID: travel.ID, SupplierTenantID: supplier.ID, Status: "active"}).Error; err != nil {
+		if err := tx.Create(&model.DistributorRelationship{AgentTenantID: travel.ID, SupplierTenantID: supplier.ID, TravelStatus: "active"}).Error; err != nil {
 			return err
 		}
 		area := model.ScenicArea{TenantID: supplier.ID, Code: "CONTRACT-AREA", Name: "Main", Status: "active"}

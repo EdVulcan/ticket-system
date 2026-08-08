@@ -12,6 +12,73 @@ import (
 
 type TeamController struct{ Service service.TeamService }
 
+func (c *TeamController) SearchSupplierPartner(ctx *gin.Context) {
+	code := ctx.Query("code")
+	if code == "" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "supplier system code is required"})
+		return
+	}
+	row, err := c.Service.SearchSupplierPartner(ctx.GetUint("tenant_id"), code)
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": row})
+}
+
+func (c *TeamController) ApplySupplierPartner(ctx *gin.Context) {
+	var input struct {
+		SystemCode string `json:"system_code" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.ApplySupplierPartnerAudited(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), ctx.GetString("role"), input.SystemCode); err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusCreated, gin.H{"status": "pending"})
+}
+
+func (c *TeamController) ListSupplierPartners(ctx *gin.Context) {
+	rows, err := c.Service.ListSupplierPartners(ctx.GetUint("tenant_id"))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": rows})
+}
+
+func (c *TeamController) ListTravelAgencyPartners(ctx *gin.Context) {
+	rows, err := c.Service.ListTravelAgencyPartners(ctx.GetUint("tenant_id"))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": rows})
+}
+
+func (c *TeamController) AuditTravelAgencyPartner(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid partnership id"})
+		return
+	}
+	var input struct {
+		Status string `json:"status" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.AuditTravelAgencyPartnerAudited(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), ctx.GetString("role"), input.Status); err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"status": input.Status})
+}
+
 func (c *TeamController) ListContracts(ctx *gin.Context) {
 	rows, err := c.Service.ListContracts(ctx.GetUint("tenant_id"))
 	if err != nil {

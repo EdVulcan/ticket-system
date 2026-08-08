@@ -26,8 +26,18 @@ func (s *DistributionService) GetSupplierByCode(code string) (*model.Tenant, err
 }
 
 func (s *DistributionService) ApplyAgent(agentTenantID uint, supplierSystemCode string) error {
+	return applySupplierRelationship(agentTenantID, supplierSystemCode, "distributor", 0, "", "")
+}
+
+func applySupplierRelationship(agentTenantID uint, supplierSystemCode, agentCapability string, actorID uint, actorRole, auditAction string) error {
+	statusColumn := "status"
+	applicationName := "distribution"
+	if agentCapability == "travel_agency" {
+		statusColumn = "travel_status"
+		applicationName = "travel partnership"
+	}
 	return model.Write(func(tx *gorm.DB) error {
-		if err := requireActiveTenantCapability(tx, agentTenantID, "distributor"); err != nil {
+		if err := requireActiveTenantCapability(tx, agentTenantID, agentCapability); err != nil {
 			return err
 		}
 		var supplier model.Tenant
@@ -38,7 +48,7 @@ func (s *DistributionService) ApplyAgent(agentTenantID uint, supplierSystemCode 
 			return errors.New("supplier tenant is unavailable")
 		}
 		if supplier.ID == agentTenantID {
-			return errors.New("a tenant cannot distribute its own products")
+			return errors.New("a tenant cannot partner with itself")
 		}
 		if err := requireActiveTenantCapability(tx, supplier.ID, "supplier"); err != nil {
 			return errors.New("supplier tenant is unavailable")
@@ -46,29 +56,50 @@ func (s *DistributionService) ApplyAgent(agentTenantID uint, supplierSystemCode 
 
 		var relationship model.DistributorRelationship
 		err := tx.Where("agent_tenant_id = ? AND supplier_tenant_id = ?", agentTenantID, supplier.ID).First(&relationship).Error
+		before := "{}"
 		if err == nil {
-			switch relationship.Status {
+			currentStatus := relationship.Status
+			if statusColumn == "travel_status" {
+				currentStatus = relationship.TravelStatus
+			}
+			switch currentStatus {
 			case "pending":
-				return errors.New("distribution application is already pending")
+				return fmt.Errorf("%s application is already pending", applicationName)
 			case "active":
-				return errors.New("distribution relationship is already active")
+				return fmt.Errorf("%s relationship is already active", applicationName)
 			default:
-				return tx.Model(&relationship).Update("status", "pending").Error
+				before = fmt.Sprintf(`{"status":%q}`, currentStatus)
+				if err := tx.Model(&relationship).Update(statusColumn, "pending").Error; err != nil {
+					return err
+				}
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		} else {
+			relationship = model.DistributorRelationship{AgentTenantID: agentTenantID, SupplierTenantID: supplier.ID, Status: "none", TravelStatus: "none", AgentLevel: "standard"}
+			if statusColumn == "travel_status" {
+				relationship.TravelStatus = "pending"
+			} else {
+				relationship.Status = "pending"
+			}
+			if err := tx.Create(&relationship).Error; err != nil {
+				return err
 			}
 		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
+		if auditAction == "" {
+			return nil
 		}
-		return tx.Create(&model.DistributorRelationship{
-			AgentTenantID: agentTenantID, SupplierTenantID: supplier.ID,
-			Status: "pending", AgentLevel: "standard",
-		}).Error
+		return recordAuditTx(tx, actorID, agentTenantID, actorRole, "tenant", auditAction, "supplier_relationship", relationship.ID,
+			"申请供应商合作", before, `{"status":"pending"}`)
 	})
 }
 
 func (s *DistributionService) ListSuppliers(agentTenantID uint) ([]map[string]interface{}, error) {
+	if err := requireActiveTenantCapability(model.DB, agentTenantID, "distributor"); err != nil {
+		return nil, err
+	}
 	var relationships []model.DistributorRelationship
-	if err := model.DB.Preload("SupplierTenant").Where("agent_tenant_id = ?", agentTenantID).Find(&relationships).Error; err != nil {
+	if err := model.DB.Preload("SupplierTenant").Where("agent_tenant_id = ? AND status != ?", agentTenantID, "none").Find(&relationships).Error; err != nil {
 		return nil, err
 	}
 
@@ -91,13 +122,19 @@ func (s *DistributionService) ListSuppliers(agentTenantID uint) ([]map[string]in
 }
 
 func (s *DistributionService) ListMyAgents(supplierTenantID uint) ([]map[string]interface{}, error) {
+	if err := requireActiveTenantCapability(model.DB, supplierTenantID, "supplier"); err != nil {
+		return nil, err
+	}
 	var relationships []model.DistributorRelationship
-	if err := model.DB.Preload("AgentTenant").Where("supplier_tenant_id = ?", supplierTenantID).Order("created_at desc").Find(&relationships).Error; err != nil {
+	if err := model.DB.Preload("AgentTenant").Where("supplier_tenant_id = ? AND status != ?", supplierTenantID, "none").Order("created_at desc").Find(&relationships).Error; err != nil {
 		return nil, err
 	}
 
 	result := make([]map[string]interface{}, 0, len(relationships))
 	for _, relationship := range relationships {
+		if err := requireActiveTenantCapability(model.DB, relationship.AgentTenantID, "distributor"); err != nil {
+			continue
+		}
 		result = append(result, map[string]interface{}{
 			"id": relationship.ID, "agent_tenant_id": relationship.AgentTenantID,
 			"agent_name": relationship.AgentTenant.Name, "agent_code": relationship.AgentTenant.SystemCode,
@@ -109,10 +146,20 @@ func (s *DistributionService) ListMyAgents(supplierTenantID uint) ([]map[string]
 }
 
 func (s *DistributionService) AuditAgent(supplierTenantID, relationshipID uint, status string) error {
+	return auditSupplierRelationship(supplierTenantID, relationshipID, "distributor", status, 0, "", "")
+}
+
+func auditSupplierRelationship(supplierTenantID, relationshipID uint, agentCapability, status string, actorID uint, actorRole, auditAction string) error {
 	if status != "active" && status != "rejected" {
 		return errors.New("invalid distribution status")
 	}
 	return model.Write(func(tx *gorm.DB) error {
+		statusColumn := "status"
+		applicationName := "distribution"
+		if agentCapability == "travel_agency" {
+			statusColumn = "travel_status"
+			applicationName = "travel partnership"
+		}
 		if err := requireActiveTenantCapability(tx, supplierTenantID, "supplier"); err != nil {
 			return err
 		}
@@ -120,25 +167,39 @@ func (s *DistributionService) AuditAgent(supplierTenantID, relationshipID uint, 
 		if err := tx.Where("id = ? AND supplier_tenant_id = ?", relationshipID, supplierTenantID).First(&relationship).Error; err != nil {
 			return errors.New("distribution application not found")
 		}
-		if err := tx.Model(&relationship).Update("status", status).Error; err != nil {
+		if err := requireActiveTenantCapability(tx, relationship.AgentTenantID, agentCapability); err != nil {
+			return errors.New("applicant tenant capability is unavailable")
+		}
+		currentStatus := relationship.Status
+		if statusColumn == "travel_status" {
+			currentStatus = relationship.TravelStatus
+		}
+		if currentStatus != "pending" {
+			return fmt.Errorf("%s application is not pending", applicationName)
+		}
+		before := fmt.Sprintf(`{"status":%q}`, currentStatus)
+		if err := tx.Model(&relationship).Update(statusColumn, status).Error; err != nil {
 			return err
 		}
-		if status != "active" {
+		if status == "active" {
+			var account model.CapitalAccount
+			err := tx.Where("owner_tenant_id = ? AND manager_tenant_id = ?", relationship.AgentTenantID, relationship.SupplierTenantID).First(&account).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				if err := tx.Create(&model.CapitalAccount{
+					OwnerTenantID: relationship.AgentTenantID, ManagerTenantID: relationship.SupplierTenantID,
+					Status: "active",
+				}).Error; err != nil {
+					return err
+				}
+			} else if err != nil {
+				return err
+			}
+		}
+		if auditAction == "" {
 			return nil
 		}
-
-		var account model.CapitalAccount
-		err := tx.Where("owner_tenant_id = ? AND manager_tenant_id = ?", relationship.AgentTenantID, relationship.SupplierTenantID).First(&account).Error
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		return tx.Create(&model.CapitalAccount{
-			OwnerTenantID: relationship.AgentTenantID, ManagerTenantID: relationship.SupplierTenantID,
-			Status: "active",
-		}).Error
+		return recordAuditTx(tx, actorID, supplierTenantID, actorRole, "tenant", auditAction, "supplier_relationship", relationship.ID,
+			"审核合作申请", before, fmt.Sprintf(`{"status":%q}`, status))
 	})
 }
 

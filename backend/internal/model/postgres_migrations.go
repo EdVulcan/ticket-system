@@ -8,12 +8,13 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 71
+const CurrentPostgresSchemaVersion = 72
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
 func runPostgresMigrations(db *gorm.DB) error {
 	hadSettlementSource := db.Migrator().HasColumn(&SettlementLine{}, "Source")
+	hadTravelRelationshipStatus := db.Migrator().HasColumn(&DistributorRelationship{}, "TravelStatus")
 	models := []interface{}{
 		&SchemaMigration{},
 		&Tenant{}, &TenantCapability{}, &ScenicArea{}, &PlatformUser{}, &User{}, &Staff{},
@@ -35,6 +36,21 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
+	}
+	if !hadTravelRelationshipStatus {
+		if err := db.Exec(`
+			UPDATE distributor_relationships AS relationship
+			SET travel_status = relationship.status
+			WHERE relationship.status != 'none'
+			  AND EXISTS (
+				SELECT 1 FROM tenant_capabilities AS capability
+				WHERE capability.tenant_id = relationship.agent_tenant_id
+				  AND capability.capability = 'travel_agency'
+				  AND capability.status = 'active'
+			  )
+		`).Error; err != nil {
+			return fmt.Errorf("backfill travel partnership status: %w", err)
+		}
 	}
 	if err := db.Model(&ChannelAccount{}).Where("status = ?", "sandbox").Update("environment", "sandbox").Error; err != nil {
 		return fmt.Errorf("backfill channel environment: %w", err)
@@ -77,7 +93,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "audited refund policy overrides",
+		Name:      "separate travel and distribution partnerships",
 		AppliedAt: time.Now(),
 	}).Error
 }

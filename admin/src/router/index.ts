@@ -32,7 +32,7 @@ const router = createRouter({
             path: '/distribution',
             name: 'distribution',
             component: () => import('../views/DistributionView.vue'),
-            meta: { scope: 'tenant', permission: 'distribution.read', capabilities: ['supplier', 'distributor'], title: '分销中心' }
+            meta: { scope: 'tenant', permission: 'distribution.read', capabilities: ['supplier', 'distributor'], title: '供销合作' }
         },
         {
             path: '/channels',

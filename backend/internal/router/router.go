@@ -281,6 +281,11 @@ func InitRouter(r *gin.Engine) {
 	teamGroup := protected.Group("/teams")
 	teamGroup.Use(middleware.RequireAnyTenantCapability("supplier", "travel_agency"))
 	{
+		teamGroup.GET("/partners/supplier-search", middleware.RequireTenantPermission(authz.PermissionTeamsRead), middleware.RequireAnyTenantCapability("travel_agency"), teamController.SearchSupplierPartner)
+		teamGroup.POST("/partners/suppliers", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), middleware.RequireAnyTenantCapability("travel_agency"), teamController.ApplySupplierPartner)
+		teamGroup.GET("/partners/suppliers", middleware.RequireTenantPermission(authz.PermissionTeamsRead), middleware.RequireAnyTenantCapability("travel_agency"), teamController.ListSupplierPartners)
+		teamGroup.GET("/partners/travel-agencies", middleware.RequireTenantPermission(authz.PermissionTeamsRead), middleware.RequireAnyTenantCapability("supplier"), teamController.ListTravelAgencyPartners)
+		teamGroup.POST("/partners/travel-agencies/:id/audit", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), middleware.RequireAnyTenantCapability("supplier"), teamController.AuditTravelAgencyPartner)
 		teamGroup.GET("/contract-partners", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListContractPartners)
 		teamGroup.GET("/contracts", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListContracts)
 		teamGroup.POST("/contracts", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.CreateContract)

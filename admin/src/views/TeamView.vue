@@ -41,6 +41,47 @@
         </el-table>
       </el-tab-pane>
 
+      <el-tab-pane v-if="isTravelAgency" label="合作景区" name="supplier-partners">
+        <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <span class="text-sm text-gray-500">申请合作后，由景区确认并配置团队合同。</span>
+          <el-button v-if="can('teams.write')" type="primary" :icon="Connection" @click="openSupplierPartnerDialog">申请合作景区</el-button>
+        </div>
+        <el-table :data="supplierPartners" v-loading="supplierPartnersLoading" stripe empty-text="暂无合作景区">
+          <el-table-column prop="supplier_name" label="景区供应商" min-width="180" />
+          <el-table-column prop="supplier_code" label="系统编号" min-width="150" />
+          <el-table-column prop="contact" label="联系人" min-width="130"><template #default="{ row }">{{ row.contact || '-' }}</template></el-table-column>
+          <el-table-column label="申请时间" width="180"><template #default="{ row }">{{ dateTime(row.created_at) }}</template></el-table-column>
+          <el-table-column label="合作状态" width="120"><template #default="{ row }"><el-tag :type="partnerStatusType(row.status)">{{ partnerStatusText(row.status) }}</el-tag></template></el-table-column>
+          <el-table-column label="下一步" width="140" fixed="right">
+            <template #default="{ row }">
+              <el-button v-if="row.status === 'active'" link type="primary" @click="showContracts">查看团队合同</el-button>
+              <span v-else-if="row.status === 'pending'" class="text-xs text-gray-400">等待景区确认</span>
+              <el-button v-else-if="can('teams.write')" link type="primary" @click="reapplySupplierPartner(row)">重新申请</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
+      <el-tab-pane v-if="isSupplier" label="合作旅行社" name="travel-partners">
+        <div class="mb-4 text-sm text-gray-500">确认旅行社合作申请后，即可为其创建专属产品价格和授信合同。</div>
+        <el-table :data="travelAgencyPartners" v-loading="travelAgencyPartnersLoading" stripe empty-text="暂无旅行社合作申请">
+          <el-table-column prop="travel_name" label="旅行社" min-width="180" />
+          <el-table-column prop="travel_code" label="系统编号" min-width="150" />
+          <el-table-column label="联系方式" min-width="180"><template #default="{ row }">{{ row.contact || '-' }}<span v-if="row.phone" class="ml-2 text-gray-400">{{ row.phone }}</span></template></el-table-column>
+          <el-table-column label="申请时间" width="180"><template #default="{ row }">{{ dateTime(row.created_at) }}</template></el-table-column>
+          <el-table-column label="合作状态" width="120"><template #default="{ row }"><el-tag :type="partnerStatusType(row.status)">{{ partnerStatusText(row.status) }}</el-tag></template></el-table-column>
+          <el-table-column v-if="can('teams.write')" label="操作" width="210" fixed="right">
+            <template #default="{ row }">
+              <template v-if="row.status === 'pending'">
+                <el-button link type="success" @click="auditTravelPartner(row, 'active')">通过</el-button>
+                <el-button link type="danger" @click="auditTravelPartner(row, 'rejected')">拒绝</el-button>
+              </template>
+              <el-button v-else-if="row.status === 'active'" link type="primary" @click="openContractForPartner(row)">创建合同</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </el-tab-pane>
+
       <el-tab-pane label="旅行社合同" name="contracts">
         <el-table :data="contracts" v-loading="contractsLoading" stripe empty-text="暂无团队合同">
           <el-table-column prop="contract_no" label="合同号" min-width="180" />
@@ -95,6 +136,27 @@
       </el-tab-pane>
     </el-tabs>
 
+    <el-dialog v-model="supplierPartnerDialog" title="申请合作景区" width="520px" :close-on-click-modal="false">
+      <el-form label-position="top">
+        <el-form-item label="景区系统编号" required>
+          <div class="flex w-full gap-2">
+            <el-input v-model="supplierSearchCode" placeholder="输入景区提供的系统编号" clearable @keyup.enter="searchSupplierPartner" />
+            <el-button :icon="Search" :loading="supplierSearching" @click="searchSupplierPartner">查询</el-button>
+          </div>
+        </el-form-item>
+      </el-form>
+      <el-descriptions v-if="supplierSearchResult" :column="1" border>
+        <el-descriptions-item label="景区供应商">{{ supplierSearchResult.supplier_name }}</el-descriptions-item>
+        <el-descriptions-item label="系统编号">{{ supplierSearchResult.supplier_code }}</el-descriptions-item>
+        <el-descriptions-item label="联系人">{{ supplierSearchResult.contact || '-' }}</el-descriptions-item>
+        <el-descriptions-item v-if="supplierSearchResult.status" label="当前状态">{{ partnerStatusText(supplierSearchResult.status) }}</el-descriptions-item>
+      </el-descriptions>
+      <template #footer>
+        <el-button @click="supplierPartnerDialog = false">取消</el-button>
+        <el-button type="primary" :loading="supplierApplying" :disabled="!supplierSearchResult || ['pending', 'active'].includes(supplierSearchResult.status)" @click="applySupplierPartner">提交合作申请</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="groupDialog" title="新建团队计划" width="560px">
       <el-form :model="groupForm" label-position="top">
         <el-form-item label="团队名称" required><el-input v-model="groupForm.name" maxlength="100" /></el-form-item>
@@ -120,7 +182,7 @@
       <el-form :model="contractForm" label-position="top">
         <div class="grid grid-cols-2 gap-3">
           <el-form-item label="旅行社" required>
-            <el-select v-model="contractForm.travel_tenant_id" :disabled="Boolean(contractForm.id)" filterable class="w-full" placeholder="选择已合作旅行社">
+            <el-select v-model="contractForm.travel_tenant_id" :disabled="contractPartnerLocked" filterable class="w-full" placeholder="选择已合作旅行社">
               <el-option v-for="partner in contractPartners" :key="partner.tenant_id" :label="`${partner.name}（${partner.system_code}）`" :value="partner.tenant_id" />
             </el-select>
           </el-form-item>
@@ -364,7 +426,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Delete, DocumentAdd, Download, Plus, Printer, Refresh } from '@element-plus/icons-vue'
+import { Connection, Delete, DocumentAdd, Download, Plus, Printer, Refresh, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { hasPermission } from '@/utils/permissions'
@@ -383,10 +445,14 @@ const groups = ref<any[]>([])
 const contracts = ref<any[]>([])
 const settlements = ref<any[]>([])
 const accounts = ref<any[]>([])
+const supplierPartners = ref<any[]>([])
+const travelAgencyPartners = ref<any[]>([])
 const loading = ref(false)
 const contractsLoading = ref(false)
 const settlementsLoading = ref(false)
 const accountsLoading = ref(false)
+const supplierPartnersLoading = ref(false)
+const travelAgencyPartnersLoading = ref(false)
 const isGroupOwner = (row: any) => currentTenantID.value > 0 && Number(row?.tenant_id) === currentTenantID.value
 const isGroupSupplier = (row: any) => currentTenantID.value > 0 && Number(row?.supplier_tenant_id) === currentTenantID.value && !isGroupOwner(row)
 const activeTravelContracts = computed(() => contracts.value.filter((contract: any) => Number(contract.travel_tenant_id) === currentTenantID.value && contract.status === 'active'))
@@ -403,6 +469,8 @@ const settlementStatusText = (status: string) => ({ open: '未生成', statement
 const settlementKindText = (kind: string) => kind === 'refund_correction' ? '退款冲减' : '团队结算'
 const teamSettlementStatusText = (row: any) => row?.kind === 'refund_correction' && row?.status === 'paid' ? '已完成冲减' : settlementStatusText(row?.status)
 const settlementStatusType = (status: string) => status === 'paid' ? 'success' : status === 'disputed' ? 'danger' : status === 'confirmed' ? 'warning' : status === 'supplier_confirmed' ? 'primary' : 'info'
+const partnerStatusText = (status: string) => ({ pending: '待确认', active: '合作中', rejected: '已拒绝', suspended: '已暂停' } as Record<string, string>)[status] || '未知状态'
+const partnerStatusType = (status: string) => status === 'active' ? 'success' : status === 'rejected' ? 'danger' : status === 'pending' ? 'warning' : 'info'
 
 const openTeamAfterSales = () => {
   if (!selectedGroup.value?.sales_order_no) return
@@ -471,8 +539,72 @@ const loadAccounts = async () => {
   catch (e: any) { ElMessage.error(e.response?.data?.error || '团队资金汇总加载失败') }
   finally { accountsLoading.value = false }
 }
-const handleTabChange = (tab: string) => { if (tab === 'contracts') loadContracts(); if (tab === 'settlements') loadSettlements(); if (tab === 'accounts') loadAccounts() }
-const refreshActiveTab = () => activeTab.value === 'contracts' ? loadContracts() : activeTab.value === 'settlements' ? loadSettlements() : activeTab.value === 'accounts' ? loadAccounts() : loadGroups()
+const loadSupplierPartners = async () => {
+  supplierPartnersLoading.value = true
+  try { supplierPartners.value = (await request.get('/teams/partners/suppliers')).data.data || [] }
+  catch (e: any) { ElMessage.error(e.response?.data?.error || '合作景区加载失败') }
+  finally { supplierPartnersLoading.value = false }
+}
+const loadTravelAgencyPartners = async () => {
+  travelAgencyPartnersLoading.value = true
+  try { travelAgencyPartners.value = (await request.get('/teams/partners/travel-agencies')).data.data || [] }
+  catch (e: any) { ElMessage.error(e.response?.data?.error || '合作旅行社加载失败') }
+  finally { travelAgencyPartnersLoading.value = false }
+}
+const handleTabChange = (tab: string) => {
+  if (tab === 'supplier-partners') loadSupplierPartners()
+  else if (tab === 'travel-partners') loadTravelAgencyPartners()
+  else if (tab === 'contracts') loadContracts()
+  else if (tab === 'settlements') loadSettlements()
+  else if (tab === 'accounts') loadAccounts()
+}
+const refreshActiveTab = () => activeTab.value === 'supplier-partners' ? loadSupplierPartners() : activeTab.value === 'travel-partners' ? loadTravelAgencyPartners() : activeTab.value === 'contracts' ? loadContracts() : activeTab.value === 'settlements' ? loadSettlements() : activeTab.value === 'accounts' ? loadAccounts() : loadGroups()
+
+const supplierPartnerDialog = ref(false)
+const supplierSearchCode = ref('')
+const supplierSearchResult = ref<any>(null)
+const supplierSearching = ref(false)
+const supplierApplying = ref(false)
+const openSupplierPartnerDialog = () => {
+  supplierSearchCode.value = ''
+  supplierSearchResult.value = null
+  supplierPartnerDialog.value = true
+}
+const searchSupplierPartner = async () => {
+  if (!supplierSearchCode.value.trim()) { ElMessage.warning('请输入景区系统编号'); return }
+  supplierSearching.value = true
+  try { supplierSearchResult.value = (await request.get('/teams/partners/supplier-search', { params: { code: supplierSearchCode.value.trim() } })).data.data }
+  catch (e: any) { supplierSearchResult.value = null; ElMessage.error(e.response?.data?.error || '未找到该景区供应商') }
+  finally { supplierSearching.value = false }
+}
+const applySupplierPartner = async () => {
+  if (!supplierSearchResult.value) return
+  supplierApplying.value = true
+  try {
+    await request.post('/teams/partners/suppliers', { system_code: supplierSearchResult.value.supplier_code })
+    supplierPartnerDialog.value = false
+    ElMessage.success('合作申请已提交')
+    await loadSupplierPartners()
+  } catch (e: any) { ElMessage.error(e.response?.data?.error || '合作申请提交失败') }
+  finally { supplierApplying.value = false }
+}
+const reapplySupplierPartner = async (row: any) => {
+  try {
+    await request.post('/teams/partners/suppliers', { system_code: row.supplier_code })
+    ElMessage.success('合作申请已重新提交')
+    await loadSupplierPartners()
+  } catch (e: any) { ElMessage.error(e.response?.data?.error || '重新申请失败') }
+}
+const auditTravelPartner = async (row: any, status: string) => {
+  const action = status === 'active' ? '通过' : '拒绝'
+  try {
+    await ElMessageBox.confirm(`${action}“${row.travel_name}”的合作申请？`, `${action}合作申请`, { type: status === 'active' ? 'success' : 'warning', confirmButtonText: `确认${action}`, cancelButtonText: '取消' })
+    await request.post(`/teams/partners/travel-agencies/${row.relationship_id}/audit`, { status })
+    ElMessage.success(`已${action}合作申请`)
+    await loadTravelAgencyPartners()
+  } catch (e: any) { if (e !== 'cancel' && e !== 'close') ElMessage.error(e.response?.data?.error || '合作申请处理失败') }
+}
+const showContracts = async () => { activeTab.value = 'contracts'; await loadContracts() }
 
 const saving = ref(false)
 const groupDialog = ref(false)
@@ -512,6 +644,7 @@ const createGroup = async () => {
 }
 
 const contractDialog = ref(false)
+const contractPartnerLocked = ref(false)
 const savingContract = ref(false)
 const contractCreditYuan = ref(0)
 const contractPartners = ref<any[]>([])
@@ -534,11 +667,12 @@ const loadContractFormOptions = async () => {
   contractProducts.value = (productsResponse.data.data || []).filter((product: any) => product.status === 'online' && product.is_distributable)
 }
 const addContractPriceRule = () => contractPriceRules.value.push({ product_id: null, price_yuan: 0, max_quantity: 0 })
-const openContractDialog = async (row?: any) => {
+const openContractDialog = async (row?: any, presetTravelTenantID?: number) => {
   try {
     await loadContractFormOptions()
+    contractPartnerLocked.value = Boolean(row || presetTravelTenantID)
     Object.assign(contractForm, {
-      id: Number(row?.id || 0), travel_tenant_id: row ? Number(row.travel_tenant_id) || null : null,
+      id: Number(row?.id || 0), travel_tenant_id: row ? Number(row.travel_tenant_id) || null : (Number(presetTravelTenantID) || null),
       contract_no: row?.contract_no || '', settlement_days: Number(row?.settlement_days || 0), status: row?.status || 'active',
     })
     contractCreditYuan.value = Number(row?.credit_limit_cents || 0) / 100
@@ -547,6 +681,7 @@ const openContractDialog = async (row?: any) => {
     contractDialog.value = true
   } catch (e: any) { ElMessage.error(e.response?.data?.error || '合同可选项加载失败') }
 }
+const openContractForPartner = (row: any) => openContractDialog(undefined, Number(row.travel_tenant_id))
 const saveContract = async () => {
   if (!contractForm.travel_tenant_id || !contractForm.contract_no.trim() || !contractPriceRules.value.length || contractPriceRules.value.some(rule => !rule.product_id || rule.price_yuan <= 0)) { ElMessage.warning('请选择旅行社，并完整填写至少一个产品结算价'); return }
   if (new Set(contractPriceRules.value.map(rule => rule.product_id)).size !== contractPriceRules.value.length) { ElMessage.warning('同一个产品不能重复添加'); return }

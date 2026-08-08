@@ -67,7 +67,7 @@
              <div v-if="hasAnyCapability('supplier', 'distributor') && (can('distribution.read') || can('channels.read'))" class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">分销中心</div>
              <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && can('distribution.read')" index="/distribution" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Connection /></el-icon>
-                <span>分销商管理</span>
+                <span>供销合作</span>
              </el-menu-item>
              <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && can('channels.read')" index="/channels" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
                 <el-icon><Connection /></el-icon>

@@ -1323,7 +1323,7 @@ func TestTeamRosterAndEntryStayTenantScoped(t *testing.T) {
 		if err := tx.Create(&area).Error; err != nil {
 			return err
 		}
-		if err := tx.Create(&model.DistributorRelationship{AgentTenantID: travel.ID, SupplierTenantID: supplier.ID, Status: "active"}).Error; err != nil {
+		if err := tx.Create(&model.DistributorRelationship{AgentTenantID: travel.ID, SupplierTenantID: supplier.ID, TravelStatus: "active"}).Error; err != nil {
 			return err
 		}
 		contract = model.TravelContract{TravelTenantID: travel.ID, SupplierTenantID: supplier.ID, ContractNo: "CONTRACT-TEAM-1", Status: "active"}
@@ -1383,7 +1383,7 @@ func TestTeamRosterReplaceIsIdempotentAndStopsAfterConfirmation(t *testing.T) {
 		if err := tx.Create(&contract).Error; err != nil {
 			return err
 		}
-		return tx.Create(&model.DistributorRelationship{AgentTenantID: travel.ID, SupplierTenantID: supplier.ID, Status: "active"}).Error
+		return tx.Create(&model.DistributorRelationship{AgentTenantID: travel.ID, SupplierTenantID: supplier.ID, TravelStatus: "active"}).Error
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1857,6 +1857,11 @@ func TestTeamMultiBatchAdmissionUsesSupplierTicketsAndDevice(t *testing.T) {
 	scenario := seedDistributionScenario(t)
 	if err := model.Write(func(tx *gorm.DB) error {
 		if err := tx.Create(&model.TenantCapability{TenantID: scenario.distributorID, Capability: "travel_agency", Status: "active"}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.DistributorRelationship{}).
+			Where("agent_tenant_id = ? AND supplier_tenant_id = ?", scenario.distributorID, scenario.supplierID).
+			Update("travel_status", "active").Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&model.Product{}).Where("id = ?", scenario.sourceProductID).Update("daily_stock", 2).Error; err != nil {
