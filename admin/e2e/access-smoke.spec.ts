@@ -194,6 +194,37 @@ test('平台管理员创建租户时不提交空的生命周期日期', async ({
   })
 })
 
+test('平台管理员启用待审核租户时显式确认资质', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'platform-token')
+    localStorage.setItem('user', JSON.stringify({ id: 9, username: 'platform_admin', role: 'platform_admin', scope: 'platform' }))
+  })
+  await mockJSON(page, '**/api/v1/tenants?*', {
+    data: [{ id: 2, name: '测试旅行社', system_code: 'TRAVEL002', status: 'frozen', qualification_status: 'pending', capabilities: [] }],
+    total: 1,
+  })
+  let lifecycle: Record<string, unknown> | undefined
+  let status: Record<string, unknown> | undefined
+  await page.route('**/api/v1/tenants/2/lifecycle', async route => {
+    lifecycle = route.request().postDataJSON()
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"status":"lifecycle_updated"}' })
+  })
+  await page.route('**/api/v1/tenants/2/status', async route => {
+    status = route.request().postDataJSON()
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{"message":"tenant status updated"}' })
+  })
+
+  await page.goto('/tenant')
+  await expect(page.getByText('测试旅行社')).toBeVisible()
+  await page.getByRole('combobox').locator('xpath=ancestor::div[contains(@class,"el-select__wrapper")]').click()
+  await page.getByRole('option', { name: '启用' }).click()
+  await expect(page.getByText('资质仍为“待审核”')).toBeVisible()
+  await page.getByRole('button', { name: '确认通过并启用' }).click()
+
+  await expect.poll(() => lifecycle).toMatchObject({ qualification_status: 'approved' })
+  await expect.poll(() => status).toEqual({ status: 'active' })
+})
+
 test('旅行社能力可以进入团队工作区', async ({ page }) => {
   await page.addInitScript(user => {
     localStorage.setItem('token', 'travel-token')

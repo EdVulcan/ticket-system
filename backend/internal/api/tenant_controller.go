@@ -78,8 +78,10 @@ func (c *TenantController) UpdateStatus(ctx *gin.Context) {
 	}
 	if err := c.Service.UpdateStatusAudited(uint(id), body.Status, platformActorID(ctx), ctx.GetString("role")); err != nil {
 		status := http.StatusInternalServerError
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			status = http.StatusNotFound
+		} else if errors.Is(err, service.ErrTenantActivationBlocked) {
+			status = http.StatusConflict
 		}
 		ctx.JSON(status, gin.H{"error": err.Error()})
 		return

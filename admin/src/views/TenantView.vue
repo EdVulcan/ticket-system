@@ -251,9 +251,52 @@ const capabilityStatus = (row: any, capability: string) => row.capabilities?.fin
 const qualificationStatusText = (status: string) => ({ pending: '待审核', approved: '已通过', rejected: '已驳回', expired: '已过期', legacy: '历史数据' } as Record<string, string>)[status || 'legacy'] || '待补充'
 const capabilityText = (capability: string) => ({ supplier: '景区供应商', distributor: '分销商', travel_agency: '旅行社' } as Record<string, string>)[capability] || '其他业务'
 const capabilityStatusText = (status: string) => ({ active: '已启用', suspended: '已暂停', disabled: '未启用' } as Record<string, string>)[status] || '未启用'
+
+const isExpired = (value: string | null | undefined) => {
+  if (!value) return false
+  const expiresAt = new Date(value)
+  return !Number.isNaN(expiresAt.getTime()) && expiresAt.getTime() <= Date.now()
+}
+
+const activationIssue = (row: any) => {
+  if (row.qualification_status === 'pending') return 'pending'
+  if (row.qualification_status === 'rejected') return 'rejected'
+  if (row.qualification_status === 'expired' || isExpired(row.qualification_expires_at)) return 'qualification_expired'
+  if (isExpired(row.contract_expires_at)) return 'contract_expired'
+  return ''
+}
+
 const updateStatus = async (row: any, status: string) => {
-  try { await request.patch(`/tenants/${row.id}/status`, { status }); await fetchData() }
-  catch (error: any) { ElMessage.error(error.response?.data?.error || '状态更新失败') }
+  if (status === row.status) return
+  const issue = status === 'active' ? activationIssue(row) : ''
+  try {
+    if (issue === 'pending') {
+      await ElMessageBox.confirm(
+        `“${row.name}”的资质仍为“待审核”。请确认已核验该商户资料，确认后系统会记录审核操作并启用租户。`,
+        '确认资质并启用？',
+        { confirmButtonText: '确认通过并启用', cancelButtonText: '取消', type: 'warning' }
+      )
+      await request.patch(`/tenants/${row.id}/lifecycle`, {
+        qualification_status: 'approved',
+        reason: '平台管理员确认资质并启用租户'
+      })
+    } else if (issue) {
+      const message = issue === 'rejected'
+        ? '该商户资质已驳回，请先修改并确认资质信息。'
+        : issue === 'contract_expired'
+          ? '该商户合同已过期，请先更新合同到期日。'
+          : '该商户资质已过期，请先更新资质状态和到期日。'
+      ElMessage.warning(message)
+      handleEdit(row)
+      return
+    }
+    await request.patch(`/tenants/${row.id}/status`, { status })
+    ElMessage.success(status === 'active' ? '商户已启用' : status === 'frozen' ? '商户已冻结' : '商户已关闭')
+    await fetchData()
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    // Request errors are localized and displayed by the shared interceptor.
+  }
 }
 const toggleCapability = async (row: any, capability: string) => {
   const status = capabilityStatus(row, capability) === 'active' ? 'suspended' : 'active'

@@ -1,4 +1,5 @@
 const englishErrorRules: Array<[RegExp, string]> = [
+  [/tenant activation requires approved, unexpired qualification and contract|tenant qualification or contract is not active/i, '启用前请先确认资质已通过；已填写的资质和合同到期日必须晚于当前时间'],
   [/network error|failed to fetch|connection/i, '网络连接失败，请检查网络后重试'],
   [/timeout|deadline exceeded/i, '请求超时，请稍后重试'],
   [/invalid credentials|incorrect password|authentication failed/i, '账号或密码错误'],

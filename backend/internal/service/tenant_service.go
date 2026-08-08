@@ -15,6 +15,8 @@ import (
 
 type TenantService struct{}
 
+var ErrTenantActivationBlocked = errors.New("tenant activation requires approved, unexpired qualification and contract")
+
 func (s *TenantService) RevokeSessions(id uint, actorID uint, actorRole string) error {
 	if id == 0 {
 		return gorm.ErrRecordNotFound
@@ -137,7 +139,7 @@ func (s *TenantService) UpdateStatusAudited(id uint, status string, actorID uint
 			return err
 		}
 		if status == "active" && !qualificationAllowsActivation(&tenant, time.Now()) {
-			return errors.New("tenant qualification or contract is not active")
+			return ErrTenantActivationBlocked
 		}
 		before, _ := json.Marshal(map[string]string{"status": tenant.Status})
 		after, _ := json.Marshal(map[string]string{"status": status})
