@@ -212,7 +212,12 @@ const handleSubmit = async () => {
     if (valid) {
       try {
         if (isEdit.value) {
-          await request.put(`/tenants/${form.id}`, form)
+          await request.put(`/tenants/${form.id}`, {
+            name: form.name,
+            contact: form.contact,
+            phone: form.phone,
+            address: form.address
+          })
           await request.patch(`/tenants/${form.id}/lifecycle`, {
             qualification_status: form.qualification_status,
             qualification_no: form.qualification_no,
@@ -221,7 +226,15 @@ const handleSubmit = async () => {
             reason: form.lifecycle_reason || '平台管理端更新租户生命周期'
           })
         } else {
-          await request.post('/tenants', form)
+          await request.post('/tenants', {
+            name: form.name,
+            system_code: form.system_code,
+            contact: form.contact,
+            phone: form.phone,
+            address: form.address,
+            admin_username: form.admin_username,
+            admin_password: form.admin_password
+          })
         }
         ElMessage.success(isEdit.value ? '更新成功' : '创建成功')
         dialogVisible.value = false

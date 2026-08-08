@@ -162,6 +162,38 @@ test('商户业务能力排列清晰且强制下线有明确确认', async ({ pa
   await page.getByRole('button', { name: '取消' }).click()
 })
 
+test('平台管理员创建租户时不提交空的生命周期日期', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'platform-token')
+    localStorage.setItem('user', JSON.stringify({ id: 9, username: 'platform_admin', role: 'platform_admin', scope: 'platform' }))
+  })
+  await mockJSON(page, '**/api/v1/tenants?*', { data: [], total: 0 })
+  let submitted: Record<string, unknown> | undefined
+  await page.route('**/api/v1/tenants', async route => {
+    submitted = route.request().postDataJSON()
+    await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ id: 21, ...submitted }) })
+  })
+
+  await page.goto('/tenant')
+  await page.getByRole('button', { name: '新增商户主体' }).click()
+  const dialog = page.getByRole('dialog', { name: '创建新商户主体' })
+  await dialog.getByLabel('商户主体名称').fill('山河旅行社')
+  await dialog.getByLabel('分配系统编号').fill('SHLX001')
+  await dialog.getByLabel('初始密码').fill('Travel-Password-123')
+  await dialog.getByRole('button', { name: '确认提交' }).click()
+
+  await expect.poll(() => submitted).toBeTruthy()
+  expect(submitted).toEqual({
+    name: '山河旅行社',
+    system_code: 'SHLX001',
+    contact: '',
+    phone: '',
+    address: '',
+    admin_username: '',
+    admin_password: 'Travel-Password-123',
+  })
+})
+
 test('旅行社能力可以进入团队工作区', async ({ page }) => {
   await page.addInitScript(user => {
     localStorage.setItem('token', 'travel-token')

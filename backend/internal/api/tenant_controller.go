@@ -16,9 +16,20 @@ type TenantController struct {
 }
 
 type CreateTenantRequest struct {
-	model.Tenant
+	Name          string `json:"name" binding:"required"`
+	SystemCode    string `json:"system_code" binding:"required"`
+	Contact       string `json:"contact"`
+	Phone         string `json:"phone"`
+	Address       string `json:"address"`
 	AdminUsername string `json:"admin_username"`
 	AdminPassword string `json:"admin_password" binding:"required"`
+}
+
+type UpdateTenantRequest struct {
+	Name    string `json:"name" binding:"required"`
+	Contact string `json:"contact"`
+	Phone   string `json:"phone"`
+	Address string `json:"address"`
 }
 
 func (c *TenantController) Create(ctx *gin.Context) {
@@ -28,22 +39,26 @@ func (c *TenantController) Create(ctx *gin.Context) {
 		return
 	}
 
-	if err := c.Service.Create(&req.Tenant, req.AdminUsername, req.AdminPassword); err != nil {
+	tenant := model.Tenant{
+		Name: req.Name, SystemCode: req.SystemCode, Contact: req.Contact, Phone: req.Phone, Address: req.Address,
+	}
+	if err := c.Service.Create(&tenant, req.AdminUsername, req.AdminPassword); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	ctx.JSON(http.StatusCreated, req.Tenant)
+	ctx.JSON(http.StatusCreated, tenant)
 }
 
 func (c *TenantController) Update(ctx *gin.Context) {
 	id, _ := strconv.Atoi(ctx.Param("id"))
-	var tenant model.Tenant
-	if err := ctx.ShouldBindJSON(&tenant); err != nil {
+	var req UpdateTenantRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
+	tenant := model.Tenant{Name: req.Name, Contact: req.Contact, Phone: req.Phone, Address: req.Address}
 	if err := c.Service.Update(uint(id), &tenant); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
