@@ -298,10 +298,14 @@ func generatePaymentNo() string {
 }
 
 func getProviderType(code string) string {
+	if code == "" || strings.IndexFunc(code, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+		return ""
+	}
 	if len(code) == 18 && code >= "100000000000000000" && code <= "159999999999999999" {
 		return "wechat"
 	}
-	if len(code) >= 25 && len(code) <= 30 && code >= "2500000000000000000000000" && code < "310000000000000000000000000000" {
+	// Alipay payment codes are 16-24 digits and start with a value from 25 to 30.
+	if len(code) >= 16 && len(code) <= 24 && code[:2] >= "25" && code[:2] <= "30" {
 		return "alipay"
 	}
 	return ""
@@ -438,6 +442,7 @@ func (s *PaymentService) alipayClient(tenantID uint) (*alipay.Client, error) {
 		return nil, fmt.Errorf("Alipay public key is required")
 	}
 	client.AutoVerifySign([]byte(cfg.PublicKey))
+	client.SetNotifyUrl(strings.TrimSpace(cfg.NotifyURL))
 	return client, nil
 }
 
