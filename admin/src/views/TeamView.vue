@@ -509,8 +509,15 @@ const savingContract = ref(false)
 const contractCreditYuan = ref(0)
 const contractPartners = ref<any[]>([])
 const contractProducts = ref<any[]>([])
-const contractPriceRules = ref<any[]>([])
-const contractForm = reactive({ id: 0, travel_tenant_id: 0, contract_no: '', settlement_days: 0, status: 'active' })
+type ContractPriceRuleForm = { product_id: number | null; price_yuan: number; max_quantity: number }
+const contractPriceRules = ref<ContractPriceRuleForm[]>([])
+const contractForm = reactive<{ id: number; travel_tenant_id: number | null; contract_no: string; settlement_days: number; status: string }>({
+  id: 0,
+  travel_tenant_id: null,
+  contract_no: '',
+  settlement_days: 0,
+  status: 'active',
+})
 const loadContractFormOptions = async () => {
   const [partnersResponse, productsResponse] = await Promise.all([
     request.get('/teams/contract-partners'),
@@ -519,16 +526,16 @@ const loadContractFormOptions = async () => {
   contractPartners.value = partnersResponse.data.data || []
   contractProducts.value = (productsResponse.data.data || []).filter((product: any) => product.status === 'online' && product.is_distributable)
 }
-const addContractPriceRule = () => contractPriceRules.value.push({ product_id: 0, price_yuan: 0, max_quantity: 0 })
+const addContractPriceRule = () => contractPriceRules.value.push({ product_id: null, price_yuan: 0, max_quantity: 0 })
 const openContractDialog = async (row?: any) => {
   try {
     await loadContractFormOptions()
     Object.assign(contractForm, {
-      id: Number(row?.id || 0), travel_tenant_id: Number(row?.travel_tenant_id || contractPartners.value[0]?.tenant_id || 0),
+      id: Number(row?.id || 0), travel_tenant_id: row ? Number(row.travel_tenant_id) || null : null,
       contract_no: row?.contract_no || '', settlement_days: Number(row?.settlement_days || 0), status: row?.status || 'active',
     })
     contractCreditYuan.value = Number(row?.credit_limit_cents || 0) / 100
-    contractPriceRules.value = (row?.price_rules || []).map((rule: any) => ({ product_id: rule.product_id, price_yuan: Number(rule.price_cents || 0) / 100, max_quantity: Number(rule.max_quantity || 0) }))
+    contractPriceRules.value = (row?.price_rules || []).map((rule: any) => ({ product_id: Number(rule.product_id) || null, price_yuan: Number(rule.price_cents || 0) / 100, max_quantity: Number(rule.max_quantity || 0) }))
     if (!contractPriceRules.value.length) addContractPriceRule()
     contractDialog.value = true
   } catch (e: any) { ElMessage.error(e.response?.data?.error || '合同可选项加载失败') }
