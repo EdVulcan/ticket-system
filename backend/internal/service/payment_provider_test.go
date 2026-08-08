@@ -1,6 +1,12 @@
 package service
 
-import "testing"
+import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+	"testing"
+)
 
 func TestGetProviderType(t *testing.T) {
 	tests := []struct {
@@ -24,5 +30,20 @@ func TestGetProviderType(t *testing.T) {
 				t.Fatalf("getProviderType(%q) = %q, want %q", tt.code, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNewAlipayClientUsesProductionGateway(t *testing.T) {
+	privateKey, err := rsa.GenerateKey(rand.Reader, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(privateKey)})
+	client, err := newAlipayProductionClient("2026000000000000", string(privateKeyPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !client.IsProd {
+		t.Fatal("Alipay client must use the production gateway")
 	}
 }

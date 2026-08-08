@@ -434,7 +434,7 @@ func (s *PaymentService) alipayClient(tenantID uint) (*alipay.Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Alipay is not configured")
 	}
-	client, err := alipay.NewClient(cfg.AppID, cfg.PrivateKey, false)
+	client, err := newAlipayProductionClient(cfg.AppID, cfg.PrivateKey)
 	if err != nil {
 		return nil, err
 	}
@@ -444,6 +444,10 @@ func (s *PaymentService) alipayClient(tenantID uint) (*alipay.Client, error) {
 	client.AutoVerifySign([]byte(cfg.PublicKey))
 	client.SetNotifyUrl(strings.TrimSpace(cfg.NotifyURL))
 	return client, nil
+}
+
+func newAlipayProductionClient(appID, privateKey string) (*alipay.Client, error) {
+	return alipay.NewClient(appID, privateKey, true)
 }
 
 func (s *PaymentService) payAlipay(req *model.Payment) error {
