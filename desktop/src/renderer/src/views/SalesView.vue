@@ -856,8 +856,10 @@ const handleCheckout = async () => {
 const handlePaymentSuccess = async () => {
     paymentLocked.value = false
     showPayment.value = false
-    ElMessage.success('支付成功！正在打印...')
-    if (!currentOrder.value || !posDeviceId.value || !shiftState.value.shiftId) return
+    if (!currentOrder.value || !posDeviceId.value || !shiftState.value.shiftId) {
+      ElMessage.warning('支付已成功，但未能创建打印任务，请到订单页处理。')
+      return
+    }
     let job: any
     try {
       const queued = await axios.post('/operations/print-jobs', { device_id: posDeviceId.value, shift_id: shiftState.value.shiftId, order_no: currentOrder.value.order_no })
@@ -868,6 +870,7 @@ const handlePaymentSuccess = async () => {
       await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printed' })
       cart.value = []
       currentOrder.value = null
+      ElMessage.success('支付成功，打印完成')
     } catch (error: any) {
       if (job) {
         await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'failed', error: error.message || '打印失败' }).catch(() => undefined)

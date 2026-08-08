@@ -268,6 +268,8 @@ test('现金找零正确且打印未配置时保留订单与购物清单', async
     order_no: 'POS-E2E-1', method: 'cash', amount_cents: 8000, cash_tendered_cents: 10000, shift_id: 41, device_id: 21,
   })
   await expect(page.getByText('支付已成功，但打印失败。订单和打印任务已保留，可稍后重打。')).toBeVisible()
+  await expect(page.getByText('支付成功', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('支付成功！正在打印...', { exact: true })).toHaveCount(0)
   await expect(page.locator('.cart-item').getByText('标准成人票', { exact: true })).toBeVisible()
 })
 

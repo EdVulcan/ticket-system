@@ -269,7 +269,6 @@ const finishSuccess = () => {
   paymentId.value = null
   partialCashRecorded.value = false
   emit('lockChange', false)
-  ElMessage.success('支付成功')
   emit('success')
 }
 
