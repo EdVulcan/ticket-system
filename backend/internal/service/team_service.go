@@ -50,24 +50,24 @@ type TravelContractPartner struct {
 }
 
 type TeamSupplierPartner struct {
-	RelationshipID   uint      `json:"relationship_id"`
-	SupplierTenantID uint      `json:"supplier_tenant_id"`
-	SupplierName     string    `json:"supplier_name"`
-	SupplierCode     string    `json:"supplier_code"`
-	Contact          string    `json:"contact"`
-	Status           string    `json:"status"`
-	CreatedAt        time.Time `json:"created_at"`
+	RelationshipID   uint       `json:"relationship_id"`
+	SupplierTenantID uint       `json:"supplier_tenant_id"`
+	SupplierName     string     `json:"supplier_name"`
+	SupplierCode     string     `json:"supplier_code"`
+	Contact          string     `json:"contact"`
+	Status           string     `json:"status"`
+	CreatedAt        *time.Time `json:"created_at,omitempty"`
 }
 
 type TeamTravelAgencyPartner struct {
-	RelationshipID uint      `json:"relationship_id"`
-	TravelTenantID uint      `json:"travel_tenant_id"`
-	TravelName     string    `json:"travel_name"`
-	TravelCode     string    `json:"travel_code"`
-	Contact        string    `json:"contact"`
-	Phone          string    `json:"phone"`
-	Status         string    `json:"status"`
-	CreatedAt      time.Time `json:"created_at"`
+	RelationshipID uint       `json:"relationship_id"`
+	TravelTenantID uint       `json:"travel_tenant_id"`
+	TravelName     string     `json:"travel_name"`
+	TravelCode     string     `json:"travel_code"`
+	Contact        string     `json:"contact"`
+	Phone          string     `json:"phone"`
+	Status         string     `json:"status"`
+	CreatedAt      *time.Time `json:"created_at,omitempty"`
 }
 
 func (s *TeamService) SearchSupplierPartner(travelTenantID uint, systemCode string) (*TeamSupplierPartner, error) {
@@ -89,7 +89,7 @@ func (s *TeamService) SearchSupplierPartner(travelTenantID uint, systemCode stri
 	if err := model.DB.Where("agent_tenant_id = ? AND supplier_tenant_id = ?", travelTenantID, supplier.ID).First(&relationship).Error; err == nil {
 		view.RelationshipID = relationship.ID
 		view.Status = relationship.TravelStatus
-		view.CreatedAt = relationship.CreatedAt
+		view.CreatedAt = relationship.TravelAppliedAt
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
@@ -120,7 +120,7 @@ func (s *TeamService) ListSupplierPartners(travelTenantID uint) ([]TeamSupplierP
 		rows = append(rows, TeamSupplierPartner{
 			RelationshipID: relationship.ID, SupplierTenantID: relationship.SupplierTenantID,
 			SupplierName: relationship.SupplierTenant.Name, SupplierCode: relationship.SupplierTenant.SystemCode,
-			Contact: relationship.SupplierTenant.Contact, Status: relationship.TravelStatus, CreatedAt: relationship.CreatedAt,
+			Contact: relationship.SupplierTenant.Contact, Status: relationship.TravelStatus, CreatedAt: relationship.TravelAppliedAt,
 		})
 	}
 	return rows, nil
@@ -143,7 +143,7 @@ func (s *TeamService) ListTravelAgencyPartners(supplierTenantID uint) ([]TeamTra
 			RelationshipID: relationship.ID, TravelTenantID: relationship.AgentTenantID,
 			TravelName: relationship.AgentTenant.Name, TravelCode: relationship.AgentTenant.SystemCode,
 			Contact: relationship.AgentTenant.Contact, Phone: relationship.AgentTenant.Phone,
-			Status: relationship.TravelStatus, CreatedAt: relationship.CreatedAt,
+			Status: relationship.TravelStatus, CreatedAt: relationship.TravelAppliedAt,
 		})
 	}
 	return rows, nil

@@ -31,9 +31,11 @@ func (s *DistributionService) ApplyAgent(agentTenantID uint, supplierSystemCode 
 
 func applySupplierRelationship(agentTenantID uint, supplierSystemCode, agentCapability string, actorID uint, actorRole, auditAction string) error {
 	statusColumn := "status"
+	appliedAtColumn := "distribution_applied_at"
 	applicationName := "distribution"
 	if agentCapability == "travel_agency" {
 		statusColumn = "travel_status"
+		appliedAtColumn = "travel_applied_at"
 		applicationName = "travel partnership"
 	}
 	return model.Write(func(tx *gorm.DB) error {
@@ -57,6 +59,7 @@ func applySupplierRelationship(agentTenantID uint, supplierSystemCode, agentCapa
 		var relationship model.DistributorRelationship
 		err := tx.Where("agent_tenant_id = ? AND supplier_tenant_id = ?", agentTenantID, supplier.ID).First(&relationship).Error
 		before := "{}"
+		appliedAt := time.Now()
 		if err == nil {
 			currentStatus := relationship.Status
 			if statusColumn == "travel_status" {
@@ -69,7 +72,7 @@ func applySupplierRelationship(agentTenantID uint, supplierSystemCode, agentCapa
 				return fmt.Errorf("%s relationship is already active", applicationName)
 			default:
 				before = fmt.Sprintf(`{"status":%q}`, currentStatus)
-				if err := tx.Model(&relationship).Update(statusColumn, "pending").Error; err != nil {
+				if err := tx.Model(&relationship).Updates(map[string]interface{}{statusColumn: "pending", appliedAtColumn: appliedAt}).Error; err != nil {
 					return err
 				}
 			}
@@ -79,8 +82,10 @@ func applySupplierRelationship(agentTenantID uint, supplierSystemCode, agentCapa
 			relationship = model.DistributorRelationship{AgentTenantID: agentTenantID, SupplierTenantID: supplier.ID, Status: "none", TravelStatus: "none", AgentLevel: "standard"}
 			if statusColumn == "travel_status" {
 				relationship.TravelStatus = "pending"
+				relationship.TravelAppliedAt = &appliedAt
 			} else {
 				relationship.Status = "pending"
+				relationship.DistributionAppliedAt = &appliedAt
 			}
 			if err := tx.Create(&relationship).Error; err != nil {
 				return err
@@ -135,11 +140,15 @@ func (s *DistributionService) ListMyAgents(supplierTenantID uint) ([]map[string]
 		if err := requireActiveTenantCapability(model.DB, relationship.AgentTenantID, "distributor"); err != nil {
 			continue
 		}
+		appliedAt := relationship.CreatedAt
+		if relationship.DistributionAppliedAt != nil {
+			appliedAt = *relationship.DistributionAppliedAt
+		}
 		result = append(result, map[string]interface{}{
 			"id": relationship.ID, "agent_tenant_id": relationship.AgentTenantID,
 			"agent_name": relationship.AgentTenant.Name, "agent_code": relationship.AgentTenant.SystemCode,
 			"agent_contact": relationship.AgentTenant.Contact, "status": relationship.Status,
-			"agent_level": relationship.AgentLevel, "created_at": relationship.CreatedAt.Format("2006-01-02 15:04"),
+			"agent_level": relationship.AgentLevel, "created_at": appliedAt.Format("2006-01-02 15:04"),
 		})
 	}
 	return result, nil

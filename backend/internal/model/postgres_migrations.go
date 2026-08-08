@@ -8,11 +8,17 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 72
+const CurrentPostgresSchemaVersion = 73
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
 func runPostgresMigrations(db *gorm.DB) error {
+	previousSchemaVersion := 0
+	if db.Migrator().HasTable(&SchemaMigration{}) {
+		if err := db.Model(&SchemaMigration{}).Select("COALESCE(MAX(version), 0)").Scan(&previousSchemaVersion).Error; err != nil {
+			return fmt.Errorf("read current PostgreSQL schema version: %w", err)
+		}
+	}
 	hadSettlementSource := db.Migrator().HasColumn(&SettlementLine{}, "Source")
 	hadTravelRelationshipStatus := db.Migrator().HasColumn(&DistributorRelationship{}, "TravelStatus")
 	models := []interface{}{
@@ -40,17 +46,75 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if !hadTravelRelationshipStatus {
 		if err := db.Exec(`
 			UPDATE distributor_relationships AS relationship
-			SET travel_status = relationship.status
-			WHERE relationship.status != 'none'
-			  AND EXISTS (
-				SELECT 1 FROM tenant_capabilities AS capability
-				WHERE capability.tenant_id = relationship.agent_tenant_id
-				  AND capability.capability = 'travel_agency'
-				  AND capability.status = 'active'
-			  )
+			SET travel_status = CASE
+				WHEN EXISTS (
+					SELECT 1 FROM travel_contracts AS contract
+					WHERE contract.travel_tenant_id = relationship.agent_tenant_id
+					  AND contract.supplier_tenant_id = relationship.supplier_tenant_id
+					  AND contract.status = 'active'
+					  AND contract.deleted_at IS NULL
+				) THEN 'active'
+				ELSE 'suspended'
+			END
+			WHERE EXISTS (
+				SELECT 1 FROM travel_contracts AS contract
+				WHERE contract.travel_tenant_id = relationship.agent_tenant_id
+				  AND contract.supplier_tenant_id = relationship.supplier_tenant_id
+				  AND contract.deleted_at IS NULL
+			)
 		`).Error; err != nil {
 			return fmt.Errorf("backfill travel partnership status: %w", err)
 		}
+	}
+	if previousSchemaVersion == 72 {
+		if err := db.Exec(`
+			UPDATE distributor_relationships AS relationship
+			SET travel_status = 'none', travel_applied_at = NULL
+			WHERE relationship.travel_status != 'none'
+			  AND NOT EXISTS (
+				SELECT 1 FROM travel_contracts AS contract
+				WHERE contract.travel_tenant_id = relationship.agent_tenant_id
+				  AND contract.supplier_tenant_id = relationship.supplier_tenant_id
+				  AND contract.deleted_at IS NULL
+			  )
+			  AND NOT EXISTS (
+				SELECT 1 FROM audit_logs AS audit
+				WHERE audit.target_type = 'supplier_relationship'
+				  AND audit.target_id = relationship.id
+				  AND audit.action IN ('team.partner.apply', 'team.partner.audit')
+				  AND audit.deleted_at IS NULL
+			  )
+		`).Error; err != nil {
+			return fmt.Errorf("repair inferred travel partnerships: %w", err)
+		}
+	}
+	if err := db.Exec(`
+		UPDATE distributor_relationships
+		SET distribution_applied_at = created_at
+		WHERE status != 'none' AND distribution_applied_at IS NULL
+	`).Error; err != nil {
+		return fmt.Errorf("backfill distribution partnership application time: %w", err)
+	}
+	if err := db.Exec(`
+		UPDATE distributor_relationships AS relationship
+		SET travel_applied_at = COALESCE(
+			(
+				SELECT MIN(audit.created_at) FROM audit_logs AS audit
+				WHERE audit.target_type = 'supplier_relationship'
+				  AND audit.target_id = relationship.id
+				  AND audit.action = 'team.partner.apply'
+				  AND audit.deleted_at IS NULL
+			),
+			(
+				SELECT MIN(contract.created_at) FROM travel_contracts AS contract
+				WHERE contract.travel_tenant_id = relationship.agent_tenant_id
+				  AND contract.supplier_tenant_id = relationship.supplier_tenant_id
+				  AND contract.deleted_at IS NULL
+			)
+		)
+		WHERE travel_status != 'none' AND travel_applied_at IS NULL
+	`).Error; err != nil {
+		return fmt.Errorf("backfill travel partnership application time: %w", err)
 	}
 	if err := db.Model(&ChannelAccount{}).Where("status = ?", "sandbox").Update("environment", "sandbox").Error; err != nil {
 		return fmt.Errorf("backfill channel environment: %w", err)
@@ -93,7 +157,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "separate travel and distribution partnerships",
+		Name:      "repair inferred travel partnerships and timestamps",
 		AppliedAt: time.Now(),
 	}).Error
 }

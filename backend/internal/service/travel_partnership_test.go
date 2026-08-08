@@ -38,7 +38,7 @@ func TestPureTravelAgencyCanEstablishSupplierPartnership(t *testing.T) {
 		t.Fatalf("pure travel agency application failed: %v", err)
 	}
 	partners, err := team.ListSupplierPartners(travelAgency.ID)
-	if err != nil || len(partners) != 1 || partners[0].Status != "pending" {
+	if err != nil || len(partners) != 1 || partners[0].Status != "pending" || partners[0].CreatedAt == nil {
 		t.Fatalf("travel supplier partners=%+v err=%v", partners, err)
 	}
 	agencies, err := team.ListTravelAgencyPartners(supplier.ID)
@@ -119,5 +119,8 @@ func TestTravelPartnershipDoesNotAuthorizeDistribution(t *testing.T) {
 	}
 	if relationship.TravelStatus != "active" || relationship.Status != "pending" {
 		t.Fatalf("independent relationship statuses not preserved: %+v", relationship)
+	}
+	if relationship.TravelAppliedAt == nil || relationship.DistributionAppliedAt == nil || relationship.TravelAppliedAt.Equal(*relationship.DistributionAppliedAt) {
+		t.Fatalf("independent relationship application times not preserved: %+v", relationship)
 	}
 }
