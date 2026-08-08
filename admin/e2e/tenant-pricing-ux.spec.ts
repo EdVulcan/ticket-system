@@ -62,7 +62,7 @@ test('供应商按旅行社和产品名称维护合同结算价', async ({ page 
   await page.getByRole('option', { name: '青云景区团队票' }).click()
   await dialog.getByRole('spinbutton', { name: '结算价（元）' }).fill('88')
   await dialog.getByRole('spinbutton', { name: '每单上限（0不限）' }).fill('50')
-  await expect(dialog.getByText('保存后同时作为该旅行社的供货结算价')).toBeVisible()
+  await expect(dialog.getByText('选择当前景区自己的已上架票种')).toBeVisible()
   await dialog.getByRole('button', { name: '保存' }).click()
   await expect(page.getByText('旅行社合同已创建')).toBeVisible()
 })
