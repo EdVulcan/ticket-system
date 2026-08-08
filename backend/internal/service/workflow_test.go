@@ -1646,13 +1646,17 @@ func TestSupplierControlsTravelContractProductPrices(t *testing.T) {
 		if err := tx.Create(&rule).Error; err != nil {
 			return err
 		}
-		product = model.Product{TenantID: supplier.ID, ScenicAreaID: area.ID, RuleID: rule.ID, Name: "Team Ticket", Status: "online", IsDistributable: true, Price: 120, CodeMode: "ticket", ValidityType: "date", StockType: "unlimited"}
+		product = model.Product{TenantID: supplier.ID, ScenicAreaID: area.ID, RuleID: rule.ID, Name: "Team Ticket", Status: "online", IsDistributable: false, Price: 120, CodeMode: "ticket", ValidityType: "date", StockType: "unlimited"}
 		return tx.Create(&product).Error
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	team := &TeamService{}
+	contractProducts, err := team.ListContractProducts(supplier.ID)
+	if err != nil || len(contractProducts) != 1 || contractProducts[0].ID != product.ID {
+		t.Fatalf("team contract products=%+v err=%v", contractProducts, err)
+	}
 	input := TravelContractInput{
 		TravelTenantID: travel.ID, ContractNo: "SUPPLIER-PRICED-1", Status: "active", SettlementDays: 30,
 		CreditLimitCents: 500000, PriceRules: []TeamPriceRule{{ProductID: product.ID, PriceCents: 8800, MaxQuantity: 100}},

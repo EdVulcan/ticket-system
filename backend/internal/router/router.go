@@ -287,6 +287,7 @@ func InitRouter(r *gin.Engine) {
 		teamGroup.GET("/partners/travel-agencies", middleware.RequireTenantPermission(authz.PermissionTeamsRead), middleware.RequireAnyTenantCapability("supplier"), teamController.ListTravelAgencyPartners)
 		teamGroup.POST("/partners/travel-agencies/:id/audit", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), middleware.RequireAnyTenantCapability("supplier"), teamController.AuditTravelAgencyPartner)
 		teamGroup.GET("/contract-partners", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListContractPartners)
+		teamGroup.GET("/contract-products", middleware.RequireTenantPermission(authz.PermissionTeamsRead), middleware.RequireAnyTenantCapability("supplier"), teamController.ListContractProducts)
 		teamGroup.GET("/contracts", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListContracts)
 		teamGroup.POST("/contracts", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.CreateContract)
 		teamGroup.PUT("/contracts/:id", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), teamController.UpdateContract)

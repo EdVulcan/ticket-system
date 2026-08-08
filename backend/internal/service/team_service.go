@@ -70,6 +70,37 @@ type TeamTravelAgencyPartner struct {
 	CreatedAt      *time.Time `json:"created_at,omitempty"`
 }
 
+type TeamContractProduct struct {
+	ID             uint    `json:"id"`
+	Name           string  `json:"name"`
+	Type           string  `json:"type"`
+	Price          float64 `json:"price"`
+	ScenicAreaID   uint    `json:"scenic_area_id"`
+	ScenicAreaName string  `json:"scenic_area_name"`
+}
+
+func eligibleTeamContractProductsTx(tx *gorm.DB, supplierTenantID uint) *gorm.DB {
+	return tx.Model(&model.Product{}).
+		Where("products.tenant_id = ?", supplierTenantID).
+		Where("products.status = ?", "online").
+		Where("products.source_product_id = 0 AND products.product_offer_id = 0").
+		Where("products.code_mode = ?", "ticket").
+		Where("products.scenic_area_id > 0")
+}
+
+func (s *TeamService) ListContractProducts(supplierTenantID uint) ([]TeamContractProduct, error) {
+	if err := requireActiveTenantCapability(model.DB, supplierTenantID, "supplier"); err != nil {
+		return nil, err
+	}
+	var products []TeamContractProduct
+	err := eligibleTeamContractProductsTx(model.DB, supplierTenantID).
+		Select("products.id, products.name, products.type, products.price, products.scenic_area_id, scenic_areas.name AS scenic_area_name").
+		Joins("JOIN scenic_areas ON scenic_areas.id = products.scenic_area_id AND scenic_areas.tenant_id = products.tenant_id AND scenic_areas.status = ? AND scenic_areas.deleted_at IS NULL", "active").
+		Order("scenic_areas.name, products.name, products.id").
+		Scan(&products).Error
+	return products, err
+}
+
 func (s *TeamService) SearchSupplierPartner(travelTenantID uint, systemCode string) (*TeamSupplierPartner, error) {
 	if err := requireActiveTenantCapability(model.DB, travelTenantID, "travel_agency"); err != nil {
 		return nil, err
@@ -177,8 +208,10 @@ func normalizeTeamPriceRulesTx(tx *gorm.DB, supplierTenantID uint, rules []TeamP
 			return nil, "", errors.New("contract product cannot be repeated")
 		}
 		var product model.Product
-		if err := tx.Select("id", "name", "scenic_area_id").Where("id = ? AND tenant_id = ? AND status = ? AND is_distributable = ?", rule.ProductID, supplierTenantID, "online", true).First(&product).Error; err != nil {
-			return nil, "", fmt.Errorf("contract product %d is unavailable", rule.ProductID)
+		if err := eligibleTeamContractProductsTx(tx, supplierTenantID).
+			Select("products.id", "products.name", "products.scenic_area_id").
+			Where("products.id = ?", rule.ProductID).First(&product).Error; err != nil {
+			return nil, "", fmt.Errorf("合同产品 %d 当前不可用", rule.ProductID)
 		}
 		seen[rule.ProductID] = struct{}{}
 		var area model.ScenicArea
@@ -983,14 +1016,12 @@ func (s *TeamService) CreateContractOrder(tenantID, groupID, operatorID uint, in
 			return errors.New("团队人数超过合同产品每单上限")
 		}
 		var product model.Product
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Where(
-			"id = ? AND tenant_id = ? AND scenic_area_id = ? AND status = ? AND is_distributable = ?",
-			input.ProductID, group.SupplierTenantID, group.ScenicAreaID, "online", true,
-		).First(&product).Error; err != nil {
+		if err := eligibleTeamContractProductsTx(tx, group.SupplierTenantID).
+			Clauses(clause.Locking{Strength: "UPDATE"}).
+			Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").
+			Where("products.id = ? AND products.scenic_area_id = ?", input.ProductID, group.ScenicAreaID).
+			First(&product).Error; err != nil {
 			return errors.New("合同产品当前不可售或不属于团队景区")
-		}
-		if product.CodeMode == "order" {
-			return errors.New("团队产品必须按游客生成独立票码")
 		}
 		if err := requireActiveTenantCapability(tx, product.TenantID, "supplier"); err != nil {
 			return errors.New("景区供应商当前不可用")

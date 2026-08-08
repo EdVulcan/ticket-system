@@ -126,6 +126,14 @@ func (c *TeamController) ListContractPartners(ctx *gin.Context) {
 	}
 	ctx.JSON(http.StatusOK, gin.H{"data": rows})
 }
+func (c *TeamController) ListContractProducts(ctx *gin.Context) {
+	rows, err := c.Service.ListContractProducts(ctx.GetUint("tenant_id"))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": rows})
+}
 func (c *TeamController) ListAgents(ctx *gin.Context) {
 	rows, err := c.Service.ListAgents(ctx.GetUint("tenant_id"))
 	if err != nil {

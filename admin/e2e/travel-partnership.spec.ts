@@ -73,6 +73,7 @@ test('供应商审核旅行社后可直接创建合同', async ({ page }) => {
   await mockJSON(page, '**/api/v1/teams/contract-partners', { data: [{ tenant_id: 2, name: '示例旅行社', system_code: 'TRAVEL001', relationship_id: 8 }] })
   await mockJSON(page, '**/api/v1/products?*', { data: [{ id: 3, name: '团队票', status: 'online', is_distributable: true }], total: 1 })
 
+  await mockJSON(page, '**/api/v1/teams/contract-products', { data: [{ id: 3, name: '团队票', scenic_area_id: 1, scenic_area_name: '示例景区' }] })
   await openTeamWorkspace(page, 'supplier')
   await page.getByRole('tab', { name: '合作旅行社' }).click()
   await expect(page.getByText('示例旅行社')).toBeVisible()

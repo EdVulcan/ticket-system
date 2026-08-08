@@ -194,11 +194,12 @@
         </div>
         <el-form-item label="合同状态"><el-radio-group v-model="contractForm.status"><el-radio-button label="active">有效</el-radio-button><el-radio-button label="suspended">暂停</el-radio-button></el-radio-group></el-form-item>
         <div class="mb-2 flex items-center justify-between">
-          <div><div class="font-medium text-gray-900">产品结算价</div><div class="text-xs text-gray-500">保存后同时作为该旅行社的供货结算价；已产生订单仍保留原价格快照。</div></div>
-          <el-button size="small" :icon="Plus" @click="addContractPriceRule">添加产品</el-button>
+          <div><div class="font-medium text-gray-900">产品结算价</div><div class="text-xs text-gray-500">选择当前景区自己的已上架票种，与“允许分销商代理销售”设置无关；已产生订单仍保留原价格快照。</div></div>
+          <el-button size="small" :icon="Plus" :disabled="!contractProducts.length" @click="addContractPriceRule">添加产品</el-button>
         </div>
+        <el-alert v-if="!contractProducts.length" title="暂无可用于团队合同的票种，请先发布已上架且按人出票的票种" type="warning" :closable="false" show-icon class="mb-3" />
         <div v-for="(rule, index) in contractPriceRules" :key="index" class="mb-3 grid grid-cols-[1fr_150px_150px_40px] items-end gap-3 rounded border border-gray-200 p-3">
-          <el-form-item label="产品" class="mb-0"><el-select v-model="rule.product_id" filterable class="w-full" placeholder="选择产品"><el-option v-for="product in contractProducts" :key="product.id" :label="product.name" :value="product.id" /></el-select></el-form-item>
+          <el-form-item label="产品" class="mb-0"><el-select v-model="rule.product_id" filterable class="w-full" placeholder="选择产品"><el-option v-for="product in contractProducts" :key="product.id" :label="`${product.scenic_area_name} · ${product.name} · ¥${Number(product.price || 0).toFixed(2)}`" :value="product.id" /></el-select></el-form-item>
           <el-form-item label="结算价（元）" class="mb-0"><el-input-number v-model="rule.price_yuan" :min="0.01" :precision="2" :controls="false" class="w-full" /></el-form-item>
           <el-form-item label="每单上限（0不限）" class="mb-0"><el-input-number v-model="rule.max_quantity" :min="0" :precision="0" class="w-full" /></el-form-item>
           <el-button :icon="Delete" circle title="删除这项产品价格" @click="contractPriceRules.splice(index, 1)" />
@@ -661,10 +662,10 @@ const contractForm = reactive<{ id: number; travel_tenant_id: number | null; con
 const loadContractFormOptions = async () => {
   const [partnersResponse, productsResponse] = await Promise.all([
     request.get('/teams/contract-partners'),
-    request.get('/products', { params: { page: 1, page_size: 100 } }),
+    request.get('/teams/contract-products'),
   ])
   contractPartners.value = partnersResponse.data.data || []
-  contractProducts.value = (productsResponse.data.data || []).filter((product: any) => product.status === 'online' && product.is_distributable)
+  contractProducts.value = productsResponse.data.data || []
 }
 const addContractPriceRule = () => contractPriceRules.value.push({ product_id: null, price_yuan: 0, max_quantity: 0 })
 const openContractDialog = async (row?: any, presetTravelTenantID?: number) => {
@@ -677,7 +678,7 @@ const openContractDialog = async (row?: any, presetTravelTenantID?: number) => {
     })
     contractCreditYuan.value = Number(row?.credit_limit_cents || 0) / 100
     contractPriceRules.value = (row?.price_rules || []).map((rule: any) => ({ product_id: Number(rule.product_id) || null, price_yuan: Number(rule.price_cents || 0) / 100, max_quantity: Number(rule.max_quantity || 0) }))
-    if (!contractPriceRules.value.length) addContractPriceRule()
+    if (!contractPriceRules.value.length && contractProducts.value.length) addContractPriceRule()
     contractDialog.value = true
   } catch (e: any) { ElMessage.error(e.response?.data?.error || '合同可选项加载失败') }
 }

@@ -16,6 +16,9 @@ async function json(route: Route, body: unknown, status = 200) {
 }
 
 async function prepareSupplier(page: Page) {
+  await page.route('**/api/v1/teams/contract-products', route => json(route, { data: [
+    { id: 101, name: '青云景区团队票', scenic_area_id: 11, scenic_area_name: '青云景区' },
+  ] }))
   await page.addInitScript(user => {
     localStorage.setItem('token', 'supplier-token')
     localStorage.setItem('user', JSON.stringify(user))
