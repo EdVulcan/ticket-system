@@ -172,15 +172,10 @@ func (s *CtripProtocolService) Handle(raw []byte, remoteIP string) ([]byte, erro
 	if err := json.Unmarshal(plainBody, &sequence); err != nil || strings.TrimSpace(sequence.SequenceID) == "" {
 		return marshalCtripHeaderOnly("0001", "缺少处理批次流水号"), nil
 	}
-	// Ctrip's inbound order protocol signs the decrypted business JSON. Outbound
-	// price and inventory requests use the encrypted body and remain unchanged.
-	// The current API mode instead signs accountId + encrypted body + sequenceId + signKey.
+	// Ctrip signs the encrypted body exactly as it appears in the envelope.
 	provided := strings.ToLower(strings.TrimSpace(envelope.Header.Sign))
-	legacyExpected := ctripSignature(envelope.Header, string(plainBody), signKey)
-	apiExpected := ctripAPISignature(envelope.Header.AccountID, envelope.Body, sequence.SequenceID, signKey)
-	legacyValid := len(legacyExpected) == len(provided) && subtle.ConstantTimeCompare([]byte(legacyExpected), []byte(provided)) == 1
-	apiValid := len(apiExpected) == len(provided) && subtle.ConstantTimeCompare([]byte(apiExpected), []byte(provided)) == 1
-	if !legacyValid && !apiValid {
+	expected := ctripSignature(envelope.Header, envelope.Body, signKey)
+	if len(expected) != len(provided) || subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) != 1 {
 		if logger.Log != nil {
 			logger.Log.Warn("ctrip request signature mismatch",
 				zap.String("account_id", envelope.Header.AccountID),
@@ -290,12 +285,6 @@ func loadCtripAccount(accountID string) (*model.ChannelAccount, string, CtripCha
 func ctripSignature(header ctripHeader, body, signKey string) string {
 	value := header.AccountID + header.ServiceName + header.RequestTime + body + header.Version + signKey
 	sum := md5.Sum([]byte(value)) // Ctrip's published protocol requires MD5 for compatibility.
-	return hex.EncodeToString(sum[:])
-}
-
-func ctripAPISignature(accountID, encryptedBody, sequenceID, signKey string) string {
-	value := accountID + encryptedBody + sequenceID + signKey
-	sum := md5.Sum([]byte(value))
 	return hex.EncodeToString(sum[:])
 }
 
