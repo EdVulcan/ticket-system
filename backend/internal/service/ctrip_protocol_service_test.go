@@ -115,7 +115,7 @@ func TestCtripPreOrderPaymentQueryAndCancellation(t *testing.T) {
 	wrongPriceBody["sequenceId"] = "20260804-price-mismatch"
 	wrongPriceBody["otaOrderId"] = "CTRIP-ORDER-PRICE-MISMATCH"
 	wrongPriceBody["items"].([]interface{})[0].(map[string]interface{})["salePrice"] = 98.5
-	wrongPriceRequest := buildCtripTestRequest(t, accountID, signKey, aesKey, aesIV, "CreatePreOrder", wrongPriceBody)
+	wrongPriceRequest := buildCtripAPITestRequest(t, accountID, signKey, aesKey, aesIV, "CreatePreOrder", wrongPriceBody)
 	wrongPriceResponse, err := service.Handle(wrongPriceRequest, "127.0.0.1")
 	if err != nil {
 		t.Fatal(err)
@@ -266,6 +266,33 @@ func buildCtripTestRequest(t *testing.T, accountID, signKey, aesKey, aesIV, serv
 	}
 	header := ctripHeader{AccountID: accountID, ServiceName: serviceName, RequestTime: time.Now().In(location).Format("2006-01-02 15:04:05"), Version: "1.0"}
 	header.Sign = ctripSignature(header, string(plain), signKey)
+	data, err := json.Marshal(ctripEnvelope{Header: header, Body: encrypted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func buildCtripAPITestRequest(t *testing.T, accountID, signKey, aesKey, aesIV, serviceName string, body interface{}) []byte {
+	t.Helper()
+	plain, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := encryptCtripBody(plain, aesKey, aesIV)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sequence ctripSequence
+	if err := json.Unmarshal(plain, &sequence); err != nil {
+		t.Fatal(err)
+	}
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		location = time.Local
+	}
+	header := ctripHeader{AccountID: accountID, ServiceName: serviceName, RequestTime: time.Now().In(location).Format("2006-01-02 15:04:05"), Version: "1.0"}
+	header.Sign = ctripAPISignature(accountID, encrypted, sequence.SequenceID, signKey)
 	data, err := json.Marshal(ctripEnvelope{Header: header, Body: encrypted})
 	if err != nil {
 		t.Fatal(err)

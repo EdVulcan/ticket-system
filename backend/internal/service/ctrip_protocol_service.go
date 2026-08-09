@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/md5"
@@ -14,9 +13,7 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"ticket-backend/internal/config"
@@ -171,25 +168,29 @@ func (s *CtripProtocolService) Handle(raw []byte, remoteIP string) ([]byte, erro
 	if err != nil {
 		return marshalCtripHeaderOnly("0001", "报文解密失败"), nil
 	}
+	var sequence ctripSequence
+	if err := json.Unmarshal(plainBody, &sequence); err != nil || strings.TrimSpace(sequence.SequenceID) == "" {
+		return marshalCtripHeaderOnly("0001", "缺少处理批次流水号"), nil
+	}
 	// Ctrip's inbound order protocol signs the decrypted business JSON. Outbound
 	// price and inventory requests use the encrypted body and remain unchanged.
-	expected := ctripSignature(envelope.Header, string(plainBody), signKey)
-	if len(expected) != len(envelope.Header.Sign) || subtle.ConstantTimeCompare([]byte(expected), []byte(strings.ToLower(envelope.Header.Sign))) != 1 {
+	// The current API mode instead signs accountId + encrypted body + sequenceId + signKey.
+	provided := strings.ToLower(strings.TrimSpace(envelope.Header.Sign))
+	legacyExpected := ctripSignature(envelope.Header, string(plainBody), signKey)
+	apiExpected := ctripAPISignature(envelope.Header.AccountID, envelope.Body, sequence.SequenceID, signKey)
+	legacyValid := len(legacyExpected) == len(provided) && subtle.ConstantTimeCompare([]byte(legacyExpected), []byte(provided)) == 1
+	apiValid := len(apiExpected) == len(provided) && subtle.ConstantTimeCompare([]byte(apiExpected), []byte(provided)) == 1
+	if !legacyValid && !apiValid {
 		if logger.Log != nil {
 			logger.Log.Warn("ctrip request signature mismatch",
 				zap.String("account_id", envelope.Header.AccountID),
 				zap.String("service_name", envelope.Header.ServiceName),
-				zap.String("matched_variant", ctripSignatureVariant(account.Environment == "sandbox", envelope.Header, envelope.Body, plainBody, signKey, config.AESKey, config.AESIV)),
 				zap.Int("encrypted_body_length", len(envelope.Body)),
 				zap.Int("plain_body_length", len(plainBody)),
 				zap.Int("signature_length", len(envelope.Header.Sign)),
 			)
 		}
 		return marshalCtripHeaderOnly("0002", "签名错误"), nil
-	}
-	var sequence ctripSequence
-	if err := json.Unmarshal(plainBody, &sequence); err != nil || strings.TrimSpace(sequence.SequenceID) == "" {
-		return marshalCtripHeaderOnly("0001", "缺少处理批次流水号"), nil
 	}
 
 	lock := ctripRequestLock(account.ID, sequence.SequenceID)
@@ -292,105 +293,10 @@ func ctripSignature(header ctripHeader, body, signKey string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func ctripSignatureVariant(sandbox bool, header ctripHeader, encryptedBody string, plainBody []byte, signKey, aesKey, aesIV string) string {
-	if !sandbox {
-		return "not_checked"
-	}
-	provided := strings.ToLower(strings.TrimSpace(header.Sign))
-	compactBody := append([]byte(nil), plainBody...)
-	if compacted := new(bytes.Buffer); json.Compact(compacted, plainBody) == nil {
-		compactBody = compacted.Bytes()
-	}
-	bodyVariants := []struct {
-		name  string
-		value string
-	}{
-		{"plain", string(plainBody)},
-		{"plain_trimmed", strings.TrimSpace(string(plainBody))},
-		{"plain_compact", string(compactBody)},
-		{"encrypted", encryptedBody},
-		{"plain_quoted", strconv.Quote(string(plainBody))},
-		{"plain_urlencoded", url.QueryEscape(string(plainBody))},
-	}
-	keyVariants := []struct {
-		name  string
-		value string
-	}{
-		{"sign_key", signKey},
-		{"sign_key_upper", strings.ToUpper(signKey)},
-		{"aes_key", aesKey},
-		{"aes_iv", aesIV},
-	}
-	accountVariants := []struct {
-		name  string
-		value string
-	}{
-		{"account", header.AccountID},
-		{"account_trimmed", strings.TrimSpace(header.AccountID)},
-		{"account_upper", strings.ToUpper(header.AccountID)},
-		{"account_lower", strings.ToLower(header.AccountID)},
-	}
-	for _, body := range bodyVariants {
-		for _, key := range keyVariants {
-			for _, account := range accountVariants {
-				candidateHeader := header
-				candidateHeader.AccountID = account.value
-				candidateHeader.ServiceName = strings.TrimSpace(candidateHeader.ServiceName)
-				candidateHeader.RequestTime = strings.TrimSpace(candidateHeader.RequestTime)
-				candidateHeader.Version = strings.TrimSpace(candidateHeader.Version)
-				if ctripSignature(candidateHeader, body.value, key.value) == provided {
-					return body.name + "/" + key.name + "/" + account.name
-				}
-			}
-		}
-	}
-	for _, body := range bodyVariants {
-		for _, key := range keyVariants {
-			parts := []struct {
-				name  string
-				value string
-			}{
-				{"account", header.AccountID},
-				{"service", header.ServiceName},
-				{"time", header.RequestTime},
-				{"body_" + body.name, body.value},
-				{"version", header.Version},
-				{"key_" + key.name, key.value},
-			}
-			indexes := []int{0, 1, 2, 3, 4, 5}
-			var search func(int) string
-			search = func(position int) string {
-				if position == len(indexes) {
-					var value strings.Builder
-					var order strings.Builder
-					for _, index := range indexes {
-						value.WriteString(parts[index].value)
-						if order.Len() > 0 {
-							order.WriteByte('-')
-						}
-						order.WriteString(parts[index].name)
-					}
-					sum := md5.Sum([]byte(value.String()))
-					if hex.EncodeToString(sum[:]) == provided {
-						return "permutation/" + order.String()
-					}
-					return ""
-				}
-				for index := position; index < len(indexes); index++ {
-					indexes[position], indexes[index] = indexes[index], indexes[position]
-					if matched := search(position + 1); matched != "" {
-						return matched
-					}
-					indexes[position], indexes[index] = indexes[index], indexes[position]
-				}
-				return ""
-			}
-			if matched := search(0); matched != "" {
-				return matched
-			}
-		}
-	}
-	return "none"
+func ctripAPISignature(accountID, encryptedBody, sequenceID, signKey string) string {
+	value := accountID + encryptedBody + sequenceID + signKey
+	sum := md5.Sum([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 func ctripRequestTimeValid(value string, now time.Time) bool {
