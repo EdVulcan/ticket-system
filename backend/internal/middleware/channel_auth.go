@@ -111,7 +111,7 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 				return err
 			}
 			var existing model.ChannelRequest
-			err := tx.Where("channel_account_id = ? AND request_id = ?", account.ID, requestID).First(&existing).Error
+			err := tx.Where("channel_account_id = ? AND endpoint = ? AND request_id = ?", account.ID, ctx.Request.URL.Path, requestID).First(&existing).Error
 			if err == nil {
 				if existing.BodyHash != hex.EncodeToString(bodyHash[:]) || existing.Endpoint != ctx.Request.URL.Path || (existing.Nonce != "" && existing.Nonce != nonce) {
 					return errors.New("channel request id reused with different data")
@@ -195,7 +195,7 @@ func ChannelAuthMiddleware() gin.HandlerFunc {
 		}
 		_ = model.Write(func(tx *gorm.DB) error {
 			query := tx.Model(&model.ChannelRequest{}).
-				Where("channel_account_id = ? AND request_id = ? AND status = ?", account.ID, requestID, "processing")
+				Where("channel_account_id = ? AND endpoint = ? AND request_id = ? AND status = ?", account.ID, ctx.Request.URL.Path, requestID, "processing")
 			if requestLeaseAt != nil {
 				query = query.Where("locked_at = ?", *requestLeaseAt)
 			}

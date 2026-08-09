@@ -61,14 +61,14 @@ type CtripOutboundTask struct {
 	CompletedAt             *time.Time `json:"completed_at,omitempty"`
 }
 
-// ChannelRequest records the first body hash for an external request id. A
-// retry with the same id but different content is rejected explicitly.
+// ChannelRequest records the first body hash for an external endpoint and
+// request id. A retry in the same endpoint with different content is rejected.
 type ChannelRequest struct {
 	Base
 	ChannelAccountID uint       `gorm:"uniqueIndex:idx_channel_request,priority:1;not null" json:"channel_account_id"`
-	RequestID        string     `gorm:"size:120;uniqueIndex:idx_channel_request,priority:2;not null" json:"request_id"`
+	RequestID        string     `gorm:"size:120;uniqueIndex:idx_channel_request,priority:3;not null" json:"request_id"`
 	Nonce            string     `gorm:"size:120" json:"-"`
-	Endpoint         string     `gorm:"size:120;not null" json:"endpoint"`
+	Endpoint         string     `gorm:"size:120;uniqueIndex:idx_channel_request,priority:2;not null" json:"endpoint"`
 	BodyHash         string     `gorm:"size:64;not null" json:"body_hash"`
 	ResponseJSON     string     `gorm:"type:text" json:"response_json,omitempty"`
 	Status           string     `gorm:"size:20;not null;default:'processing'" json:"status"` // processing, completed, failed, retryable

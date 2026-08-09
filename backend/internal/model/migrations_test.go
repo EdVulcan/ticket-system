@@ -39,6 +39,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		{&Payment{}, "idx_payment_idempotency"},
 		{&Refund{}, "idx_refund_allocation_sequence"},
 		{&PlatformUser{}, "idx_platform_users_initial_admin"},
+		{&ChannelRequest{}, "idx_channel_request"},
 		{&CtripOrderLink{}, "idx_ctrip_order_account_ota"},
 		{&TravelContract{}, "idx_travel_contract_scope_no"},
 		{&TourGroup{}, "idx_team_active_fulfillment_group"},
@@ -47,6 +48,13 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		if !db.Migrator().HasIndex(index.model, index.name) {
 			t.Fatalf("index %s is missing", index.name)
 		}
+	}
+	var channelRequestIndex string
+	if err := db.Raw(`SELECT indexdef FROM pg_indexes WHERE schemaname = CURRENT_SCHEMA() AND indexname = 'idx_channel_request'`).Scan(&channelRequestIndex).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(channelRequestIndex, "channel_account_id") || !strings.Contains(channelRequestIndex, "endpoint") || !strings.Contains(channelRequestIndex, "request_id") {
+		t.Fatalf("channel request idempotency index has wrong scope: %s", channelRequestIndex)
 	}
 }
 

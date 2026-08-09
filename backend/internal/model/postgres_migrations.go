@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 75
+const CurrentPostgresSchemaVersion = 76
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -22,6 +22,11 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	hadSettlementSource := db.Migrator().HasColumn(&SettlementLine{}, "Source")
 	hadTravelRelationshipStatus := db.Migrator().HasColumn(&DistributorRelationship{}, "TravelStatus")
+	if previousSchemaVersion > 0 && previousSchemaVersion < 76 && db.Migrator().HasIndex(&ChannelRequest{}, "idx_channel_request") {
+		if err := db.Migrator().DropIndex(&ChannelRequest{}, "idx_channel_request"); err != nil {
+			return fmt.Errorf("replace channel request idempotency index: %w", err)
+		}
+	}
 	models := []interface{}{
 		&SchemaMigration{},
 		&Tenant{}, &TenantCapability{}, &ScenicArea{}, &PlatformUser{}, &User{}, &Staff{},
@@ -175,7 +180,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "add team settlement due dates",
+		Name:      "scope channel idempotency by endpoint",
 		AppliedAt: time.Now(),
 	}).Error
 }

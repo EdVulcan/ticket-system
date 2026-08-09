@@ -103,7 +103,7 @@ func TestCtripPreOrderPaymentQueryAndCancellation(t *testing.T) {
 		"sequenceId": "20260804-create-001", "otaOrderId": "CTRIP-ORDER-001",
 		"contacts": []map[string]string{{"name": "测试游客", "mobile": "13800138000"}},
 		"items": []map[string]interface{}{{
-			"itemId": "ITEM-001", "PLU": "PLU-ADULT", "locale": "zh-CN", "quantity": 1,
+			"PLU": "PLU-ADULT", "locale": "zh-CN", "quantity": 1,
 			"price": 99.5, "priceCurrency": "CNY", "salePrice": 99.5, "salePriceCurrency": "CNY",
 			"useStartDate": visitDate, "useEndDate": visitDate,
 			"passengers": []map[string]string{{"passengerId": "PASSENGER-001", "name": "测试游客", "mobile": "13800138000", "cardNo": "110101199001010011"}},
@@ -173,9 +173,21 @@ func TestCtripPreOrderPaymentQueryAndCancellation(t *testing.T) {
 	if err := model.DB.Model(&model.Order{}).Where("tenant_id = ? AND external_no = ?", tenantID, "CTRIP-ORDER-001").Count(&orderCount).Error; err != nil || orderCount != 1 {
 		t.Fatalf("order count=%d err=%v", orderCount, err)
 	}
+	prePayQueryBody := map[string]interface{}{
+		"sequenceId": "20260804-query-before-pay", "otaOrderId": "CTRIP-ORDER-001", "supplierOrderId": supplierOrderID,
+	}
+	prePayQueryResponse, err := service.Handle(buildCtripTestRequest(t, accountID, signKey, aesKey, aesIV, "QueryOrder", prePayQueryBody), "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prePayQueryResult := decodeCtripTestResponse(t, prePayQueryResponse, aesKey, aesIV)
+	prePayItems, ok := prePayQueryResult.Body["items"].([]interface{})
+	if prePayQueryResult.Code != "0000" || !ok || len(prePayItems) != 1 || prePayItems[0].(map[string]interface{})["itemId"] != "0" {
+		t.Fatalf("pre-payment query exposed an invalid item id: %+v", prePayQueryResult)
+	}
 
 	payBody := map[string]interface{}{
-		"sequenceId": "20260804-pay-001", "otaOrderId": "CTRIP-ORDER-001", "supplierOrderId": supplierOrderID,
+		"sequenceId": "20260804-create-001", "otaOrderId": "CTRIP-ORDER-001", "supplierOrderId": supplierOrderID,
 		"confirmType": 2, "orderLastConfirmTime": time.Now().Add(time.Hour).Format("2006-01-02 15:04:05"),
 		"items": []map[string]string{{"itemId": "ITEM-001", "PLU": "PLU-ADULT"}},
 	}
@@ -186,6 +198,39 @@ func TestCtripPreOrderPaymentQueryAndCancellation(t *testing.T) {
 	payResult := decodeCtripTestResponse(t, payResponse, aesKey, aesIV)
 	if payResult.Code != "0000" || payResult.Body["supplierConfirmType"].(float64) != 1 {
 		t.Fatalf("pay response=%+v", payResult)
+	}
+	repeatedPayResponse, err := service.Handle(buildCtripTestRequest(t, accountID, signKey, aesKey, aesIV, "PayPreOrder", payBody), "127.0.0.1")
+	if err != nil || string(repeatedPayResponse) != string(payResponse) {
+		t.Fatalf("idempotent payment response changed: err=%v\nfirst=%s\nsecond=%s", err, payResponse, repeatedPayResponse)
+	}
+	conflictingPayBody := map[string]interface{}{
+		"sequenceId": "20260804-pay-conflict", "otaOrderId": "CTRIP-ORDER-001", "supplierOrderId": supplierOrderID,
+		"confirmType": 2, "orderLastConfirmTime": time.Now().Add(time.Hour).Format("2006-01-02 15:04:05"),
+		"items": []map[string]string{{"itemId": "ITEM-DIFFERENT", "PLU": "PLU-ADULT"}},
+	}
+	conflictingPayResponse, err := service.Handle(buildCtripTestRequest(t, accountID, signKey, aesKey, aesIV, "PayPreOrder", conflictingPayBody), "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := decodeCtripTestResponse(t, conflictingPayResponse, aesKey, aesIV); result.Code != "1006" {
+		t.Fatalf("conflicting payment item id was accepted: %+v", result)
+	}
+	var sharedSequenceRequests int64
+	if err := model.DB.Model(&model.ChannelRequest{}).
+		Where("channel_account_id = ? AND request_id = ?", channel.ID, "20260804-create-001").
+		Count(&sharedSequenceRequests).Error; err != nil {
+		t.Fatal(err)
+	}
+	if sharedSequenceRequests != 2 {
+		t.Fatalf("shared CreatePreOrder/PayPreOrder sequence records=%d, want 2", sharedSequenceRequests)
+	}
+	var linkedItem model.CtripOrderItem
+	if err := model.DB.Joins("JOIN ctrip_order_links ON ctrip_order_links.id = ctrip_order_items.ctrip_order_link_id").
+		Where("ctrip_order_links.supplier_order_id = ?", supplierOrderID).First(&linkedItem).Error; err != nil {
+		t.Fatal(err)
+	}
+	if linkedItem.ExternalItemID != "ITEM-001" {
+		t.Fatalf("payment item id was not persisted: %q", linkedItem.ExternalItemID)
 	}
 	var sandboxOrder model.Order
 	if err := model.DB.Preload("Items.Tickets").Where("order_no = ?", supplierOrderID).First(&sandboxOrder).Error; err != nil {

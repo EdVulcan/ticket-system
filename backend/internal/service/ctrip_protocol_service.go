@@ -133,6 +133,19 @@ type ctripCancelOrderRequest struct {
 	Items           []ctripCancelItem `json:"items"`
 }
 
+const ctripPendingItemPrefix = "pending:"
+
+func ctripPendingItemID(index int) string {
+	return fmt.Sprintf("%s%d", ctripPendingItemPrefix, index+1)
+}
+
+func ctripItemIDForResponse(value string) string {
+	if strings.HasPrefix(value, ctripPendingItemPrefix) {
+		return "0"
+	}
+	return value
+}
+
 type ctripQueryOrderRequest struct {
 	SequenceID      string `json:"sequenceId"`
 	OTAOrderID      string `json:"otaOrderId"`
@@ -197,7 +210,7 @@ func (s *CtripProtocolService) Handle(raw []byte, remoteIP string) ([]byte, erro
 	endpoint := "ctrip:" + envelope.Header.ServiceName
 	var request model.ChannelRequest
 	retryAttempt := false
-	err = model.DB.Where("channel_account_id = ? AND request_id = ?", account.ID, sequence.SequenceID).First(&request).Error
+	err = model.DB.Where("channel_account_id = ? AND endpoint = ? AND request_id = ?", account.ID, endpoint, sequence.SequenceID).First(&request).Error
 	if err == nil {
 		if request.BodyHash != hashText || request.Endpoint != endpoint {
 			return s.encryptResponse(config, "0001", "同一流水号的报文内容不一致", nil), nil
@@ -473,10 +486,13 @@ func (s *CtripProtocolService) createPreOrder(account *model.ChannelAccount, raw
 	order.ExternalNo = &externalNo
 	links := make([]model.CtripOrderItem, 0, len(input.Items))
 	seenItems := make(map[string]struct{}, len(input.Items))
-	for _, source := range input.Items {
+	for index, source := range input.Items {
 		itemID, plu := strings.TrimSpace(source.ItemID), strings.TrimSpace(source.PLU)
-		if itemID == "" || plu == "" || source.Quantity <= 0 {
-			return nil, &ctripBusinessError{Code: "1005", Message: "订单项编号、PLU 和数量必填"}
+		if plu == "" || source.Quantity <= 0 {
+			return nil, &ctripBusinessError{Code: "1005", Message: "PLU 和数量必填"}
+		}
+		if itemID == "" {
+			itemID = ctripPendingItemID(index)
 		}
 		if len(itemID) > 100 || len(plu) > 120 {
 			return nil, &ctripBusinessError{Code: "1006", Message: "订单项编号或 PLU 过长"}
@@ -608,13 +624,11 @@ func ctripPreOrderMatches(link *model.CtripOrderLink, existing *model.Order, req
 	for _, item := range existing.Items {
 		orderItems[item.ID] = item
 	}
-	existingLinks := make(map[string]model.CtripOrderItem, len(link.Items))
-	for _, item := range link.Items {
-		existingLinks[item.ExternalItemID] = item
-	}
+	existingLinks := append([]model.CtripOrderItem(nil), link.Items...)
+	sort.Slice(existingLinks, func(left, right int) bool { return existingLinks[left].OrderItemID < existingLinks[right].OrderItemID })
 	for index, requestedLink := range requestedLinks {
-		existingLink, ok := existingLinks[requestedLink.ExternalItemID]
-		if !ok || existingLink.PLU != requestedLink.PLU || existingLink.PassengerIDsJSON != requestedLink.PassengerIDsJSON ||
+		existingLink := existingLinks[index]
+		if existingLink.PLU != requestedLink.PLU || existingLink.PassengerIDsJSON != requestedLink.PassengerIDsJSON ||
 			existingLink.GuestPriceCents != requestedLink.GuestPriceCents || existingLink.SalePriceCents != requestedLink.SalePriceCents || existingLink.CostCents != requestedLink.CostCents {
 			return false
 		}
@@ -656,9 +670,7 @@ func (s *CtripProtocolService) payPreOrder(account *model.ChannelAccount, raw []
 	if link.State == "pre_cancelled" || link.State == "cancelled" {
 		return nil, &ctripBusinessError{Code: "1100", Message: "订单已经取消"}
 	}
-	if err := validateCtripPayItems(link.Items, input.Items); err != nil {
-		return nil, err
-	}
+	var assignments []ctripPayItemAssignment
 	if err := model.Write(func(tx *gorm.DB) error {
 		var lockedLink model.CtripOrderLink
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND channel_account_id = ?", link.ID, account.ID).First(&lockedLink).Error; err != nil {
@@ -667,6 +679,16 @@ func (s *CtripProtocolService) payPreOrder(account *model.ChannelAccount, raw []
 		if lockedLink.State == "pre_cancelled" || lockedLink.State == "cancelled" {
 			return errors.New("ctrip order is cancelled")
 		}
+		var lockedItems []model.CtripOrderItem
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("ctrip_order_link_id = ?", lockedLink.ID).Order("id").Find(&lockedItems).Error; err != nil {
+			return err
+		}
+		var err error
+		assignments, err = validateCtripPayItems(lockedItems, input.Items)
+		if err != nil {
+			return err
+		}
 		var lockedOrder model.Order
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND channel_account_id = ?", order.ID, account.TenantID, account.ID).First(&lockedOrder).Error; err != nil {
 			return err
@@ -674,28 +696,67 @@ func (s *CtripProtocolService) payPreOrder(account *model.ChannelAccount, raw []
 		if err := markOrderAsPaidTx(tx, &lockedOrder); err != nil {
 			return err
 		}
+		for _, assignment := range assignments {
+			if !assignment.Update {
+				continue
+			}
+			result := tx.Model(&model.CtripOrderItem{}).
+				Where("id = ? AND ctrip_order_link_id = ?", assignment.LinkItemID, lockedLink.ID).
+				Update("external_item_id", assignment.ExternalItemID)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return errors.New("ctrip order item link is inconsistent")
+			}
+		}
 		return tx.Model(&lockedLink).Update("state", "paid").Error
 	}); err != nil {
 		return nil, err
 	}
 	link.State = "paid"
+	assignedIDs := make(map[uint]string, len(assignments))
+	for _, assignment := range assignments {
+		assignedIDs[assignment.LinkItemID] = assignment.ExternalItemID
+	}
+	for index := range link.Items {
+		link.Items[index].ExternalItemID = assignedIDs[link.Items[index].ID]
+	}
 	return buildCtripPayResponse(link)
 }
 
-func validateCtripPayItems(expected []model.CtripOrderItem, actual []ctripPayItem) error {
+type ctripPayItemAssignment struct {
+	LinkItemID     uint
+	ExternalItemID string
+	Update         bool
+}
+
+func validateCtripPayItems(expected []model.CtripOrderItem, actual []ctripPayItem) ([]ctripPayItemAssignment, error) {
 	if len(expected) != len(actual) {
-		return &ctripBusinessError{Code: "1006", Message: "支付订单项与预下单不一致"}
+		return nil, &ctripBusinessError{Code: "1006", Message: "支付订单项与预下单不一致"}
 	}
-	values := make(map[string]string, len(actual))
-	for _, item := range actual {
-		values[strings.TrimSpace(item.ItemID)] = strings.TrimSpace(item.PLU)
-	}
-	for _, item := range expected {
-		if values[item.ExternalItemID] != item.PLU {
-			return &ctripBusinessError{Code: "1006", Message: "支付订单项与预下单不一致"}
+	ordered := append([]model.CtripOrderItem(nil), expected...)
+	sort.Slice(ordered, func(left, right int) bool { return ordered[left].ID < ordered[right].ID })
+	seen := make(map[string]struct{}, len(actual))
+	assignments := make([]ctripPayItemAssignment, 0, len(actual))
+	for index, source := range actual {
+		itemID, plu := strings.TrimSpace(source.ItemID), strings.TrimSpace(source.PLU)
+		if itemID == "" || plu == "" || len(itemID) > 100 || len(plu) > 120 {
+			return nil, &ctripBusinessError{Code: "1006", Message: "支付订单项与预下单不一致"}
 		}
+		if _, exists := seen[itemID]; exists {
+			return nil, &ctripBusinessError{Code: "1006", Message: "支付订单项编号重复"}
+		}
+		seen[itemID] = struct{}{}
+		existing := ordered[index]
+		if existing.PLU != plu || (!strings.HasPrefix(existing.ExternalItemID, ctripPendingItemPrefix) && existing.ExternalItemID != itemID) {
+			return nil, &ctripBusinessError{Code: "1006", Message: "支付订单项与预下单不一致"}
+		}
+		assignments = append(assignments, ctripPayItemAssignment{
+			LinkItemID: existing.ID, ExternalItemID: itemID, Update: existing.ExternalItemID != itemID,
+		})
 	}
-	return nil
+	return assignments, nil
 }
 
 func buildCtripPayResponse(link *model.CtripOrderLink) (interface{}, error) {
@@ -898,7 +959,7 @@ func (s *CtripProtocolService) queryOrder(account *model.ChannelAccount, raw []b
 			}
 		}
 		responseItem := map[string]interface{}{
-			"itemId": protocolItem.ExternalItemID, "orderStatus": ctripOrderItemStatus(order, link.State, &item),
+			"itemId": ctripItemIDForResponse(protocolItem.ExternalItemID), "orderStatus": ctripOrderItemStatus(order, link.State, &item),
 			"quantity": item.Quantity, "useQuantity": quantityUsed, "cancelQuantity": quantityCancelled,
 			"vouchers": vouchers,
 		}
