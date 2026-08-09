@@ -199,6 +199,9 @@ func (s *TicketService) VerifyDeviceRequest(code string, checkPointID, deviceID,
 				}
 			}
 		}
+		if _, err := enqueueCtripConsumedNoticeTx(tx, salesTenantID, order.ID); err != nil {
+			return err
+		}
 		return nil
 	})
 

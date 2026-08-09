@@ -61,12 +61,41 @@ type InventoryRequest struct {
 	Inventories      []Inventory `json:"inventorys"`
 }
 
+type ConsumedPassenger struct {
+	PassengerID string `json:"passengerId"`
+}
+
+type ConsumedVoucher struct {
+	VoucherID string `json:"voucherId"`
+}
+
+type ConsumedItem struct {
+	ItemID       string              `json:"itemId"`
+	UseStartDate string              `json:"useStartDate,omitempty"`
+	UseEndDate   string              `json:"useEndDate,omitempty"`
+	Quantity     int                 `json:"quantity,omitempty"`
+	UseQuantity  int                 `json:"useQuantity,omitempty"`
+	Passengers   []ConsumedPassenger `json:"passengers,omitempty"`
+	Vouchers     []ConsumedVoucher   `json:"vouchers,omitempty"`
+}
+
+type ConsumedNoticeRequest struct {
+	SequenceID      string         `json:"sequenceId"`
+	OTAOrderID      string         `json:"otaOrderId"`
+	SupplierOrderID string         `json:"supplierOrderId"`
+	Items           []ConsumedItem `json:"items"`
+}
+
 func (c *Client) SyncPrice(ctx context.Context, endpoint string, payload PriceRequest) (*Response, error) {
 	return c.post(ctx, endpoint, "DatePriceModify", payload)
 }
 
 func (c *Client) SyncInventory(ctx context.Context, endpoint string, payload InventoryRequest) (*Response, error) {
 	return c.post(ctx, endpoint, "DateInventoryModify", payload)
+}
+
+func (c *Client) NotifyConsumed(ctx context.Context, endpoint string, payload ConsumedNoticeRequest) (*Response, error) {
+	return c.post(ctx, endpoint, "OrderConsumedNotice", payload)
 }
 
 func (c *Client) post(ctx context.Context, endpoint, serviceName string, payload interface{}) (*Response, error) {

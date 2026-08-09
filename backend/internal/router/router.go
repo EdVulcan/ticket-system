@@ -266,6 +266,7 @@ func InitRouter(r *gin.Engine) {
 		channelAdminGroup.GET("/mappings", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.ListMappings)
 		channelAdminGroup.POST("/mappings", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.AddMapping)
 		channelAdminGroup.POST("/:id/mappings/:mappingId/ctrip-sync", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SyncCtripMapping)
+		channelAdminGroup.POST("/:id/ctrip-sandbox-consume", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SimulateCtripSandboxConsumption)
 		channelAdminGroup.PATCH("/:id/mappings/:mappingId/ctrip-pricing", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.UpdateCtripMappingPricing)
 		channelAdminGroup.GET("/:id/ctrip-sync-tasks", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.ListCtripSyncTasks)
 		channelAdminGroup.POST("/:id/bills/import", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.ImportBill)

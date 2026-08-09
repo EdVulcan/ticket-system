@@ -168,6 +168,30 @@ func (c *ChannelController) SyncCtripMapping(ctx *gin.Context) {
 	ctx.JSON(http.StatusAccepted, result)
 }
 
+func (c *ChannelController) SimulateCtripSandboxConsumption(ctx *gin.Context) {
+	accountID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || accountID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	var body struct {
+		SupplierOrderID string `json:"supplier_order_id" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	task, err := c.CtripSync.SimulateSandboxConsumption(
+		ctx.GetUint("tenant_id"), uint(accountID), body.SupplierOrderID,
+		ctx.GetUint("user_id"), ctx.GetString("role"),
+	)
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusAccepted, gin.H{"task": task})
+}
+
 func (c *ChannelController) UpdateCtripMappingPricing(ctx *gin.Context) {
 	accountID, accountErr := strconv.ParseUint(ctx.Param("id"), 10, 32)
 	mappingID, mappingErr := strconv.ParseUint(ctx.Param("mappingId"), 10, 32)

@@ -47,3 +47,26 @@ func TestClientRejectsResponseWithoutResultCode(t *testing.T) {
 		t.Fatal("missing result code was accepted")
 	}
 }
+
+func TestNotifyConsumedUsesOrderNoticeService(t *testing.T) {
+	var serviceName string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var envelope struct {
+			Header map[string]string `json:"header"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil {
+			t.Fatal(err)
+		}
+		serviceName = envelope.Header["serviceName"]
+		_, _ = w.Write([]byte(`{"header":{"resultCode":"0000","resultMessage":"success"}}`))
+	}))
+	defer server.Close()
+	client := Client{AccountID: "account", SignKey: "sign", AESKey: "1234567890abcdef", AESIV: "abcdef1234567890", HTTP: server.Client()}
+	response, err := client.NotifyConsumed(context.Background(), server.URL, ConsumedNoticeRequest{
+		SequenceID: "20260809abcdef", OTAOrderID: "OTA-1", SupplierOrderID: "ORD-1",
+		Items: []ConsumedItem{{ItemID: "ITEM-1", Quantity: 1, UseQuantity: 1, Vouchers: []ConsumedVoucher{{VoucherID: "TICKET-1"}}}},
+	})
+	if err != nil || response.Code != "0000" || serviceName != "OrderConsumedNotice" {
+		t.Fatalf("response=%+v service=%q err=%v", response, serviceName, err)
+	}
+}

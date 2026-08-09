@@ -18,9 +18,10 @@
       <el-table-column prop="status" label="状态" width="120"><template #default="{row}"><el-tag :type="row.status === 'active' ? 'success' : row.status === 'sandbox' ? 'warning' : 'info'">{{ accountStatusText(row.status) }}</el-tag></template></el-table-column>
       <el-table-column prop="rate_limit_per_min" label="限流/分钟" width="120" />
       <el-table-column prop="permissions_json" label="权限" min-width="220" show-overflow-tooltip />
-      <el-table-column label="操作" width="600" fixed="right">
+      <el-table-column label="操作" width="700" fixed="right">
         <template #default="{row}">
           <el-button v-if="canWrite && row.type === 'ctrip'" link type="primary" @click="openCtripConfig(row)">携程参数</el-button>
+          <el-button v-if="canWrite && row.type === 'ctrip' && row.status === 'sandbox'" link type="primary" @click="openCtripSandboxConsume(row)">沙箱核销测试</el-button>
           <el-button v-if="canWrite" link type="primary" @click="openMapping(row)">商品映射</el-button>
           <el-button link type="primary" @click="openOrders(row)">渠道订单</el-button>
           <el-button link type="primary" @click="openRequests(row)">请求日志</el-button>
@@ -63,6 +64,14 @@
       <template #footer><el-button @click="ctripConfigDialog = false">取消</el-button><el-button type="primary" :loading="ctripConfigSaving" @click="saveCtripConfig">保存参数</el-button></template>
     </el-dialog>
 
+    <el-dialog v-model="ctripSandboxConsumeDialog" title="携程沙箱模拟核销" width="520px" :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" title="仅用于携程遍历测试。正式订单必须由真实闸机核销，系统不会提供模拟入口。" />
+      <el-form class="mt-4" label-position="top">
+        <el-form-item label="供应商订单号"><el-input v-model="ctripSandboxSupplierOrderID" placeholder="例如：ORD..." /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="ctripSandboxConsumeDialog = false">取消</el-button><el-button type="primary" :loading="ctripSandboxConsuming" @click="simulateCtripSandboxConsumption">确认模拟核销</el-button></template>
+    </el-dialog>
+
     <el-dialog v-model="mappingDialog" title="商品映射" width="1060px">
       <el-alert v-if="selectedAccount?.type === 'ctrip'" class="mb-4" type="info" :closable="false" title="外部编码填写携程 PLU；价格按当前携程合同单独设置，不会改动景区产品原价。" />
       <div class="grid grid-cols-1 gap-2 mb-4 md:grid-cols-5">
@@ -87,9 +96,9 @@
         <el-table-column v-if="selectedAccount?.type === 'ctrip'" label="操作" width="210"><template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openPricing(row)">修改价格</el-button><el-button v-if="canWrite" link type="primary" :loading="syncingMappingID === row.id" @click="syncMapping(row)">同步价格库存</el-button></template></el-table-column>
       </el-table>
       <template v-if="selectedAccount?.type === 'ctrip'">
-        <div class="flex items-center justify-between mt-5 mb-2"><h3 class="font-medium text-gray-900">最近同步</h3><el-button link type="primary" @click="loadCtripSyncTasks">刷新</el-button></div>
-        <el-table :data="ctripSyncTasks" size="small" max-height="240" empty-text="暂无同步记录">
-          <el-table-column label="内容" width="90"><template #default="{ row }">{{ row.kind === 'price' ? '价格' : '库存' }}</template></el-table-column>
+        <div class="flex items-center justify-between mt-5 mb-2"><h3 class="font-medium text-gray-900">最近出站任务</h3><el-button link type="primary" @click="loadCtripSyncTasks">刷新</el-button></div>
+        <el-table :data="ctripSyncTasks" size="small" max-height="240" empty-text="暂无出站记录">
+          <el-table-column label="内容" width="100"><template #default="{ row }">{{ ctripTaskKindText(row.kind) }}</template></el-table-column>
           <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="syncStatusType(row.status)">{{ syncStatusText(row.status) }}</el-tag></template></el-table-column>
           <el-table-column prop="attempt_count" label="尝试次数" width="90" />
           <el-table-column label="时间" width="180"><template #default="{ row }">{{ dateTime(row.completed_at || row.created_at) }}</template></el-table-column>
@@ -303,6 +312,9 @@ const reconciliationDetail = ref<any>(null)
 const ctripConfigDialog = ref(false)
 const ctripConfigSaving = ref(false)
 const ctripConfig = reactive({ account_id: '', sign_key: '', aes_key: '', aes_iv: '' })
+const ctripSandboxConsumeDialog = ref(false)
+const ctripSandboxConsuming = ref(false)
+const ctripSandboxSupplierOrderID = ref('')
 const ctripEndpoint = `${window.location.origin}/api/v1/integrations/ctrip/order`
 const form = reactive({ code: '', type: 'core', app_id: '', secret: '', aes_key: '', aes_iv: '', status: 'active', permissions_json: '["products:read","inventory:reserve","orders:create","orders:query","orders:cancel"]', rate_limit_per_min: 600, allowed_ips_json: '' })
 const mapping = reactive<{ external_code: string; product_id: number | null; channel_sale_yuan: number; channel_cost_yuan: number }>({ external_code: '', product_id: null, channel_sale_yuan: 0, channel_cost_yuan: 0 })
@@ -337,6 +349,17 @@ const saveCtripConfig = async () => {
   finally { ctripConfigSaving.value = false }
 }
 const copyCtripEndpoint = async () => { await navigator.clipboard.writeText(ctripEndpoint); ElMessage.success('接口地址已复制') }
+const openCtripSandboxConsume = (row: any) => { selectedAccount.value = row; ctripSandboxSupplierOrderID.value = ''; ctripSandboxConsumeDialog.value = true }
+const simulateCtripSandboxConsumption = async () => {
+  if (!selectedAccount.value || !ctripSandboxSupplierOrderID.value.trim()) { ElMessage.warning('请填写供应商订单号'); return }
+  await ElMessageBox.confirm('该操作会把指定沙箱订单标记为已核销并向携程发送核销通知，确认继续？', '确认沙箱核销', { type: 'warning' })
+  ctripSandboxConsuming.value = true
+  try {
+    await request.post(`/channel-accounts/${selectedAccount.value.id}/ctrip-sandbox-consume`, { supplier_order_id: ctripSandboxSupplierOrderID.value.trim() })
+    ctripSandboxConsumeDialog.value = false
+    ElMessage.success('核销通知已进入可靠发送队列')
+  } finally { ctripSandboxConsuming.value = false }
+}
 const toggleStatus = async (row: any) => { const status = row.status === 'disabled' ? (row.environment === 'sandbox' ? 'sandbox' : 'active') : 'disabled'; await request.patch(`/channel-accounts/${row.id}/status`, { status }); row.status = status; ElMessage.success('状态已更新') }
 const rotate = async (row: any) => { await ElMessageBox.confirm('轮换后旧密钥立即失效，确认继续？', '确认轮换', { type: 'warning' }); const response = await request.post(`/channel-accounts/${row.id}/rotate-secret`); newSecret.value = response.data.secret; secretDialog.value = true }
 const productName = (id: number) => products.value.find((product: any) => Number(product.id) === Number(id))?.name || '已下架或不可见产品'
@@ -391,6 +414,7 @@ const signedCents = (value: number) => `${Number(value || 0) > 0 ? '+' : Number(
 const accountStatusText = (status: string) => ({ active: '正式启用', sandbox: '测试中', disabled: '已停用' } as Record<string, string>)[status] || '未知状态'
 const adapterTypeText = (type: string) => ({ core: '通用渠道', ctrip: '携程', meituan: '美团', zyb: '智游宝上游' } as Record<string, string>)[type] || '自定义渠道'
 const mappingStatusText = (status: string) => ({ active: '已启用', disabled: '已停用' } as Record<string, string>)[status] || '未知状态'
+const ctripTaskKindText = (kind: string) => ({ price: '价格', inventory: '库存', consumed: '核销通知' } as Record<string, string>)[kind] || '其他'
 const syncStatusText = (status: string) => ({ pending: '等待同步', processing: '同步中', succeeded: '已成功', failed: '同步失败' } as Record<string, string>)[status] || '未知状态'
 const syncStatusType = (status: string) => status === 'succeeded' ? 'success' : status === 'failed' ? 'danger' : status === 'processing' ? 'primary' : 'warning'
 const requestStatusText = (status: string) => ({ processing: '处理中', completed: '已完成', failed: '失败待处理', retryable: '已授权重试' } as Record<string, string>)[status] || '未知状态'

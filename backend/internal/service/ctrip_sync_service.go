@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -21,6 +22,8 @@ import (
 const (
 	ctripSandboxPriceEndpoint     = "https://ttdopen.ctrip.com/api/product/price.do"
 	ctripSandboxInventoryEndpoint = "https://ttdopen.ctrip.com/api/product/stock.do"
+	ctripSandboxOrderEndpoint     = "https://ttdopen.ctrip.com/api/order/notice.do"
+	ctripProductionOrderEndpoint  = "https://ttdentry.ctrip.com/ttd-connect-orderentryapi/supplier/order/notice.do"
 	ctripSyncMaxAttempts          = 5
 	ctripSyncStaleAfter           = 5 * time.Minute
 )
@@ -40,6 +43,25 @@ func ctripSyncEndpoints(status string) (string, string, error) {
 	default:
 		return "", "", errors.New("ctrip channel is disabled")
 	}
+}
+
+func ctripOrderNoticeEndpoint(environment string) (string, error) {
+	switch environment {
+	case "sandbox":
+		return ctripSandboxOrderEndpoint, nil
+	case "production":
+		return ctripProductionOrderEndpoint, nil
+	default:
+		return "", errors.New("ctrip channel is disabled")
+	}
+}
+
+func newCtripSequenceID(now time.Time) (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	return now.Format("20060102") + hex.EncodeToString(value[:]), nil
 }
 
 func (s *CtripSyncService) EnqueueMappingSync(tenantID, accountID, mappingID uint, start, end time.Time) (*CtripSyncResult, error) {
@@ -189,6 +211,146 @@ func maxInt(left, right int) int {
 	return right
 }
 
+func enqueueCtripConsumedNoticeTx(tx *gorm.DB, tenantID, orderID uint) (*model.CtripOutboundTask, error) {
+	var link model.CtripOrderLink
+	if err := tx.Preload("Items").Where("tenant_id = ? AND order_id = ?", tenantID, orderID).First(&link).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var account model.ChannelAccount
+	if err := tx.Where("id = ? AND tenant_id = ? AND type = ?", link.ChannelAccountID, tenantID, "ctrip").First(&account).Error; err != nil {
+		return nil, err
+	}
+	endpoint, err := ctripOrderNoticeEndpoint(account.Environment)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]ctrip.ConsumedItem, 0, len(link.Items))
+	var mappingID uint
+	for _, linkedItem := range link.Items {
+		var orderItem model.OrderItem
+		if err := tx.Preload("Tickets", func(db *gorm.DB) *gorm.DB { return db.Order("id") }).Where("id = ? AND order_id = ?", linkedItem.OrderItemID, orderID).First(&orderItem).Error; err != nil {
+			return nil, err
+		}
+		usedTickets := make([]model.Ticket, 0, len(orderItem.Tickets))
+		for _, ticket := range orderItem.Tickets {
+			if ticket.Status == "used" {
+				usedTickets = append(usedTickets, ticket)
+			}
+		}
+		if len(usedTickets) == 0 {
+			continue
+		}
+		useQuantity := len(usedTickets)
+		if len(orderItem.Tickets) == 1 && orderItem.Tickets[0].CodeMode == "order" {
+			useQuantity = orderItem.Quantity
+		}
+		item := ctrip.ConsumedItem{ItemID: linkedItem.ExternalItemID, Quantity: orderItem.Quantity, UseQuantity: useQuantity}
+		if orderItem.UseDate != nil {
+			item.UseStartDate = orderItem.UseDate.Format("2006-01-02")
+			item.UseEndDate = item.UseStartDate
+		}
+		for _, ticket := range usedTickets {
+			item.Vouchers = append(item.Vouchers, ctrip.ConsumedVoucher{VoucherID: ticket.TicketCode})
+		}
+		var passengerIDs []string
+		if linkedItem.PassengerIDsJSON != "" {
+			if err := json.Unmarshal([]byte(linkedItem.PassengerIDsJSON), &passengerIDs); err != nil {
+				return nil, errors.New("ctrip passenger snapshot is invalid")
+			}
+		}
+		if useQuantity < len(passengerIDs) {
+			passengerIDs = passengerIDs[:useQuantity]
+		}
+		for _, passengerID := range passengerIDs {
+			item.Passengers = append(item.Passengers, ctrip.ConsumedPassenger{PassengerID: passengerID})
+		}
+		items = append(items, item)
+		if mappingID == 0 {
+			var mapping model.ChannelProductMapping
+			if err := tx.Where("channel_account_id = ? AND external_code = ?", account.ID, linkedItem.PLU).First(&mapping).Error; err == nil {
+				mappingID = mapping.ID
+			}
+		}
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	sequenceID, err := newCtripSequenceID(time.Now())
+	if err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(ctrip.ConsumedNoticeRequest{SequenceID: sequenceID, OTAOrderID: link.OTAOrderID, SupplierOrderID: link.SupplierOrderID, Items: items})
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(payload)
+	now := time.Now()
+	task := model.CtripOutboundTask{
+		TenantID: tenantID, ChannelAccountID: account.ID, ChannelProductMappingID: mappingID,
+		Kind: "consumed", PayloadHash: hex.EncodeToString(digest[:]), Endpoint: endpoint,
+		PayloadJSON: string(payload), Status: "pending", NextAttemptAt: &now,
+	}
+	if err := tx.Create(&task).Error; err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+func (s *CtripSyncService) SimulateSandboxConsumption(tenantID, accountID uint, supplierOrderID string, actorUserID uint, actorRole string) (*model.CtripOutboundTask, error) {
+	supplierOrderID = strings.TrimSpace(supplierOrderID)
+	if tenantID == 0 || accountID == 0 || supplierOrderID == "" {
+		return nil, errors.New("channel and supplier order number are required")
+	}
+	var result *model.CtripOutboundTask
+	err := model.Write(func(tx *gorm.DB) error {
+		var account model.ChannelAccount
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND type = ?", accountID, tenantID, "ctrip").First(&account).Error; err != nil {
+			return errors.New("ctrip channel account not found")
+		}
+		if account.Environment != "sandbox" || account.Status != "sandbox" {
+			return errors.New("simulated consumption is only available for an enabled Ctrip sandbox channel")
+		}
+		var link model.CtripOrderLink
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND channel_account_id = ? AND supplier_order_id = ?", tenantID, accountID, supplierOrderID).First(&link).Error; err != nil {
+			return errors.New("Ctrip sandbox order not found")
+		}
+		var order model.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND channel_account_id = ? AND environment = ?", link.OrderID, tenantID, accountID, "sandbox").First(&order).Error; err != nil {
+			return errors.New("Ctrip sandbox order not found")
+		}
+		if order.Status != "paid" {
+			return errors.New("only a paid Ctrip sandbox order can be consumed")
+		}
+		if err := tx.Model(&model.Ticket{}).Where("order_item_id IN (SELECT id FROM order_items WHERE order_id = ?) AND status IN ?", order.ID, []string{"unused", "active", "issued"}).Updates(map[string]interface{}{"status": "used"}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.TicketEntitlement{}).
+			Where("ticket_id IN (SELECT tickets.id FROM tickets JOIN order_items ON order_items.id = tickets.order_item_id WHERE order_items.order_id = ?) AND status IN ?", order.ID, []string{"active", "issued"}).
+			Update("status", "used").Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&order).Update("status", "completed").Error; err != nil {
+			return err
+		}
+		if err := updateFulfillmentOrdersTx(tx, order.ID, "fulfilled"); err != nil {
+			return err
+		}
+		var err error
+		result, err = enqueueCtripConsumedNoticeTx(tx, tenantID, order.ID)
+		if err != nil {
+			return err
+		}
+		if result == nil {
+			return errors.New("Ctrip consumed notification was not created")
+		}
+		return recordAuditTx(tx, actorUserID, tenantID, actorRole, "tenant", "ctrip.sandbox.consume", "order", order.ID, "Ctrip sandbox traversal test", "", fmt.Sprintf(`{"supplier_order_id":%q,"task_id":%d}`, supplierOrderID, result.ID))
+	})
+	return result, err
+}
+
 func (s *CtripSyncService) ProcessTasks(ctx context.Context, now time.Time, limit int) (int, error) {
 	if limit <= 0 {
 		limit = 20
@@ -238,13 +400,25 @@ func (s *CtripSyncService) processTask(ctx context.Context, task *model.CtripOut
 	if account.Status == "disabled" {
 		return errors.New("ctrip channel is disabled")
 	}
-	priceEndpoint, stockEndpoint, endpointErr := ctripSyncEndpoints(account.Environment)
-	if endpointErr != nil {
-		return endpointErr
-	}
-	expectedEndpoint := stockEndpoint
-	if task.Kind == "price" {
-		expectedEndpoint = priceEndpoint
+	var expectedEndpoint string
+	switch task.Kind {
+	case "price", "inventory":
+		priceEndpoint, stockEndpoint, endpointErr := ctripSyncEndpoints(account.Environment)
+		if endpointErr != nil {
+			return endpointErr
+		}
+		expectedEndpoint = stockEndpoint
+		if task.Kind == "price" {
+			expectedEndpoint = priceEndpoint
+		}
+	case "consumed":
+		var endpointErr error
+		expectedEndpoint, endpointErr = ctripOrderNoticeEndpoint(account.Environment)
+		if endpointErr != nil {
+			return endpointErr
+		}
+	default:
+		return errors.New("unsupported ctrip outbound task kind")
 	}
 	if task.Endpoint != expectedEndpoint {
 		return errors.New("ctrip task environment no longer matches the channel environment; create a new synchronization")
@@ -276,6 +450,12 @@ func (s *CtripSyncService) processTask(ctx context.Context, task *model.CtripOut
 			return err
 		}
 		response, err = client.SyncInventory(ctx, task.Endpoint, payload)
+	case "consumed":
+		var payload ctrip.ConsumedNoticeRequest
+		if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
+			return err
+		}
+		response, err = client.NotifyConsumed(ctx, task.Endpoint, payload)
 	default:
 		return errors.New("unsupported ctrip outbound task kind")
 	}
@@ -283,7 +463,7 @@ func (s *CtripSyncService) processTask(ctx context.Context, task *model.CtripOut
 		return err
 	}
 	if response.Code != "0000" {
-		return fmt.Errorf("ctrip rejected synchronization (%s): %s", response.Code, response.Message)
+		return fmt.Errorf("ctrip rejected outbound request (%s): %s", response.Code, response.Message)
 	}
 	return model.Write(func(tx *gorm.DB) error {
 		return tx.Model(&model.CtripOutboundTask{}).Where("id = ? AND locked_at = ?", task.ID, task.LockedAt).Updates(map[string]interface{}{

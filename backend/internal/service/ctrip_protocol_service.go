@@ -842,8 +842,15 @@ func (s *CtripProtocolService) cancelOrder(account *model.ChannelAccount, raw []
 	if link.State == "cancelled" {
 		return buildCtripCancelResponse(link)
 	}
-	if order.Status != "paid" {
+	if order.Status != "paid" && order.Status != "completed" && order.Status != "partial_refunded" {
 		return nil, &ctripBusinessError{Code: "2007", Message: "该订单尚未支付"}
+	}
+	for _, item := range order.Items {
+		for _, ticket := range item.Tickets {
+			if ticket.Status == "used" || ticket.CheckInCount > 0 {
+				return nil, &ctripBusinessError{Code: "2002", Message: "该订单已经使用"}
+			}
+		}
 	}
 	if err := validateFullCtripCancellation(link.Items, order.Items, input.Items); err != nil {
 		return nil, err
@@ -892,7 +899,7 @@ func cancelCtripOrderAtomic(account *model.ChannelAccount, linkID, orderID uint)
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Tickets").Where("id = ? AND tenant_id = ? AND channel_account_id = ?", orderID, account.TenantID, account.ID).First(&order).Error; err != nil {
 			return err
 		}
-		if order.Status != "paid" && order.Status != "cancelled" {
+		if order.Status != "paid" && order.Status != "completed" && order.Status != "partial_refunded" && order.Status != "cancelled" {
 			return errors.New("channel order is not paid")
 		}
 		if err := cancelOrderTxMode(tx, &order, true); err != nil {
