@@ -15,7 +15,7 @@ SDK 来源：`https://docs.c-ctrip.com/files/7/tour_order_connect/trip_sdk_golan
 
 - 独立的携程渠道账号，每个景区租户分别保存自己的账号、签名密钥、AES 密钥和初始向量。
 - 密钥使用系统实例密钥加密落库，管理端和查询接口均不回显明文。
-- 官方签名顺序：`accountId + serviceName + requestTime + body + version + signKey`，结果取小写 MD5。
+- 官方签名顺序：`accountId + serviceName + requestTime + body + version + signKey`，结果取小写 MD5。携程调用商家订单接口时，`body` 使用解密后的业务 JSON；本系统向携程推送价格库存时，按官方客户端使用加密后的请求正文。两个方向不得混用。
 - AES-128-CBC、PKCS5/PKCS7 补位和官方 `a-p` 半字节编码；兼容旧示例中的 Base64 密文输入。
 - 请求时间窗口、IP 白名单、每分钟限流、流水号幂等和“相同流水号不同正文”拒绝。
 - `CreatePreOrder`：支持多订单项、商品 PLU 映射、出行人、库存预占和本地未支付订单创建。

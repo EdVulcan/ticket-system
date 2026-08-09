@@ -156,10 +156,6 @@ func (s *CtripProtocolService) Handle(raw []byte, remoteIP string) ([]byte, erro
 	if !ctripIPAllowed(account.AllowedIPsJSON, remoteIP) {
 		return marshalCtripHeaderOnly("0003", "来源网络地址未获授权"), nil
 	}
-	expected := ctripSignature(envelope.Header, envelope.Body, signKey)
-	if len(expected) != len(envelope.Header.Sign) || subtle.ConstantTimeCompare([]byte(expected), []byte(strings.ToLower(envelope.Header.Sign))) != 1 {
-		return marshalCtripHeaderOnly("0002", "签名错误"), nil
-	}
 	if !ctripRequestTimeValid(envelope.Header.RequestTime, time.Now()) {
 		return marshalCtripHeaderOnly("0001", "请求时间无效或已过期"), nil
 	}
@@ -169,6 +165,12 @@ func (s *CtripProtocolService) Handle(raw []byte, remoteIP string) ([]byte, erro
 	plainBody, err := decryptCtripBody(envelope.Body, config.AESKey, config.AESIV)
 	if err != nil {
 		return marshalCtripHeaderOnly("0001", "报文解密失败"), nil
+	}
+	// Ctrip's inbound order protocol signs the decrypted business JSON. Outbound
+	// price and inventory requests use the encrypted body and remain unchanged.
+	expected := ctripSignature(envelope.Header, string(plainBody), signKey)
+	if len(expected) != len(envelope.Header.Sign) || subtle.ConstantTimeCompare([]byte(expected), []byte(strings.ToLower(envelope.Header.Sign))) != 1 {
+		return marshalCtripHeaderOnly("0002", "签名错误"), nil
 	}
 	var sequence ctripSequence
 	if err := json.Unmarshal(plainBody, &sequence); err != nil || strings.TrimSpace(sequence.SequenceID) == "" {
@@ -269,8 +271,8 @@ func loadCtripAccount(accountID string) (*model.ChannelAccount, string, CtripCha
 	return &account, signKey, config, nil
 }
 
-func ctripSignature(header ctripHeader, encryptedBody, signKey string) string {
-	value := header.AccountID + header.ServiceName + header.RequestTime + encryptedBody + header.Version + signKey
+func ctripSignature(header ctripHeader, body, signKey string) string {
+	value := header.AccountID + header.ServiceName + header.RequestTime + body + header.Version + signKey
 	sum := md5.Sum([]byte(value)) // Ctrip's published protocol requires MD5 for compatibility.
 	return hex.EncodeToString(sum[:])
 }

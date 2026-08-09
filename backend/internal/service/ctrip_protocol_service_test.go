@@ -265,7 +265,7 @@ func buildCtripTestRequest(t *testing.T, accountID, signKey, aesKey, aesIV, serv
 		location = time.Local
 	}
 	header := ctripHeader{AccountID: accountID, ServiceName: serviceName, RequestTime: time.Now().In(location).Format("2006-01-02 15:04:05"), Version: "1.0"}
-	header.Sign = ctripSignature(header, encrypted, signKey)
+	header.Sign = ctripSignature(header, string(plain), signKey)
 	data, err := json.Marshal(ctripEnvelope{Header: header, Body: encrypted})
 	if err != nil {
 		t.Fatal(err)
