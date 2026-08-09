@@ -1331,7 +1331,7 @@ func TestTeamRosterAndEntryStayTenantScoped(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	group := model.TourGroup{Name: "Team 1", SupplierTenantID: supplier.ID, ScenicAreaID: area.ID, ContractID: contract.ID, VisitDate: time.Now().AddDate(0, 0, 1)}
+	group := model.TourGroup{Name: "Team 1", SupplierTenantID: supplier.ID, ScenicAreaID: area.ID, ContractID: contract.ID, VisitDate: time.Now().AddDate(0, 0, 1), ExpectedCount: 2}
 	if err := (&TeamService{}).CreateGroup(travel.ID, &group); err != nil {
 		t.Fatal(err)
 	}
@@ -1395,7 +1395,7 @@ func TestTeamRosterReplaceIsIdempotentAndStopsAfterConfirmation(t *testing.T) {
 	if err := model.DB.Where("travel_tenant_id = ? AND supplier_tenant_id = ?", travel.ID, supplier.ID).First(&contract).Error; err != nil {
 		t.Fatal(err)
 	}
-	group := model.TourGroup{Name: "Replace Team", SupplierTenantID: supplier.ID, ScenicAreaID: area.ID, ContractID: contract.ID, VisitDate: time.Now().AddDate(0, 0, 1)}
+	group := model.TourGroup{Name: "Replace Team", SupplierTenantID: supplier.ID, ScenicAreaID: area.ID, ContractID: contract.ID, VisitDate: time.Now().AddDate(0, 0, 1), ExpectedCount: 3}
 	if err := (&TeamService{}).CreateGroup(travel.ID, &group); err != nil {
 		t.Fatal(err)
 	}
@@ -1895,7 +1895,7 @@ func TestTeamMultiBatchAdmissionUsesSupplierTicketsAndDevice(t *testing.T) {
 	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, scenario.distributorID); err != nil {
 		t.Fatal(err)
 	}
-	group := model.TourGroup{Name: "Paid Team", SupplierTenantID: scenario.supplierID, ScenicAreaID: source.ScenicAreaID, ContractID: contract.ID, VisitDate: visitDate}
+	group := model.TourGroup{Name: "Paid Team", SupplierTenantID: scenario.supplierID, ScenicAreaID: source.ScenicAreaID, ContractID: contract.ID, VisitDate: visitDate, ExpectedCount: 2}
 	teamService := &TeamService{}
 	if err := teamService.CreateGroup(scenario.distributorID, &group); err != nil {
 		t.Fatal(err)
@@ -1917,19 +1917,11 @@ func TestTeamMultiBatchAdmissionUsesSupplierTicketsAndDevice(t *testing.T) {
 	if err != nil || len(supplierConfirmations) != 1 || supplierConfirmations[0].SupplierAcknowledgedAt == nil {
 		t.Fatalf("supplier confirmations=%+v err=%v", supplierConfirmations, err)
 	}
-	addedChange, err := teamService.ChangeTeamMember(scenario.distributorID, group.ID, 0, "add", 0, model.TourGroupMember{Name: "Temporary C"}, "guide added one guest")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var temporaryMember model.TourGroupMember
-	if err := model.DB.First(&temporaryMember, addedChange.MemberID).Error; err != nil || temporaryMember.Status != "planned" {
-		t.Fatalf("temporary member=%+v err=%v", temporaryMember, err)
-	}
-	if _, err := teamService.ChangeTeamMember(scenario.distributorID, group.ID, 0, "remove", temporaryMember.ID, model.TourGroupMember{}, "guest cancelled before entry"); err != nil {
-		t.Fatal(err)
+	if _, err := teamService.ChangeTeamMember(scenario.distributorID, group.ID, 0, "add", 0, model.TourGroupMember{Name: "Temporary C"}, "guide added one guest"); err == nil {
+		t.Fatal("temporary member without a paid spare ticket was accepted")
 	}
 	memberChanges, err := teamService.ListTeamMemberChanges(scenario.supplierID, group.ID)
-	if err != nil || len(memberChanges) != 2 {
+	if err != nil || len(memberChanges) != 0 {
 		t.Fatalf("supplier member changes=%+v err=%v", memberChanges, err)
 	}
 	members, err := teamService.ListMembers(scenario.distributorID, group.ID)
@@ -1966,7 +1958,7 @@ func TestTeamMultiBatchAdmissionUsesSupplierTicketsAndDevice(t *testing.T) {
 		t.Fatalf("supplier groups=%+v err=%v", supplierGroups, err)
 	}
 	supplierMembers, err := teamService.ListMembers(scenario.supplierID, group.ID)
-	if err != nil || len(supplierMembers) != 3 {
+	if err != nil || len(supplierMembers) != 2 {
 		t.Fatalf("supplier members=%+v err=%v", supplierMembers, err)
 	}
 	batches, err := teamService.ListEntryBatches(scenario.supplierID, group.ID)

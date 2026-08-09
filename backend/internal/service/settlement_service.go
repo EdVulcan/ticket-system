@@ -114,7 +114,16 @@ func loadSettlementAdmissionFacts(tx *gorm.DB, supplierTenantID, distributorTena
 		Joins("JOIN fulfillment_orders ON fulfillment_orders.id = tickets.fulfillment_order_id").
 		Where("check_in_records.result = ? AND fulfillment_orders.supplier_tenant_id = ? AND fulfillment_orders.sales_tenant_id = ?", "success", supplierTenantID, distributorTenantID).
 		Where("NOT EXISTS (SELECT 1 FROM check_in_records earlier WHERE earlier.ticket_id = check_in_records.ticket_id AND earlier.result = 'success' AND earlier.id < check_in_records.id)").
-		Where("NOT EXISTS (SELECT 1 FROM tour_groups WHERE tour_groups.sales_order_id = fulfillment_orders.sales_order_id)")
+		Where(`NOT EXISTS (
+			SELECT 1
+			FROM tour_group_members
+			JOIN tour_groups ON tour_groups.id = tour_group_members.group_id
+			WHERE tour_group_members.ticket_code = tickets.ticket_code
+				AND tour_groups.sales_order_id = fulfillment_orders.sales_order_id
+				AND tour_groups.tenant_id = fulfillment_orders.sales_tenant_id
+				AND tour_groups.supplier_tenant_id = fulfillment_orders.supplier_tenant_id
+				AND tour_groups.scenic_area_id = tickets.fulfillment_scenic_area_id
+		)`)
 	var admissions, reversals []model.CheckInRecord
 	if err := base.Session(&gorm.Session{}).
 		Where("check_in_records.settlement_line_id = 0 AND check_in_records.reversed_at IS NULL AND check_in_records.check_in_time BETWEEN ? AND ?", start, end).

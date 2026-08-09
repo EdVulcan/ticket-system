@@ -15,14 +15,25 @@ func (s *TeamService) SubmitTeamConfirmation(tenantID, groupID, actorUserID uint
 	if tenantID == 0 || groupID == 0 || confirmedCount < 1 {
 		return nil, errors.New("group and confirmed count are required")
 	}
+	notes = strings.TrimSpace(notes)
 	var confirmation model.TourGroupConfirmation
 	err := model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
+			return err
+		}
 		var group model.TourGroup
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
 			return errors.New("team group not found")
 		}
 		if group.SalesOrderID == 0 || (group.Status != "confirmed" && group.Status != "partial_entry") {
 			return errors.New("only a confirmed team can submit an operational confirmation")
+		}
+		var activeMemberCount int64
+		if err := tx.Model(&model.TourGroupMember{}).Where("group_id = ? AND status != ?", group.ID, "cancelled").Count(&activeMemberCount).Error; err != nil {
+			return err
+		}
+		if int64(confirmedCount) != activeMemberCount && notes == "" {
+			return errors.New("confirmation count differs from the active roster; notes are required")
 		}
 		var guide model.TourGuide
 		if guideID != 0 {
@@ -44,7 +55,7 @@ func (s *TeamService) SubmitTeamConfirmation(tenantID, groupID, actorUserID uint
 			GroupID: group.ID, Sequence: int(count) + 1, TravelTenantID: group.TenantID,
 			SupplierTenantID: group.SupplierTenantID, ScenicAreaID: group.ScenicAreaID,
 			ConfirmedCount: confirmedCount, GuideID: guide.ID, GuideName: guide.Name, GuidePhone: guide.Phone,
-			VehicleID: vehicle.ID, PlateNumber: vehicle.PlateNumber, Notes: strings.TrimSpace(notes),
+			VehicleID: vehicle.ID, PlateNumber: vehicle.PlateNumber, Notes: notes,
 			SubmittedBy: actorUserID, SubmittedAt: time.Now(),
 		}
 		if err := tx.Create(&confirmation).Error; err != nil {
@@ -100,6 +111,9 @@ func (s *TeamService) ChangeTeamMember(tenantID, groupID, actorUserID uint, acti
 	}
 	var change model.TourGroupMemberChange
 	err := model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
+			return err
+		}
 		var group model.TourGroup
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
 			return errors.New("team group not found")
@@ -131,15 +145,17 @@ func (s *TeamService) ChangeTeamMember(tenantID, groupID, actorUserID uint, acti
 			member.GroupID = group.ID
 			member.Status = "planned"
 			var ticket model.Ticket
-			ticketErr := tx.Where(`order_id = ? AND fulfillment_tenant_id = ? AND fulfillment_scenic_area_id = ? AND status = ? AND code_mode != ?
+			ticketErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(`order_id = ? AND fulfillment_tenant_id = ? AND fulfillment_scenic_area_id = ? AND status = ? AND code_mode != ?
 				AND NOT EXISTS (SELECT 1 FROM tour_group_members WHERE tour_group_members.ticket_code = tickets.ticket_code AND tour_group_members.status != ?)`,
 				group.SalesOrderID, group.SupplierTenantID, group.ScenicAreaID, "unused", "order", "cancelled").Order("id").First(&ticket).Error
-			if ticketErr == nil {
-				member.TicketCode = ticket.TicketCode
-				member.Status = "ticketed"
-			} else if !errors.Is(ticketErr, gorm.ErrRecordNotFound) {
+			if errors.Is(ticketErr, gorm.ErrRecordNotFound) {
+				return errors.New("当前团队订单没有可分配的备用票权，暂不能加员")
+			}
+			if ticketErr != nil {
 				return ticketErr
 			}
+			member.TicketCode = ticket.TicketCode
+			member.Status = "ticketed"
 			if err := tx.Create(&member).Error; err != nil {
 				return err
 			}
@@ -152,12 +168,15 @@ func (s *TeamService) ChangeTeamMember(tenantID, groupID, actorUserID uint, acti
 			if err := tx.Where("id = ? AND group_id = ?", memberID, group.ID).First(&changedMember).Error; err != nil {
 				return errors.New("team member not found")
 			}
-			if changedMember.Status == "entered" || changedMember.Status == "cancelled" {
+			if changedMember.Status == "cancelled" {
+				return errors.New("该成员已随退票或作废完成减员，无需重复操作")
+			}
+			if changedMember.Status == "entered" {
 				return errors.New("entered or cancelled member cannot be removed")
 			}
 			if changedMember.TicketCode != "" {
 				var ticket model.Ticket
-				if err := tx.Where("ticket_code = ? AND order_id = ?", changedMember.TicketCode, group.SalesOrderID).First(&ticket).Error; err != nil || ticket.Status != "refunded" {
+				if err := tx.Where("ticket_code = ? AND order_id = ?", changedMember.TicketCode, group.SalesOrderID).First(&ticket).Error; err != nil || (ticket.Status != "refunded" && ticket.Status != "void") {
 					return errors.New("refund or void the member ticket before removal")
 				}
 			}

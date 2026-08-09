@@ -252,6 +252,35 @@ func TestBundleTenantIsolation(t *testing.T) {
 	}
 }
 
+func TestBundleEligibleComponentsSupportPostgresBooleanProducts(t *testing.T) {
+	resetBusinessData(t)
+	scenario := seedDistributionScenario(t)
+
+	components, err := (&BundleService{}).ListEligibleComponents(scenario.distributorID, "online")
+	if err != nil {
+		t.Fatalf("list eligible bundle components: %v", err)
+	}
+	if len(components) != 1 || components[0].SellerProductID != scenario.listingID {
+		t.Fatalf("eligible components=%+v, want listing %d", components, scenario.listingID)
+	}
+}
+
+func TestDistributorWithoutSupplierCapabilityCannotCreateOfflineBundle(t *testing.T) {
+	resetBusinessData(t)
+	distributorID, first, second, _ := seedCrossSupplierBundle(t, 2)
+
+	_, err := (&BundleService{}).Create(distributorID, 1, BundleUpsertInput{
+		Name: "Window Bundle", Type: "offline", RetailPriceCents: 15000,
+		Components: []BundleComponentInput{
+			{SellerProductID: first.listingID, Quantity: 1, RetailAllocationCents: 8000},
+			{SellerProductID: second.listingID, Quantity: 1, RetailAllocationCents: 7000},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "supplier") {
+		t.Fatalf("offline distributor bundle error=%v, want supplier capability rejection", err)
+	}
+}
+
 func TestBundleRevisionPreservesOldOrderSnapshot(t *testing.T) {
 	resetBusinessData(t)
 	distributorID, first, second, bundle := seedCrossSupplierBundle(t, 3)

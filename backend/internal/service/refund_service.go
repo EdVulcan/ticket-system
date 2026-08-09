@@ -1130,6 +1130,9 @@ func applyRefundBusinessFactsTx(tx *gorm.DB, order *model.Order, refund *model.R
 			}
 		}
 	}
+	if err := lockTeamProjectionForRefundTx(tx, order.ID); err != nil {
+		return err
+	}
 	for _, ticket := range selected {
 		if ticket.CheckInCount > 0 {
 			now := time.Now()
@@ -1153,6 +1156,9 @@ func applyRefundBusinessFactsTx(tx *gorm.DB, order *model.Order, refund *model.R
 	if err := reconcileTeamSettlementsAfterRefundTx(tx, order, refund); err != nil {
 		return err
 	}
+	if err := syncTeamProjectionAfterRefundTx(tx, order.ID, selected, refund); err != nil {
+		return err
+	}
 	var remainingTickets int64
 	if err := tx.Model(&model.Ticket{}).Where("order_item_id IN (SELECT id FROM order_items WHERE order_id = ?) AND status != ?", order.ID, "refunded").Count(&remainingTickets).Error; err != nil {
 		return err
@@ -1171,36 +1177,209 @@ func applyRefundBusinessFactsTx(tx *gorm.DB, order *model.Order, refund *model.R
 	return nil
 }
 
+func lockTeamProjectionForRefundTx(tx *gorm.DB, orderID uint) error {
+	if orderID == 0 {
+		return nil
+	}
+	var groupIDs []uint
+	if err := tx.Model(&model.TourGroup{}).Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("sales_order_id = ?", orderID).Order("id ASC").Pluck("id", &groupIDs).Error; err != nil {
+		return err
+	}
+	if len(groupIDs) == 0 {
+		return nil
+	}
+	var members []model.TourGroupMember
+	return tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("group_id IN ?", groupIDs).Order("group_id ASC, id ASC").Find(&members).Error
+}
+
+// syncTeamProjectionAfterRefundTx keeps the operational team roster aligned
+// with the refunded ticket facts. Check-in records remain as reversed audit
+// facts, while the current roster no longer presents the visitor as admitted.
+func syncTeamProjectionAfterRefundTx(tx *gorm.DB, orderID uint, selected map[string]*model.Ticket, refund *model.Refund) error {
+	if orderID == 0 || len(selected) == 0 {
+		return nil
+	}
+	selectedCodes := make(map[string]struct{}, len(selected))
+	for code := range selected {
+		if code = strings.TrimSpace(code); code != "" {
+			selectedCodes[code] = struct{}{}
+		}
+	}
+	if len(selectedCodes) == 0 {
+		return nil
+	}
+
+	var groups []model.TourGroup
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("sales_order_id = ?", orderID).Order("id ASC").Find(&groups).Error; err != nil {
+		return err
+	}
+	if len(groups) == 0 {
+		return nil
+	}
+	groupIDs := make([]uint, 0, len(groups))
+	groupsByID := make(map[uint]*model.TourGroup, len(groups))
+	changeSequence := make(map[uint]int, len(groups))
+	projectedCount := make(map[uint]int, len(groups))
+	for i := range groups {
+		groupIDs = append(groupIDs, groups[i].ID)
+		groupsByID[groups[i].ID] = &groups[i]
+		projectedCount[groups[i].ID] = groups[i].ExpectedCount
+		var count int64
+		if err := tx.Model(&model.TourGroupMemberChange{}).Where("group_id = ?", groups[i].ID).Count(&count).Error; err != nil {
+			return err
+		}
+		changeSequence[groups[i].ID] = int(count)
+	}
+	var members []model.TourGroupMember
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("group_id IN ?", groupIDs).Order("group_id ASC, id ASC").Find(&members).Error; err != nil {
+		return err
+	}
+
+	affected := make(map[uint]bool)
+	for i := range members {
+		member := &members[i]
+		if _, ok := selectedCodes[strings.TrimSpace(member.TicketCode)]; !ok {
+			continue
+		}
+		affected[member.GroupID] = true
+		if member.Status == "cancelled" && member.EnteredAt == nil && member.EntryBatchNo == "" {
+			continue
+		}
+		if err := tx.Model(member).Updates(map[string]interface{}{
+			"status": "cancelled", "entered_at": nil, "entry_batch_no": "",
+		}).Error; err != nil {
+			return err
+		}
+		group := groupsByID[member.GroupID]
+		beforeCount := projectedCount[member.GroupID]
+		afterCount := beforeCount
+		if afterCount > 0 {
+			afterCount--
+		}
+		changeSequence[member.GroupID]++
+		reason := "订单退票自动减员"
+		actorUserID := uint(0)
+		refundRecordID := uint(0)
+		if refund != nil {
+			if value := strings.TrimSpace(refund.Reason); value != "" {
+				reason = value
+			}
+			actorUserID = refund.AuthorizedBy
+			refundRecordID = refund.ID
+		}
+		change := model.TourGroupMemberChange{
+			GroupID: member.GroupID, Sequence: changeSequence[member.GroupID],
+			TravelTenantID: group.TenantID, SupplierTenantID: group.SupplierTenantID,
+			ChangeType: "remove", MemberID: member.ID, MemberName: member.Name,
+			BeforeExpectedCount: beforeCount, AfterExpectedCount: afterCount,
+			Reason: reason, ActorUserID: actorUserID,
+		}
+		if err := tx.Create(&change).Error; err != nil {
+			return err
+		}
+		if err := recordAuditTx(tx, actorUserID, group.TenantID, auditRoleTx(tx, actorUserID), "tenant", "team.member.change", "tour_group_member_change", change.ID,
+			reason, fmt.Sprintf(`{"expected_count":%d}`, beforeCount), fmt.Sprintf(`{"expected_count":%d,"action":"remove","member_id":%d,"refund_id":%d}`, afterCount, member.ID, refundRecordID)); err != nil {
+			return err
+		}
+		projectedCount[member.GroupID] = afterCount
+		member.Status = "cancelled"
+		member.EnteredAt = nil
+		member.EntryBatchNo = ""
+	}
+	for i := range groups {
+		group := &groups[i]
+		if !affected[group.ID] {
+			continue
+		}
+		activeCount, enteredCount := 0, 0
+		for j := range members {
+			if members[j].GroupID != group.ID || members[j].Status == "cancelled" {
+				continue
+			}
+			activeCount++
+			if members[j].Status == "entered" {
+				enteredCount++
+			}
+		}
+		status := "confirmed"
+		switch {
+		case activeCount == 0:
+			status = "cancelled"
+		case enteredCount == activeCount:
+			status = "entered"
+		case enteredCount > 0:
+			status = "partial_entry"
+		}
+		if group.ExpectedCount == activeCount && group.Status == status {
+			continue
+		}
+		if err := tx.Model(group).Updates(map[string]interface{}{
+			"expected_count": activeCount, "status": status,
+		}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func releaseTeamCreditAfterRefundTx(tx *gorm.DB, order *model.Order) error {
 	var groups []model.TourGroup
 	if err := tx.Where("sales_order_id = ? AND status != ?", order.ID, "cancelled").Find(&groups).Error; err != nil {
 		return err
 	}
 	for i := range groups {
+		var memberCodes []string
+		if err := tx.Model(&model.TourGroupMember{}).
+			Where("group_id = ? AND ticket_code != ?", groups[i].ID, "").
+			Pluck("ticket_code", &memberCodes).Error; err != nil {
+			return err
+		}
+		memberTickets := make(map[string]struct{}, len(memberCodes))
+		for _, code := range memberCodes {
+			if code = strings.TrimSpace(code); code != "" {
+				memberTickets[code] = struct{}{}
+			}
+		}
 		var remaining int64
 		for itemIndex := range order.Items {
 			item := &order.Items[itemIndex]
-			if item.FulfillmentTenantID != groups[i].SupplierTenantID || item.FulfillmentScenicAreaID != groups[i].ScenicAreaID {
+			if item.OrderID != order.ID || item.FulfillmentTenantID != groups[i].SupplierTenantID || item.FulfillmentScenicAreaID != groups[i].ScenicAreaID {
 				continue
 			}
 			unit := moneyCents(item.SettlementPrice)
-			if len(item.Tickets) == 1 && item.Tickets[0].CodeMode == "order" {
-				if item.Tickets[0].Status != "refunded" {
-					remaining += unit * int64(item.Quantity)
-				}
-				continue
-			}
 			for ticketIndex := range item.Tickets {
-				if item.Tickets[ticketIndex].Status != "refunded" {
+				ticket := &item.Tickets[ticketIndex]
+				if _, ok := memberTickets[strings.TrimSpace(ticket.TicketCode)]; !ok ||
+					ticket.OrderID != order.ID || ticket.TenantID != groups[i].TenantID ||
+					ticket.FulfillmentTenantID != groups[i].SupplierTenantID ||
+					ticket.FulfillmentScenicAreaID != groups[i].ScenicAreaID || ticket.Status == "refunded" {
+					continue
+				}
+				if ticket.CodeMode == "order" {
+					remaining += unit * int64(item.Quantity)
+				} else {
 					remaining += unit
 				}
 			}
 		}
-		creditUsed := remaining - groups[i].DepositCents
+		deposit := groups[i].DepositCents
+		if deposit > remaining {
+			deposit = remaining
+		}
+		if deposit < 0 {
+			deposit = 0
+		}
+		creditUsed := remaining - deposit
 		if creditUsed < 0 {
 			creditUsed = 0
 		}
-		if err := tx.Model(&groups[i]).Update("credit_used_cents", creditUsed).Error; err != nil {
+		if err := tx.Model(&groups[i]).Updates(map[string]interface{}{
+			"deposit_cents": deposit, "credit_used_cents": creditUsed,
+		}).Error; err != nil {
 			return err
 		}
 	}

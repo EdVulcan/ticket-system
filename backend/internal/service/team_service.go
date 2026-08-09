@@ -8,12 +8,66 @@ import (
 	"strings"
 	"ticket-backend/internal/model"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 type TeamService struct{}
+
+type TeamAgentInput struct {
+	Name      string `json:"name"`
+	Phone     string `json:"phone"`
+	JobNumber string `json:"job_number"`
+}
+
+type TeamGuideInput struct {
+	Name      string `json:"name"`
+	Phone     string `json:"phone"`
+	LicenseNo string `json:"license_no"`
+}
+
+type TeamVehicleInput struct {
+	PlateNumber string `json:"plate_number"`
+	DriverName  string `json:"driver_name"`
+	DriverPhone string `json:"driver_phone"`
+	Capacity    int    `json:"capacity"`
+}
+
+// TeamGroupPlanUpdate intentionally exposes only operational plan fields.
+// Supplier, scenic-area, contract, order, roster, ticket and money facts are
+// maintained by their dedicated workflows and cannot be patched here.
+type TeamGroupPlanUpdate struct {
+	Name      *string    `json:"name"`
+	VisitDate *time.Time `json:"visit_date"`
+	GuideID   *uint      `json:"guide_id"`
+	VehicleID *uint      `json:"vehicle_id"`
+	AgentID   *uint      `json:"agent_id"`
+	Reason    string     `json:"reason"`
+}
+
+// TeamGroupListOptions contains only tenant-scoped operational filters. The
+// tenant itself is always derived from the authenticated request context.
+type TeamGroupListOptions struct {
+	Page       int
+	PageSize   int
+	Keyword    string
+	Status     string
+	VisitStart *time.Time
+	VisitEnd   *time.Time
+}
+
+type teamGroupPlanAuditSnapshot struct {
+	Name         string    `json:"name"`
+	VisitDate    time.Time `json:"visit_date"`
+	GuideID      uint      `json:"guide_id"`
+	VehicleID    uint      `json:"vehicle_id"`
+	AgentID      uint      `json:"agent_id"`
+	Status       string    `json:"status"`
+	SalesOrderID uint      `json:"sales_order_id"`
+}
 
 type TeamPriceRule struct {
 	ProductID      uint   `json:"product_id"`
@@ -230,53 +284,6 @@ func normalizeTeamPriceRulesTx(tx *gorm.DB, supplierTenantID uint, rules []TeamP
 	return normalized, string(data), err
 }
 
-func syncTravelContractOffersTx(tx *gorm.DB, supplierTenantID, travelTenantID uint, rules []TeamPriceRule) error {
-	if err := requireActiveTenantCapability(tx, travelTenantID, "travel_agency"); err != nil {
-		return errors.New("该旅行社业务能力当前不可用")
-	}
-	for _, rule := range rules {
-		var product model.Product
-		if err := tx.Where("id = ? AND tenant_id = ?", rule.ProductID, supplierTenantID).First(&product).Error; err != nil {
-			return errors.New("合同产品当前不可用")
-		}
-		revision, err := ensureProductRevisionTx(tx, &product)
-		if err != nil {
-			return err
-		}
-		var offer model.ProductOffer
-		err = tx.Where("supplier_tenant_id = ? AND distributor_tenant_id = ? AND source_product_id = ?", supplierTenantID, travelTenantID, product.ID).First(&offer).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			offer = model.ProductOffer{
-				SupplierTenantID: supplierTenantID, DistributorTenantID: travelTenantID,
-				SourceProductID: product.ID, ProductRevisionID: revision.ID, FulfillmentScenicAreaID: product.ScenicAreaID,
-				SettlementPrice: centsMoney(rule.PriceCents), MinimumRetailPriceCents: rule.PriceCents,
-				Status: "active", AllowedChannels: "window,online,ota",
-			}
-			if err := tx.Create(&offer).Error; err != nil {
-				return err
-			}
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		if offer.Status != "active" {
-			return fmt.Errorf("产品“%s”的供货已暂停或终止，请先在分销管理中恢复", product.Name)
-		}
-		minimumRetailPriceCents := offer.MinimumRetailPriceCents
-		if minimumRetailPriceCents < rule.PriceCents {
-			minimumRetailPriceCents = rule.PriceCents
-		}
-		if err := tx.Model(&offer).Updates(map[string]interface{}{
-			"product_revision_id": revision.ID, "fulfillment_scenic_area_id": product.ScenicAreaID,
-			"settlement_price": centsMoney(rule.PriceCents), "minimum_retail_price_cents": minimumRetailPriceCents,
-		}).Error; err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func validateTravelContractInput(input TravelContractInput) error {
 	if input.TravelTenantID == 0 || strings.TrimSpace(input.ContractNo) == "" {
 		return errors.New("travel agency and contract number are required")
@@ -309,11 +316,8 @@ func (s *TeamService) CreateContract(supplierTenantID, operatorID uint, input Tr
 		if err := tx.Where("agent_tenant_id = ? AND supplier_tenant_id = ? AND travel_status = ?", input.TravelTenantID, supplierTenantID, "active").First(&relationship).Error; err != nil {
 			return errors.New("active travel agency relationship not found")
 		}
-		normalizedRules, priceJSON, err := normalizeTeamPriceRulesTx(tx, supplierTenantID, input.PriceRules)
+		_, priceJSON, err := normalizeTeamPriceRulesTx(tx, supplierTenantID, input.PriceRules)
 		if err != nil {
-			return err
-		}
-		if err := syncTravelContractOffersTx(tx, supplierTenantID, input.TravelTenantID, normalizedRules); err != nil {
 			return err
 		}
 		status := input.Status
@@ -357,11 +361,8 @@ func (s *TeamService) UpdateContract(supplierTenantID, contractID, operatorID ui
 		if input.TravelTenantID != contract.TravelTenantID || strings.TrimSpace(input.ContractNo) != contract.ContractNo {
 			return errors.New("travel agency and contract number cannot be changed")
 		}
-		normalizedRules, priceJSON, err := normalizeTeamPriceRulesTx(tx, supplierTenantID, input.PriceRules)
+		_, priceJSON, err := normalizeTeamPriceRulesTx(tx, supplierTenantID, input.PriceRules)
 		if err != nil {
-			return err
-		}
-		if err := syncTravelContractOffersTx(tx, supplierTenantID, input.TravelTenantID, normalizedRules); err != nil {
 			return err
 		}
 		before, _ := json.Marshal(contract)
@@ -463,21 +464,181 @@ func (s *TeamService) ListContractPartners(supplierTenantID uint) ([]TravelContr
 	return rows, nil
 }
 
-func (s *TeamService) CreateAgent(tenantID uint, agent *model.TravelAgent) error {
-	if strings.TrimSpace(agent.Name) == "" || strings.TrimSpace(agent.JobNumber) == "" {
-		return errors.New("agent name and job number are required")
+func normalizeTeamReferenceText(value, field string, maxRunes int, required bool) (string, error) {
+	value = strings.TrimSpace(value)
+	if required && value == "" {
+		return "", fmt.Errorf("%s is required", field)
 	}
-	agent.Base = model.Base{}
-	agent.TenantID = tenantID
-	if agent.Status == "" {
-		agent.Status = "active"
+	if utf8.RuneCountInString(value) > maxRunes {
+		return "", fmt.Errorf("%s is too long", field)
 	}
-	return model.Write(func(tx *gorm.DB) error {
+	for _, char := range value {
+		if unicode.IsControl(char) {
+			return "", fmt.Errorf("%s contains invalid characters", field)
+		}
+	}
+	return value, nil
+}
+
+func normalizeTeamAgentInput(input TeamAgentInput) (TeamAgentInput, error) {
+	var err error
+	if input.Name, err = normalizeTeamReferenceText(input.Name, "agent name", 80, true); err != nil {
+		return input, err
+	}
+	if input.Phone, err = normalizeTeamReferenceText(input.Phone, "agent phone", 30, false); err != nil {
+		return input, err
+	}
+	if input.JobNumber, err = normalizeTeamReferenceText(input.JobNumber, "agent job number", 50, true); err != nil {
+		return input, err
+	}
+	return input, nil
+}
+
+func normalizeTeamGuideInput(input TeamGuideInput) (TeamGuideInput, error) {
+	var err error
+	if input.Name, err = normalizeTeamReferenceText(input.Name, "guide name", 80, true); err != nil {
+		return input, err
+	}
+	if input.Phone, err = normalizeTeamReferenceText(input.Phone, "guide phone", 30, false); err != nil {
+		return input, err
+	}
+	if input.LicenseNo, err = normalizeTeamReferenceText(input.LicenseNo, "guide license number", 80, false); err != nil {
+		return input, err
+	}
+	return input, nil
+}
+
+func normalizeTeamVehicleInput(input TeamVehicleInput) (TeamVehicleInput, error) {
+	var err error
+	if input.PlateNumber, err = normalizeTeamReferenceText(input.PlateNumber, "plate number", 30, true); err != nil {
+		return input, err
+	}
+	input.PlateNumber = strings.ToUpper(input.PlateNumber)
+	if input.DriverName, err = normalizeTeamReferenceText(input.DriverName, "driver name", 80, false); err != nil {
+		return input, err
+	}
+	if input.DriverPhone, err = normalizeTeamReferenceText(input.DriverPhone, "driver phone", 30, false); err != nil {
+		return input, err
+	}
+	if input.Capacity < 0 {
+		return input, errors.New("vehicle capacity cannot be negative")
+	}
+	return input, nil
+}
+
+func requireTeamReferenceActorTx(tx *gorm.DB, tenantID, actorUserID uint) error {
+	if actorUserID == 0 {
+		return errors.New("team operator is required")
+	}
+	var count int64
+	if err := tx.Model(&model.User{}).Where("id = ? AND tenant_id = ?", actorUserID, tenantID).Count(&count).Error; err != nil {
+		return err
+	}
+	if count != 1 {
+		return errors.New("team operator not found")
+	}
+	return nil
+}
+
+func teamReferenceJSON(value interface{}) (string, error) {
+	data, err := json.Marshal(value)
+	return string(data), err
+}
+
+func validateTeamReferenceStatus(status string) (string, error) {
+	status = strings.TrimSpace(status)
+	if status != "active" && status != "inactive" {
+		return "", errors.New("reference status must be active or inactive")
+	}
+	return status, nil
+}
+
+func (s *TeamService) CreateAgent(tenantID, actorUserID uint, input TeamAgentInput) (*model.TravelAgent, error) {
+	input, err := normalizeTeamAgentInput(input)
+	if err != nil {
+		return nil, err
+	}
+	agent := model.TravelAgent{TenantID: tenantID, Name: input.Name, Phone: input.Phone, JobNumber: input.JobNumber, Status: "active"}
+	err = model.Write(func(tx *gorm.DB) error {
 		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
 			return err
 		}
-		return tx.Create(agent).Error
+		if err := requireTeamReferenceActorTx(tx, tenantID, actorUserID); err != nil {
+			return err
+		}
+		if err := tx.Create(&agent).Error; err != nil {
+			return err
+		}
+		after, err := teamReferenceJSON(&agent)
+		if err != nil {
+			return err
+		}
+		return recordAuditTx(tx, actorUserID, tenantID, auditRoleTx(tx, actorUserID), "tenant", "team.agent.create", "travel_agent", agent.ID, "create team agent", "{}", after)
 	})
+	return &agent, err
+}
+
+func (s *TeamService) UpdateAgent(tenantID, agentID, actorUserID uint, input TeamAgentInput) (*model.TravelAgent, error) {
+	input, err := normalizeTeamAgentInput(input)
+	if err != nil {
+		return nil, err
+	}
+	var agent model.TravelAgent
+	err = model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
+			return err
+		}
+		if err := requireTeamReferenceActorTx(tx, tenantID, actorUserID); err != nil {
+			return err
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", agentID, tenantID).First(&agent).Error; err != nil {
+			return errors.New("team agent not found")
+		}
+		before, err := teamReferenceJSON(&agent)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&agent).Updates(map[string]interface{}{"name": input.Name, "phone": input.Phone, "job_number": input.JobNumber}).Error; err != nil {
+			return err
+		}
+		agent.Name, agent.Phone, agent.JobNumber = input.Name, input.Phone, input.JobNumber
+		after, err := teamReferenceJSON(&agent)
+		if err != nil {
+			return err
+		}
+		return recordAuditTx(tx, actorUserID, tenantID, auditRoleTx(tx, actorUserID), "tenant", "team.agent.update", "travel_agent", agent.ID, "update team agent", before, after)
+	})
+	return &agent, err
+}
+
+func (s *TeamService) SetAgentStatus(tenantID, agentID, actorUserID uint, status, reason string) (*model.TravelAgent, error) {
+	status, err := validateTeamReferenceStatus(status)
+	if err != nil {
+		return nil, err
+	}
+	var agent model.TravelAgent
+	err = model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
+			return err
+		}
+		if err := requireTeamReferenceActorTx(tx, tenantID, actorUserID); err != nil {
+			return err
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", agentID, tenantID).First(&agent).Error; err != nil {
+			return errors.New("team agent not found")
+		}
+		if agent.Status == status {
+			return nil
+		}
+		before, _ := teamReferenceJSON(&agent)
+		if err := tx.Model(&agent).Update("status", status).Error; err != nil {
+			return err
+		}
+		agent.Status = status
+		after, _ := teamReferenceJSON(&agent)
+		return recordAuditTx(tx, actorUserID, tenantID, auditRoleTx(tx, actorUserID), "tenant", "team.agent.status", "travel_agent", agent.ID, strings.TrimSpace(reason), before, after)
+	})
+	return &agent, err
 }
 
 func (s *TeamService) ListAgents(tenantID uint) ([]model.TravelAgent, error) {
@@ -485,21 +646,92 @@ func (s *TeamService) ListAgents(tenantID uint) ([]model.TravelAgent, error) {
 	return rows, model.DB.Where("tenant_id = ?", tenantID).Order("created_at DESC").Find(&rows).Error
 }
 
-func (s *TeamService) CreateGuide(tenantID uint, guide *model.TourGuide) error {
-	if strings.TrimSpace(guide.Name) == "" {
-		return errors.New("guide name is required")
+func (s *TeamService) CreateGuide(tenantID, actorUserID uint, input TeamGuideInput) (*model.TourGuide, error) {
+	input, err := normalizeTeamGuideInput(input)
+	if err != nil {
+		return nil, err
 	}
-	guide.Base = model.Base{}
-	guide.TenantID = tenantID
-	if guide.Status == "" {
-		guide.Status = "active"
-	}
-	return model.Write(func(tx *gorm.DB) error {
+	guide := model.TourGuide{TenantID: tenantID, Name: input.Name, Phone: input.Phone, LicenseNo: input.LicenseNo, Status: "active"}
+	err = model.Write(func(tx *gorm.DB) error {
 		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
 			return err
 		}
-		return tx.Create(guide).Error
+		if err := requireTeamReferenceActorTx(tx, tenantID, actorUserID); err != nil {
+			return err
+		}
+		if err := tx.Create(&guide).Error; err != nil {
+			return err
+		}
+		after, err := teamReferenceJSON(&guide)
+		if err != nil {
+			return err
+		}
+		return recordAuditTx(tx, actorUserID, tenantID, auditRoleTx(tx, actorUserID), "tenant", "team.guide.create", "tour_guide", guide.ID, "create tour guide", "{}", after)
 	})
+	return &guide, err
+}
+
+func (s *TeamService) UpdateGuide(tenantID, guideID, actorUserID uint, input TeamGuideInput) (*model.TourGuide, error) {
+	input, err := normalizeTeamGuideInput(input)
+	if err != nil {
+		return nil, err
+	}
+	var guide model.TourGuide
+	err = model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
+			return err
+		}
+		if err := requireTeamReferenceActorTx(tx, tenantID, actorUserID); err != nil {
+			return err
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", guideID, tenantID).First(&guide).Error; err != nil {
+			return errors.New("team guide not found")
+		}
+		before, err := teamReferenceJSON(&guide)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&guide).Updates(map[string]interface{}{"name": input.Name, "phone": input.Phone, "license_no": input.LicenseNo}).Error; err != nil {
+			return err
+		}
+		guide.Name, guide.Phone, guide.LicenseNo = input.Name, input.Phone, input.LicenseNo
+		after, err := teamReferenceJSON(&guide)
+		if err != nil {
+			return err
+		}
+		return recordAuditTx(tx, actorUserID, tenantID, auditRoleTx(tx, actorUserID), "tenant", "team.guide.update", "tour_guide", guide.ID, "update tour guide", before, after)
+	})
+	return &guide, err
+}
+
+func (s *TeamService) SetGuideStatus(tenantID, guideID, actorUserID uint, status, reason string) (*model.TourGuide, error) {
+	status, err := validateTeamReferenceStatus(status)
+	if err != nil {
+		return nil, err
+	}
+	var guide model.TourGuide
+	err = model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
+			return err
+		}
+		if err := requireTeamReferenceActorTx(tx, tenantID, actorUserID); err != nil {
+			return err
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", guideID, tenantID).First(&guide).Error; err != nil {
+			return errors.New("team guide not found")
+		}
+		if guide.Status == status {
+			return nil
+		}
+		before, _ := teamReferenceJSON(&guide)
+		if err := tx.Model(&guide).Update("status", status).Error; err != nil {
+			return err
+		}
+		guide.Status = status
+		after, _ := teamReferenceJSON(&guide)
+		return recordAuditTx(tx, actorUserID, tenantID, auditRoleTx(tx, actorUserID), "tenant", "team.guide.status", "tour_guide", guide.ID, strings.TrimSpace(reason), before, after)
+	})
+	return &guide, err
 }
 
 func (s *TeamService) ListGuides(tenantID uint) ([]model.TourGuide, error) {
@@ -507,21 +739,92 @@ func (s *TeamService) ListGuides(tenantID uint) ([]model.TourGuide, error) {
 	return rows, model.DB.Where("tenant_id = ?", tenantID).Order("created_at DESC").Find(&rows).Error
 }
 
-func (s *TeamService) CreateVehicle(tenantID uint, vehicle *model.TravelVehicle) error {
-	if strings.TrimSpace(vehicle.PlateNumber) == "" {
-		return errors.New("plate number is required")
+func (s *TeamService) CreateVehicle(tenantID, actorUserID uint, input TeamVehicleInput) (*model.TravelVehicle, error) {
+	input, err := normalizeTeamVehicleInput(input)
+	if err != nil {
+		return nil, err
 	}
-	vehicle.Base = model.Base{}
-	vehicle.TenantID = tenantID
-	if vehicle.Status == "" {
-		vehicle.Status = "active"
-	}
-	return model.Write(func(tx *gorm.DB) error {
+	vehicle := model.TravelVehicle{TenantID: tenantID, PlateNumber: input.PlateNumber, DriverName: input.DriverName, DriverPhone: input.DriverPhone, Capacity: input.Capacity, Status: "active"}
+	err = model.Write(func(tx *gorm.DB) error {
 		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
 			return err
 		}
-		return tx.Create(vehicle).Error
+		if err := requireTeamReferenceActorTx(tx, tenantID, actorUserID); err != nil {
+			return err
+		}
+		if err := tx.Create(&vehicle).Error; err != nil {
+			return err
+		}
+		after, err := teamReferenceJSON(&vehicle)
+		if err != nil {
+			return err
+		}
+		return recordAuditTx(tx, actorUserID, tenantID, auditRoleTx(tx, actorUserID), "tenant", "team.vehicle.create", "travel_vehicle", vehicle.ID, "create travel vehicle", "{}", after)
 	})
+	return &vehicle, err
+}
+
+func (s *TeamService) UpdateVehicle(tenantID, vehicleID, actorUserID uint, input TeamVehicleInput) (*model.TravelVehicle, error) {
+	input, err := normalizeTeamVehicleInput(input)
+	if err != nil {
+		return nil, err
+	}
+	var vehicle model.TravelVehicle
+	err = model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
+			return err
+		}
+		if err := requireTeamReferenceActorTx(tx, tenantID, actorUserID); err != nil {
+			return err
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", vehicleID, tenantID).First(&vehicle).Error; err != nil {
+			return errors.New("team vehicle not found")
+		}
+		before, err := teamReferenceJSON(&vehicle)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&vehicle).Updates(map[string]interface{}{"plate_number": input.PlateNumber, "driver_name": input.DriverName, "driver_phone": input.DriverPhone, "capacity": input.Capacity}).Error; err != nil {
+			return err
+		}
+		vehicle.PlateNumber, vehicle.DriverName, vehicle.DriverPhone, vehicle.Capacity = input.PlateNumber, input.DriverName, input.DriverPhone, input.Capacity
+		after, err := teamReferenceJSON(&vehicle)
+		if err != nil {
+			return err
+		}
+		return recordAuditTx(tx, actorUserID, tenantID, auditRoleTx(tx, actorUserID), "tenant", "team.vehicle.update", "travel_vehicle", vehicle.ID, "update travel vehicle", before, after)
+	})
+	return &vehicle, err
+}
+
+func (s *TeamService) SetVehicleStatus(tenantID, vehicleID, actorUserID uint, status, reason string) (*model.TravelVehicle, error) {
+	status, err := validateTeamReferenceStatus(status)
+	if err != nil {
+		return nil, err
+	}
+	var vehicle model.TravelVehicle
+	err = model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
+			return err
+		}
+		if err := requireTeamReferenceActorTx(tx, tenantID, actorUserID); err != nil {
+			return err
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", vehicleID, tenantID).First(&vehicle).Error; err != nil {
+			return errors.New("team vehicle not found")
+		}
+		if vehicle.Status == status {
+			return nil
+		}
+		before, _ := teamReferenceJSON(&vehicle)
+		if err := tx.Model(&vehicle).Update("status", status).Error; err != nil {
+			return err
+		}
+		vehicle.Status = status
+		after, _ := teamReferenceJSON(&vehicle)
+		return recordAuditTx(tx, actorUserID, tenantID, auditRoleTx(tx, actorUserID), "tenant", "team.vehicle.status", "travel_vehicle", vehicle.ID, strings.TrimSpace(reason), before, after)
+	})
+	return &vehicle, err
 }
 
 func (s *TeamService) ListVehicles(tenantID uint) ([]model.TravelVehicle, error) {
@@ -537,6 +840,9 @@ func (s *TeamService) CreateGroup(tenantID uint, group *model.TourGroup) error {
 	if tenantID == 0 || strings.TrimSpace(group.Name) == "" || group.SupplierTenantID == 0 || group.ScenicAreaID == 0 || group.VisitDate.IsZero() {
 		return errors.New("group name, supplier, scenic area and visit date are required")
 	}
+	if group.ExpectedCount < 1 {
+		return errors.New("团队计划人数至少为 1")
+	}
 	if group.DepositCents != 0 {
 		return errors.New("team deposit must be recorded through a verified payment workflow")
 	}
@@ -548,10 +854,16 @@ func (s *TeamService) CreateGroup(tenantID uint, group *model.TourGroup) error {
 		if err := tx.Where("id = ? AND tenant_id = ? AND status = ?", group.ScenicAreaID, group.SupplierTenantID, "active").First(&area).Error; err != nil {
 			return errors.New("supplier scenic area not found")
 		}
-		if group.SupplierTenantID != tenantID {
-			var relationship model.DistributorRelationship
-			if err := tx.Where("agent_tenant_id = ? AND supplier_tenant_id = ? AND travel_status = ?", tenantID, group.SupplierTenantID, "active").First(&relationship).Error; err != nil {
-				return errors.New("active supplier relationship not found")
+		for _, assignment := range []struct {
+			kind string
+			id   uint
+		}{
+			{kind: "agent", id: group.AgentID},
+			{kind: "guide", id: group.GuideID},
+			{kind: "vehicle", id: group.VehicleID},
+		} {
+			if err := validateTeamPlanAssignmentTx(tx, tenantID, assignment.kind, assignment.id); err != nil {
+				return err
 			}
 		}
 		if err := validateTeamContractTx(tx, tenantID, group); err != nil {
@@ -569,23 +881,301 @@ func (s *TeamService) CreateGroup(tenantID uint, group *model.TourGroup) error {
 	})
 }
 
+func teamGroupPlanSnapshot(group *model.TourGroup) teamGroupPlanAuditSnapshot {
+	return teamGroupPlanAuditSnapshot{
+		Name: group.Name, VisitDate: group.VisitDate, GuideID: group.GuideID,
+		VehicleID: group.VehicleID, AgentID: group.AgentID, Status: group.Status,
+		SalesOrderID: group.SalesOrderID,
+	}
+}
+
+func validateTeamPlanAssignmentTx(tx *gorm.DB, tenantID uint, kind string, id uint) error {
+	if id == 0 {
+		return nil
+	}
+	switch kind {
+	case "guide":
+		var count int64
+		if err := tx.Model(&model.TourGuide{}).Where("id = ? AND tenant_id = ? AND status = ?", id, tenantID, "active").Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return errors.New("所选导游不存在、已停用或不属于当前旅行社")
+		}
+	case "vehicle":
+		var count int64
+		if err := tx.Model(&model.TravelVehicle{}).Where("id = ? AND tenant_id = ? AND status = ?", id, tenantID, "active").Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return errors.New("所选车辆不存在、已停用或不属于当前旅行社")
+		}
+	case "agent":
+		var count int64
+		if err := tx.Model(&model.TravelAgent{}).Where("id = ? AND tenant_id = ? AND status = ?", id, tenantID, "active").Count(&count).Error; err != nil {
+			return err
+		}
+		if count == 0 {
+			return errors.New("所选业务员不存在、已停用或不属于当前旅行社")
+		}
+	default:
+		return errors.New("未知团队安排类型")
+	}
+	return nil
+}
+
+// UpdateGroupPlan updates only the operational plan. Once a confirmation or
+// order exists, fields that would rewrite its historical meaning are frozen;
+// guide, vehicle and agent assignments may still be corrected with a reason
+// until the group has fully entered.
+func (s *TeamService) UpdateGroupPlan(tenantID, groupID, actorUserID uint, input TeamGroupPlanUpdate) (*model.TourGroup, error) {
+	var result model.TourGroup
+	err := model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
+			return err
+		}
+		var group model.TourGroup
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
+			return errors.New("团队计划不存在")
+		}
+		if group.Status == "entered" {
+			return errors.New("团队已全部入园，不能再修改计划")
+		}
+		if group.Status == "cancelled" {
+			return errors.New("团队计划已取消，不能再修改")
+		}
+		if group.Status != "draft" && group.Status != "confirmed" && group.Status != "partial_entry" {
+			return errors.New("当前团队状态不允许修改计划")
+		}
+
+		var confirmationCount int64
+		if err := tx.Model(&model.TourGroupConfirmation{}).Where("group_id = ?", group.ID).Count(&confirmationCount).Error; err != nil {
+			return err
+		}
+		restricted := group.SalesOrderID != 0 || group.Status != "draft" || confirmationCount > 0
+		updates := make(map[string]interface{})
+		if input.Name != nil {
+			name := strings.TrimSpace(*input.Name)
+			if name == "" {
+				return errors.New("团队名称不能为空")
+			}
+			if len([]rune(name)) > 120 {
+				return errors.New("团队名称不能超过120个字符")
+			}
+			if name != group.Name {
+				if confirmationCount > 0 {
+					return errors.New("已有确认单的团队不能修改团队名称，请追加新的确认说明")
+				}
+				updates["name"] = name
+			}
+		}
+		if input.VisitDate != nil {
+			if input.VisitDate.IsZero() {
+				return errors.New("到园日期不能为空")
+			}
+			visitDate := startOfDay(*input.VisitDate)
+			if !sameTeamDate(visitDate, group.VisitDate) {
+				if restricted {
+					return errors.New("已有确认单、订单或履约进度的团队不能修改到园日期")
+				}
+				candidate := group
+				candidate.VisitDate = visitDate
+				if err := validateTeamContractTx(tx, tenantID, &candidate); err != nil {
+					return err
+				}
+				updates["visit_date"] = visitDate
+			}
+		}
+		if input.GuideID != nil && *input.GuideID != group.GuideID {
+			if err := validateTeamPlanAssignmentTx(tx, tenantID, "guide", *input.GuideID); err != nil {
+				return err
+			}
+			updates["guide_id"] = *input.GuideID
+		}
+		if input.VehicleID != nil && *input.VehicleID != group.VehicleID {
+			if err := validateTeamPlanAssignmentTx(tx, tenantID, "vehicle", *input.VehicleID); err != nil {
+				return err
+			}
+			updates["vehicle_id"] = *input.VehicleID
+		}
+		if input.AgentID != nil && *input.AgentID != group.AgentID {
+			if err := validateTeamPlanAssignmentTx(tx, tenantID, "agent", *input.AgentID); err != nil {
+				return err
+			}
+			updates["agent_id"] = *input.AgentID
+		}
+		if len(updates) == 0 {
+			result = group
+			return nil
+		}
+		reason := strings.TrimSpace(input.Reason)
+		if restricted && reason == "" {
+			return errors.New("已有确认单、订单或履约进度的团队修改计划时必须填写原因")
+		}
+		if len([]rune(reason)) > 255 {
+			return errors.New("修改原因不能超过255个字符")
+		}
+		if reason == "" {
+			reason = "维护草稿团队计划"
+		}
+		beforeJSON, err := json.Marshal(teamGroupPlanSnapshot(&group))
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&group).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.First(&group, group.ID).Error; err != nil {
+			return err
+		}
+		afterJSON, err := json.Marshal(teamGroupPlanSnapshot(&group))
+		if err != nil {
+			return err
+		}
+		if err := recordAuditTx(tx, actorUserID, tenantID, auditRoleTx(tx, actorUserID), "tenant", "team.plan.update", "tour_group", group.ID, reason, string(beforeJSON), string(afterJSON)); err != nil {
+			return err
+		}
+		result = group
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// CancelGroup cancels only an unfunded, unfulfilled plan. It never refunds,
+// voids tickets, releases credit or rewrites admission/settlement facts; a
+// bound order must first be handled through the existing after-sale workflow.
+func (s *TeamService) CancelGroup(tenantID, groupID, actorUserID uint, reason string) (*model.TourGroup, error) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return nil, errors.New("取消团队计划必须填写原因")
+	}
+	if len([]rune(reason)) > 255 {
+		return nil, errors.New("取消原因不能超过255个字符")
+	}
+	var result model.TourGroup
+	err := model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
+			return err
+		}
+		var group model.TourGroup
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
+			return errors.New("团队计划不存在")
+		}
+		if group.Status == "cancelled" {
+			result = group
+			return nil
+		}
+		if group.Status == "entered" || group.Status == "partial_entry" {
+			return errors.New("团队已有入园事实，不能直接取消计划")
+		}
+		if group.SalesOrderID != 0 {
+			return errors.New("团队已绑定订单，不能直接取消；请先通过订单售后完成退票或作废，取消计划不会自动处理资金")
+		}
+		if group.ContractAmountCents != 0 || group.DepositCents != 0 || group.CreditUsedCents != 0 || group.SettlementStatus != "open" {
+			return errors.New("团队已有资金或结算事实，不能直接取消计划")
+		}
+		var fulfillmentFacts int64
+		if err := tx.Model(&model.TourGroupMember{}).Where("group_id = ? AND (ticket_code != '' OR status IN ?)", group.ID, []string{"ticketed", "entered"}).Count(&fulfillmentFacts).Error; err != nil {
+			return err
+		}
+		if fulfillmentFacts > 0 {
+			return errors.New("团队已有票权或入园事实，不能直接取消计划")
+		}
+		if err := tx.Model(&model.TourEntryBatch{}).Where("group_id = ?", group.ID).Count(&fulfillmentFacts).Error; err != nil {
+			return err
+		}
+		if fulfillmentFacts > 0 {
+			return errors.New("团队已有分批入园记录，不能直接取消计划")
+		}
+		if err := tx.Model(&model.TeamSettlementStatement{}).Where("group_id = ?", group.ID).Count(&fulfillmentFacts).Error; err != nil {
+			return err
+		}
+		if fulfillmentFacts > 0 {
+			return errors.New("团队已有结算单，不能直接取消计划")
+		}
+		beforeJSON, err := json.Marshal(teamGroupPlanSnapshot(&group))
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&group).Update("status", "cancelled").Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.TourGroupMember{}).Where("group_id = ? AND status = ?", group.ID, "planned").Update("status", "cancelled").Error; err != nil {
+			return err
+		}
+		group.Status = "cancelled"
+		afterJSON, err := json.Marshal(teamGroupPlanSnapshot(&group))
+		if err != nil {
+			return err
+		}
+		if err := recordAuditTx(tx, actorUserID, tenantID, auditRoleTx(tx, actorUserID), "tenant", "team.plan.cancel", "tour_group", group.ID, reason, string(beforeJSON), string(afterJSON)); err != nil {
+			return err
+		}
+		result = group
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 func (s *TeamService) ListGroups(tenantID uint, page, pageSize int) ([]model.TourGroup, int64, error) {
-	if page < 1 {
-		page = 1
+	return s.ListGroupsWithOptions(tenantID, TeamGroupListOptions{Page: page, PageSize: pageSize})
+}
+
+func (s *TeamService) ListGroupsWithOptions(tenantID uint, options TeamGroupListOptions) ([]model.TourGroup, int64, error) {
+	if options.Page < 1 {
+		options.Page = 1
 	}
-	if pageSize < 1 {
-		pageSize = 20
+	if options.PageSize < 1 {
+		options.PageSize = 20
 	}
-	if pageSize > 100 {
-		pageSize = 100
+	if options.PageSize > 100 {
+		options.PageSize = 100
 	}
 	query := model.DB.Model(&model.TourGroup{}).Where("tenant_id = ? OR supplier_tenant_id = ?", tenantID, tenantID)
+	if keyword := strings.TrimSpace(options.Keyword); keyword != "" {
+		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(keyword)
+		pattern := "%" + escaped + "%"
+		query = query.Where(`(
+			tour_groups.group_no ILIKE ? ESCAPE E'\\' OR
+			tour_groups.name ILIKE ? ESCAPE E'\\' OR
+			EXISTS (
+				SELECT 1 FROM orders
+				WHERE orders.id = tour_groups.sales_order_id
+				  AND orders.tenant_id = tour_groups.tenant_id
+				  AND orders.deleted_at IS NULL
+				  AND orders.order_no ILIKE ? ESCAPE E'\\'
+			)
+		)`, pattern, pattern, pattern)
+	}
+	if status := strings.ToLower(strings.TrimSpace(options.Status)); status != "" {
+		query = query.Where("tour_groups.status = ?", status)
+	}
+	if options.VisitStart != nil {
+		query = query.Where("tour_groups.visit_date >= ?", startOfDay(*options.VisitStart))
+	}
+	if options.VisitEnd != nil {
+		query = query.Where("tour_groups.visit_date <= ?", startOfDay(*options.VisitEnd))
+	}
 	var total int64
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var groups []model.TourGroup
-	if err := query.Order("visit_date ASC, created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&groups).Error; err != nil {
+	if err := query.
+		Order("CASE WHEN tour_groups.visit_date >= CURRENT_DATE THEN 0 ELSE 1 END ASC").
+		Order("CASE WHEN tour_groups.visit_date >= CURRENT_DATE THEN tour_groups.visit_date END ASC").
+		Order("CASE WHEN tour_groups.visit_date < CURRENT_DATE THEN tour_groups.visit_date END DESC").
+		Order("tour_groups.created_at DESC").
+		Order("tour_groups.id DESC").
+		Offset((options.Page - 1) * options.PageSize).
+		Limit(options.PageSize).
+		Find(&groups).Error; err != nil {
 		return nil, 0, err
 	}
 	orderIDs := make([]uint, 0, len(groups))
@@ -620,12 +1210,23 @@ func (s *TeamService) AddMembers(tenantID, groupID uint, members []model.TourGro
 	}
 	count := 0
 	err := model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
+			return err
+		}
 		var group model.TourGroup
-		if err := tx.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
 			return errors.New("group not found")
 		}
-		if group.Status == "entered" || group.Status == "cancelled" {
-			return errors.New("cannot add members to a completed or cancelled group")
+		if group.Status != "draft" || group.SalesOrderID != 0 {
+			return errors.New("members can only be added before the group is confirmed")
+		}
+		var existingCount int64
+		if err := tx.Model(&model.TourGroupMember{}).Where("group_id = ?", groupID).Count(&existingCount).Error; err != nil {
+			return err
+		}
+		newCount := int(existingCount) + len(members)
+		if group.ExpectedCount > 0 && newCount > group.ExpectedCount {
+			return errors.New("团队名单不能超过计划人数")
 		}
 		for i := range members {
 			if strings.TrimSpace(members[i].Name) == "" {
@@ -648,18 +1249,19 @@ func (s *TeamService) AddMembers(tenantID, groupID uint, members []model.TourGro
 			}
 			members[i].Base = model.Base{}
 			members[i].GroupID = groupID
-			if members[i].Status == "" {
-				members[i].Status = "planned"
-				if strings.TrimSpace(members[i].TicketCode) != "" {
-					members[i].Status = "ticketed"
-				}
-			}
+			members[i].Status = "planned"
+			members[i].TicketCode = ""
+			members[i].EnteredAt = nil
+			members[i].EntryBatchNo = ""
 			if err := tx.Create(&members[i]).Error; err != nil {
 				return err
 			}
 			count++
 		}
-		return tx.Model(&group).UpdateColumn("expected_count", gorm.Expr("expected_count + ?", len(members))).Error
+		if group.ExpectedCount <= 0 {
+			return tx.Model(&group).UpdateColumn("expected_count", newCount).Error
+		}
+		return nil
 	})
 	return count, err
 }
@@ -668,8 +1270,14 @@ func (s *TeamService) AddMembers(tenantID, groupID uint, members []model.TourGro
 // replaced before the group is confirmed; once tickets or admission facts
 // exist, deleting rows would orphan entitlements and audit history.
 func (s *TeamService) ReplaceMembers(tenantID, groupID uint, members []model.TourGroupMember) (int, error) {
+	if len(members) == 0 {
+		return 0, errors.New("团队名单不能为空")
+	}
 	returnCount := len(members)
 	err := model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
+			return err
+		}
 		var group model.TourGroup
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
 			return errors.New("group not found")
@@ -748,7 +1356,7 @@ func (s *TeamService) EnterBatch(tenantID, groupID, deviceID, operatorID uint, m
 		if err := requireActiveTenantCapability(tx, tenantID, "supplier"); err != nil {
 			return err
 		}
-		if err := tx.Where("id = ? AND supplier_tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND supplier_tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
 			return errors.New("group not found")
 		}
 		var existing model.TourEntryBatch
@@ -796,11 +1404,11 @@ func (s *TeamService) EnterBatch(tenantID, groupID, deviceID, operatorID uint, m
 		now := time.Now()
 		for _, memberID := range normalizedMemberIDs {
 			var member model.TourGroupMember
-			if err := tx.Where("id = ? AND group_id = ? AND status = ?", memberID, groupID, "ticketed").First(&member).Error; err != nil {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND group_id = ? AND status = ?", memberID, groupID, "ticketed").First(&member).Error; err != nil {
 				return fmt.Errorf("member %d is not ticketed", memberID)
 			}
 			var ticket model.Ticket
-			if err := tx.Preload("OrderItem").Where("ticket_code = ? AND order_id = ? AND fulfillment_tenant_id = ? AND fulfillment_scenic_area_id = ? AND status IN ?", member.TicketCode, order.ID, group.SupplierTenantID, group.ScenicAreaID, []string{"unused", "active"}).First(&ticket).Error; err != nil {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("OrderItem").Where("ticket_code = ? AND order_id = ? AND fulfillment_tenant_id = ? AND fulfillment_scenic_area_id = ? AND status IN ?", member.TicketCode, order.ID, group.SupplierTenantID, group.ScenicAreaID, []string{"unused", "active"}).First(&ticket).Error; err != nil {
 				return fmt.Errorf("member %d has no valid ticket entitlement", memberID)
 			}
 			if ticket.OrderItem.UseDate == nil || !sameTeamDate(*ticket.OrderItem.UseDate, group.VisitDate) {
@@ -844,13 +1452,17 @@ func (s *TeamService) EnterBatch(tenantID, groupID, deviceID, operatorID uint, m
 			if err := tx.Create(&model.CheckInRecord{TenantID: group.SupplierTenantID, ScenicAreaID: group.ScenicAreaID, TicketCode: ticket.TicketCode, TicketID: ticket.ID, CheckPointID: checkpointID, DeviceID: device.ID, CheckInTime: now, Result: "success", Message: "team admission"}).Error; err != nil {
 				return err
 			}
-			if err := tx.Model(&ticket).Updates(map[string]interface{}{"status": "used", "check_in_count": gorm.Expr("check_in_count + 1")}).Error; err != nil {
+			result := tx.Model(&model.Ticket{}).Where("id = ? AND status IN ? AND check_in_count = 0", ticket.ID, []string{"unused", "active"}).Updates(map[string]interface{}{"status": "used", "check_in_count": gorm.Expr("check_in_count + 1")})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return fmt.Errorf("member %d ticket entitlement was already admitted", memberID)
+			}
+			if err := tx.Model(&model.TourGroupMember{}).Where("id = ? AND group_id = ? AND status = ?", member.ID, groupID, "ticketed").Updates(map[string]interface{}{"status": "entered", "entered_at": now, "entry_batch_no": batch.BatchNo}).Error; err != nil {
 				return err
 			}
 			if err := tx.Model(&model.TicketEntitlement{}).Where("ticket_id = ? AND fulfillment_order_id = ?", ticket.ID, ticket.FulfillmentOrderID).Update("status", "used").Error; err != nil {
-				return err
-			}
-			if err := tx.Model(&member).Updates(map[string]interface{}{"status": "entered", "entered_at": now, "entry_batch_no": batch.BatchNo}).Error; err != nil {
 				return err
 			}
 			batch.EnteredCount++
@@ -889,9 +1501,15 @@ func (s *TeamService) ListEntryBatches(tenantID, groupID uint) ([]model.TourEntr
 
 func (s *TeamService) AttachOrder(tenantID, groupID, orderID uint) error {
 	return model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveTenantCapability(tx, tenantID, "travel_agency"); err != nil {
+			return err
+		}
 		var group model.TourGroup
-		if err := tx.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
 			return errors.New("group not found")
+		}
+		if group.Status != "draft" || group.SalesOrderID != 0 {
+			return errors.New("only an unbound draft team can attach a sales order")
 		}
 		var order model.Order
 		if err := tx.Preload("Items").Where("id = ? AND tenant_id = ? AND status IN ?", orderID, tenantID, []string{"paid", "completed", "partial_refunded"}).First(&order).Error; err != nil {
@@ -910,6 +1528,9 @@ func (s *TeamService) AttachOrder(tenantID, groupID, orderID uint) error {
 			}
 		}
 		for _, item := range order.Items {
+			if item.FulfillmentTenantID != group.SupplierTenantID || item.FulfillmentScenicAreaID != group.ScenicAreaID {
+				continue
+			}
 			if item.UseDate == nil || !sameTeamDate(*item.UseDate, group.VisitDate) {
 				return errors.New("sales order visit date does not match team visit date")
 			}
@@ -921,46 +1542,55 @@ func (s *TeamService) AttachOrder(tenantID, groupID, orderID uint) error {
 		if count == 0 {
 			return errors.New("order has no matching supplier fulfillment")
 		}
-		var members []model.TourGroupMember
-		if err := tx.Where("group_id = ? AND status = ?", group.ID, "planned").Order("id").Find(&members).Error; err != nil {
+		var existingGroupCount int64
+		if err := tx.Model(&model.TourGroup{}).
+			Where("sales_order_id = ? AND supplier_tenant_id = ? AND scenic_area_id = ? AND id != ? AND status != ?", order.ID, group.SupplierTenantID, group.ScenicAreaID, group.ID, "cancelled").
+			Count(&existingGroupCount).Error; err != nil {
 			return err
 		}
+		if existingGroupCount > 0 {
+			return errors.New("this supplier fulfillment is already attached to another active team")
+		}
+		var members []model.TourGroupMember
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("group_id = ? AND status = ?", group.ID, "planned").Order("id").Find(&members).Error; err != nil {
+			return err
+		}
+		if len(members) == 0 || len(members) != group.ExpectedCount {
+			return errors.New("team roster must match the planned headcount before attaching an order")
+		}
 		var tickets []model.Ticket
-		if err := tx.Where("order_id = ? AND fulfillment_tenant_id = ? AND fulfillment_scenic_area_id = ? AND status = ? AND code_mode != ?", order.ID, group.SupplierTenantID, group.ScenicAreaID, "unused", "order").Order("id").Find(&tickets).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(`order_id = ? AND tenant_id = ? AND fulfillment_tenant_id = ? AND fulfillment_scenic_area_id = ? AND status = ? AND code_mode != ?
+			AND NOT EXISTS (
+				SELECT 1 FROM tour_group_members AS assigned_member
+				JOIN tour_groups AS assigned_group ON assigned_group.id = assigned_member.group_id AND assigned_group.deleted_at IS NULL
+				WHERE assigned_member.deleted_at IS NULL AND assigned_member.ticket_code = tickets.ticket_code
+				  AND assigned_member.group_id != ? AND assigned_member.status != ? AND assigned_group.status != ?
+			)`, order.ID, order.TenantID, group.SupplierTenantID, group.ScenicAreaID, "unused", "order", group.ID, "cancelled", "cancelled").Order("id").Find(&tickets).Error; err != nil {
 			return err
 		}
 		if len(tickets) < len(members) {
 			return errors.New("order does not have enough member ticket entitlements")
 		}
+		assignedTickets := tickets[:len(members)]
 		for i := range members {
-			if err := tx.Model(&members[i]).Updates(map[string]interface{}{"ticket_code": tickets[i].TicketCode, "status": "ticketed"}).Error; err != nil {
+			if err := tx.Model(&members[i]).Updates(map[string]interface{}{"ticket_code": assignedTickets[i].TicketCode, "status": "ticketed"}).Error; err != nil {
 				return err
 			}
 		}
-		amountCents := teamOrderSettlementCents(&order, group.SupplierTenantID, group.ScenicAreaID)
+		amountCents, err := teamAssignedTicketSettlementCents(&order, assignedTickets, group.SupplierTenantID, group.ScenicAreaID)
+		if err != nil {
+			return err
+		}
 		if amountCents <= 0 {
 			return errors.New("order has no settlement amount for the team supplier and scenic area")
 		}
-		creditUsed := amountCents - group.DepositCents
-		if creditUsed < 0 {
-			creditUsed = 0
-		}
-		if group.ContractID != 0 {
-			var contract model.TravelContract
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&contract, group.ContractID).Error; err != nil {
-				return err
-			}
-			var occupied int64
-			if err := tx.Model(&model.TourGroup{}).
-				Where("contract_id = ? AND id != ? AND status != ? AND settlement_status != ?", contract.ID, group.ID, "cancelled", "settled").
-				Select("COALESCE(SUM(credit_used_cents), 0)").Scan(&occupied).Error; err != nil {
-				return err
-			}
-			if contract.CreditLimitCents > 0 && occupied+creditUsed > contract.CreditLimitCents {
-				return errors.New("team order exceeds contract credit limit")
-			}
-		}
-		return tx.Model(&group).Updates(map[string]interface{}{"sales_order_id": order.ID, "status": "confirmed", "contract_amount_cents": amountCents, "credit_used_cents": creditUsed, "settlement_status": "open"}).Error
+		// An existing paid order has already completed its original funding path.
+		// Treat its supplier settlement amount as funded instead of occupying the
+		// travel contract credit a second time.
+		return tx.Model(&group).Updates(map[string]interface{}{
+			"sales_order_id": order.ID, "status": "confirmed", "contract_amount_cents": amountCents,
+			"deposit_cents": amountCents, "credit_used_cents": 0, "settlement_status": "open",
+		}).Error
 	})
 }
 
@@ -987,7 +1617,7 @@ func (s *TeamService) CreateContractOrder(tenantID, groupID, operatorID uint, in
 			return err
 		}
 		var contract model.TravelContract
-		if err := tx.Where("id = ? AND travel_tenant_id = ? AND supplier_tenant_id = ? AND status = ?", group.ContractID, tenantID, group.SupplierTenantID, "active").First(&contract).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND travel_tenant_id = ? AND supplier_tenant_id = ? AND status = ?", group.ContractID, tenantID, group.SupplierTenantID, "active").First(&contract).Error; err != nil {
 			return errors.New("有效旅行社合同不存在")
 		}
 		rules, err := decodeTeamPriceRules(contract.PriceRulesJSON)
@@ -1078,7 +1708,7 @@ func (s *TeamService) CreateContractOrder(tenantID, groupID, operatorID uint, in
 		if err := tx.Model(&model.TourGroup{}).Where("contract_id = ? AND id != ? AND status != ? AND settlement_status != ?", contract.ID, group.ID, "cancelled", "settled").Select("COALESCE(SUM(credit_used_cents), 0)").Scan(&occupied).Error; err != nil {
 			return err
 		}
-		if contract.CreditLimitCents > 0 && occupied+creditUsed > contract.CreditLimitCents {
+		if occupied+creditUsed > contract.CreditLimitCents {
 			return errors.New("团队订单超过合同可用授信额度")
 		}
 		if err := tx.Create(&order).Error; err != nil {
@@ -1130,31 +1760,56 @@ func (s *TeamService) CreateContractOrder(tenantID, groupID, operatorID uint, in
 	return &order, nil
 }
 
-func teamOrderSettlementCents(order *model.Order, supplierTenantID, scenicAreaID uint) int64 {
-	if order == nil {
-		return 0
+func teamAssignedTicketSettlementCents(order *model.Order, tickets []model.Ticket, supplierTenantID, scenicAreaID uint) (int64, error) {
+	if order == nil || order.ID == 0 || order.TenantID == 0 || len(tickets) == 0 {
+		return 0, errors.New("assigned team tickets are required")
 	}
-	var total int64
+	items := make(map[uint]model.OrderItem, len(order.Items))
 	for i := range order.Items {
 		item := order.Items[i]
-		if item.FulfillmentTenantID != supplierTenantID || item.FulfillmentScenicAreaID != scenicAreaID {
-			continue
+		if item.OrderID == order.ID && item.FulfillmentTenantID == supplierTenantID && item.FulfillmentScenicAreaID == scenicAreaID {
+			items[item.ID] = item
 		}
-		total += moneyCents(item.SettlementPrice) * int64(item.Quantity)
 	}
-	return total
+	var total int64
+	for i := range tickets {
+		ticket := tickets[i]
+		if ticket.OrderID != order.ID || ticket.TenantID != order.TenantID ||
+			ticket.FulfillmentTenantID != supplierTenantID || ticket.FulfillmentScenicAreaID != scenicAreaID ||
+			ticket.CodeMode == "order" {
+			return 0, errors.New("assigned team ticket ownership is invalid")
+		}
+		item, ok := items[ticket.OrderItemID]
+		if !ok {
+			return 0, errors.New("assigned team ticket settlement snapshot is unavailable")
+		}
+		total += moneyCents(item.SettlementPrice)
+	}
+	return total, nil
 }
 
 func sameTeamDate(left, right time.Time) bool {
-	return startOfDay(left).Equal(startOfDay(right))
+	leftYear, leftMonth, leftDay := left.Date()
+	rightYear, rightMonth, rightDay := right.Date()
+	return leftYear == rightYear && leftMonth == rightMonth && leftDay == rightDay
 }
 
 func validateTeamContractTx(tx *gorm.DB, tenantID uint, group *model.TourGroup) error {
 	if group == nil || group.SupplierTenantID == 0 || group.VisitDate.IsZero() {
 		return errors.New("team supplier and visit date are required")
 	}
+	if err := requireActiveTenantCapability(tx, group.SupplierTenantID, "supplier"); err != nil {
+		return errors.New("supplier tenant is unavailable")
+	}
 	if tenantID == group.SupplierTenantID {
-		return requireActiveTenantCapability(tx, tenantID, "supplier")
+		return nil
+	}
+	var relationship model.DistributorRelationship
+	if err := tx.Where(
+		"agent_tenant_id = ? AND supplier_tenant_id = ? AND travel_status = ?",
+		tenantID, group.SupplierTenantID, "active",
+	).First(&relationship).Error; err != nil {
+		return errors.New("active travel agency relationship not found")
 	}
 	if group.ContractID == 0 {
 		return errors.New("active travel contract is required")

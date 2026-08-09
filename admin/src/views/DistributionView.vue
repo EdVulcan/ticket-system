@@ -399,7 +399,7 @@
           <el-form-item label="组合产品名称"><el-input v-model="bundleForm.name" maxlength="100" /></el-form-item>
           <el-form-item label="销售端">
             <el-radio-group v-model="bundleForm.type" @change="loadBundleComponents">
-              <el-radio-button label="offline">售票窗口</el-radio-button>
+              <el-radio-button v-if="canSupply" label="offline">售票窗口</el-radio-button>
               <el-radio-button label="online">线上</el-radio-button>
             </el-radio-group>
           </el-form-item>
@@ -519,7 +519,7 @@ const savingBundle = ref(false)
 const bundleFormVisible = ref(false)
 const bundles = ref<any[]>([])
 const eligibleBundleComponents = ref<any[]>([])
-const bundleForm = reactive<any>({ id: 0, name: '', type: 'offline', retail_price: 0, components: [] })
+const bundleForm = reactive<any>({ id: 0, name: '', type: canSupply.value ? 'offline' : 'online', retail_price: 0, components: [] })
 const bundleAllocationTotal = computed(() => bundleForm.components.reduce((sum: number, item: any) => sum + Number(item.allocation || 0), 0))
 const allocationDifference = computed(() => Number((Number(bundleForm.retail_price || 0) - bundleAllocationTotal.value).toFixed(2)))
 
@@ -587,7 +587,7 @@ const isBundleComponentSelected = (productID: number, currentIndex: number | str
 const openBundleForm = async (row?: any) => {
   bundleForm.id = row?.id || 0
   bundleForm.name = row?.name || ''
-  bundleForm.type = row?.type || 'offline'
+  bundleForm.type = row?.type === 'offline' && canSupply.value ? 'offline' : 'online'
   bundleForm.retail_price = row ? Number(row.retail_price_cents || 0) / 100 : 0
   bundleForm.components = row
     ? (row.components || []).map((item: any) => ({ seller_product_id: item.seller_product_id, quantity: item.quantity, allocation: Number(item.retail_allocation_cents || 0) / 100 }))

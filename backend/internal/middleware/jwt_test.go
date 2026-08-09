@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"ticket-backend/internal/authz"
 	"ticket-backend/internal/config"
 	"ticket-backend/internal/service"
 	"time"
@@ -108,5 +109,36 @@ func TestRequireTenantPermissionUsesFixedRoleMatrix(t *testing.T) {
 	engine.ServeHTTP(denied, httptest.NewRequest(http.MethodGet, "/denied", nil))
 	if denied.Code != http.StatusForbidden {
 		t.Fatalf("viewer write status=%d", denied.Code)
+	}
+}
+
+func TestRequireTeamContractPermissionSeparatesReceptionFromCommercialTerms(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	setRole := func(role string) gin.HandlerFunc {
+		return func(ctx *gin.Context) {
+			ctx.Set("scope", "tenant")
+			ctx.Set("role", role)
+		}
+	}
+	permission := RequireTenantPermission(authz.PermissionTeamContractsWrite)
+	engine.POST("/team-operator", setRole(authz.RoleTeamOperator), permission, func(ctx *gin.Context) { ctx.Status(http.StatusNoContent) })
+	engine.POST("/settlement-operator", setRole(authz.RoleSettlementOperator), permission, func(ctx *gin.Context) { ctx.Status(http.StatusNoContent) })
+	engine.POST("/admin", setRole(authz.RoleTenantAdmin), permission, func(ctx *gin.Context) { ctx.Status(http.StatusNoContent) })
+
+	tests := []struct {
+		path string
+		want int
+	}{
+		{"/team-operator", http.StatusForbidden},
+		{"/settlement-operator", http.StatusNoContent},
+		{"/admin", http.StatusNoContent},
+	}
+	for _, test := range tests {
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, httptest.NewRequest(http.MethodPost, test.path, nil))
+		if response.Code != test.want {
+			t.Fatalf("POST %s status=%d, want %d", test.path, response.Code, test.want)
+		}
 	}
 }

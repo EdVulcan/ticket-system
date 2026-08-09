@@ -6,7 +6,7 @@ type TravelContract struct {
 	Base
 	TravelTenantID   uint       `gorm:"index;not null" json:"travel_tenant_id"`
 	SupplierTenantID uint       `gorm:"index;not null" json:"supplier_tenant_id"`
-	ContractNo       string     `gorm:"size:80;uniqueIndex;not null" json:"contract_no"`
+	ContractNo       string     `gorm:"size:80;not null;index" json:"contract_no"`
 	Status           string     `gorm:"size:20;not null;default:'active'" json:"status"`
 	SettlementDays   int        `gorm:"not null;default:0" json:"settlement_days"`
 	CreditLimitCents int64      `gorm:"not null;default:0" json:"credit_limit_cents"`
@@ -136,24 +136,29 @@ type TourGroupMemberChange struct {
 // contract may use deposits, credit and an agency-specific price list.
 type TeamSettlementStatement struct {
 	Base
-	TravelTenantID   uint                       `gorm:"index;not null" json:"travel_tenant_id"`
-	SupplierTenantID uint                       `gorm:"index;not null" json:"supplier_tenant_id"`
-	GroupID          uint                       `gorm:"uniqueIndex:idx_team_settlement_group_sequence,priority:1;not null" json:"group_id"`
-	Sequence         int                        `gorm:"uniqueIndex:idx_team_settlement_group_sequence,priority:2;not null;default:1" json:"sequence"`
-	Kind             string                     `gorm:"size:30;not null;default:'original'" json:"kind"` // original, refund_correction
-	StatementNo      string                     `gorm:"size:80;uniqueIndex;not null" json:"statement_no"`
-	IdempotencyKey   string                     `gorm:"size:120;uniqueIndex;not null" json:"idempotency_key"`
-	GrossCents       int64                      `gorm:"not null" json:"gross_cents"`
-	RefundCents      int64                      `gorm:"not null" json:"refund_cents"`
-	DepositCents     int64                      `gorm:"not null" json:"deposit_cents"`
-	NetCents         int64                      `gorm:"not null" json:"net_cents"`
-	AdjustmentCents  int64                      `gorm:"not null;default:0" json:"adjustment_cents"`
-	Status           string                     `gorm:"size:30;not null;index" json:"status"` // draft, supplier_confirmed, confirmed, disputed, paid
-	DisputeReason    string                     `gorm:"size:255" json:"dispute_reason,omitempty"`
-	PaymentProof     string                     `gorm:"size:255" json:"payment_proof,omitempty"`
-	ConfirmedAt      *time.Time                 `json:"confirmed_at,omitempty"`
-	PaidAt           *time.Time                 `json:"paid_at,omitempty"`
-	Adjustments      []TeamSettlementAdjustment `gorm:"foreignKey:StatementID" json:"adjustments,omitempty"`
+	TravelTenantID     uint                       `gorm:"index;not null" json:"travel_tenant_id"`
+	TravelTenantName   string                     `gorm:"-" json:"travel_tenant_name,omitempty"`
+	SupplierTenantID   uint                       `gorm:"index;not null" json:"supplier_tenant_id"`
+	SupplierTenantName string                     `gorm:"-" json:"supplier_tenant_name,omitempty"`
+	GroupID            uint                       `gorm:"uniqueIndex:idx_team_settlement_group_sequence,priority:1;not null" json:"group_id"`
+	GroupNo            string                     `gorm:"-" json:"group_no,omitempty"`
+	GroupName          string                     `gorm:"-" json:"group_name,omitempty"`
+	Sequence           int                        `gorm:"uniqueIndex:idx_team_settlement_group_sequence,priority:2;not null;default:1" json:"sequence"`
+	Kind               string                     `gorm:"size:30;not null;default:'original'" json:"kind"` // original, refund_correction
+	StatementNo        string                     `gorm:"size:80;uniqueIndex;not null" json:"statement_no"`
+	IdempotencyKey     string                     `gorm:"size:120;uniqueIndex;not null" json:"idempotency_key"`
+	GrossCents         int64                      `gorm:"not null" json:"gross_cents"`
+	RefundCents        int64                      `gorm:"not null" json:"refund_cents"`
+	DepositCents       int64                      `gorm:"not null" json:"deposit_cents"`
+	NetCents           int64                      `gorm:"not null" json:"net_cents"`
+	AdjustmentCents    int64                      `gorm:"not null;default:0" json:"adjustment_cents"`
+	Status             string                     `gorm:"size:30;not null;index" json:"status"` // draft, supplier_confirmed, confirmed, payment_submitted, disputed, paid
+	DisputeReason      string                     `gorm:"size:255" json:"dispute_reason,omitempty"`
+	PaymentProof       string                     `gorm:"size:255" json:"payment_proof,omitempty"`
+	DueAt              *time.Time                 `gorm:"index" json:"due_at,omitempty"`
+	ConfirmedAt        *time.Time                 `json:"confirmed_at,omitempty"`
+	PaidAt             *time.Time                 `json:"paid_at,omitempty"`
+	Adjustments        []TeamSettlementAdjustment `gorm:"foreignKey:StatementID" json:"adjustments,omitempty"`
 }
 
 // TeamSettlementAdjustment preserves each negotiated correction while keeping

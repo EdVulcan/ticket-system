@@ -68,6 +68,11 @@ func (s *BundleService) Create(sellerTenantID, operatorID uint, input BundleUpse
 		if err := requireActiveTenantCapability(tx, sellerTenantID, "distributor"); err != nil {
 			return err
 		}
+		if input.Type == "offline" {
+			if err := requireActiveTenantCapability(tx, sellerTenantID, "supplier"); err != nil {
+				return err
+			}
+		}
 		facts, err := validateBundleInputTx(tx, sellerTenantID, input)
 		if err != nil {
 			return err
@@ -106,6 +111,11 @@ func (s *BundleService) Revise(sellerTenantID, bundleID, operatorID uint, input 
 	err := model.Write(func(tx *gorm.DB) error {
 		if err := requireActiveTenantCapability(tx, sellerTenantID, "distributor"); err != nil {
 			return err
+		}
+		if input.Type == "offline" {
+			if err := requireActiveTenantCapability(tx, sellerTenantID, "supplier"); err != nil {
+				return err
+			}
 		}
 		var bundle model.BundleProduct
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND seller_tenant_id = ?", bundleID, sellerTenantID).First(&bundle).Error; err != nil {
@@ -231,6 +241,11 @@ func (s *BundleService) ListEligibleComponents(sellerTenantID uint, productType 
 	if productType != "" && productType != "online" && productType != "offline" {
 		return nil, errors.New("invalid product type")
 	}
+	if productType == "offline" {
+		if err := requireActiveTenantCapability(model.DB, sellerTenantID, "supplier"); err != nil {
+			return nil, err
+		}
+	}
 	type row struct {
 		SellerProductID, ProductOfferID, SupplierTenantID, SourceProductID, FulfillmentScenicAreaID uint
 		SellerProductName, ProductType, SupplierName, SourceProductName, AllowedChannels            string
@@ -244,7 +259,7 @@ func (s *BundleService) ListEligibleComponents(sellerTenantID uint, productType 
 		 o.fulfillment_scenic_area_id, o.settlement_price, o.minimum_retail_price_cents, o.allowed_channels`).
 		Joins("JOIN products p ON p.id = l.product_id AND p.tenant_id = l.seller_tenant_id AND p.status = 'online'").
 		Joins("JOIN product_offers o ON o.id = l.product_offer_id AND o.distributor_tenant_id = l.seller_tenant_id AND o.status = 'active'").
-		Joins("JOIN products source ON source.id = o.source_product_id AND source.tenant_id = o.supplier_tenant_id AND source.status = 'online' AND source.is_distributable = 1 AND source.current_revision_id = o.product_revision_id").
+		Joins("JOIN products source ON source.id = o.source_product_id AND source.tenant_id = o.supplier_tenant_id AND source.status = 'online' AND source.is_distributable = ? AND source.current_revision_id = o.product_revision_id", true).
 		Joins("JOIN tenants supplier ON supplier.id = o.supplier_tenant_id AND supplier.status = 'active'").
 		Joins("JOIN tenant_capabilities supplier_capability ON supplier_capability.tenant_id = o.supplier_tenant_id AND supplier_capability.capability = 'supplier' AND supplier_capability.status = 'active'").
 		Joins("JOIN distributor_relationships r ON r.agent_tenant_id = l.seller_tenant_id AND r.supplier_tenant_id = o.supplier_tenant_id AND r.status = 'active'").

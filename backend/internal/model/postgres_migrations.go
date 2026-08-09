@@ -2,13 +2,14 @@ package model
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 73
+const CurrentPostgresSchemaVersion = 75
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -66,7 +67,10 @@ func runPostgresMigrations(db *gorm.DB) error {
 			return fmt.Errorf("backfill travel partnership status: %w", err)
 		}
 	}
-	if previousSchemaVersion == 72 {
+	// Schema 74 is the first version that treats distribution and team
+	// partnerships as independent facts. Reapply the idempotent repair on every
+	// subsequent upgrade so a persisted version 74 database is covered too.
+	if previousSchemaVersion > 0 && previousSchemaVersion < CurrentPostgresSchemaVersion {
 		if err := db.Exec(`
 			UPDATE distributor_relationships AS relationship
 			SET travel_status = 'none', travel_applied_at = NULL
@@ -125,6 +129,17 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := db.Model(&TeamSettlementStatement{}).Where("sequence IS NULL OR sequence = 0").Updates(map[string]interface{}{"sequence": 1, "kind": "original"}).Error; err != nil {
 		return fmt.Errorf("backfill team settlement sequence: %w", err)
 	}
+	if err := db.Exec(`
+		UPDATE team_settlement_statements AS statement
+		SET due_at = statement.created_at + contract.settlement_days * INTERVAL '1 day'
+		FROM tour_groups AS team, travel_contracts AS contract
+		WHERE statement.due_at IS NULL
+		  AND statement.kind != 'refund_correction'
+		  AND statement.group_id = team.id
+		  AND team.contract_id = contract.id
+	`).Error; err != nil {
+		return fmt.Errorf("backfill team settlement due dates: %w", err)
+	}
 	if err := backfillPendingRefundReservations(db); err != nil {
 		return err
 	}
@@ -146,6 +161,9 @@ func runPostgresMigrations(db *gorm.DB) error {
 	`).Error; err != nil {
 		return fmt.Errorf("backfill initial platform administrator: %w", err)
 	}
+	if err := validateTeamUniquenessMigrationData(db); err != nil {
+		return err
+	}
 	if err := applyPostgresIndexes(db); err != nil {
 		return err
 	}
@@ -157,9 +175,71 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "repair inferred travel partnerships and timestamps",
+		Name:      "add team settlement due dates",
 		AppliedAt: time.Now(),
 	}).Error
+}
+
+func validateTeamUniquenessMigrationData(db *gorm.DB) error {
+	var fulfillmentConflicts []struct {
+		SalesOrderID     uint   `gorm:"column:sales_order_id"`
+		SupplierTenantID uint   `gorm:"column:supplier_tenant_id"`
+		ScenicAreaID     uint   `gorm:"column:scenic_area_id"`
+		GroupNos         string `gorm:"column:group_nos"`
+	}
+	if err := db.Raw(`
+		SELECT sales_order_id, supplier_tenant_id, scenic_area_id,
+		       STRING_AGG(group_no, ', ' ORDER BY id) AS group_nos
+		FROM tour_groups
+		WHERE sales_order_id != 0 AND status != 'cancelled' AND deleted_at IS NULL
+		GROUP BY sales_order_id, supplier_tenant_id, scenic_area_id
+		HAVING COUNT(*) > 1
+		ORDER BY sales_order_id, supplier_tenant_id, scenic_area_id
+		LIMIT 20
+	`).Scan(&fulfillmentConflicts).Error; err != nil {
+		return fmt.Errorf("inspect legacy team fulfillment bindings: %w", err)
+	}
+
+	var ticketConflicts []struct {
+		TicketCode string `gorm:"column:ticket_code"`
+		Members    string `gorm:"column:members"`
+		Groups     string `gorm:"column:groups"`
+	}
+	if err := db.Raw(`
+		SELECT member.ticket_code,
+		       STRING_AGG(member.id::text, ', ' ORDER BY member.id) AS members,
+		       STRING_AGG(COALESCE(team.group_no, 'group#' || member.group_id::text), ', ' ORDER BY member.id) AS groups
+		FROM tour_group_members AS member
+		LEFT JOIN tour_groups AS team ON team.id = member.group_id
+		WHERE member.ticket_code != '' AND member.status != 'cancelled' AND member.deleted_at IS NULL
+		GROUP BY member.ticket_code
+		HAVING COUNT(*) > 1
+		ORDER BY member.ticket_code
+		LIMIT 20
+	`).Scan(&ticketConflicts).Error; err != nil {
+		return fmt.Errorf("inspect legacy team ticket assignments: %w", err)
+	}
+
+	if len(fulfillmentConflicts) == 0 && len(ticketConflicts) == 0 {
+		return nil
+	}
+	details := make([]string, 0, len(fulfillmentConflicts)+len(ticketConflicts))
+	for _, conflict := range fulfillmentConflicts {
+		details = append(details, fmt.Sprintf(
+			"duplicate fulfillment binding order=%d supplier=%d scenic=%d groups=[%s]",
+			conflict.SalesOrderID, conflict.SupplierTenantID, conflict.ScenicAreaID, conflict.GroupNos,
+		))
+	}
+	for _, conflict := range ticketConflicts {
+		details = append(details, fmt.Sprintf(
+			"duplicate ticket assignment ticket=%s members=[%s] groups=[%s]",
+			conflict.TicketCode, conflict.Members, conflict.Groups,
+		))
+	}
+	return fmt.Errorf(
+		"team uniqueness migration blocked by legacy conflicts; resolve the listed records and restart: %s",
+		strings.Join(details, "; "),
+	)
 }
 
 func backfillPendingRefundReservations(db *gorm.DB) error {
@@ -201,7 +281,7 @@ func backfillPendingRefundReservations(db *gorm.DB) error {
 }
 
 func applyPostgresIndexes(db *gorm.DB) error {
-	for _, index := range []string{"idx_settlement_fulfillment_unique", "idx_settlement_lines_fulfillment_order_id", "idx_team_settlement_statements_group_id", "idx_team_settlement_group_id", "idx_devices_serial_number"} {
+	for _, index := range []string{"idx_settlement_fulfillment_unique", "idx_settlement_lines_fulfillment_order_id", "idx_team_settlement_statements_group_id", "idx_team_settlement_group_id", "idx_devices_serial_number", "idx_travel_contracts_contract_no"} {
 		if err := db.Exec("DROP INDEX IF EXISTS " + index).Error; err != nil {
 			return fmt.Errorf("drop obsolete PostgreSQL index: %w", err)
 		}
@@ -212,6 +292,9 @@ func applyPostgresIndexes(db *gorm.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_refund_allocation_sequence ON refunds(parent_refund_id, allocation_seq) WHERE parent_refund_id != 0`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_bundle_component_product ON bundle_components(bundle_version_id, seller_product_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_team_entry_request ON tour_entry_batches(group_id, idempotency_key)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_travel_contract_scope_no ON travel_contracts(supplier_tenant_id, travel_tenant_id, contract_no) WHERE deleted_at IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_team_active_fulfillment_group ON tour_groups(sales_order_id, supplier_tenant_id, scenic_area_id) WHERE sales_order_id != 0 AND status != 'cancelled' AND deleted_at IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_team_member_active_ticket ON tour_group_members(ticket_code) WHERE ticket_code != '' AND status != 'cancelled' AND deleted_at IS NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_team_settlement_group_sequence ON team_settlement_statements(group_id, sequence)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_idempotency ON payments(tenant_id, idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_product_stock_slot ON product_inventories(tenant_id, product_id, stock_date, stock_slot)`,

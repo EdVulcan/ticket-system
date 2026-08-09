@@ -192,7 +192,7 @@ func TestDisabledDeviceHeartbeatDoesNotReactivate(t *testing.T) {
 func TestTeamCreationRejectsClientControlledDeposit(t *testing.T) {
 	group := model.TourGroup{
 		Name: "Unverified deposit", SupplierTenantID: 1, ScenicAreaID: 1,
-		VisitDate: time.Now(), DepositCents: 10000,
+		VisitDate: time.Now(), ExpectedCount: 1, DepositCents: 10000,
 	}
 	if err := (&TeamService{}).CreateGroup(1, &group); err == nil || !strings.Contains(err.Error(), "verified payment") {
 		t.Fatalf("client-controlled deposit error=%v", err)

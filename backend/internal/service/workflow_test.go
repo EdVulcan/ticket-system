@@ -1672,9 +1672,9 @@ func TestSupplierControlsTravelContractProductPrices(t *testing.T) {
 	if err != nil || len(partners) != 1 || partners[0].TenantID != travel.ID {
 		t.Fatalf("pure travel partner list=%+v err=%v", partners, err)
 	}
-	var offer model.ProductOffer
-	if err := model.DB.Where("supplier_tenant_id = ? AND distributor_tenant_id = ? AND source_product_id = ?", supplier.ID, travel.ID, product.ID).First(&offer).Error; err != nil || moneyCents(offer.SettlementPrice) != 8800 || offer.Status != "active" {
-		t.Fatalf("contract supply offer=%+v err=%v", offer, err)
+	var offerCount int64
+	if err := model.DB.Model(&model.ProductOffer{}).Where("supplier_tenant_id = ? AND distributor_tenant_id = ? AND source_product_id = ?", supplier.ID, travel.ID, product.ID).Count(&offerCount).Error; err != nil || offerCount != 0 {
+		t.Fatalf("team contract leaked into ordinary distribution offers: count=%d err=%v", offerCount, err)
 	}
 	if _, err := team.CreateContract(travel.ID, 12, input); err == nil {
 		t.Fatal("travel agency set its own contract price")
@@ -1687,8 +1687,8 @@ func TestSupplierControlsTravelContractProductPrices(t *testing.T) {
 	if err != nil || updated.PriceRules[0].PriceCents != 8500 {
 		t.Fatalf("updated contract=%+v err=%v", updated, err)
 	}
-	if err := model.DB.First(&offer, offer.ID).Error; err != nil || moneyCents(offer.SettlementPrice) != 8500 {
-		t.Fatalf("updated contract supply offer=%+v err=%v", offer, err)
+	if err := model.DB.Model(&model.ProductOffer{}).Where("supplier_tenant_id = ? AND distributor_tenant_id = ? AND source_product_id = ?", supplier.ID, travel.ID, product.ID).Count(&offerCount).Error; err != nil || offerCount != 0 {
+		t.Fatalf("updated team contract leaked into ordinary distribution offers: count=%d err=%v", offerCount, err)
 	}
 	var area model.ScenicArea
 	if err := model.DB.Where("tenant_id = ?", supplier.ID).First(&area).Error; err != nil {
@@ -1732,6 +1732,12 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 			return err
 		}
 		if err := tx.Create(&supplier).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&[]model.TenantCapability{
+			{TenantID: travel.ID, Capability: "travel_agency", Status: "active"},
+			{TenantID: supplier.ID, Capability: "supplier", Status: "active"},
+		}).Error; err != nil {
 			return err
 		}
 		area = model.ScenicArea{TenantID: supplier.ID, Code: "TEAM-FIN-AREA", Name: "Team Area", Status: "active"}
@@ -1802,7 +1808,12 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 			return err
 		}
 		group = model.TourGroup{TenantID: travel.ID, SupplierTenantID: supplier.ID, ScenicAreaID: area.ID, ContractID: contract.ID, GroupNo: "TEAM-1", Name: "Team", VisitDate: time.Now(), ExpectedCount: 1, Status: "confirmed", SalesOrderID: order.ID, ContractAmountCents: 9900, DepositCents: 1000, CreditUsedCents: 8900, SettlementStatus: "open"}
-		return tx.Create(&group).Error
+		if err := tx.Create(&group).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.TourGroupMember{
+			GroupID: group.ID, Name: "Team Visitor", TicketCode: ticket.TicketCode, Status: "entered",
+		}).Error
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1850,7 +1861,10 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 	if err := team.SetTeamSettlementStatus(travel.ID, statement.ID, "confirmed", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := team.SetTeamSettlementStatus(travel.ID, statement.ID, "paid", "bank-slip-1"); err != nil {
+	if err := team.SetTeamSettlementStatus(travel.ID, statement.ID, "payment_submitted", "bank-slip-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := team.SetTeamSettlementStatus(supplier.ID, statement.ID, "paid", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := model.DB.First(&group, group.ID).Error; err != nil {
@@ -1863,8 +1877,8 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 	if err := model.DB.Model(&model.AuditLog{}).Where("target_type = ? AND target_id = ?", "team_settlement_statement", statement.ID).Count(&auditCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if auditCount != 7 {
-		t.Fatalf("team settlement audit count=%d, want 7", auditCount)
+	if auditCount != 8 {
+		t.Fatalf("team settlement audit count=%d, want 8", auditCount)
 	}
 	travelAccounts, err := team.ListTeamAccountSummaries(travel.ID)
 	if err != nil || len(travelAccounts) != 1 || travelAccounts[0].PaidCents != 8000 || travelAccounts[0].PendingCents != 0 || travelAccounts[0].CreditUsedCents != 0 {
@@ -1895,6 +1909,16 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 func TestSupplierUsedRefundOnDistributedTeamOrderCreatesOneCorrection(t *testing.T) {
 	resetBusinessData(t)
 	scenario := seedDistributionScenario(t)
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create(&model.TenantCapability{TenantID: scenario.distributorID, Capability: "travel_agency", Status: "active"}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.DistributorRelationship{}).
+			Where("agent_tenant_id = ? AND supplier_tenant_id = ?", scenario.distributorID, scenario.supplierID).
+			Update("travel_status", "active").Error
+	}); err != nil {
+		t.Fatal(err)
+	}
 	initial := model.User{TenantID: scenario.supplierID, Username: "supplier-initial", Password: "test", Role: "super_admin", IsInitialAdmin: true}
 	ordinary := model.User{TenantID: scenario.supplierID, Username: "supplier-admin", Password: "test", Role: "admin"}
 	if err := model.DB.Create(&initial).Error; err != nil {
@@ -1933,6 +1957,11 @@ func TestSupplierUsedRefundOnDistributedTeamOrderCreatesOneCorrection(t *testing
 	if err := model.DB.Create(&group).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := model.DB.Create(&model.TourGroupMember{
+		GroupID: group.ID, Name: "Distributed Team Visitor", TicketCode: ticket.TicketCode, Status: "entered",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
 	team := &TeamService{}
 	statement, err := team.GenerateTeamSettlement(scenario.distributorID, group.ID)
 	if err != nil || statement.GrossCents != 6000 || statement.Sequence != 1 || statement.Kind != "original" {
@@ -1944,7 +1973,10 @@ func TestSupplierUsedRefundOnDistributedTeamOrderCreatesOneCorrection(t *testing
 	if err := team.SetTeamSettlementStatus(scenario.distributorID, statement.ID, "confirmed", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := team.SetTeamSettlementStatus(scenario.distributorID, statement.ID, "paid", "bank-slip"); err != nil {
+	if err := team.SetTeamSettlementStatus(scenario.distributorID, statement.ID, "payment_submitted", "bank-slip"); err != nil {
+		t.Fatal(err)
+	}
+	if err := team.SetTeamSettlementStatus(scenario.supplierID, statement.ID, "paid", ""); err != nil {
 		t.Fatal(err)
 	}
 

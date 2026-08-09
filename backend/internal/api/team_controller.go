@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -143,16 +145,56 @@ func (c *TeamController) ListAgents(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"data": rows})
 }
 func (c *TeamController) CreateAgent(ctx *gin.Context) {
-	var row model.TravelAgent
-	if err := ctx.ShouldBindJSON(&row); err != nil {
+	var input service.TeamAgentInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := c.Service.CreateAgent(ctx.GetUint("tenant_id"), &row); err != nil {
+	row, err := c.Service.CreateAgent(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), input)
+	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	ctx.JSON(http.StatusCreated, row)
+}
+func (c *TeamController) UpdateAgent(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid agent id"})
+		return
+	}
+	var input service.TeamAgentInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	row, err := c.Service.UpdateAgent(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), input)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, row)
+}
+func (c *TeamController) SetAgentStatus(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid agent id"})
+		return
+	}
+	var input struct {
+		Status string `json:"status" binding:"required"`
+		Reason string `json:"reason"`
+	}
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	row, err := c.Service.SetAgentStatus(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), input.Status, input.Reason)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, row)
 }
 func (c *TeamController) ListGuides(ctx *gin.Context) {
 	rows, err := c.Service.ListGuides(ctx.GetUint("tenant_id"))
@@ -163,16 +205,56 @@ func (c *TeamController) ListGuides(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"data": rows})
 }
 func (c *TeamController) CreateGuide(ctx *gin.Context) {
-	var row model.TourGuide
-	if err := ctx.ShouldBindJSON(&row); err != nil {
+	var input service.TeamGuideInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := c.Service.CreateGuide(ctx.GetUint("tenant_id"), &row); err != nil {
+	row, err := c.Service.CreateGuide(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), input)
+	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	ctx.JSON(http.StatusCreated, row)
+}
+func (c *TeamController) UpdateGuide(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid guide id"})
+		return
+	}
+	var input service.TeamGuideInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	row, err := c.Service.UpdateGuide(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), input)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, row)
+}
+func (c *TeamController) SetGuideStatus(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid guide id"})
+		return
+	}
+	var input struct {
+		Status string `json:"status" binding:"required"`
+		Reason string `json:"reason"`
+	}
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	row, err := c.Service.SetGuideStatus(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), input.Status, input.Reason)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, row)
 }
 func (c *TeamController) ListVehicles(ctx *gin.Context) {
 	rows, err := c.Service.ListVehicles(ctx.GetUint("tenant_id"))
@@ -183,40 +265,192 @@ func (c *TeamController) ListVehicles(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"data": rows})
 }
 func (c *TeamController) CreateVehicle(ctx *gin.Context) {
-	var row model.TravelVehicle
-	if err := ctx.ShouldBindJSON(&row); err != nil {
+	var input service.TeamVehicleInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := c.Service.CreateVehicle(ctx.GetUint("tenant_id"), &row); err != nil {
+	row, err := c.Service.CreateVehicle(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), input)
+	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	ctx.JSON(http.StatusCreated, row)
 }
+func (c *TeamController) UpdateVehicle(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid vehicle id"})
+		return
+	}
+	var input service.TeamVehicleInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	row, err := c.Service.UpdateVehicle(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), input)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, row)
+}
+func (c *TeamController) SetVehicleStatus(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid vehicle id"})
+		return
+	}
+	var input struct {
+		Status string `json:"status" binding:"required"`
+		Reason string `json:"reason"`
+	}
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	row, err := c.Service.SetVehicleStatus(ctx.GetUint("tenant_id"), uint(id), ctx.GetUint("user_id"), input.Status, input.Reason)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, row)
+}
 
 func (c *TeamController) ListGroups(ctx *gin.Context) {
-	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
-	groups, total, err := c.Service.ListGroups(ctx.GetUint("tenant_id"), page, pageSize)
+	options, err := parseTeamGroupListOptions(ctx)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	groups, total, err := c.Service.ListGroupsWithOptions(ctx.GetUint("tenant_id"), options)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	ctx.JSON(http.StatusOK, gin.H{"data": groups, "total": total, "page": page, "page_size": pageSize})
+	ctx.JSON(http.StatusOK, gin.H{"data": groups, "total": total, "page": options.Page, "page_size": options.PageSize})
+}
+
+func parseTeamGroupListOptions(ctx *gin.Context) (service.TeamGroupListOptions, error) {
+	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
+	if page < 1 {
+		page = 1
+	}
+	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	options := service.TeamGroupListOptions{
+		Page: page, PageSize: pageSize,
+		Keyword: ctx.Query("keyword"), Status: ctx.Query("status"),
+	}
+	if value := ctx.Query("visit_start"); value != "" {
+		parsed, err := time.Parse("2006-01-02", value)
+		if err != nil {
+			return options, fmt.Errorf("开始到园日期格式必须为 YYYY-MM-DD")
+		}
+		options.VisitStart = &parsed
+	}
+	if value := ctx.Query("visit_end"); value != "" {
+		parsed, err := time.Parse("2006-01-02", value)
+		if err != nil {
+			return options, fmt.Errorf("结束到园日期格式必须为 YYYY-MM-DD")
+		}
+		options.VisitEnd = &parsed
+	}
+	if options.VisitStart != nil && options.VisitEnd != nil && options.VisitStart.After(*options.VisitEnd) {
+		return options, fmt.Errorf("开始到园日期不能晚于结束到园日期")
+	}
+	return options, nil
 }
 
 func (c *TeamController) CreateGroup(ctx *gin.Context) {
-	var group model.TourGroup
-	if err := ctx.ShouldBindJSON(&group); err != nil {
+	var input struct {
+		Name             string `json:"name" binding:"required"`
+		SupplierTenantID uint   `json:"supplier_tenant_id" binding:"required"`
+		ScenicAreaID     uint   `json:"scenic_area_id" binding:"required"`
+		ContractID       uint   `json:"contract_id"`
+		VisitDate        string `json:"visit_date" binding:"required"`
+		ExpectedCount    int    `json:"expected_count" binding:"required,min=1"`
+		GuideID          uint   `json:"guide_id"`
+		VehicleID        uint   `json:"vehicle_id"`
+		AgentID          uint   `json:"agent_id"`
+	}
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "团队名称、景区供应商、所属景区、到园日期和计划人数均为必填，计划人数至少为 1"})
+		return
+	}
+	visitDate, err := parseTeamVisitDate(input.VisitDate)
+	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	group := model.TourGroup{
+		Name: input.Name, SupplierTenantID: input.SupplierTenantID, ScenicAreaID: input.ScenicAreaID,
+		ContractID: input.ContractID, VisitDate: visitDate, ExpectedCount: input.ExpectedCount,
+		GuideID: input.GuideID, VehicleID: input.VehicleID, AgentID: input.AgentID,
 	}
 	if err := c.Service.CreateGroup(ctx.GetUint("tenant_id"), &group); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	ctx.JSON(http.StatusCreated, group)
+}
+
+func parseTeamVisitDate(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	for _, layout := range []string{"2006-01-02", time.RFC3339Nano} {
+		parsed, err := time.Parse(layout, value)
+		if err != nil {
+			continue
+		}
+		year, month, day := parsed.Date()
+		return time.Date(year, month, day, 0, 0, 0, 0, time.UTC), nil
+	}
+	return time.Time{}, fmt.Errorf("游玩日期格式必须为 YYYY-MM-DD 或 RFC3339")
+}
+
+func (c *TeamController) UpdateGroupPlan(ctx *gin.Context) {
+	groupID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || groupID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "团队编号无效"})
+		return
+	}
+	var input service.TeamGroupPlanUpdate
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	group, err := c.Service.UpdateGroupPlan(ctx.GetUint("tenant_id"), uint(groupID), ctx.GetUint("user_id"), input)
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, group)
+}
+
+func (c *TeamController) CancelGroup(ctx *gin.Context) {
+	groupID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || groupID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "团队编号无效"})
+		return
+	}
+	var body struct {
+		Reason string `json:"reason" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "取消团队计划必须填写原因"})
+		return
+	}
+	group, err := c.Service.CancelGroup(ctx.GetUint("tenant_id"), uint(groupID), ctx.GetUint("user_id"), body.Reason)
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, group)
 }
 
 func (c *TeamController) CreateContractOrder(ctx *gin.Context) {
@@ -307,10 +541,6 @@ func (c *TeamController) EnterBatch(ctx *gin.Context) {
 	}
 	if err := ctx.ShouldBindJSON(&body); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	if err := service.RequireStaffResource(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), ctx.GetString("role"), "device", body.DeviceID); err != nil {
-		ctx.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
 	batch, err := c.Service.EnterBatch(ctx.GetUint("tenant_id"), uint(groupID), body.DeviceID, ctx.GetUint("user_id"), body.MemberIDs, body.IdempotencyKey)
@@ -447,7 +677,13 @@ func (c *TeamController) AttachOrder(ctx *gin.Context) {
 
 func (c *TeamController) ListSettlements(ctx *gin.Context) {
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
+	if page < 1 {
+		page = 1
+	}
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
 	rows, total, err := c.Service.ListTeamSettlements(ctx.GetUint("tenant_id"), page, pageSize)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

@@ -7,8 +7,8 @@ func TestFixedTenantRolePermissions(t *testing.T) {
 		role, allowed, denied string
 	}{
 		{RoleProductOperator, PermissionCatalogWrite, PermissionFinanceWrite},
-		{RoleTeamOperator, PermissionTeamsWrite, PermissionDistributionWrite},
-		{RoleSettlementOperator, PermissionSettlementsWrite, PermissionCatalogWrite},
+		{RoleTeamOperator, PermissionTeamsWrite, PermissionTeamContractsWrite},
+		{RoleSettlementOperator, PermissionTeamContractsWrite, PermissionCatalogWrite},
 		{RoleViewer, PermissionOrdersRead, PermissionOrdersWrite},
 	}
 	for _, test := range tests {
@@ -21,6 +21,20 @@ func TestFixedTenantRolePermissions(t *testing.T) {
 	}
 	if !HasTenantPermission(RoleTenantAdmin, PermissionTenantAccounts) || !HasTenantPermission("super_admin", PermissionPaymentConfig) {
 		t.Fatal("tenant administrators should retain all tenant permissions")
+	}
+}
+
+func TestTeamCommercialConfigurationRequiresContractPermission(t *testing.T) {
+	if HasTenantPermission(RoleTeamOperator, PermissionTeamContractsWrite) {
+		t.Fatal("team operator must not change contract prices or credit limits")
+	}
+	if !HasTenantPermission(RoleSettlementOperator, PermissionTeamContractsWrite) {
+		t.Fatal("settlement operator should manage team contract commercial terms")
+	}
+	for _, role := range []string{RoleTenantAdmin, "super_admin"} {
+		if !HasTenantPermission(role, PermissionTeamContractsWrite) {
+			t.Fatalf("tenant administrator %s should manage team contracts", role)
+		}
 	}
 }
 

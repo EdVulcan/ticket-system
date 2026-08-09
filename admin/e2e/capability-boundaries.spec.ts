@@ -2,20 +2,21 @@ import { expect, test, type Page } from '@playwright/test'
 
 type Capability = 'supplier' | 'distributor' | 'travel_agency'
 
-async function openAs(page: Page, capability: Capability, path: string, expiresAt?: string) {
-  await page.addInitScript(({ activeCapability, capabilityExpiresAt }) => {
-    localStorage.setItem('token', `${activeCapability}-token`)
+async function openAs(page: Page, capability: Capability | Capability[], path: string, expiresAt?: string) {
+  const capabilities = Array.isArray(capability) ? capability : [capability]
+  await page.addInitScript(({ activeCapabilities, capabilityExpiresAt }) => {
+    localStorage.setItem('token', `${activeCapabilities.join('-')}-token`)
     localStorage.setItem('user', JSON.stringify({
       id: 101,
-      username: `${activeCapability}_admin`,
+      username: `${activeCapabilities.join('_')}_admin`,
       role: 'admin',
       scope: 'tenant',
       tenant_id: 101,
       tenant_name: '测试商户',
       system_code: 'TEST001',
-      capabilities: [{ capability: activeCapability, status: 'active', expires_at: capabilityExpiresAt }],
+      capabilities: activeCapabilities.map(capabilityName => ({ capability: capabilityName, status: 'active', expires_at: capabilityExpiresAt })),
     }))
-  }, { activeCapability: capability, capabilityExpiresAt: expiresAt })
+  }, { activeCapabilities: capabilities, capabilityExpiresAt: expiresAt })
   await page.route('**/api/v1/**', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -82,4 +83,18 @@ test('expired capability is hidden and cannot pass the route guard', async ({ pa
   await expect(page).toHaveURL('http://127.0.0.1:4173/')
   await expect(page.getByRole('menuitem', { name: '终端设备' })).toHaveCount(0)
   await expect(page.getByRole('menuitem', { name: '线下/窗口订单' })).toHaveCount(0)
+})
+
+test('travel agency distributor bundle creation is online only', async ({ page }) => {
+  await openAs(page, ['travel_agency', 'distributor'], '/distribution')
+
+  await expect(page.getByRole('menuitem', { name: '供销合作' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '旅行社团队' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '窗口门票' })).toHaveCount(0)
+  await page.getByRole('tab', { name: '组合产品' }).click()
+  await page.getByRole('button', { name: '新建组合产品' }).click()
+
+  const dialog = page.getByRole('dialog', { name: '新建组合产品' })
+  await expect(dialog.getByRole('radio', { name: '线上' })).toBeChecked()
+  await expect(dialog.getByRole('radio', { name: '售票窗口' })).toHaveCount(0)
 })

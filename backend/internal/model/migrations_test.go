@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 	"ticket-backend/internal/testdb"
 	"time"
@@ -39,9 +40,49 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		{&Refund{}, "idx_refund_allocation_sequence"},
 		{&PlatformUser{}, "idx_platform_users_initial_admin"},
 		{&CtripOrderLink{}, "idx_ctrip_order_account_ota"},
+		{&TravelContract{}, "idx_travel_contract_scope_no"},
+		{&TourGroup{}, "idx_team_active_fulfillment_group"},
+		{&TourGroupMember{}, "idx_team_member_active_ticket"},
 	} {
 		if !db.Migrator().HasIndex(index.model, index.name) {
 			t.Fatalf("index %s is missing", index.name)
+		}
+	}
+}
+
+func TestTeamUniquenessMigrationReportsActionableLegacyConflicts(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	for _, index := range []string{"idx_team_active_fulfillment_group", "idx_team_member_active_ticket"} {
+		if err := db.Exec("DROP INDEX IF EXISTS " + index).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := TourGroup{TenantID: 11, SupplierTenantID: 22, ScenicAreaID: 33, SalesOrderID: 44, GroupNo: "LEGACY-DUP-1", Name: "Legacy duplicate one", VisitDate: time.Now(), Status: "confirmed"}
+	second := TourGroup{TenantID: 11, SupplierTenantID: 22, ScenicAreaID: 33, SalesOrderID: 44, GroupNo: "LEGACY-DUP-2", Name: "Legacy duplicate two", VisitDate: time.Now(), Status: "confirmed"}
+	if err := db.Create(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&TourGroupMember{GroupID: first.ID, Name: "First", TicketCode: "LEGACY-TICKET-DUP", Status: "ticketed"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&TourGroupMember{GroupID: second.ID, Name: "Second", TicketCode: "LEGACY-TICKET-DUP", Status: "ticketed"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	err := validateTeamUniquenessMigrationData(db)
+	if err == nil {
+		t.Fatal("legacy duplicate team facts were accepted before unique-index migration")
+	}
+	message := err.Error()
+	for _, expected := range []string{"order=44", "supplier=22", "scenic=33", "LEGACY-DUP-1", "LEGACY-DUP-2", "LEGACY-TICKET-DUP"} {
+		if !strings.Contains(message, expected) {
+			t.Fatalf("migration error %q does not identify %q", message, expected)
 		}
 	}
 }
