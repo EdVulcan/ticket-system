@@ -139,6 +139,7 @@ func eligibleTeamContractProductsTx(tx *gorm.DB, supplierTenantID uint) *gorm.DB
 		Where("products.status = ?", "online").
 		Where("products.source_product_id = 0 AND products.product_offer_id = 0").
 		Where("products.code_mode = ?", "ticket").
+		Where("products.region_limit IS NULL OR BTRIM(products.region_limit) = ''").
 		Where("products.scenic_area_id > 0")
 }
 
