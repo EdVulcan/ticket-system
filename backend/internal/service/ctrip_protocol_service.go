@@ -14,7 +14,9 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"ticket-backend/internal/config"
@@ -177,7 +179,7 @@ func (s *CtripProtocolService) Handle(raw []byte, remoteIP string) ([]byte, erro
 			logger.Log.Warn("ctrip request signature mismatch",
 				zap.String("account_id", envelope.Header.AccountID),
 				zap.String("service_name", envelope.Header.ServiceName),
-				zap.String("matched_variant", ctripSignatureVariant(envelope.Header, envelope.Body, plainBody, signKey, config.AESKey, config.AESIV)),
+				zap.String("matched_variant", ctripSignatureVariant(account.Environment == "sandbox", envelope.Header, envelope.Body, plainBody, signKey, config.AESKey, config.AESIV)),
 				zap.Int("encrypted_body_length", len(envelope.Body)),
 				zap.Int("plain_body_length", len(plainBody)),
 				zap.Int("signature_length", len(envelope.Header.Sign)),
@@ -290,7 +292,10 @@ func ctripSignature(header ctripHeader, body, signKey string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func ctripSignatureVariant(header ctripHeader, encryptedBody string, plainBody []byte, signKey, aesKey, aesIV string) string {
+func ctripSignatureVariant(sandbox bool, header ctripHeader, encryptedBody string, plainBody []byte, signKey, aesKey, aesIV string) string {
+	if !sandbox {
+		return "not_checked"
+	}
 	provided := strings.ToLower(strings.TrimSpace(header.Sign))
 	compactBody := append([]byte(nil), plainBody...)
 	if compacted := new(bytes.Buffer); json.Compact(compacted, plainBody) == nil {
@@ -304,6 +309,8 @@ func ctripSignatureVariant(header ctripHeader, encryptedBody string, plainBody [
 		{"plain_trimmed", strings.TrimSpace(string(plainBody))},
 		{"plain_compact", string(compactBody)},
 		{"encrypted", encryptedBody},
+		{"plain_quoted", strconv.Quote(string(plainBody))},
+		{"plain_urlencoded", url.QueryEscape(string(plainBody))},
 	}
 	keyVariants := []struct {
 		name  string
@@ -334,6 +341,52 @@ func ctripSignatureVariant(header ctripHeader, encryptedBody string, plainBody [
 				if ctripSignature(candidateHeader, body.value, key.value) == provided {
 					return body.name + "/" + key.name + "/" + account.name
 				}
+			}
+		}
+	}
+	for _, body := range bodyVariants {
+		for _, key := range keyVariants {
+			parts := []struct {
+				name  string
+				value string
+			}{
+				{"account", header.AccountID},
+				{"service", header.ServiceName},
+				{"time", header.RequestTime},
+				{"body_" + body.name, body.value},
+				{"version", header.Version},
+				{"key_" + key.name, key.value},
+			}
+			indexes := []int{0, 1, 2, 3, 4, 5}
+			var search func(int) string
+			search = func(position int) string {
+				if position == len(indexes) {
+					var value strings.Builder
+					var order strings.Builder
+					for _, index := range indexes {
+						value.WriteString(parts[index].value)
+						if order.Len() > 0 {
+							order.WriteByte('-')
+						}
+						order.WriteString(parts[index].name)
+					}
+					sum := md5.Sum([]byte(value.String()))
+					if hex.EncodeToString(sum[:]) == provided {
+						return "permutation/" + order.String()
+					}
+					return ""
+				}
+				for index := position; index < len(indexes); index++ {
+					indexes[position], indexes[index] = indexes[index], indexes[position]
+					if matched := search(position + 1); matched != "" {
+						return matched
+					}
+					indexes[position], indexes[index] = indexes[index], indexes[position]
+				}
+				return ""
+			}
+			if matched := search(0); matched != "" {
+				return matched
 			}
 		}
 	}
