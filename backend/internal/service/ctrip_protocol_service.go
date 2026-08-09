@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/md5"
@@ -19,8 +20,10 @@ import (
 	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/utils"
+	"ticket-backend/pkg/logger"
 	"time"
 
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -170,6 +173,16 @@ func (s *CtripProtocolService) Handle(raw []byte, remoteIP string) ([]byte, erro
 	// price and inventory requests use the encrypted body and remain unchanged.
 	expected := ctripSignature(envelope.Header, string(plainBody), signKey)
 	if len(expected) != len(envelope.Header.Sign) || subtle.ConstantTimeCompare([]byte(expected), []byte(strings.ToLower(envelope.Header.Sign))) != 1 {
+		if logger.Log != nil {
+			logger.Log.Warn("ctrip request signature mismatch",
+				zap.String("account_id", envelope.Header.AccountID),
+				zap.String("service_name", envelope.Header.ServiceName),
+				zap.String("matched_variant", ctripSignatureVariant(envelope.Header, envelope.Body, plainBody, signKey, config.AESKey, config.AESIV)),
+				zap.Int("encrypted_body_length", len(envelope.Body)),
+				zap.Int("plain_body_length", len(plainBody)),
+				zap.Int("signature_length", len(envelope.Header.Sign)),
+			)
+		}
 		return marshalCtripHeaderOnly("0002", "签名错误"), nil
 	}
 	var sequence ctripSequence
@@ -275,6 +288,56 @@ func ctripSignature(header ctripHeader, body, signKey string) string {
 	value := header.AccountID + header.ServiceName + header.RequestTime + body + header.Version + signKey
 	sum := md5.Sum([]byte(value)) // Ctrip's published protocol requires MD5 for compatibility.
 	return hex.EncodeToString(sum[:])
+}
+
+func ctripSignatureVariant(header ctripHeader, encryptedBody string, plainBody []byte, signKey, aesKey, aesIV string) string {
+	provided := strings.ToLower(strings.TrimSpace(header.Sign))
+	compactBody := append([]byte(nil), plainBody...)
+	if compacted := new(bytes.Buffer); json.Compact(compacted, plainBody) == nil {
+		compactBody = compacted.Bytes()
+	}
+	bodyVariants := []struct {
+		name  string
+		value string
+	}{
+		{"plain", string(plainBody)},
+		{"plain_trimmed", strings.TrimSpace(string(plainBody))},
+		{"plain_compact", string(compactBody)},
+		{"encrypted", encryptedBody},
+	}
+	keyVariants := []struct {
+		name  string
+		value string
+	}{
+		{"sign_key", signKey},
+		{"sign_key_upper", strings.ToUpper(signKey)},
+		{"aes_key", aesKey},
+		{"aes_iv", aesIV},
+	}
+	accountVariants := []struct {
+		name  string
+		value string
+	}{
+		{"account", header.AccountID},
+		{"account_trimmed", strings.TrimSpace(header.AccountID)},
+		{"account_upper", strings.ToUpper(header.AccountID)},
+		{"account_lower", strings.ToLower(header.AccountID)},
+	}
+	for _, body := range bodyVariants {
+		for _, key := range keyVariants {
+			for _, account := range accountVariants {
+				candidateHeader := header
+				candidateHeader.AccountID = account.value
+				candidateHeader.ServiceName = strings.TrimSpace(candidateHeader.ServiceName)
+				candidateHeader.RequestTime = strings.TrimSpace(candidateHeader.RequestTime)
+				candidateHeader.Version = strings.TrimSpace(candidateHeader.Version)
+				if ctripSignature(candidateHeader, body.value, key.value) == provided {
+					return body.name + "/" + key.name + "/" + account.name
+				}
+			}
+		}
+	}
+	return "none"
 }
 
 func ctripRequestTimeValid(value string, now time.Time) bool {
