@@ -121,17 +121,27 @@ func (s *CtripSyncService) EnqueueMappingSync(tenantID, accountID, mappingID uin
 		if err != nil {
 			return err
 		}
-		for day := start; !day.After(end); day = day.AddDate(0, 0, 1) {
-			date := day.Format("2006-01-02")
-			prices = append(prices, ctrip.Price{Date: date, SalePrice: float64(mapping.ChannelSaleCents) / 100, CostPrice: float64(mapping.ChannelCostCents) / 100})
-			inventories = append(inventories, ctrip.Inventory{Date: date, Quantity: remainingByDate[date]})
+		dateType := "DATE_REQUIRED"
+		if product.ValidityType == "days" {
+			if product.StockType == "daily" {
+				return errors.New("Ctrip non-date products require unlimited or total inventory")
+			}
+			dateType = "DATE_NOT_REQUIRED"
+			prices = append(prices, ctrip.Price{SalePrice: float64(mapping.ChannelSaleCents) / 100, CostPrice: float64(mapping.ChannelCostCents) / 100})
+			inventories = append(inventories, ctrip.Inventory{Quantity: remainingByDate[start.Format("2006-01-02")]})
+		} else {
+			for day := start; !day.After(end); day = day.AddDate(0, 0, 1) {
+				date := day.Format("2006-01-02")
+				prices = append(prices, ctrip.Price{Date: date, SalePrice: float64(mapping.ChannelSaleCents) / 100, CostPrice: float64(mapping.ChannelCostCents) / 100})
+				inventories = append(inventories, ctrip.Inventory{Date: date, Quantity: remainingByDate[date]})
+			}
 		}
 		payloads := []struct {
 			kind, endpoint string
 			value          interface{}
 		}{
-			{"price", priceEndpoint, ctrip.PriceRequest{SequenceID: sequence + "P", SupplierOptionID: mapping.ExternalCode, DateType: "DATE_REQUIRED", Prices: prices}},
-			{"inventory", stockEndpoint, ctrip.InventoryRequest{SequenceID: sequence + "S", SupplierOptionID: mapping.ExternalCode, DateType: "DATE_REQUIRED", Inventories: inventories}},
+			{"price", priceEndpoint, ctrip.PriceRequest{SequenceID: sequence + "P", SupplierOptionID: mapping.ExternalCode, DateType: dateType, Prices: prices}},
+			{"inventory", stockEndpoint, ctrip.InventoryRequest{SequenceID: sequence + "S", SupplierOptionID: mapping.ExternalCode, DateType: dateType, Inventories: inventories}},
 		}
 		for _, entry := range payloads {
 			payload, err := json.Marshal(entry.value)
