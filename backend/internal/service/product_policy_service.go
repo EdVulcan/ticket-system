@@ -153,6 +153,9 @@ func validateRegion(config, region string) error {
 	if err := json.Unmarshal([]byte(config), &allowed); err != nil {
 		return fmt.Errorf("invalid region policy")
 	}
+	if len(allowed) == 0 {
+		return nil
+	}
 	if strings.TrimSpace(region) == "" {
 		return errors.New("visitor region is required")
 	}

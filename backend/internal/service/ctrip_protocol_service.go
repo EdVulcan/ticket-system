@@ -71,10 +71,11 @@ type ctripContact struct {
 }
 
 type ctripPassenger struct {
-	PassengerID string `json:"passengerId"`
-	Name        string `json:"name"`
-	Mobile      string `json:"mobile"`
-	CardNo      string `json:"cardNo"`
+	PassengerID     string `json:"passengerId"`
+	Name            string `json:"name"`
+	Mobile          string `json:"mobile"`
+	CardNo          string `json:"cardNo"`
+	NationalityCode string `json:"nationalityCode"`
 }
 
 type ctripPreOrderItem struct {
@@ -543,7 +544,7 @@ func (s *CtripProtocolService) createPreOrder(account *model.ChannelAccount, raw
 			}
 			seenPassengers[passengerID] = struct{}{}
 			passengerIDs = append(passengerIDs, passengerID)
-			visitors = append(visitors, model.VisitorInput{Name: passenger.Name, Phone: passenger.Mobile, IdentityNo: passenger.CardNo})
+			visitors = append(visitors, model.VisitorInput{Name: passenger.Name, Phone: passenger.Mobile, IdentityNo: passenger.CardNo, Region: passenger.NationalityCode})
 		}
 		if product.CodeMode == "ticket" && len(visitors) > 0 && len(visitors) != source.Quantity {
 			return nil, &ctripBusinessError{Code: "1006", Message: "出行人数量与购票数量不一致"}

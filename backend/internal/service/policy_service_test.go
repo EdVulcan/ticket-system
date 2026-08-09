@@ -5,6 +5,15 @@ import (
 	"ticket-backend/internal/model"
 )
 
+func TestEmptyRegionPolicyDoesNotRequireVisitorRegion(t *testing.T) {
+	if err := validateRegion(`[]`, ""); err != nil {
+		t.Fatalf("empty region policy rejected an unspecified visitor region: %v", err)
+	}
+	if err := validateRegion(` [ ] `, "CN"); err != nil {
+		t.Fatalf("empty region policy rejected a supplied visitor region: %v", err)
+	}
+}
+
 func TestPolicyListHidesInactiveFromSellerButKeepsAdminMaintenance(t *testing.T) {
 	resetBusinessData(t)
 	tenant := model.Tenant{Name: "政策景区", SystemCode: "POLICY-TEST", Status: "active"}
