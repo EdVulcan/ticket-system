@@ -28,7 +28,7 @@ async function prepareSupplier(page: Page) {
     if (route.request().method() === 'POST') {
       const body = route.request().postDataJSON()
       expect(body.travel_tenant_id).toBe(21)
-      expect(body.price_rules).toEqual([{ product_id: 101, price_cents: 8800, max_quantity: 50 }])
+      expect(body.price_rules).toEqual([{ product_id: 101, price_cents: 8800, min_quantity: 5 }])
       await json(route, { id: 31, ...body }, 201)
       return
     }
@@ -61,10 +61,32 @@ test('供应商按旅行社和产品名称维护合同结算价', async ({ page 
   await productSelect.click()
   await page.getByRole('option', { name: '青云景区团队票' }).click()
   await dialog.getByRole('spinbutton', { name: '结算价（元）' }).fill('88')
-  await dialog.getByRole('spinbutton', { name: '每单上限（0不限）' }).fill('50')
+  await dialog.getByRole('spinbutton', { name: '最低成团人数' }).fill('5')
   await expect(dialog.getByText('选择当前景区自己的已上架票种')).toBeVisible()
   await dialog.getByRole('button', { name: '保存' }).click()
   await expect(page.getByText('旅行社合同已创建')).toBeVisible()
+})
+
+test('已取消团队只提供履约详情而不显示履约入园', async ({ page }) => {
+  await prepareSupplier(page)
+  await page.unroute('**/api/v1/teams?page=*')
+  await page.route('**/api/v1/teams?page=*', route => json(route, { data: [{
+    id: 41,
+    group_no: 'GROUP-CANCELLED',
+    name: '已取消测试团',
+    tenant_id: 21,
+    supplier_tenant_id: 1,
+    scenic_area_id: 11,
+    expected_count: 0,
+    status: 'cancelled',
+    settlement_status: 'open',
+    visit_date: '2026-08-10T00:00:00+08:00',
+  }], total: 1 }))
+
+  await page.goto('/teams')
+  const row = page.getByRole('row').filter({ hasText: '已取消测试团' })
+  await expect(row.getByRole('button', { name: '履约详情' })).toBeVisible()
+  await expect(row.getByRole('button', { name: '履约入园' })).toHaveCount(0)
 })
 
 test('供应商可以为票种配置闸机本地语音编号', async ({ page }) => {

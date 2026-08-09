@@ -90,7 +90,7 @@ func seedTeamP0Fixture(t *testing.T, creditLimitCents int64) teamP0Fixture {
 		if err := tx.Omit("Rule").Create(&fixture.product).Error; err != nil {
 			return err
 		}
-		priceRules, err := json.Marshal([]TeamPriceRule{{ProductID: fixture.product.ID, PriceCents: 6000, MaxQuantity: 100}})
+		priceRules, err := json.Marshal([]TeamPriceRule{{ProductID: fixture.product.ID, PriceCents: 6000, MinQuantity: 1}})
 		if err != nil {
 			return err
 		}
@@ -142,6 +142,35 @@ func TestTeamZeroCreditDoesNotAuthorizeUnfundedContractOrder(t *testing.T) {
 	}
 }
 
+func TestTeamContractOrderRequiresMinimumGroupSize(t *testing.T) {
+	fixture := seedTeamP0Fixture(t, 100000)
+	priceRules := fmt.Sprintf(`[{"product_id":%d,"price_cents":6000,"min_quantity":2}]`, fixture.product.ID)
+	if err := model.DB.Model(&model.TravelContract{}).Where("id = ?", fixture.contract.ID).
+		Update("price_rules_json", priceRules).Error; err != nil {
+		t.Fatal(err)
+	}
+	group := createTeamP0Group(t, fixture, "Below Minimum Team", 1)
+
+	if _, err := (&TeamService{}).CreateContractOrder(fixture.travel.ID, group.ID, fixture.operator.ID, TeamOrderInput{ProductID: fixture.product.ID}); err == nil {
+		t.Fatal("contract order accepted a team below the configured minimum group size")
+	}
+}
+
+func TestLegacyTeamMaximumDoesNotBecomeMinimum(t *testing.T) {
+	fixture := seedTeamP0Fixture(t, 100000)
+	legacy := fixture.contract
+	legacy.PriceRulesJSON = fmt.Sprintf(`[{"product_id":%d,"price_cents":6000,"max_quantity":100}]`, fixture.product.ID)
+	order := model.Order{Items: []model.OrderItem{{
+		FulfillmentProductID: fixture.product.ID,
+		SettlementPrice:      60,
+		Quantity:             1,
+	}}}
+
+	if err := validateTeamOrderAgainstContract(&legacy, &order); err != nil {
+		t.Fatalf("legacy maximum quantity was incorrectly treated as a minimum: %v", err)
+	}
+}
+
 func TestTeamContractDoesNotCreateDistributionOffer(t *testing.T) {
 	fixture := seedTeamP0Fixture(t, 100000)
 	var secondTravel model.Tenant
@@ -160,7 +189,7 @@ func TestTeamContractDoesNotCreateDistributionOffer(t *testing.T) {
 
 	_, err := (&TeamService{}).CreateContract(fixture.supplier.ID, fixture.operator.ID, TravelContractInput{
 		TravelTenantID: secondTravel.ID, ContractNo: fmt.Sprintf("NO-OFFER-%d", time.Now().UnixNano()), Status: "active",
-		CreditLimitCents: 100000, PriceRules: []TeamPriceRule{{ProductID: fixture.product.ID, PriceCents: 5500, MaxQuantity: 20}},
+		CreditLimitCents: 100000, PriceRules: []TeamPriceRule{{ProductID: fixture.product.ID, PriceCents: 5500, MinQuantity: 1}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -194,7 +223,7 @@ func TestTeamContractDoesNotOverwriteDistributionOffer(t *testing.T) {
 
 	_, err := (&TeamService{}).UpdateContract(fixture.supplier.ID, fixture.contract.ID, fixture.operator.ID, TravelContractInput{
 		TravelTenantID: fixture.travel.ID, ContractNo: fixture.contract.ContractNo, Status: "active",
-		CreditLimitCents: 100000, PriceRules: []TeamPriceRule{{ProductID: fixture.product.ID, PriceCents: 5500, MaxQuantity: 20}},
+		CreditLimitCents: 100000, PriceRules: []TeamPriceRule{{ProductID: fixture.product.ID, PriceCents: 5500, MinQuantity: 1}},
 	})
 	if err != nil {
 		t.Fatal(err)

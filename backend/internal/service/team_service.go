@@ -75,7 +75,14 @@ type TeamPriceRule struct {
 	ScenicAreaID   uint   `json:"scenic_area_id,omitempty"`
 	ScenicAreaName string `json:"scenic_area_name,omitempty"`
 	PriceCents     int64  `json:"price_cents"`
-	MaxQuantity    int    `json:"max_quantity"`
+	MinQuantity    int    `json:"min_quantity"`
+}
+
+func teamPriceRuleMinimum(rule TeamPriceRule) int {
+	if rule.MinQuantity < 1 {
+		return 1
+	}
+	return rule.MinQuantity
 }
 
 type TravelContractInput struct {
@@ -256,7 +263,7 @@ func normalizeTeamPriceRulesTx(tx *gorm.DB, supplierTenantID uint, rules []TeamP
 	seen := make(map[uint]struct{}, len(rules))
 	normalized := make([]TeamPriceRule, 0, len(rules))
 	for _, rule := range rules {
-		if rule.ProductID == 0 || rule.PriceCents <= 0 || rule.MaxQuantity < 0 {
+		if rule.ProductID == 0 || rule.PriceCents <= 0 || rule.MinQuantity < 0 {
 			return nil, "", errors.New("invalid contract product price")
 		}
 		if _, ok := seen[rule.ProductID]; ok {
@@ -271,7 +278,7 @@ func normalizeTeamPriceRulesTx(tx *gorm.DB, supplierTenantID uint, rules []TeamP
 		seen[rule.ProductID] = struct{}{}
 		var area model.ScenicArea
 		_ = tx.Select("id", "name").Where("id = ? AND tenant_id = ?", product.ScenicAreaID, supplierTenantID).First(&area).Error
-		normalized = append(normalized, TeamPriceRule{ProductID: product.ID, ProductName: product.Name, ScenicAreaID: product.ScenicAreaID, ScenicAreaName: area.Name, PriceCents: rule.PriceCents, MaxQuantity: rule.MaxQuantity})
+		normalized = append(normalized, TeamPriceRule{ProductID: product.ID, ProductName: product.Name, ScenicAreaID: product.ScenicAreaID, ScenicAreaName: area.Name, PriceCents: rule.PriceCents, MinQuantity: teamPriceRuleMinimum(rule)})
 	}
 	sort.Slice(normalized, func(i, j int) bool { return normalized[i].ProductID < normalized[j].ProductID })
 	stored := make([]TeamPriceRule, len(normalized))
@@ -1643,8 +1650,8 @@ func (s *TeamService) CreateContractOrder(tenantID, groupID, operatorID uint, in
 		if quantity == 0 || quantity != group.ExpectedCount {
 			return errors.New("请先录入与计划人数一致的游客名单")
 		}
-		if priceRule.MaxQuantity > 0 && quantity > priceRule.MaxQuantity {
-			return errors.New("团队人数超过合同产品每单上限")
+		if quantity < teamPriceRuleMinimum(*priceRule) {
+			return errors.New("团队人数未达到合同产品最低成团人数")
 		}
 		var product model.Product
 		if err := eligibleTeamContractProductsTx(tx, group.SupplierTenantID).
@@ -1843,7 +1850,7 @@ func validateTeamOrderAgainstContract(contract *model.TravelContract, order *mod
 	}
 	byProduct := make(map[uint]TeamPriceRule, len(rules))
 	for _, rule := range rules {
-		if rule.ProductID == 0 || rule.PriceCents <= 0 || rule.MaxQuantity < 0 {
+		if rule.ProductID == 0 || rule.PriceCents <= 0 || rule.MinQuantity < 0 {
 			return errors.New("invalid team contract price rule")
 		}
 		byProduct[rule.ProductID] = rule
@@ -1863,8 +1870,8 @@ func validateTeamOrderAgainstContract(contract *model.TravelContract, order *mod
 		quantities[item.FulfillmentProductID] += item.Quantity
 	}
 	for productID, quantity := range quantities {
-		if rule := byProduct[productID]; rule.MaxQuantity > 0 && quantity > rule.MaxQuantity {
-			return fmt.Errorf("supplier product %d exceeds team contract quantity", productID)
+		if rule := byProduct[productID]; quantity < teamPriceRuleMinimum(rule) {
+			return fmt.Errorf("supplier product %d is below team contract minimum quantity", productID)
 		}
 	}
 	return nil

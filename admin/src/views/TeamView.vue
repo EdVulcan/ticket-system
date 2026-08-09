@@ -60,7 +60,7 @@
           <el-table-column label="结算" width="110"><template #default="{ row }">{{ settlementStatusText(row.settlement_status) }}</template></el-table-column>
           <el-table-column label="操作" width="390" fixed="right">
             <template #default="{ row }">
-              <el-button link type="primary" @click="openGroupDetail(row)">{{ isGroupSupplier(row) ? '履约入园' : '名单详情' }}</el-button>
+              <el-button link type="primary" @click="openGroupDetail(row)">{{ groupDetailActionText(row) }}</el-button>
               <el-button v-if="isGroupOwner(row) && can('teams.write')" link type="success" :disabled="row.status !== 'draft'" @click="openContractOrder(row)">生成订单</el-button>
               <el-button v-if="isGroupOwner(row) && can('teams.write')" link type="primary" :disabled="row.status !== 'draft'" @click="openAttachOrder(row)">绑定已有订单</el-button>
               <el-button
@@ -192,7 +192,7 @@
             <template #default="{ row }">
               <div v-for="rule in row.price_rules || []" :key="rule.product_id" class="leading-6">
                 <span>{{ rule.product_name }}</span><strong class="ml-2">¥{{ cents(rule.price_cents) }}</strong>
-                <span v-if="rule.max_quantity" class="ml-2 text-xs text-gray-400">最多 {{ rule.max_quantity }} 张/单</span>
+                <span class="ml-2 text-xs text-gray-400">至少 {{ rule.min_quantity || 1 }} 张/单</span>
               </div>
             </template>
           </el-table-column>
@@ -391,7 +391,7 @@
         <div v-for="(rule, index) in contractPriceRules" :key="index" class="mb-3 grid grid-cols-[1fr_150px_150px_40px] items-end gap-3 rounded border border-gray-200 p-3">
           <el-form-item label="产品" class="mb-0"><el-select v-model="rule.product_id" filterable class="w-full" placeholder="选择产品"><el-option v-for="product in contractProducts" :key="product.id" :label="`${product.scenic_area_name} · ${product.name} · ¥${Number(product.price || 0).toFixed(2)}`" :value="product.id" /></el-select></el-form-item>
           <el-form-item label="结算价（元）" class="mb-0"><el-input-number v-model="rule.price_yuan" :min="0.01" :precision="2" :controls="false" class="w-full" /></el-form-item>
-          <el-form-item label="每单上限（0不限）" class="mb-0"><el-input-number v-model="rule.max_quantity" :min="0" :precision="0" class="w-full" /></el-form-item>
+          <el-form-item label="最低成团人数" class="mb-0"><el-input-number v-model="rule.min_quantity" :min="1" :precision="0" class="w-full" /></el-form-item>
           <el-button :icon="Delete" circle title="删除这项产品价格" @click="contractPriceRules.splice(index, 1)" />
         </div>
       </el-form>
@@ -1035,7 +1035,7 @@ const savingContract = ref(false)
 const contractCreditYuan = ref(0)
 const contractPartners = ref<any[]>([])
 const contractProducts = ref<any[]>([])
-type ContractPriceRuleForm = { product_id: number | null; price_yuan: number; max_quantity: number }
+type ContractPriceRuleForm = { product_id: number | null; price_yuan: number; min_quantity: number }
 const contractPriceRules = ref<ContractPriceRuleForm[]>([])
 const contractForm = reactive<{ id: number; travel_tenant_id: number | null; contract_no: string; settlement_days: number; starts_at: string; ends_at: string; status: string }>({
   id: 0,
@@ -1058,7 +1058,7 @@ const loadContractFormOptions = async () => {
     .filter((product: any) => Number(product.id) > 0)
     .map((product: any) => ({ ...product, id: Number(product.id) }))
 }
-const addContractPriceRule = () => contractPriceRules.value.push({ product_id: null, price_yuan: 0, max_quantity: 0 })
+const addContractPriceRule = () => contractPriceRules.value.push({ product_id: null, price_yuan: 0, min_quantity: 1 })
 const openContractDialog = async (row?: any, presetTravelTenantID?: number) => {
   try {
     await loadContractFormOptions()
@@ -1069,7 +1069,7 @@ const openContractDialog = async (row?: any, presetTravelTenantID?: number) => {
       starts_at: dateOnlyValue(row?.starts_at), ends_at: dateOnlyValue(row?.ends_at),
     })
     contractCreditYuan.value = Number(row?.credit_limit_cents || 0) / 100
-    contractPriceRules.value = (row?.price_rules || []).map((rule: any) => ({ product_id: Number(rule.product_id) || null, price_yuan: Number(rule.price_cents || 0) / 100, max_quantity: Number(rule.max_quantity || 0) }))
+    contractPriceRules.value = (row?.price_rules || []).map((rule: any) => ({ product_id: Number(rule.product_id) || null, price_yuan: Number(rule.price_cents || 0) / 100, min_quantity: Math.max(1, Number(rule.min_quantity || 1)) }))
     if (!contractPriceRules.value.length && contractProducts.value.length) addContractPriceRule()
     contractDialog.value = true
   } catch (e: any) { ElMessage.error(e.response?.data?.error || '合同可选项加载失败') }
@@ -1085,7 +1085,7 @@ const saveContract = async () => {
       travel_tenant_id: contractForm.travel_tenant_id, contract_no: contractForm.contract_no.trim(), status: contractForm.status,
       settlement_days: contractForm.settlement_days, credit_limit_cents: Math.round(contractCreditYuan.value * 100),
       starts_at: contractDateValue(contractForm.starts_at), ends_at: contractDateValue(contractForm.ends_at),
-      price_rules: contractPriceRules.value.map(rule => ({ product_id: rule.product_id, price_cents: Math.round(rule.price_yuan * 100), max_quantity: rule.max_quantity })),
+      price_rules: contractPriceRules.value.map(rule => ({ product_id: rule.product_id, price_cents: Math.round(rule.price_yuan * 100), min_quantity: rule.min_quantity })),
     }
     if (contractForm.id) await request.put(`/teams/contracts/${contractForm.id}`, payload)
     else await request.post('/teams/contracts', payload)
@@ -1121,6 +1121,10 @@ const canEditRoster = computed(() => can('teams.write') && isGroupOwner(selected
 const canChangeMembers = computed(() => can('teams.write') && isGroupOwner(selectedGroup.value) && ['confirmed', 'partial_entry'].includes(selectedGroup.value?.status))
 const canSubmitConfirmation = computed(() => canChangeMembers.value)
 const canEnterSelectedGroup = computed(() => can('teams.write') && isGroupSupplier(selectedGroup.value) && ['confirmed', 'partial_entry'].includes(selectedGroup.value?.status))
+const groupDetailActionText = (row: any) => {
+  if (!isGroupSupplier(row)) return '名单详情'
+  return ['confirmed', 'partial_entry'].includes(row.status) ? '履约入园' : '履约详情'
+}
 const admissionDevices = computed(() => devices.value.filter(device => device.status === 'online' && Number(device.scenic_area_id) === Number(selectedGroup.value?.scenic_area_id) && device.check_point_id))
 const loadGroupDetail = async () => {
   if (!selectedGroup.value) return
@@ -1166,7 +1170,7 @@ const openGroupDetail = async (row: any) => {
   detailDialog.value = true
   await Promise.all([
     loadGroupDetail(),
-    isGroupSupplier(row) ? loadAdmissionDevices() : Promise.resolve(),
+    isGroupSupplier(row) && ['confirmed', 'partial_entry'].includes(row.status) ? loadAdmissionDevices() : Promise.resolve(),
     isGroupOwner(row) ? loadReferenceData() : Promise.resolve(),
   ])
 }

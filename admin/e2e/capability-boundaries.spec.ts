@@ -92,6 +92,7 @@ test('travel agency distributor bundle creation is online only', async ({ page }
   await expect(page.getByRole('menuitem', { name: '旅行社团队' })).toBeVisible()
   await expect(page.getByRole('menuitem', { name: '窗口门票' })).toHaveCount(0)
   await page.getByRole('tab', { name: '组合产品' }).click()
+  await expect(page.getByRole('tabpanel', { name: '组合产品' }).getByText('暂无数据')).toBeVisible()
   await page.getByRole('button', { name: '新建组合产品' }).click()
 
   const dialog = page.getByRole('dialog', { name: '新建组合产品' })

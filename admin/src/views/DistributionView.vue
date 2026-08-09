@@ -572,6 +572,7 @@ const fetchBundles = async () => {
 }
 
 const loadBundleComponents = async () => {
+  if (!canSupply.value && bundleForm.type === 'offline') bundleForm.type = 'online'
   try {
     eligibleBundleComponents.value = (await request.get('/distribution/bundle-components', { params: { type: bundleForm.type } })).data.data || []
   } catch (e: any) {
@@ -597,6 +598,10 @@ const openBundleForm = async (row?: any) => {
 }
 
 const saveBundle = async () => {
+  if (!canSupply.value && bundleForm.type === 'offline') {
+    ElMessage.error('当前商户不具备窗口售票能力，只能创建线上组合产品')
+    return
+  }
   if (!bundleForm.name.trim() || bundleForm.retail_price <= 0 || bundleForm.components.length < 2 || allocationDifference.value !== 0 || bundleForm.components.some((item: any) => !item.seller_product_id || item.quantity <= 0 || item.allocation <= 0)) {
     ElMessage.warning('请填写完整信息，并确保组件分摊金额等于组合售价')
     return

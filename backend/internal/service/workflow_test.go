@@ -1659,7 +1659,7 @@ func TestSupplierControlsTravelContractProductPrices(t *testing.T) {
 	}
 	input := TravelContractInput{
 		TravelTenantID: travel.ID, ContractNo: "SUPPLIER-PRICED-1", Status: "active", SettlementDays: 30,
-		CreditLimitCents: 500000, PriceRules: []TeamPriceRule{{ProductID: product.ID, PriceCents: 8800, MaxQuantity: 100}},
+		CreditLimitCents: 500000, PriceRules: []TeamPriceRule{{ProductID: product.ID, PriceCents: 8800, MinQuantity: 1}},
 	}
 	contract, err := team.CreateContract(supplier.ID, 11, input)
 	if err != nil {
@@ -1761,7 +1761,7 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 		if err := tx.Omit("Rule").Create(&product).Error; err != nil {
 			return err
 		}
-		priceRules := fmt.Sprintf(`[{"product_id":%d,"price_cents":9900,"max_quantity":2}]`, product.ID)
+		priceRules := fmt.Sprintf(`[{"product_id":%d,"price_cents":9900,"min_quantity":2}]`, product.ID)
 		return tx.Create(&model.TravelContract{TravelTenantID: travel.ID, SupplierTenantID: supplier.ID, ContractNo: "TEAM-CONTRACT-1", Status: "active", PriceRulesJSON: priceRules, CreditLimitCents: 20000}).Error
 	}); err != nil {
 		t.Fatal(err)
@@ -1770,7 +1770,11 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 	if err := model.DB.First(&contract).Error; err != nil {
 		t.Fatal(err)
 	}
-	validOrder := model.Order{Items: []model.OrderItem{{FulfillmentProductID: product.ID, SettlementPrice: 99, Quantity: 1}}}
+	belowMinimum := model.Order{Items: []model.OrderItem{{FulfillmentProductID: product.ID, SettlementPrice: 99, Quantity: 1}}}
+	if err := validateTeamOrderAgainstContract(&contract, &belowMinimum); err == nil {
+		t.Fatal("contract accepted an order below its minimum group size")
+	}
+	validOrder := model.Order{Items: []model.OrderItem{{FulfillmentProductID: product.ID, SettlementPrice: 99, Quantity: 2}}}
 	if err := validateTeamOrderAgainstContract(&contract, &validOrder); err != nil {
 		t.Fatal(err)
 	}
@@ -1779,12 +1783,12 @@ func TestTeamContractPricingAndSettlementAreIdempotent(t *testing.T) {
 	if err := validateTeamOrderAgainstContract(&contract, &invalidOrder); err == nil {
 		t.Fatal("contract accepted a non-contract price")
 	}
-	overLimit := model.Order{Items: []model.OrderItem{
+	aboveMinimum := model.Order{Items: []model.OrderItem{
 		{FulfillmentProductID: product.ID, SettlementPrice: 99, Quantity: 2},
 		{FulfillmentProductID: product.ID, SettlementPrice: 99, Quantity: 1},
 	}}
-	if err := validateTeamOrderAgainstContract(&contract, &overLimit); err == nil {
-		t.Fatal("contract quantity limit was bypassed by duplicate order items")
+	if err := validateTeamOrderAgainstContract(&contract, &aboveMinimum); err != nil {
+		t.Fatalf("contract rejected an order above its minimum group size: %v", err)
 	}
 	var group model.TourGroup
 	if err := model.Write(func(tx *gorm.DB) error {
