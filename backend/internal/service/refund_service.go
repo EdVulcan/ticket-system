@@ -1105,17 +1105,31 @@ func applyRefundBusinessFactsTx(tx *gorm.DB, order *model.Order, refund *model.R
 		}
 		cashCents := allocatedRefundCents(item.CashCostCents, previouslyRefunded, selectedUnits, totalUnits)
 		creditCents := allocatedRefundCents(item.CreditCostCents, previouslyRefunded, selectedUnits, totalUnits)
-		var listing model.Product
-		if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", item.ProductID, order.TenantID).First(&listing).Error; err != nil {
-			return err
-		}
-		stockProduct, distributed, err := loadStoredFulfillmentProduct(tx, &listing, item, order.TenantID)
-		if err != nil {
-			return err
+		var stockProduct *model.Product
+		distributed := false
+		if order.Channel == "team" {
+			if item.FulfillmentProductID == 0 || item.FulfillmentTenantID == 0 {
+				return errors.New("team order fulfillment ownership is unavailable")
+			}
+			var product model.Product
+			if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", item.FulfillmentProductID, item.FulfillmentTenantID).First(&product).Error; err != nil {
+				return errors.New("team order fulfillment product is unavailable")
+			}
+			stockProduct = &product
+		} else {
+			var listing model.Product
+			if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", item.ProductID, order.TenantID).First(&listing).Error; err != nil {
+				return err
+			}
+			var err error
+			stockProduct, distributed, err = loadStoredFulfillmentProduct(tx, &listing, item, order.TenantID)
+			if err != nil {
+				return err
+			}
 		}
 		if distributed {
 			key := "refund:" + refund.RefundNo + ":item:" + ledgerItemKey(item)
-			if err := refundDistributionAllocation(tx, order, item, order.TenantID, stockProduct.TenantID, cashCents, creditCents, key, listing.Name); err != nil {
+			if err := refundDistributionAllocation(tx, order, item, order.TenantID, stockProduct.TenantID, cashCents, creditCents, key, item.ProductName); err != nil {
 				return err
 			}
 			if stockQuantity > 0 {

@@ -108,6 +108,58 @@ func TestUnusedTeamTicketRefundCancelsMemberAndRecalculatesGroup(t *testing.T) {
 	assertRefundedTeamProjection(t, group.ID, member.ID)
 }
 
+func TestContractTeamOrderRefundReleasesCreditAndCancelsMember(t *testing.T) {
+	fixture := seedTeamP0Fixture(t, 100000)
+	group := createTeamP0Group(t, fixture, "Contract Refund Team", 1)
+	order, err := (&TeamService{}).CreateContractOrder(
+		fixture.travel.ID,
+		group.ID,
+		fixture.operator.ID,
+		TeamOrderInput{ProductID: fixture.product.ID},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var member model.TourGroupMember
+	if err := model.DB.Where("group_id = ?", group.ID).First(&member).Error; err != nil {
+		t.Fatal(err)
+	}
+	if member.TicketCode == "" {
+		t.Fatal("contract order did not assign a ticket to the team member")
+	}
+
+	refund, err := (&RefundService{}).CreateMixedRefundAs(
+		RefundActor{TenantID: fixture.travel.ID, UserID: fixture.operator.ID},
+		order.OrderNo,
+		"contract-team-refund",
+		order.TotalAmount,
+		[]string{member.TicketCode},
+		"unused contract team ticket refund",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refund.Status != "group_succeeded" {
+		t.Fatalf("refund status=%s", refund.Status)
+	}
+
+	assertRefundedTeamProjection(t, group.ID, member.ID)
+	var storedGroup model.TourGroup
+	if err := model.DB.First(&storedGroup, group.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedGroup.CreditUsedCents != 0 || storedGroup.DepositCents != 0 {
+		t.Fatalf("team funding after refund: credit=%d deposit=%d", storedGroup.CreditUsedCents, storedGroup.DepositCents)
+	}
+	var storedOrder model.Order
+	if err := model.DB.First(&storedOrder, order.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedOrder.Status != "refunded" {
+		t.Fatalf("order status=%s", storedOrder.Status)
+	}
+}
+
 func TestUsedTeamTicketRefundCancelsMemberAndReversesAdmission(t *testing.T) {
 	resetBusinessData(t)
 	scenario := seedDistributionScenario(t)
