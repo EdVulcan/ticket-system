@@ -84,7 +84,7 @@ func loadXiaohongshuWebhookConfig(appID string) (*model.ChannelAccount, string, 
 		return nil, "", "", ErrXiaohongshuWebhookNotConfigured
 	}
 	var account model.ChannelAccount
-	if err := model.DB.Where("type = ? AND app_id = ? AND status = ?", "xiaohongshu", appID, "active").First(&account).Error; err != nil {
+	if err := model.DB.Where("type = ? AND app_id = ? AND status IN ?", "xiaohongshu", appID, []string{"active", "sandbox"}).First(&account).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, "", "", ErrXiaohongshuWebhookNotConfigured
 		}

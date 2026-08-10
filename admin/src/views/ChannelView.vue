@@ -22,6 +22,7 @@
         <template #default="{row}">
           <el-button v-if="canWrite && row.type === 'ctrip'" link type="primary" @click="openCtripConfig(row)">携程参数</el-button>
           <el-button v-if="canWrite && row.type === 'xiaohongshu'" link type="primary" @click="openXiaohongshuConfig(row)">小红书参数</el-button>
+          <el-button v-if="canWrite && row.type === 'xiaohongshu' && row.status !== 'disabled'" link type="primary" @click="switchXiaohongshuEnvironment(row)">{{ row.status === 'sandbox' ? '切换正式环境' : '切换测试环境' }}</el-button>
           <el-button v-if="canWrite && row.type === 'ctrip' && row.status === 'sandbox'" link type="primary" @click="openCtripSandboxConsume(row)">沙箱核销测试</el-button>
           <el-button v-if="canWrite" link type="primary" @click="openMapping(row)">商品映射</el-button>
           <el-button link type="primary" @click="openOrders(row)">渠道订单</el-button>
@@ -50,8 +51,7 @@
           <el-form-item label="小程序 AppSecret"><el-input v-model="form.secret" type="password" show-password autocomplete="new-password" /></el-form-item>
         </template>
         <el-form-item v-else label="初始密钥"><el-input v-model="form.secret" type="password" show-password /></el-form-item>
-        <el-form-item v-if="form.type !== 'xiaohongshu'" label="运行环境"><el-radio-group v-model="form.status"><el-radio-button label="sandbox">测试环境</el-radio-button><el-radio-button label="active">正式环境</el-radio-button></el-radio-group></el-form-item>
-        <el-alert v-else class="mb-4" type="warning" :closable="false" title="小红书公开接口未提供独立沙箱地址，保存配置不会自动创建或修改商品。" />
+        <el-form-item label="运行环境"><el-radio-group v-model="form.status"><el-radio-button label="sandbox">测试环境</el-radio-button><el-radio-button label="active">正式环境</el-radio-button></el-radio-group></el-form-item>
         <el-form-item label="接口权限配置"><el-input v-model="form.permissions_json" /></el-form-item>
         <el-form-item label="每分钟请求上限"><el-input-number v-model="form.rate_limit_per_min" :min="1" :max="100000" /></el-form-item>
         <el-form-item label="允许访问的网络地址"><el-input v-model="form.allowed_ips_json" placeholder='例如 ["203.0.113.5"]' /></el-form-item>
@@ -379,7 +379,7 @@ const syncEnd = new Date(); syncEnd.setDate(syncEnd.getDate() + 30)
 const syncDateRange = ref<[string, string]>([dateValue(new Date()), dateValue(syncEnd)])
 
 const load = async () => { loading.value = true; try { accounts.value = (await request.get('/channel-accounts')).data.data || [] } finally { loading.value = false } }
-const handleAdapterTypeChange = (type: string) => { form.status = type === 'ctrip' ? 'sandbox' : 'active'; form.app_id = ''; form.secret = ''; form.aes_key = ''; form.aes_iv = '' }
+const handleAdapterTypeChange = (type: string) => { form.status = ['ctrip', 'xiaohongshu'].includes(type) ? 'sandbox' : 'active'; form.app_id = ''; form.secret = ''; form.aes_key = ''; form.aes_iv = '' }
 const create = async () => {
   if (!form.code.trim()) { ElMessage.warning('请填写渠道编码'); return }
   if (form.type === 'ctrip' && (!form.app_id.trim() || !form.secret.trim() || form.aes_key.length !== 16 || form.aes_iv.length !== 16)) { ElMessage.warning('请完整填写携程接口参数，AES 密钥和初始向量必须为 16 位'); return }
@@ -447,6 +447,15 @@ const simulateCtripSandboxConsumption = async () => {
   } finally { ctripSandboxConsuming.value = false }
 }
 const toggleStatus = async (row: any) => { const status = row.status === 'disabled' ? (row.environment === 'sandbox' ? 'sandbox' : 'active') : 'disabled'; await request.patch(`/channel-accounts/${row.id}/status`, { status }); row.status = status; ElMessage.success('状态已更新') }
+const switchXiaohongshuEnvironment = async (row: any) => {
+  const status = row.status === 'sandbox' ? 'active' : 'sandbox'
+  const label = status === 'sandbox' ? '测试环境' : '正式环境'
+  await ElMessageBox.confirm(`切换后将立即使用小红书${label}接口和当前环境凭据，确认继续？`, '切换运行环境', { type: 'warning' })
+  await request.patch(`/channel-accounts/${row.id}/status`, { status })
+  row.status = status
+  row.environment = status === 'sandbox' ? 'sandbox' : 'production'
+  ElMessage.success(`已切换到${label}`)
+}
 const rotate = async (row: any) => { await ElMessageBox.confirm('轮换后旧密钥立即失效，确认继续？', '确认轮换', { type: 'warning' }); const response = await request.post(`/channel-accounts/${row.id}/rotate-secret`); newSecret.value = response.data.secret; secretDialog.value = true }
 const productName = (id: number) => products.value.find((product: any) => Number(product.id) === Number(id))?.name || '已下架或不可见产品'
 const openMapping = async (row: any) => {

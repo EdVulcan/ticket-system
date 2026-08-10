@@ -159,8 +159,8 @@ func (s *ChannelService) createXiaohongshu(tenantID uint, account *model.Channel
 	account.TenantID = tenantID
 	account.Type = "xiaohongshu"
 	account.AppID = appID
-	account.Status = "active"
-	account.Environment = "production"
+	account.Status = normalizeChannelStatus(account.Status)
+	account.Environment = channelEnvironment(account.Status)
 	account.SecretCiphertext = secretCiphertext
 	account.VerifyKeyCiphertext = verifyKeyCiphertext
 	account.ProtocolConfigCiphertext = protocolConfigCiphertext
@@ -246,7 +246,7 @@ func (s *ChannelService) configureXiaohongshu(tenantID, id uint, appID, appSecre
 			return errors.New("该小红书小程序 AppID 已被配置")
 		}
 		result := tx.Model(&model.ChannelAccount{}).Where("id = ? AND tenant_id = ? AND type = ?", id, tenantID, "xiaohongshu").Updates(map[string]interface{}{
-			"app_id": appID, "secret_ciphertext": secretCiphertext, "status": "active", "environment": "production",
+			"app_id": appID, "secret_ciphertext": secretCiphertext,
 			"verify_key_ciphertext": verifyKeyCiphertext, "protocol_config_ciphertext": protocolConfigCiphertext,
 			"sign_algorithm": "access-token", "key_version": gorm.Expr("key_version + 1"),
 		})

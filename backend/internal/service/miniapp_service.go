@@ -24,7 +24,7 @@ var (
 )
 
 type MiniappService struct {
-	NewXiaohongshuClient func(appID, secret string) *xiaohongshu.Client
+	NewXiaohongshuClient func(appID, secret, environment string) *xiaohongshu.Client
 	Now                  func() time.Time
 }
 
@@ -50,9 +50,7 @@ type MiniappCatalog struct {
 
 func NewMiniappService() MiniappService {
 	return MiniappService{
-		NewXiaohongshuClient: func(appID, secret string) *xiaohongshu.Client {
-			return &xiaohongshu.Client{AppID: appID, Secret: secret}
-		},
+		NewXiaohongshuClient: xiaohongshu.NewClient,
 	}
 }
 
@@ -69,7 +67,7 @@ func (s MiniappService) LoginXiaohongshu(ctx context.Context, appID, code string
 	if newClient == nil {
 		newClient = NewMiniappService().NewXiaohongshuClient
 	}
-	platformSession, err := newClient(account.AppID, secret).Code2Session(ctx, code)
+	platformSession, err := newClient(account.AppID, secret, account.Environment).Code2Session(ctx, code)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +91,7 @@ func (s MiniappService) LoginXiaohongshu(ctx context.Context, appID, code string
 
 	err = model.Write(func(tx *gorm.DB) error {
 		var current model.ChannelAccount
-		if err := tx.Where("id = ? AND tenant_id = ? AND type = ? AND status = ?", account.ID, account.TenantID, "xiaohongshu", "active").First(&current).Error; err != nil {
+		if err := tx.Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", account.ID, account.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&current).Error; err != nil {
 			return ErrMiniappUnavailable
 		}
 		var tenant model.Tenant
@@ -138,7 +136,7 @@ func (s MiniappService) Authenticate(token string) (*model.MiniappCustomer, erro
 		return nil, ErrMiniappUnauthenticated
 	}
 	var account model.ChannelAccount
-	if err := model.DB.Where("id = ? AND tenant_id = ? AND type = ? AND status = ?", customer.ChannelAccountID, customer.TenantID, "xiaohongshu", "active").First(&account).Error; err != nil {
+	if err := model.DB.Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", customer.ChannelAccountID, customer.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
 		return nil, ErrMiniappUnavailable
 	}
 	var tenant model.Tenant
@@ -206,7 +204,7 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 
 func loadActiveXiaohongshuAccount(appID string) (*model.ChannelAccount, string, error) {
 	var account model.ChannelAccount
-	if err := model.DB.Where("type = ? AND app_id = ? AND status = ?", "xiaohongshu", appID, "active").First(&account).Error; err != nil {
+	if err := model.DB.Where("type = ? AND app_id = ? AND status IN ?", "xiaohongshu", appID, []string{"active", "sandbox"}).First(&account).Error; err != nil {
 		return nil, "", ErrMiniappUnavailable
 	}
 	var tenant model.Tenant

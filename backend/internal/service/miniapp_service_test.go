@@ -16,7 +16,7 @@ import (
 func TestXiaohongshuMiniappLoginAndCatalogAreChannelScoped(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
-	account := model.ChannelAccount{Code: "xiaohongshu-storefront"}
+	account := model.ChannelAccount{Code: "xiaohongshu-storefront", Status: "sandbox"}
 	if err := (&ChannelService{}).CreateXiaohongshu(tenantID, &account, "miniapp-storefront", "app-secret"); err != nil {
 		t.Fatal(err)
 	}
@@ -44,9 +44,12 @@ func TestXiaohongshuMiniappLoginAndCatalogAreChannelScoped(t *testing.T) {
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.Local)
 	miniapp := NewMiniappService()
 	miniapp.Now = func() time.Time { return now }
-	miniapp.NewXiaohongshuClient = func(appID, secret string) *xiaohongshu.Client {
+	miniapp.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
 		if appID != "miniapp-storefront" || secret != "app-secret" {
 			t.Fatalf("appid=%q secret=%q", appID, secret)
+		}
+		if environment != "sandbox" {
+			t.Fatalf("environment=%q", environment)
 		}
 		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
 	}
@@ -94,7 +97,7 @@ func TestXiaohongshuMiniappSessionFailsClosedWhenChannelIsDisabled(t *testing.T)
 	server := miniappLoginServer(t)
 	defer server.Close()
 	miniapp := NewMiniappService()
-	miniapp.NewXiaohongshuClient = func(appID, secret string) *xiaohongshu.Client {
+	miniapp.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
 		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
 	}
 	login, err := miniapp.LoginXiaohongshu(context.Background(), "miniapp-disabled", "login-code")

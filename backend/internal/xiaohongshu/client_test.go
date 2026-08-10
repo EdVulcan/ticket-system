@@ -120,6 +120,15 @@ func TestCode2SessionUsesOfficialLoginEndpoint(t *testing.T) {
 	}
 }
 
+func TestBaseURLForEnvironmentSeparatesSandboxAndProduction(t *testing.T) {
+	if got := BaseURLForEnvironment("sandbox"); got != SandboxBaseURL {
+		t.Fatalf("sandbox base URL=%q", got)
+	}
+	if got := BaseURLForEnvironment("production"); got != DefaultBaseURL {
+		t.Fatalf("production base URL=%q", got)
+	}
+}
+
 func TestClientReturnsOfficialAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"data":null,"success":false,"msg":"trade ability is unavailable","code":40001}`))

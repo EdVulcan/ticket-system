@@ -14,7 +14,7 @@ func TestXiaohongshuChannelCredentialsAreTenantScopedAndEncrypted(t *testing.T) 
 	if err := (&ChannelService{}).CreateXiaohongshuIntegration(tenantID, &account, "miniapp-1", "app-secret-1", "MessageToken123", "abcdefghijklmnopqrstuvwxyzABCDEFGH123456789"); err != nil {
 		t.Fatal(err)
 	}
-	if account.Type != "xiaohongshu" || account.Status != "active" || account.Environment != "production" {
+	if account.Type != "xiaohongshu" || account.Status != "sandbox" || account.Environment != "sandbox" {
 		t.Fatalf("account=%+v", account)
 	}
 	if account.SecretCiphertext == "" || account.VerifyKeyCiphertext == "" || account.ProtocolConfigCiphertext == "" || strings.Contains(account.SecretCiphertext, "app-secret-1") {

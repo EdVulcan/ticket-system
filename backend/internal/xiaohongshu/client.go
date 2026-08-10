@@ -14,7 +14,10 @@ import (
 	"time"
 )
 
-const DefaultBaseURL = "https://miniapp.xiaohongshu.com"
+const (
+	DefaultBaseURL = "https://miniapp.xiaohongshu.com"
+	SandboxBaseURL = "https://miniapp.beta.xiaohongshu.com"
+)
 
 const (
 	ProductTypeGroupVoucher   = 1
@@ -36,6 +39,21 @@ type Client struct {
 	mu             sync.Mutex
 	accessToken    string
 	tokenExpiresAt time.Time
+}
+
+func NewClient(appID, secret, environment string) *Client {
+	return &Client{
+		AppID:   strings.TrimSpace(appID),
+		Secret:  strings.TrimSpace(secret),
+		BaseURL: BaseURLForEnvironment(environment),
+	}
+}
+
+func BaseURLForEnvironment(environment string) string {
+	if strings.EqualFold(strings.TrimSpace(environment), "sandbox") {
+		return SandboxBaseURL
+	}
+	return DefaultBaseURL
 }
 
 type APIError struct {
