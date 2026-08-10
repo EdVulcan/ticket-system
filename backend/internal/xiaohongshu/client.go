@@ -349,7 +349,7 @@ func (c *Client) authenticatedPost(ctx context.Context, path string, payload, re
 		return fmt.Errorf("create xiaohongshu endpoint: %w", err)
 	}
 	query := endpoint.Query()
-	query.Set("appid", strings.TrimSpace(c.AppID))
+	query.Set("app_id", strings.TrimSpace(c.AppID))
 	query.Set("access_token", token)
 	endpoint.RawQuery = query.Encode()
 	return c.post(ctx, endpoint.String(), payload, response)

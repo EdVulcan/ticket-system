@@ -166,7 +166,7 @@ func TestVoucherBatchLimitIsEnforced(t *testing.T) {
 
 func assertAuthQuery(t *testing.T, r *http.Request) {
 	t.Helper()
-	if r.URL.Query().Get("appid") != "miniapp" || r.URL.Query().Get("access_token") != "token-1" {
+	if r.URL.Query().Get("app_id") != "miniapp" || r.URL.Query().Get("access_token") != "token-1" {
 		t.Fatalf("query=%s", r.URL.RawQuery)
 	}
 }

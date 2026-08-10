@@ -11,6 +11,7 @@
 - 小程序登录：`https://miniapp.xiaohongshu.com/doc/DC724193`
 - `code2session`：`GET https://miniapp.xiaohongshu.com/api/rmp/session`
 - 小程序代码构成：`https://miniapp.xiaohongshu.com/doc/DC451266`
+- 测试小程序使用说明：`https://miniapp.xiaohongshu.com/doc/DC483845`
 - 交易组件说明：`https://miniapp.xiaohongshu.com/third/api-3rd-doc/rmpDeal`
 - 小程序调用凭证：`POST https://miniapp.xiaohongshu.com/api/rmp/token`
 - 生活服务商品同步：`POST https://miniapp.xiaohongshu.com/api/rmp/mp/deal/poi/product/upsert`
@@ -20,6 +21,10 @@
 - 售后新增：`POST https://miniapp.xiaohongshu.com/api/rmp/mp/deal/order/after_sales_order/add`
 - 结算请求：`POST https://miniapp.xiaohongshu.com/api/rmp/mp/deal/settle`
 - 消息加解密：`https://miniapp.xiaohongshu.com/third/api-3rd-doc/msgCrypt`
+
+正式小程序服务端 API 基地址为 `https://miniapp.xiaohongshu.com`，测试小程序必须改用
+`https://miniapp-sandbox.xiaohongshu.com`。两个环境会相互拦截，不能混用。测试小程序单笔下单金额不得超过
+`0.1` 元，无法对外发布，且到期后无法退款，联调订单必须在测试小程序到期前完成退款。
 
 ## 2. 已确认的业务语义
 
@@ -56,8 +61,8 @@
 - 客户端已校验订单金额、商品必要字段、担保支付结算类型和单批最多 10 张凭证。
 - 管理端已支持按租户创建小红书渠道账号，并配置 AppID、AppSecret、消息 Token 和 EncodingAESKey；敏感值加密保存且不会通过接口回显，组合型供应商/分销商租户仍按销售租户隔离凭据。
 - 消息推送地址为 `https://<部署域名>/api/v1/integrations/xiaohongshu/events/<AppID>`。保存配置时的 GET 请求执行 SHA-1 验签并原样返回 `echostr`；POST 事件先验签、按官方 AES-CBC/PKCS#7 协议解密、校验明文 AppID，再加密且幂等入库后返回 `success`。无法验证或无法持久化的事件不会被确认。
-- 尚未用真实小程序调用 `code2session`，也未创建或修改小红书商品；当前完成的是可测试的本地代码链路，不代表交易能力已验收。
-- 下一步用开发工具验证真实登录和票种目录，并在小红书后台保存管理端生成的消息推送 URL、Token 和 EncodingAESKey；随后再接入 POI/类目选择、可靠商品同步任务、订单协议关联和担保支付，不能让票种预览绕过交易组件直接收款。
+- 已在官方开发者工具中使用测试小程序完成真实 `xhs.login -> code2session` 和票种目录验证；服务端按渠道环境自动选择正式或沙箱 API 基地址，不维护两套业务代码。
+- 下一步接入 POI/类目选择、可靠商品同步任务、订单协议关联和担保支付，不能让票种预览绕过交易组件直接收款。
 
 ## 5. 真实联调前需要的资料
 
