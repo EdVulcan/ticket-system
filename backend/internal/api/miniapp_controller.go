@@ -2,12 +2,15 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"ticket-backend/internal/service"
 	"ticket-backend/internal/xiaohongshu"
+	"ticket-backend/pkg/logger"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 type MiniappController struct {
@@ -31,13 +34,30 @@ func (c *MiniappController) LoginXiaohongshu(ctx *gin.Context) {
 		}
 		var platformError *xiaohongshu.APIError
 		if errors.As(err, &platformError) {
-			ctx.JSON(http.StatusUnauthorized, gin.H{"error": "小红书登录凭证已失效，请重新进入小程序"})
+			if logger.Log != nil {
+				logger.Log.Warn("xiaohongshu miniapp login rejected",
+					zap.String("app_id", strings.TrimSpace(body.AppID)),
+					zap.Int("platform_code", platformError.Code),
+					zap.String("platform_message", platformError.Message),
+				)
+			}
+			ctx.JSON(http.StatusUnauthorized, gin.H{
+				"error":         xiaohongshuLoginError(platformError),
+				"platform_code": platformError.Code,
+			})
 			return
 		}
 		ctx.JSON(http.StatusBadGateway, gin.H{"error": "小红书登录校验失败，请稍后重试"})
 		return
 	}
 	ctx.JSON(http.StatusOK, result)
+}
+
+func xiaohongshuLoginError(platformError *xiaohongshu.APIError) string {
+	if platformError == nil || platformError.Code == 0 {
+		return "小红书平台拒绝登录，请检查小程序配置后重试"
+	}
+	return fmt.Sprintf("小红书平台拒绝登录（错误码 %d），请检查 AppID、AppSecret 与当前环境是否匹配", platformError.Code)
 }
 
 func (c *MiniappController) ListCatalog(ctx *gin.Context) {
