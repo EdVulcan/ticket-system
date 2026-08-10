@@ -330,6 +330,10 @@ func serveAdminUI(engine *gin.Engine, directory string) {
 		return
 	}
 	engine.StaticFS("/assets", http.Dir(filepath.Join(absDirectory, "assets")))
+	xiaohongshuValidationPath := filepath.Join(absDirectory, "74e84f27.txt")
+	if info, err := os.Stat(xiaohongshuValidationPath); err == nil && !info.IsDir() {
+		engine.StaticFile("/74e84f27.txt", xiaohongshuValidationPath)
+	}
 	downloadsDirectory := filepath.Join(absDirectory, "downloads")
 	if info, err := os.Stat(downloadsDirectory); err == nil && info.IsDir() {
 		engine.StaticFS("/downloads", http.Dir(downloadsDirectory))

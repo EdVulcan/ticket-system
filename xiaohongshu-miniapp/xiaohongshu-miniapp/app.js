@@ -1,5 +1,5 @@
 const API_ROOT = 'https://ymsq.edvulcan.top/api/v1/storefront/xiaohongshu';
-const APP_ID = '672997dc4889610001aa80b2';
+const APP_ID = '6a79580901ada500017dac60';
 const SESSION_STORAGE_KEY = 'ticket-miniapp-session';
 
 App({
