@@ -39,6 +39,63 @@ type ChannelProductMapping struct {
 	ChannelCostCents int64  `gorm:"not null;default:0" json:"channel_cost_cents"`
 }
 
+// XiaohongshuProductConfig contains the provider-specific fields required to
+// publish an existing channel mapping. It does not own product price,
+// inventory or fulfillment rights.
+type XiaohongshuProductConfig struct {
+	Base
+	TenantID                uint       `gorm:"index;not null" json:"tenant_id"`
+	ChannelAccountID        uint       `gorm:"index;not null" json:"channel_account_id"`
+	ChannelProductMappingID uint       `gorm:"uniqueIndex;not null" json:"channel_product_mapping_id"`
+	ExternalSKUID           string     `gorm:"column:external_sku_id;size:120;not null" json:"external_sku_id"`
+	CategoryID              string     `gorm:"size:120;not null" json:"category_id"`
+	POIIDsJSON              string     `gorm:"column:poi_ids_json;type:text" json:"poi_ids_json"`
+	ImageURL                string     `gorm:"size:500;not null" json:"image_url"`
+	Description             string     `gorm:"type:text;not null" json:"description"`
+	ProductPath             string     `gorm:"size:255;not null" json:"product_path"`
+	OrderPath               string     `gorm:"size:255;not null" json:"order_path"`
+	ProductType             int        `gorm:"not null;default:1" json:"product_type"`
+	SettleType              int        `gorm:"not null;default:1" json:"settle_type"`
+	SyncStatus              string     `gorm:"size:20;not null;default:'pending';index" json:"sync_status"`
+	LastSyncError           string     `gorm:"size:500" json:"last_sync_error,omitempty"`
+	LastSyncedAt            *time.Time `json:"last_synced_at,omitempty"`
+}
+
+// XiaohongshuOrderLink keeps miniapp payment identifiers separate from the
+// core order. Pay tokens are encrypted and a client request id is the
+// idempotency boundary for repeated taps.
+type XiaohongshuOrderLink struct {
+	Base
+	TenantID           uint       `gorm:"index;not null" json:"tenant_id"`
+	ChannelAccountID   uint       `gorm:"index;not null;uniqueIndex:idx_xhs_order_external,priority:1" json:"channel_account_id"`
+	MiniappCustomerID  uint       `gorm:"index;not null;uniqueIndex:idx_xhs_order_request,priority:1" json:"-"`
+	OrderID            uint       `gorm:"uniqueIndex;not null" json:"order_id"`
+	ClientRequestID    string     `gorm:"size:100;not null;uniqueIndex:idx_xhs_order_request,priority:2" json:"-"`
+	ExternalOrderID    string     `gorm:"size:100;not null;uniqueIndex:idx_xhs_order_external,priority:2" json:"external_order_id"`
+	PlatformOrderID    string     `gorm:"size:100;index" json:"platform_order_id,omitempty"`
+	PayTokenCiphertext string     `gorm:"type:text" json:"-"`
+	PayTokenExpiresAt  *time.Time `json:"pay_token_expires_at,omitempty"`
+	State              string     `gorm:"size:20;not null;default:'creating';index" json:"state"`
+	TradeNo            string     `gorm:"size:100;index" json:"trade_no,omitempty"`
+	PayChannel         int        `gorm:"not null;default:0" json:"pay_channel,omitempty"`
+	LastQueriedAt      *time.Time `json:"last_queried_at,omitempty"`
+	LastError          string     `gorm:"size:500" json:"last_error,omitempty"`
+}
+
+// XiaohongshuVoucherLink maps provider vouchers to immutable local ticket
+// entitlements. The raw provider code is encrypted at rest.
+type XiaohongshuVoucherLink struct {
+	Base
+	TenantID               uint   `gorm:"index;not null" json:"tenant_id"`
+	ChannelAccountID       uint   `gorm:"index;not null;uniqueIndex:idx_xhs_voucher_hash,priority:1" json:"channel_account_id"`
+	XiaohongshuOrderLinkID uint   `gorm:"index;not null" json:"xiaohongshu_order_link_id"`
+	TicketID               uint   `gorm:"uniqueIndex;not null" json:"ticket_id"`
+	VoucherCodeHash        string `gorm:"size:64;not null;uniqueIndex:idx_xhs_voucher_hash,priority:2" json:"-"`
+	VoucherCodeCiphertext  string `gorm:"type:text;not null" json:"-"`
+	Status                 int    `gorm:"not null;default:1" json:"status"`
+	VerifyID               string `gorm:"size:100" json:"verify_id,omitempty"`
+}
+
 // CtripOutboundTask persists price and inventory notifications before any
 // network call. A failed call can be retried after a restart without changing
 // the supplier product or inventory facts.

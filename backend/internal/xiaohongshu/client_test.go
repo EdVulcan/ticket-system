@@ -120,6 +120,38 @@ func TestCode2SessionUsesOfficialLoginEndpoint(t *testing.T) {
 	}
 }
 
+func TestListCategoriesAndPOIsUseOfficialQueries(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/rmp/token":
+			_, _ = w.Write([]byte(`{"data":{"access_token":"token-1","expire_in":7200},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/apps/category":
+			assertAuthQuery(t, r)
+			_, _ = w.Write([]byte(`{"data":{"category_info":[{"category_id":"C-1","name":"景区门票","require_claim_store":true,"support_trade":true}]},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/mp/deal/poi/list":
+			assertAuthQuery(t, r)
+			if r.URL.Query().Get("page_no") != "2" || r.URL.Query().Get("page_size") != "40" {
+				t.Fatalf("query=%s", r.URL.RawQuery)
+			}
+			_, _ = w.Write([]byte(`{"data":{"list":[{"poi_id":"P-1","name":"云门山","address":"韶关"}],"total":1},"success":true,"msg":"success","code":0}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := Client{AppID: "miniapp", Secret: "secret", BaseURL: server.URL, HTTP: server.Client()}
+	categories, err := client.ListCategories(context.Background())
+	if err != nil || len(categories) != 1 || categories[0].ID != "C-1" || !categories[0].SupportTrade {
+		t.Fatalf("categories=%+v err=%v", categories, err)
+	}
+	pois, err := client.ListPOIs(context.Background(), 2, 40)
+	if err != nil || pois.Total != 1 || len(pois.List) != 1 || pois.List[0].ID != "P-1" {
+		t.Fatalf("pois=%+v err=%v", pois, err)
+	}
+}
+
 func TestBaseURLForEnvironmentSeparatesSandboxAndProduction(t *testing.T) {
 	if got := BaseURLForEnvironment("sandbox"); got != "https://miniapp-sandbox.xiaohongshu.com" {
 		t.Fatalf("sandbox base URL=%q", got)

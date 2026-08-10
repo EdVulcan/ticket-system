@@ -38,6 +38,12 @@ Page({
     this.loadCatalog();
   },
 
+  buy(event) {
+    const mappingId = event.currentTarget.dataset.id;
+    if (!mappingId) return;
+    xhs.navigateTo({ url: `/pages/order/confirm?mapping_id=${mappingId}` });
+  },
+
   formatPrice(cents) {
     const amount = Number(cents || 0) / 100;
     return amount % 1 === 0 ? amount.toFixed(0) : amount.toFixed(2);

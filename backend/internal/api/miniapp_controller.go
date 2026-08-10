@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
 	"ticket-backend/internal/xiaohongshu"
 	"ticket-backend/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 type MiniappController struct {
@@ -61,10 +63,8 @@ func xiaohongshuLoginError(platformError *xiaohongshu.APIError) string {
 }
 
 func (c *MiniappController) ListCatalog(ctx *gin.Context) {
-	token := bearerToken(ctx.GetHeader("Authorization"))
-	customer, err := c.Service.Authenticate(token)
+	customer, err := c.authenticate(ctx)
 	if err != nil {
-		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "登录状态已失效，请重新进入小程序"})
 		return
 	}
 	catalog, err := c.Service.ListCatalog(customer)
@@ -77,6 +77,56 @@ func (c *MiniappController) ListCatalog(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, catalog)
+}
+
+func (c *MiniappController) CreateOrder(ctx *gin.Context) {
+	customer, err := c.authenticate(ctx)
+	if err != nil {
+		return
+	}
+	var body service.MiniappOrderCreateInput
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "请选择票种和购买数量"})
+		return
+	}
+	result, err := c.Service.CreateXiaohongshuOrder(ctx.Request.Context(), customer, body)
+	if err != nil {
+		var platformError *xiaohongshu.APIError
+		if errors.As(err, &platformError) {
+			ctx.JSON(http.StatusBadGateway, gin.H{"error": "小红书暂时无法创建支付订单，请稍后重试", "platform_code": platformError.Code})
+			return
+		}
+		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusCreated, result)
+}
+
+func (c *MiniappController) GetOrder(ctx *gin.Context) {
+	customer, err := c.authenticate(ctx)
+	if err != nil {
+		return
+	}
+	result, err := c.Service.GetXiaohongshuOrder(ctx.Request.Context(), customer, ctx.Param("orderNo"))
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "订单不存在"})
+		return
+	}
+	if err != nil {
+		ctx.JSON(http.StatusBadGateway, gin.H{"error": "订单状态查询失败，请稍后重试"})
+		return
+	}
+	ctx.JSON(http.StatusOK, result)
+}
+
+func (c *MiniappController) authenticate(ctx *gin.Context) (*model.MiniappCustomer, error) {
+	token := bearerToken(ctx.GetHeader("Authorization"))
+	customer, err := c.Service.Authenticate(token)
+	if err != nil {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "登录状态已失效，请重新进入小程序"})
+		return nil, err
+	}
+	return customer, nil
 }
 
 func bearerToken(header string) string {

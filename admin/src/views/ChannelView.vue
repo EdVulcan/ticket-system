@@ -102,7 +102,7 @@
 
     <el-dialog v-model="mappingDialog" title="商品映射" width="1060px">
       <el-alert v-if="selectedAccount?.type === 'ctrip'" class="mb-4" type="info" :closable="false" title="外部编码填写携程 PLU；价格按当前携程合同单独设置，不会改动景区产品原价。" />
-      <el-alert v-else-if="selectedAccount?.type === 'xiaohongshu'" class="mb-4" type="info" :closable="false" title="外部编码填写小红书 out_product_id。商品同步将在 POI、类目和小程序页面路径配置完成后开放。" />
+      <el-alert v-else-if="selectedAccount?.type === 'xiaohongshu'" class="mb-4" :type="selectedAccount?.status === 'sandbox' ? 'warning' : 'info'" :closable="false" :title="selectedAccount?.status === 'sandbox' ? '测试小程序单笔订单不能超过 0.10 元；先添加映射，再完成发布配置并同步商品。' : '先添加映射，再完成类目、门店和小程序路径配置并同步商品。'" />
       <div class="grid grid-cols-1 gap-2 mb-4 md:grid-cols-5">
         <el-input v-model="mapping.external_code" placeholder="外部商品编码 / PLU" />
         <el-select v-model="mapping.product_id" filterable placeholder="选择本商户产品">
@@ -126,7 +126,7 @@
         <el-table-column v-if="selectedAccount?.type === 'ctrip'" label="携程销售价" width="120"><template #default="{ row }">¥{{ cents(row.channel_sale_cents) }}</template></el-table-column>
         <el-table-column v-if="selectedAccount?.type === 'ctrip'" label="携程结算价" width="120"><template #default="{ row }">¥{{ cents(row.channel_cost_cents) }}</template></el-table-column>
         <el-table-column label="状态" width="90"><template #default="{ row }">{{ mappingStatusText(row.status) }}</template></el-table-column>
-        <el-table-column v-if="selectedAccount?.type === 'xiaohongshu'" label="操作" width="100"><template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openXiaohongshuMappingEdit(row)">编辑映射</el-button></template></el-table-column>
+        <el-table-column v-if="selectedAccount?.type === 'xiaohongshu'" label="操作" width="120"><template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openXiaohongshuMappingEdit(row)">发布配置</el-button></template></el-table-column>
         <el-table-column v-if="selectedAccount?.type === 'ctrip'" label="操作" width="210"><template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openPricing(row)">修改价格</el-button><el-button v-if="canWrite" link type="primary" :loading="syncingMappingID === row.id" @click="syncMapping(row)">同步价格库存</el-button></template></el-table-column>
       </el-table>
       <template v-if="selectedAccount?.type === 'ctrip'">
@@ -141,14 +141,37 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="xiaohongshuMappingDialog" title="编辑小红书商品映射" width="520px" :close-on-click-modal="false">
-      <el-form label-position="top">
-        <el-form-item label="外部商品编码"><el-input v-model="xiaohongshuMapping.external_code" /></el-form-item>
-        <el-form-item label="小程序展示名称"><el-input v-model="xiaohongshuMapping.display_name" placeholder="留空则使用本地产品名称" /></el-form-item>
-        <el-form-item label="小红书售价"><el-input-number v-model="xiaohongshuMapping.channel_sale_yuan" :min="0.01" :precision="2" :step="1" controls-position="right" class="w-full" /></el-form-item>
-        <el-form-item label="状态"><el-radio-group v-model="xiaohongshuMapping.status"><el-radio-button label="active">启用</el-radio-button><el-radio-button label="disabled">停用</el-radio-button></el-radio-group></el-form-item>
+    <el-dialog v-model="xiaohongshuMappingDialog" title="小红书商品发布配置" width="760px" :close-on-click-modal="false">
+      <el-alert v-if="selectedAccount?.status === 'sandbox'" class="mb-4" type="warning" :closable="false" title="当前为测试小程序：不能对外发布，订单总额不能超过 0.10 元，且使用小红书自动绑定的测试门店。" />
+      <el-form v-loading="xiaohongshuMappingLoading" label-position="top">
+        <div class="grid grid-cols-1 gap-x-4 md:grid-cols-2">
+          <el-form-item label="外部商品编码"><el-input v-model="xiaohongshuMapping.external_code" /></el-form-item>
+          <el-form-item label="外部规格编码"><el-input v-model="xiaohongshuMapping.external_sku_id" placeholder="用于小红书 SKU 唯一标识" /></el-form-item>
+          <el-form-item label="小程序展示名称"><el-input v-model="xiaohongshuMapping.display_name" placeholder="留空则使用本地产品名称" /></el-form-item>
+          <el-form-item label="小红书售价"><el-input-number v-model="xiaohongshuMapping.channel_sale_yuan" :min="0.01" :precision="2" :step="1" controls-position="right" class="w-full" /></el-form-item>
+          <el-form-item label="小红书类目">
+            <el-select v-model="xiaohongshuMapping.category_id" filterable class="w-full" placeholder="选择支持交易的类目">
+              <el-option v-for="category in xiaohongshuCategories" :key="category.category_id" :label="category.name" :value="category.category_id" :disabled="category.support_trade === false" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="关联门店">
+            <el-select v-model="xiaohongshuMapping.poi_ids" multiple filterable collapse-tags class="w-full" placeholder="测试小程序可使用自动绑定门店">
+              <el-option v-for="poi in xiaohongshuPOIs" :key="poi.poi_id" :label="`${poi.name}${poi.address ? ` · ${poi.address}` : ''}`" :value="poi.poi_id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="商品类型"><el-select v-model="xiaohongshuMapping.product_type" class="w-full"><el-option label="团购券" :value="1" /><el-option label="预售券" :value="2" /><el-option label="日历商品" :value="3" /></el-select></el-form-item>
+          <el-form-item label="结算方式"><el-select v-model="xiaohongshuMapping.settle_type" class="w-full"><el-option label="总部结算" :value="1" /><el-option label="门店结算" :value="2" /><el-option label="区域结算" :value="3" /></el-select></el-form-item>
+        </div>
+        <el-form-item label="商品图片网址"><el-input v-model="xiaohongshuMapping.image_url" placeholder="必须是可公网访问的 HTTPS 图片" /></el-form-item>
+        <el-form-item label="商品说明"><el-input v-model="xiaohongshuMapping.description" type="textarea" :rows="3" maxlength="1000" show-word-limit /></el-form-item>
+        <div class="grid grid-cols-1 gap-x-4 md:grid-cols-2">
+          <el-form-item label="小程序商品页路径"><el-input v-model="xiaohongshuMapping.product_path" /></el-form-item>
+          <el-form-item label="小程序订单页路径"><el-input v-model="xiaohongshuMapping.order_path" /></el-form-item>
+        </div>
+        <el-form-item label="映射状态"><el-radio-group v-model="xiaohongshuMapping.status"><el-radio-button label="active">启用</el-radio-button><el-radio-button label="disabled">停用</el-radio-button></el-radio-group></el-form-item>
+        <el-alert v-if="xiaohongshuMapping.sync_status" :type="xiaohongshuMapping.sync_status === 'synced' ? 'success' : xiaohongshuMapping.sync_status === 'failed' ? 'error' : 'warning'" :closable="false" :title="xiaohongshuMapping.sync_status === 'synced' ? '商品已同步到当前小红书环境' : xiaohongshuMapping.last_sync_error || '配置已保存，尚未同步商品'" />
       </el-form>
-      <template #footer><el-button @click="xiaohongshuMappingDialog = false">取消</el-button><el-button type="primary" :loading="xiaohongshuMappingSaving" @click="saveXiaohongshuMapping">保存</el-button></template>
+      <template #footer><el-button @click="xiaohongshuMappingDialog = false">关闭</el-button><el-button :loading="xiaohongshuMappingSaving" @click="saveXiaohongshuMapping(false)">保存配置</el-button><el-button type="primary" :loading="xiaohongshuMappingSyncing" @click="saveXiaohongshuMapping(true)">保存并同步</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="pricingDialog" title="修改携程渠道价格" width="460px" :close-on-click-modal="false">
@@ -370,7 +393,11 @@ const ctripSyncTasks = ref<any[]>([])
 const syncingMappingID = ref(0)
 const xiaohongshuMappingDialog = ref(false)
 const xiaohongshuMappingSaving = ref(false)
-const xiaohongshuMapping = reactive({ mapping_id: 0, external_code: '', display_name: '', channel_sale_yuan: 0, status: 'active' })
+const xiaohongshuMappingLoading = ref(false)
+const xiaohongshuMappingSyncing = ref(false)
+const xiaohongshuCategories = ref<any[]>([])
+const xiaohongshuPOIs = ref<any[]>([])
+const xiaohongshuMapping = reactive({ mapping_id: 0, external_code: '', external_sku_id: '', display_name: '', channel_sale_yuan: 0, category_id: '', poi_ids: [] as string[], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, status: 'active', sync_status: '', last_sync_error: '' })
 const pricingDialog = ref(false)
 const pricingSaving = ref(false)
 const pricing = reactive({ mapping_id: 0, channel_sale_yuan: 0, channel_cost_yuan: 0 })
@@ -479,20 +506,48 @@ const addMapping = async () => {
   mappings.value.unshift(response.data)
   Object.assign(mapping, { external_code: '', display_name: '', product_id: null, channel_sale_yuan: 0, channel_cost_yuan: 0 })
 }
-const openXiaohongshuMappingEdit = (row: any) => {
-  Object.assign(xiaohongshuMapping, { mapping_id: row.id, external_code: row.external_code || '', display_name: row.display_name || '', channel_sale_yuan: Number(row.channel_sale_cents || 0) / 100, status: row.status || 'active' })
+const openXiaohongshuMappingEdit = async (row: any) => {
+  if (!selectedAccount.value) return
+  Object.assign(xiaohongshuMapping, { mapping_id: row.id, external_code: row.external_code || '', external_sku_id: `${row.external_code || 'XHS'}_SKU`, display_name: row.display_name || '', channel_sale_yuan: Number(row.channel_sale_cents || 0) / 100, category_id: '', poi_ids: [], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, status: row.status || 'active', sync_status: '', last_sync_error: '' })
   xiaohongshuMappingDialog.value = true
+  xiaohongshuMappingLoading.value = true
+  try {
+    const [categoryResult, poiResult, configResult] = await Promise.allSettled([
+      request.get(`/channel-accounts/${selectedAccount.value.id}/xiaohongshu-categories`),
+      request.get(`/channel-accounts/${selectedAccount.value.id}/xiaohongshu-pois`, { params: { page: 1, page_size: 100 } }),
+      request.get(`/channel-accounts/${selectedAccount.value.id}/mappings/${row.id}/xiaohongshu-product`),
+    ])
+    xiaohongshuCategories.value = categoryResult.status === 'fulfilled' ? categoryResult.value.data.data || [] : []
+    xiaohongshuPOIs.value = poiResult.status === 'fulfilled' ? poiResult.value.data.data || [] : []
+    if (configResult.status === 'fulfilled') {
+      const config = configResult.value.data
+      Object.assign(xiaohongshuMapping, { external_sku_id: config.external_sku_id || xiaohongshuMapping.external_sku_id, category_id: config.category_id || '', poi_ids: config.poi_ids || [], image_url: config.image_url || '', description: config.description || '', product_path: config.product_path || '/pages/index/index', order_path: config.order_path || '/pages/order/detail', product_type: config.product_type || 1, settle_type: config.settle_type || 1, sync_status: config.sync_status || '', last_sync_error: config.last_sync_error || '' })
+    }
+    if (categoryResult.status === 'rejected') ElMessage.warning('暂时无法加载小红书类目，请确认当前环境凭据')
+    if (poiResult.status === 'rejected') ElMessage.warning('暂时无法加载小红书门店，可稍后重试')
+  } finally { xiaohongshuMappingLoading.value = false }
 }
-const saveXiaohongshuMapping = async () => {
-  if (!selectedAccount.value || !xiaohongshuMapping.external_code.trim() || xiaohongshuMapping.channel_sale_yuan <= 0) { ElMessage.warning('请填写外部商品编码和有效售价'); return }
+const saveXiaohongshuMapping = async (syncAfterSave: boolean) => {
+  if (!selectedAccount.value || !xiaohongshuMapping.external_code.trim() || !xiaohongshuMapping.external_sku_id.trim() || xiaohongshuMapping.channel_sale_yuan <= 0 || !xiaohongshuMapping.category_id || !xiaohongshuMapping.image_url.trim() || !xiaohongshuMapping.description.trim()) { ElMessage.warning('请完整填写商品编码、规格编码、售价、类目、图片和商品说明'); return }
+  if (!xiaohongshuMapping.image_url.startsWith('https://') || !xiaohongshuMapping.product_path.startsWith('/') || !xiaohongshuMapping.order_path.startsWith('/')) { ElMessage.warning('商品图片必须使用 HTTPS，小程序页面路径必须以 / 开头'); return }
+  if (selectedAccount.value.status === 'sandbox' && Math.round(xiaohongshuMapping.channel_sale_yuan * 100) > 10) { ElMessage.warning('测试小程序售价不能高于 0.10 元，否则无法完成支付测试'); return }
   xiaohongshuMappingSaving.value = true
   try {
     await request.patch(`/channel-accounts/${selectedAccount.value.id}/mappings/${xiaohongshuMapping.mapping_id}`, { external_code: xiaohongshuMapping.external_code.trim(), display_name: xiaohongshuMapping.display_name.trim(), channel_sale_cents: Math.round(xiaohongshuMapping.channel_sale_yuan * 100), channel_cost_cents: 0, status: xiaohongshuMapping.status })
+    const config = (await request.put(`/channel-accounts/${selectedAccount.value.id}/mappings/${xiaohongshuMapping.mapping_id}/xiaohongshu-product`, { external_sku_id: xiaohongshuMapping.external_sku_id.trim(), category_id: xiaohongshuMapping.category_id, poi_ids: xiaohongshuMapping.poi_ids, image_url: xiaohongshuMapping.image_url.trim(), description: xiaohongshuMapping.description.trim(), product_path: xiaohongshuMapping.product_path.trim(), order_path: xiaohongshuMapping.order_path.trim(), product_type: xiaohongshuMapping.product_type, settle_type: xiaohongshuMapping.settle_type })).data
     const row = mappings.value.find((item: any) => item.id === xiaohongshuMapping.mapping_id)
     if (row) Object.assign(row, { external_code: xiaohongshuMapping.external_code.trim(), display_name: xiaohongshuMapping.display_name.trim(), channel_sale_cents: Math.round(xiaohongshuMapping.channel_sale_yuan * 100), channel_cost_cents: 0, status: xiaohongshuMapping.status })
-    xiaohongshuMappingDialog.value = false
-    ElMessage.success('小红书商品映射已更新')
-  } finally { xiaohongshuMappingSaving.value = false }
+    xiaohongshuMapping.sync_status = config.sync_status || 'pending'
+    xiaohongshuMapping.last_sync_error = ''
+    if (syncAfterSave) {
+      xiaohongshuMappingSyncing.value = true
+      await request.post(`/channel-accounts/${selectedAccount.value.id}/mappings/${xiaohongshuMapping.mapping_id}/xiaohongshu-sync`)
+      xiaohongshuMapping.sync_status = 'synced'
+      ElMessage.success('商品已同步到小红书当前环境')
+    } else {
+      ElMessage.success('小红书商品发布配置已保存')
+    }
+  } finally { xiaohongshuMappingSaving.value = false; xiaohongshuMappingSyncing.value = false }
 }
 const loadCtripSyncTasks = async () => {
   if (!selectedAccount.value || selectedAccount.value.type !== 'ctrip') return

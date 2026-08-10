@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"ticket-backend/internal/model"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var (
@@ -44,8 +46,26 @@ type MiniappCatalogProduct struct {
 }
 
 type MiniappCatalog struct {
-	StoreName string                  `json:"store_name"`
-	Products  []MiniappCatalogProduct `json:"products"`
+	StoreName     string                  `json:"store_name"`
+	Environment   string                  `json:"environment"`
+	MaxOrderCents int64                   `json:"max_order_cents,omitempty"`
+	Products      []MiniappCatalogProduct `json:"products"`
+}
+
+type MiniappOrderCreateInput struct {
+	MappingID       uint   `json:"mapping_id"`
+	Quantity        int    `json:"quantity"`
+	ClientRequestID string `json:"request_id"`
+}
+
+type MiniappOrderResult struct {
+	OrderNo         string     `json:"order_no"`
+	PlatformOrderID string     `json:"order_id,omitempty"`
+	PayToken        string     `json:"pay_token,omitempty"`
+	AmountCents     int64      `json:"amount_cents"`
+	Status          string     `json:"status"`
+	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
+	TicketCodes     []string   `json:"ticket_codes,omitempty"`
 }
 
 func NewMiniappService() MiniappService {
@@ -157,6 +177,10 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 	if err := model.DB.Select("id", "name").Where("id = ? AND status = ?", customer.TenantID, "active").First(&tenant).Error; err != nil {
 		return nil, ErrMiniappUnavailable
 	}
+	var account model.ChannelAccount
+	if err := model.DB.Select("id", "environment").Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", customer.ChannelAccountID, customer.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
+		return nil, ErrMiniappUnavailable
+	}
 	type catalogRow struct {
 		MappingID        uint
 		DisplayName      string
@@ -174,6 +198,7 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 			scenic.name AS scenic_area_name, mapping.channel_sale_cents, product.price AS product_price,
 			product.tags, product.validity_type, product.validity_days`).
 		Joins("JOIN products AS product ON product.id = mapping.product_id AND product.tenant_id = ? AND product.deleted_at IS NULL", customer.TenantID).
+		Joins("JOIN xiaohongshu_product_configs AS xhs_config ON xhs_config.channel_product_mapping_id = mapping.id AND xhs_config.tenant_id = ? AND xhs_config.sync_status = ? AND xhs_config.deleted_at IS NULL", customer.TenantID, "synced").
 		Joins(`LEFT JOIN scenic_areas AS scenic ON scenic.id = CASE
 			WHEN product.fulfillment_scenic_area_id != 0 THEN product.fulfillment_scenic_area_id ELSE product.scenic_area_id END
 			AND scenic.tenant_id = CASE WHEN product.fulfillment_tenant_id != 0 THEN product.fulfillment_tenant_id ELSE product.tenant_id END
@@ -199,7 +224,355 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 			ValidityType: row.ValidityType, ValidityDays: row.ValidityDays,
 		})
 	}
-	return &MiniappCatalog{StoreName: tenant.Name, Products: products}, nil
+	catalog := &MiniappCatalog{StoreName: tenant.Name, Environment: account.Environment, Products: products}
+	if account.Environment == "sandbox" {
+		catalog.MaxOrderCents = 10
+	}
+	return catalog, nil
+}
+
+func (s MiniappService) CreateXiaohongshuOrder(ctx context.Context, customer *model.MiniappCustomer, input MiniappOrderCreateInput) (*MiniappOrderResult, error) {
+	if customer == nil || customer.ID == 0 {
+		return nil, ErrMiniappUnauthenticated
+	}
+	input.ClientRequestID = strings.TrimSpace(input.ClientRequestID)
+	if input.MappingID == 0 || input.Quantity <= 0 || input.Quantity > 100 || input.ClientRequestID == "" || len(input.ClientRequestID) > 100 {
+		return nil, errors.New("请选择票种、数量并提供有效的请求编号")
+	}
+	if existing, err := s.loadOrderResult(customer, input.ClientRequestID); err == nil {
+		return existing, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	var account model.ChannelAccount
+	var mapping model.ChannelProductMapping
+	var product model.Product
+	var config model.XiaohongshuProductConfig
+	if err := model.DB.Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", customer.ChannelAccountID, customer.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
+		return nil, ErrMiniappUnavailable
+	}
+	if err := model.DB.Where("id = ? AND channel_account_id = ? AND status = ?", input.MappingID, account.ID, "active").First(&mapping).Error; err != nil {
+		return nil, errors.New("票种当前不可购买")
+	}
+	if err := model.DB.Where("id = ? AND tenant_id = ? AND status = ?", mapping.ProductID, customer.TenantID, "online").First(&product).Error; err != nil {
+		return nil, errors.New("票种当前不可购买")
+	}
+	if err := model.DB.Where("channel_product_mapping_id = ? AND tenant_id = ? AND channel_account_id = ? AND sync_status = ?", mapping.ID, customer.TenantID, account.ID, "synced").First(&config).Error; err != nil {
+		return nil, errors.New("票种尚未完成小红书商品同步")
+	}
+	totalCents := mapping.ChannelSaleCents * int64(input.Quantity)
+	if totalCents <= 0 {
+		return nil, errors.New("票种售价无效")
+	}
+	if account.Environment == "sandbox" && totalCents > 10 {
+		return nil, errors.New("测试小程序单笔订单金额不能超过 0.10 元")
+	}
+	externalID, err := randomXiaohongshuOrderID()
+	if err != nil {
+		return nil, err
+	}
+	order := model.Order{
+		TenantID: customer.TenantID, Channel: "xiaohongshu", ChannelAccountID: account.ID,
+		ExternalNo: &externalID, Items: []model.OrderItem{{ProductID: product.ID, Quantity: input.Quantity}},
+	}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		return nil, err
+	}
+	link := model.XiaohongshuOrderLink{
+		TenantID: customer.TenantID, ChannelAccountID: account.ID, MiniappCustomerID: customer.ID,
+		OrderID: order.ID, ClientRequestID: input.ClientRequestID, ExternalOrderID: externalID, State: "creating",
+	}
+	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&link).Error }); err != nil {
+		_ = (&OrderService{}).Cancel(order.OrderNo, customer.TenantID)
+		if existing, findErr := s.loadOrderResult(customer, input.ClientRequestID); findErr == nil {
+			return existing, nil
+		}
+		return nil, err
+	}
+
+	openID, err := utils.DecryptAES(customer.OpenIDCiphertext)
+	if err != nil || strings.TrimSpace(openID) == "" {
+		s.failXiaohongshuOrder(&link, &order, "小程序用户身份解密失败")
+		return nil, ErrMiniappUnauthenticated
+	}
+	secret, err := utils.DecryptAES(account.SecretCiphertext)
+	if err != nil || strings.TrimSpace(secret) == "" {
+		s.failXiaohongshuOrder(&link, &order, "小红书渠道密钥不可用")
+		return nil, ErrMiniappUnavailable
+	}
+	newClient := s.NewXiaohongshuClient
+	if newClient == nil {
+		newClient = xiaohongshu.NewClient
+	}
+	expiresAt := s.now().Add(DefaultOrderReservationTTL)
+	response, err := newClient(account.AppID, secret, account.Environment).UpsertOrder(ctx, xiaohongshu.OrderUpsertRequest{
+		ExternalOrderID: externalID, OpenID: openID, Path: miniappPathWithOrder(config.OrderPath, order.OrderNo),
+		CreatedAt: s.now().Unix(), ExpiresAt: expiresAt.Unix(),
+		Products: []xiaohongshu.OrderProduct{{ExternalProductID: mapping.ExternalCode, ExternalSKUID: config.ExternalSKUID, Count: input.Quantity, SalePrice: mapping.ChannelSaleCents, RealPrice: totalCents}},
+		Price:    xiaohongshu.OrderPrice{OrderPrice: totalCents},
+	})
+	if err != nil {
+		s.failXiaohongshuOrder(&link, &order, err.Error())
+		return nil, err
+	}
+	if response.FinalPrice != totalCents || response.OpenPayType != "life_gpay" {
+		s.failXiaohongshuOrder(&link, &order, "小红书返回的金额或支付类型不匹配")
+		return nil, errors.New("小红书订单金额或支付类型校验失败")
+	}
+	if response.ExpiresAt > 0 {
+		expiresAt = time.Unix(response.ExpiresAt, 0)
+	}
+	payTokenCiphertext, err := utils.EncryptAES(response.PayToken)
+	if err != nil {
+		s.failXiaohongshuOrder(&link, &order, "支付令牌加密失败")
+		return nil, err
+	}
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.Order{}).Where("id = ? AND tenant_id = ? AND status = ?", order.ID, customer.TenantID, "unpaid").Update("expires_at", expiresAt).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.XiaohongshuOrderLink{}).Where("id = ? AND state = ?", link.ID, "creating").Updates(map[string]interface{}{
+			"platform_order_id": response.OrderID, "pay_token_ciphertext": payTokenCiphertext,
+			"pay_token_expires_at": expiresAt, "state": "unpaid", "last_error": "",
+		}).Error
+	}); err != nil {
+		return nil, err
+	}
+	return &MiniappOrderResult{OrderNo: order.OrderNo, PlatformOrderID: response.OrderID, PayToken: response.PayToken, AmountCents: totalCents, Status: "unpaid", ExpiresAt: &expiresAt}, nil
+}
+
+func (s MiniappService) GetXiaohongshuOrder(ctx context.Context, customer *model.MiniappCustomer, orderNo string) (*MiniappOrderResult, error) {
+	if customer == nil || customer.ID == 0 {
+		return nil, ErrMiniappUnauthenticated
+	}
+	var link model.XiaohongshuOrderLink
+	var order model.Order
+	if err := model.DB.Table("xiaohongshu_order_links AS link").Select("link.*").
+		Joins("JOIN orders AS orders ON orders.id = link.order_id AND orders.tenant_id = link.tenant_id").
+		Where("link.miniapp_customer_id = ? AND link.channel_account_id = ? AND orders.order_no = ?", customer.ID, customer.ChannelAccountID, strings.TrimSpace(orderNo)).
+		First(&link).Error; err != nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if err := model.DB.Where("id = ? AND tenant_id = ?", link.OrderID, customer.TenantID).First(&order).Error; err != nil {
+		return nil, err
+	}
+	if link.State == "paid" || link.State == "cancelled" || link.State == "failed" {
+		return s.orderResult(&link, &order, false)
+	}
+	return s.refreshXiaohongshuOrder(ctx, customer, &link, &order)
+}
+
+func (s MiniappService) refreshXiaohongshuOrder(ctx context.Context, customer *model.MiniappCustomer, link *model.XiaohongshuOrderLink, order *model.Order) (*MiniappOrderResult, error) {
+	var account model.ChannelAccount
+	if err := model.DB.Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", link.ChannelAccountID, link.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
+		return nil, ErrMiniappUnavailable
+	}
+	openID, err := utils.DecryptAES(customer.OpenIDCiphertext)
+	if err != nil {
+		return nil, ErrMiniappUnauthenticated
+	}
+	secret, err := utils.DecryptAES(account.SecretCiphertext)
+	if err != nil {
+		return nil, ErrMiniappUnavailable
+	}
+	newClient := s.NewXiaohongshuClient
+	if newClient == nil {
+		newClient = xiaohongshu.NewClient
+	}
+	platform, err := newClient(account.AppID, secret, account.Environment).GetGuaranteeOrder(ctx, xiaohongshu.GuaranteeOrderRequest{ExternalOrderID: link.ExternalOrderID, OpenID: openID, OrderType: 1})
+	if err != nil {
+		_ = model.Write(func(tx *gorm.DB) error {
+			return tx.Model(link).Updates(map[string]interface{}{"last_queried_at": s.now(), "last_error": truncateChannelError(err.Error())}).Error
+		})
+		return nil, err
+	}
+	if link.PlatformOrderID != "" && platform.OrderID != "" && link.PlatformOrderID != platform.OrderID {
+		return nil, errors.New("小红书订单编号不匹配")
+	}
+	switch platform.OrderStatus {
+	case 6, 7:
+		if platform.PayAmount != moneyCents(order.TotalAmount) {
+			return nil, errors.New("小红书支付金额与本地订单不一致")
+		}
+		if err := s.completeXiaohongshuOrder(link, order, platform); err != nil {
+			return nil, err
+		}
+		link.State = "paid"
+		order.Status = "paid"
+		return s.orderResult(link, order, false)
+	case 71, 998:
+		if order.Status == "unpaid" {
+			if err := (&OrderService{}).Cancel(order.OrderNo, order.TenantID); err != nil {
+				return nil, err
+			}
+		}
+		_ = model.Write(func(tx *gorm.DB) error {
+			return tx.Model(link).Updates(map[string]interface{}{"state": "cancelled", "last_queried_at": s.now(), "last_error": ""}).Error
+		})
+		link.State = "cancelled"
+		order.Status = "cancelled"
+		return s.orderResult(link, order, false)
+	default:
+		if link.PayTokenExpiresAt != nil && !link.PayTokenExpiresAt.After(s.now()) && order.Status == "unpaid" {
+			if err := (&OrderService{}).Cancel(order.OrderNo, order.TenantID); err != nil {
+				return nil, err
+			}
+			_ = model.Write(func(tx *gorm.DB) error {
+				return tx.Model(link).Updates(map[string]interface{}{"state": "cancelled", "last_queried_at": s.now(), "last_error": ""}).Error
+			})
+			link.State = "cancelled"
+			order.Status = "cancelled"
+			return s.orderResult(link, order, false)
+		}
+		_ = model.Write(func(tx *gorm.DB) error {
+			return tx.Model(link).Updates(map[string]interface{}{"last_queried_at": s.now(), "last_error": ""}).Error
+		})
+		return s.orderResult(link, order, true)
+	}
+}
+
+func (s MiniappService) completeXiaohongshuOrder(link *model.XiaohongshuOrderLink, order *model.Order, platform *xiaohongshu.GuaranteeOrderResponse) error {
+	return model.Write(func(tx *gorm.DB) error {
+		var lockedLink model.XiaohongshuOrderLink
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", link.ID, link.TenantID).First(&lockedLink).Error; err != nil {
+			return err
+		}
+		var lockedOrder model.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", order.ID, order.TenantID).First(&lockedOrder).Error; err != nil {
+			return err
+		}
+		if lockedLink.State == "paid" && lockedOrder.Status == "paid" {
+			return nil
+		}
+		amountCents := moneyCents(lockedOrder.TotalAmount)
+		var payment model.Payment
+		err := tx.Where("tenant_id = ? AND idempotency_key = ?", lockedOrder.TenantID, fmt.Sprintf("xiaohongshu:%d", lockedLink.ID)).First(&payment).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			now := s.now()
+			payment = model.Payment{TenantID: lockedOrder.TenantID, PaymentNo: generatePaymentNo(), IdempotencyKey: fmt.Sprintf("xiaohongshu:%d", lockedLink.ID), OrderNo: lockedOrder.OrderNo, Amount: centsMoney(amountCents), AmountCents: amountCents, Method: "xiaohongshu", PayType: "life_gpay", Status: "paid", TransactionID: platform.TradeNo, PaidAt: &now}
+			if err := tx.Create(&payment).Error; err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		} else if payment.AmountCents != amountCents || payment.Status != "paid" || (payment.TransactionID != "" && platform.TradeNo != "" && payment.TransactionID != platform.TradeNo) {
+			return errors.New("小红书支付流水与本地记录不一致")
+		}
+		if err := settleOrderIfFullyPaidTx(tx, &lockedOrder); err != nil {
+			return err
+		}
+		voucherError := ""
+		if len(platform.Vouchers) > 0 {
+			var tickets []model.Ticket
+			if err := tx.Where("order_id = ? AND tenant_id = ?", lockedOrder.ID, lockedOrder.TenantID).Order("id ASC").Find(&tickets).Error; err != nil {
+				return err
+			}
+			if len(tickets) != len(platform.Vouchers) {
+				voucherError = fmt.Sprintf("小红书券码数量 %d 与本地票数 %d 不一致", len(platform.Vouchers), len(tickets))
+			} else {
+				for index, voucher := range platform.Vouchers {
+					ciphertext, err := utils.EncryptAES(voucher.Code)
+					if err != nil {
+						return err
+					}
+					row := model.XiaohongshuVoucherLink{TenantID: lockedOrder.TenantID, ChannelAccountID: lockedLink.ChannelAccountID, XiaohongshuOrderLinkID: lockedLink.ID, TicketID: tickets[index].ID, VoucherCodeHash: hashMiniappValue(voucher.Code), VoucherCodeCiphertext: ciphertext, Status: voucher.Status}
+					if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "ticket_id"}}, DoUpdates: clause.AssignmentColumns([]string{"voucher_code_hash", "voucher_code_ciphertext", "status", "updated_at"})}).Create(&row).Error; err != nil {
+						return err
+					}
+				}
+			}
+		}
+		return tx.Model(&lockedLink).Updates(map[string]interface{}{"state": "paid", "trade_no": platform.TradeNo, "pay_channel": platform.PayChannel, "last_queried_at": s.now(), "last_error": voucherError}).Error
+	})
+}
+
+func (s MiniappService) ProcessPendingXiaohongshuOrders(ctx context.Context, now time.Time, limit int) (int, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	var links []model.XiaohongshuOrderLink
+	if err := model.DB.Where("state IN ?", []string{"creating", "unpaid"}).Where("last_queried_at IS NULL OR last_queried_at < ?", now.Add(-20*time.Second)).Order("id ASC").Limit(limit).Find(&links).Error; err != nil {
+		return 0, err
+	}
+	processed := 0
+	for i := range links {
+		if links[i].State == "creating" {
+			if links[i].CreatedAt.Before(now.Add(-5 * time.Minute)) {
+				var order model.Order
+				if model.DB.Where("id = ? AND tenant_id = ?", links[i].OrderID, links[i].TenantID).First(&order).Error == nil && order.Status == "unpaid" {
+					_ = (&OrderService{}).Cancel(order.OrderNo, order.TenantID)
+				}
+				_ = model.Write(func(tx *gorm.DB) error {
+					return tx.Model(&links[i]).Updates(map[string]interface{}{"state": "failed", "last_error": "创建小红书订单超时"}).Error
+				})
+			}
+			continue
+		}
+		var customer model.MiniappCustomer
+		var order model.Order
+		if model.DB.Where("id = ? AND tenant_id = ?", links[i].MiniappCustomerID, links[i].TenantID).First(&customer).Error != nil || model.DB.Where("id = ? AND tenant_id = ?", links[i].OrderID, links[i].TenantID).First(&order).Error != nil {
+			continue
+		}
+		if _, err := s.refreshXiaohongshuOrder(ctx, &customer, &links[i], &order); err != nil {
+			continue
+		}
+		processed++
+	}
+	return processed, nil
+}
+
+func (s MiniappService) loadOrderResult(customer *model.MiniappCustomer, requestID string) (*MiniappOrderResult, error) {
+	var link model.XiaohongshuOrderLink
+	if err := model.DB.Where("miniapp_customer_id = ? AND channel_account_id = ? AND client_request_id = ?", customer.ID, customer.ChannelAccountID, requestID).First(&link).Error; err != nil {
+		return nil, err
+	}
+	var order model.Order
+	if err := model.DB.Where("id = ? AND tenant_id = ?", link.OrderID, customer.TenantID).First(&order).Error; err != nil {
+		return nil, err
+	}
+	return s.orderResult(&link, &order, link.State == "unpaid")
+}
+
+func (s MiniappService) orderResult(link *model.XiaohongshuOrderLink, order *model.Order, includePayToken bool) (*MiniappOrderResult, error) {
+	result := &MiniappOrderResult{OrderNo: order.OrderNo, PlatformOrderID: link.PlatformOrderID, AmountCents: moneyCents(order.TotalAmount), Status: link.State, ExpiresAt: link.PayTokenExpiresAt}
+	if includePayToken && link.PayTokenCiphertext != "" {
+		payToken, err := utils.DecryptAES(link.PayTokenCiphertext)
+		if err != nil {
+			return nil, err
+		}
+		result.PayToken = payToken
+	}
+	if link.State == "paid" {
+		if err := model.DB.Model(&model.Ticket{}).Where("order_id = ? AND tenant_id = ?", order.ID, order.TenantID).Order("id ASC").Pluck("ticket_code", &result.TicketCodes).Error; err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
+}
+
+func (s MiniappService) failXiaohongshuOrder(link *model.XiaohongshuOrderLink, order *model.Order, message string) {
+	_ = model.Write(func(tx *gorm.DB) error {
+		return tx.Model(link).Updates(map[string]interface{}{"state": "failed", "last_error": truncateChannelError(message)}).Error
+	})
+	_ = (&OrderService{}).Cancel(order.OrderNo, order.TenantID)
+}
+
+func randomXiaohongshuOrderID() (string, error) {
+	value, err := randomMiniappToken()
+	if err != nil {
+		return "", err
+	}
+	return "XHS" + strings.ToUpper(value[:24]), nil
+}
+
+func miniappPathWithOrder(path, orderNo string) string {
+	path = strings.TrimSpace(path)
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	return path + separator + "order_no=" + orderNo
 }
 
 func loadActiveXiaohongshuAccount(appID string) (*model.ChannelAccount, string, error) {

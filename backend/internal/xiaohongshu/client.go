@@ -82,6 +82,35 @@ type Session struct {
 	SessionKey string `json:"session_key"`
 }
 
+type Category struct {
+	ID                string `json:"category_id"`
+	Name              string `json:"name"`
+	RequireClaimStore bool   `json:"require_claim_store"`
+	SupportTrade      bool   `json:"support_trade"`
+	TradeAbility      string `json:"trade_ability,omitempty"`
+	Path              string `json:"path,omitempty"`
+}
+
+type CategoryListResponse struct {
+	Categories []Category `json:"category_info"`
+}
+
+type POI struct {
+	ID         string  `json:"poi_id"`
+	Name       string  `json:"name"`
+	Address    string  `json:"address"`
+	Longitude  float64 `json:"longitude"`
+	Latitude   float64 `json:"latitude"`
+	SourceID   string  `json:"source_id,omitempty"`
+	SourceType int     `json:"source_type,omitempty"`
+	SourceName string  `json:"source_name,omitempty"`
+}
+
+type POIListResponse struct {
+	List  []POI `json:"list"`
+	Total int   `json:"total"`
+}
+
 type PackageEntry struct {
 	Name  string `json:"name"`
 	Count int    `json:"count,omitempty"`
@@ -197,6 +226,7 @@ type GuaranteeOrderResponse struct {
 	Bookings    []BookDetail   `json:"book_details,omitempty"`
 	Products    []OrderProduct `json:"product_infos,omitempty"`
 	TradeNo     string         `json:"third_trade_no,omitempty"`
+	PayChannel  int            `json:"pay_channel,omitempty"`
 }
 
 type VoucherCode struct {
@@ -239,6 +269,31 @@ func (c *Client) Code2Session(ctx context.Context, code string) (*Session, error
 		return nil, errors.New("xiaohongshu session response is incomplete")
 	}
 	return &session, nil
+}
+
+func (c *Client) ListCategories(ctx context.Context) ([]Category, error) {
+	var response CategoryListResponse
+	if err := c.authenticatedGet(ctx, "/api/rmp/apps/category", nil, &response); err != nil {
+		return nil, err
+	}
+	return response.Categories, nil
+}
+
+func (c *Client) ListPOIs(ctx context.Context, page, pageSize int) (*POIListResponse, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 20
+	}
+	query := url.Values{}
+	query.Set("page_no", fmt.Sprintf("%d", page))
+	query.Set("page_size", fmt.Sprintf("%d", pageSize))
+	var response POIListResponse
+	if err := c.authenticatedGet(ctx, "/api/rmp/mp/deal/poi/list", query, &response); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 func (c *Client) UpsertLocalLifeProduct(ctx context.Context, request LocalLifeProductRequest) error {
@@ -353,6 +408,27 @@ func (c *Client) authenticatedPost(ctx context.Context, path string, payload, re
 	query.Set("access_token", token)
 	endpoint.RawQuery = query.Encode()
 	return c.post(ctx, endpoint.String(), payload, response)
+}
+
+func (c *Client) authenticatedGet(ctx context.Context, path string, params url.Values, response any) error {
+	token, err := c.getAccessToken(ctx)
+	if err != nil {
+		return err
+	}
+	endpoint, err := url.Parse(c.baseURL() + path)
+	if err != nil {
+		return fmt.Errorf("create xiaohongshu endpoint: %w", err)
+	}
+	query := endpoint.Query()
+	for key, values := range params {
+		for _, value := range values {
+			query.Add(key, value)
+		}
+	}
+	query.Set("app_id", strings.TrimSpace(c.AppID))
+	query.Set("access_token", token)
+	endpoint.RawQuery = query.Encode()
+	return c.get(ctx, endpoint.String(), response)
 }
 
 func (c *Client) getAccessToken(ctx context.Context) (string, error) {

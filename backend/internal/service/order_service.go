@@ -156,17 +156,22 @@ func (s *OrderService) Create(req *model.Order) error {
 			var channelCostCents int64
 			channelPricing := false
 			if channelAccount != nil {
-				if channelAccount.Type == "ctrip" {
+				if channelAccount.Type == "ctrip" || channelAccount.Type == "xiaohongshu" {
 					var mapping model.ChannelProductMapping
 					if err := tx.Where("channel_account_id = ? AND product_id = ? AND status = ?", channelAccount.ID, listing.ID, "active").First(&mapping).Error; err != nil {
-						return errors.New("Ctrip product mapping is unavailable")
+						return errors.New("official channel product mapping is unavailable")
 					}
-					if mapping.ChannelSaleCents <= 0 || mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents {
-						return errors.New("Ctrip product pricing is not configured")
+					if mapping.ChannelSaleCents <= 0 {
+						return errors.New("official channel product pricing is not configured")
 					}
 					listingForResolution.Price = centsMoney(mapping.ChannelSaleCents)
-					channelCostCents = mapping.ChannelCostCents
-					channelPricing = true
+					if channelAccount.Type == "ctrip" {
+						if mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents {
+							return errors.New("Ctrip product pricing is not configured")
+						}
+						channelCostCents = mapping.ChannelCostCents
+						channelPricing = true
+					}
 				}
 			}
 			if item.BundleComponentID != 0 {
@@ -1165,6 +1170,7 @@ func (s *OrderService) ExpireUnpaid(now time.Time) (int, error) {
 			Preload("Items.Tickets").
 			Where("orders.status = ? AND orders.expires_at IS NOT NULL AND orders.expires_at <= ?", "unpaid", now).
 			Where("NOT EXISTS (SELECT 1 FROM payments WHERE payments.tenant_id = orders.tenant_id AND payments.order_no = orders.order_no AND payments.status IN ?)", []string{"pending", "paid", "partial_refunded"}).
+			Where("NOT EXISTS (SELECT 1 FROM xiaohongshu_order_links WHERE xiaohongshu_order_links.order_id = orders.id AND xiaohongshu_order_links.state IN ?)", []string{"creating", "unpaid"}).
 			Find(&orders).Error; err != nil {
 			return err
 		}

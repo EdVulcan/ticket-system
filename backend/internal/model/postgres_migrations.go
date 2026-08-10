@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 78
+const CurrentPostgresSchemaVersion = 79
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -37,8 +37,8 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&DistributorRelationship{}, &CapitalAccount{}, &TransactionRecord{}, &LedgerEntry{},
 		&Policy{}, &PaymentConfig{}, &Payment{}, &Refund{}, &PaymentReconciliationTask{}, &DigitalRefundTask{},
 		&AuditLog{}, &OTANonce{}, &FinancialDocument{},
-		&ChannelAccount{}, &MiniappCustomer{}, &ChannelProductMapping{}, &ChannelRequest{}, &ChannelNonce{}, &ChannelReservation{},
-		&CtripOrderLink{}, &CtripOrderItem{}, &CtripOutboundTask{}, &XiaohongshuWebhookEvent{},
+		&ChannelAccount{}, &MiniappCustomer{}, &ChannelProductMapping{}, &XiaohongshuProductConfig{}, &ChannelRequest{}, &ChannelNonce{}, &ChannelReservation{},
+		&CtripOrderLink{}, &CtripOrderItem{}, &CtripOutboundTask{}, &XiaohongshuOrderLink{}, &XiaohongshuVoucherLink{}, &XiaohongshuWebhookEvent{},
 		&ChannelBillRecord{}, &ChannelReconciliation{}, &ChannelReconciliationLine{},
 		&TravelContract{}, &TravelAgent{}, &TourGuide{}, &TravelVehicle{}, &TourGroup{}, &TourGroupMember{},
 		&TourEntryBatch{}, &TourGroupConfirmation{}, &TourGroupMemberChange{}, &TeamSettlementStatement{}, &TeamSettlementAdjustment{},
@@ -180,7 +180,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "xiaohongshu encrypted webhook events",
+		Name:      "xiaohongshu product and guarantee payment facts",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -408,6 +408,26 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 				SELECT 1 FROM channel_accounts a
 				WHERE a.id = NEW.channel_account_id AND a.tenant_id = NEW.tenant_id AND a.type = 'xiaohongshu'
 			) THEN RAISE EXCEPTION 'xiaohongshu webhook ownership mismatch'; END IF;
+		WHEN 'xiaohongshu_product_configs' THEN
+			IF NEW.tenant_id = 0 OR NOT EXISTS (
+				SELECT 1 FROM channel_accounts a JOIN channel_product_mappings m ON m.channel_account_id = a.id
+				WHERE a.id = NEW.channel_account_id AND a.tenant_id = NEW.tenant_id AND a.type = 'xiaohongshu'
+				  AND m.id = NEW.channel_product_mapping_id
+			) THEN RAISE EXCEPTION 'xiaohongshu product config ownership mismatch'; END IF;
+		WHEN 'xiaohongshu_order_links' THEN
+			IF NEW.tenant_id = 0 OR NOT EXISTS (
+				SELECT 1 FROM channel_accounts a JOIN miniapp_customers c ON c.channel_account_id = a.id
+				JOIN orders o ON o.id = NEW.order_id
+				WHERE a.id = NEW.channel_account_id AND a.tenant_id = NEW.tenant_id AND a.type = 'xiaohongshu'
+				  AND c.id = NEW.miniapp_customer_id AND c.tenant_id = NEW.tenant_id
+				  AND o.tenant_id = NEW.tenant_id AND o.channel_account_id = NEW.channel_account_id
+			) THEN RAISE EXCEPTION 'xiaohongshu order ownership mismatch'; END IF;
+		WHEN 'xiaohongshu_voucher_links' THEN
+			IF NEW.tenant_id = 0 OR NOT EXISTS (
+				SELECT 1 FROM xiaohongshu_order_links l JOIN tickets t ON t.id = NEW.ticket_id
+				WHERE l.id = NEW.xiaohongshu_order_link_id AND l.tenant_id = NEW.tenant_id
+				  AND l.channel_account_id = NEW.channel_account_id AND t.order_id = l.order_id
+			) THEN RAISE EXCEPTION 'xiaohongshu voucher ownership mismatch'; END IF;
 		END CASE;
 		RETURN NEW;
 	END;
@@ -415,7 +435,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_webhook_events"} {
+	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

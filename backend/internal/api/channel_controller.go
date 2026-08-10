@@ -11,9 +11,10 @@ import (
 )
 
 type ChannelController struct {
-	Service   service.ChannelService
-	Gateway   *service.ChannelGatewayService
-	CtripSync service.CtripSyncService
+	Service             service.ChannelService
+	Gateway             *service.ChannelGatewayService
+	CtripSync           service.CtripSyncService
+	XiaohongshuProducts service.XiaohongshuProductService
 }
 
 func (c *ChannelController) List(ctx *gin.Context) {
@@ -203,6 +204,85 @@ func (c *ChannelController) UpdateMapping(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"message": "mapping updated"})
+}
+
+func (c *ChannelController) ListXiaohongshuCategories(ctx *gin.Context) {
+	accountID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || accountID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	rows, err := c.XiaohongshuProducts.ListCategories(ctx.Request.Context(), ctx.GetUint("tenant_id"), uint(accountID))
+	if err != nil {
+		ctx.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": rows})
+}
+
+func (c *ChannelController) ListXiaohongshuPOIs(ctx *gin.Context) {
+	accountID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || accountID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
+	result, err := c.XiaohongshuProducts.ListPOIs(ctx.Request.Context(), ctx.GetUint("tenant_id"), uint(accountID), page, pageSize)
+	if err != nil {
+		ctx.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": result.List, "total": result.Total})
+}
+
+func (c *ChannelController) GetXiaohongshuProductConfig(ctx *gin.Context) {
+	accountID, accountErr := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	mappingID, mappingErr := strconv.ParseUint(ctx.Param("mappingId"), 10, 32)
+	if accountErr != nil || mappingErr != nil || accountID == 0 || mappingID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel or mapping id"})
+		return
+	}
+	config, err := c.XiaohongshuProducts.GetConfig(ctx.GetUint("tenant_id"), uint(accountID), uint(mappingID))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "尚未配置小红书商品发布参数"})
+		return
+	}
+	ctx.JSON(http.StatusOK, config)
+}
+
+func (c *ChannelController) SaveXiaohongshuProductConfig(ctx *gin.Context) {
+	accountID, accountErr := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	mappingID, mappingErr := strconv.ParseUint(ctx.Param("mappingId"), 10, 32)
+	if accountErr != nil || mappingErr != nil || accountID == 0 || mappingID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel or mapping id"})
+		return
+	}
+	var body service.XiaohongshuProductConfigInput
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	config, err := c.XiaohongshuProducts.SaveConfig(ctx.GetUint("tenant_id"), uint(accountID), uint(mappingID), ctx.GetUint("user_id"), ctx.GetString("role"), body)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, config)
+}
+
+func (c *ChannelController) SyncXiaohongshuProduct(ctx *gin.Context) {
+	accountID, accountErr := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	mappingID, mappingErr := strconv.ParseUint(ctx.Param("mappingId"), 10, 32)
+	if accountErr != nil || mappingErr != nil || accountID == 0 || mappingID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel or mapping id"})
+		return
+	}
+	if err := c.XiaohongshuProducts.Sync(ctx.Request.Context(), ctx.GetUint("tenant_id"), uint(accountID), uint(mappingID), ctx.GetUint("user_id"), ctx.GetString("role")); err != nil {
+		ctx.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"synced": true})
 }
 
 func (c *ChannelController) SyncCtripMapping(ctx *gin.Context) {

@@ -1,0 +1,256 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"math"
+	"net/url"
+	"strings"
+	"ticket-backend/internal/model"
+	"ticket-backend/internal/utils"
+	"ticket-backend/internal/xiaohongshu"
+	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+type XiaohongshuProductService struct {
+	NewClient func(appID, secret, environment string) *xiaohongshu.Client
+	Now       func() time.Time
+}
+
+type XiaohongshuProductConfigInput struct {
+	ExternalSKUID string   `json:"external_sku_id"`
+	CategoryID    string   `json:"category_id"`
+	POIIDs        []string `json:"poi_ids"`
+	ImageURL      string   `json:"image_url"`
+	Description   string   `json:"description"`
+	ProductPath   string   `json:"product_path"`
+	OrderPath     string   `json:"order_path"`
+	ProductType   int      `json:"product_type"`
+	SettleType    int      `json:"settle_type"`
+}
+
+type XiaohongshuProductConfigView struct {
+	model.XiaohongshuProductConfig
+	POIIDs []string `json:"poi_ids"`
+}
+
+func NewXiaohongshuProductService() XiaohongshuProductService {
+	return XiaohongshuProductService{NewClient: xiaohongshu.NewClient}
+}
+
+func (s XiaohongshuProductService) ListCategories(ctx context.Context, tenantID, accountID uint) ([]xiaohongshu.Category, error) {
+	client, _, err := s.client(tenantID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	return client.ListCategories(ctx)
+}
+
+func (s XiaohongshuProductService) ListPOIs(ctx context.Context, tenantID, accountID uint, page, pageSize int) (*xiaohongshu.POIListResponse, error) {
+	client, _, err := s.client(tenantID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	return client.ListPOIs(ctx, page, pageSize)
+}
+
+func (s XiaohongshuProductService) GetConfig(tenantID, accountID, mappingID uint) (*XiaohongshuProductConfigView, error) {
+	var config model.XiaohongshuProductConfig
+	if err := model.DB.Table("xiaohongshu_product_configs AS config").
+		Joins("JOIN channel_accounts AS account ON account.id = config.channel_account_id").
+		Joins("JOIN channel_product_mappings AS mapping ON mapping.id = config.channel_product_mapping_id AND mapping.channel_account_id = account.id").
+		Where("config.channel_product_mapping_id = ? AND account.id = ? AND account.tenant_id = ? AND account.type = ?", mappingID, accountID, tenantID, "xiaohongshu").
+		First(&config).Error; err != nil {
+		return nil, err
+	}
+	return &XiaohongshuProductConfigView{XiaohongshuProductConfig: config, POIIDs: parseXiaohongshuPOIIDs(config.POIIDsJSON)}, nil
+}
+
+func (s XiaohongshuProductService) SaveConfig(tenantID, accountID, mappingID, actorUserID uint, actorRole string, input XiaohongshuProductConfigInput) (*XiaohongshuProductConfigView, error) {
+	normalizeXiaohongshuProductInput(&input)
+	if err := validateXiaohongshuProductInput(input); err != nil {
+		return nil, err
+	}
+	poiJSON, _ := json.Marshal(input.POIIDs)
+	var stored model.XiaohongshuProductConfig
+	err := model.Write(func(tx *gorm.DB) error {
+		if err := loadXiaohongshuMappingTx(tx, tenantID, accountID, mappingID, nil, nil); err != nil {
+			return err
+		}
+		config := model.XiaohongshuProductConfig{
+			TenantID: tenantID, ChannelAccountID: accountID, ChannelProductMappingID: mappingID,
+			ExternalSKUID: input.ExternalSKUID, CategoryID: input.CategoryID, POIIDsJSON: string(poiJSON),
+			ImageURL: input.ImageURL, Description: input.Description, ProductPath: input.ProductPath,
+			OrderPath: input.OrderPath, ProductType: input.ProductType, SettleType: input.SettleType,
+			SyncStatus: "pending", LastSyncError: "", LastSyncedAt: nil,
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "channel_product_mapping_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"external_sku_id", "category_id", "poi_ids_json", "image_url", "description", "product_path", "order_path", "product_type", "settle_type", "sync_status", "last_sync_error", "last_synced_at", "updated_at"}),
+		}).Create(&config).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("channel_product_mapping_id = ?", mappingID).First(&stored).Error; err != nil {
+			return err
+		}
+		after, _ := json.Marshal(input)
+		return recordAuditTx(tx, actorUserID, tenantID, actorRole, "tenant", "xiaohongshu.product.configure", "channel_product_mapping", mappingID, "配置小红书商品发布参数", "", string(after))
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &XiaohongshuProductConfigView{XiaohongshuProductConfig: stored, POIIDs: input.POIIDs}, nil
+}
+
+func (s XiaohongshuProductService) Sync(ctx context.Context, tenantID, accountID, mappingID, actorUserID uint, actorRole string) error {
+	client, account, err := s.client(tenantID, accountID)
+	if err != nil {
+		return err
+	}
+	var mapping model.ChannelProductMapping
+	var product model.Product
+	if err := loadXiaohongshuMappingTx(model.DB, tenantID, accountID, mappingID, &mapping, &product); err != nil {
+		return err
+	}
+	var config model.XiaohongshuProductConfig
+	if err := model.DB.Where("tenant_id = ? AND channel_account_id = ? AND channel_product_mapping_id = ?", tenantID, accountID, mappingID).First(&config).Error; err != nil {
+		return errors.New("请先完成小红书商品发布配置")
+	}
+	name := strings.TrimSpace(mapping.DisplayName)
+	if name == "" {
+		name = product.Name
+	}
+	originPrice := int64(math.Round(product.Price * 100))
+	if originPrice < mapping.ChannelSaleCents {
+		originPrice = mapping.ChannelSaleCents
+	}
+	now := s.now()
+	request := xiaohongshu.LocalLifeProductRequest{
+		ExternalProductID: mapping.ExternalCode, Name: name, ShortTitle: name,
+		Description: config.Description, Path: config.ProductPath, TopImage: config.ImageURL,
+		CategoryID: config.CategoryID, CreatedAt: product.CreatedAt.Unix(), UpdatedAt: now.Unix(),
+		POIIDs: parseXiaohongshuPOIIDs(config.POIIDsJSON), ProductType: config.ProductType, SettleType: config.SettleType,
+		SKUs: []xiaohongshu.ProductSKU{{ExternalSKUID: config.ExternalSKUID, Name: name, Image: config.ImageURL, OriginPrice: originPrice, SalePrice: mapping.ChannelSaleCents, Status: 1}},
+	}
+	err = client.UpsertLocalLifeProduct(ctx, request)
+	if err != nil {
+		_ = model.Write(func(tx *gorm.DB) error {
+			return tx.Model(&model.XiaohongshuProductConfig{}).Where("id = ? AND tenant_id = ?", config.ID, tenantID).
+				Updates(map[string]interface{}{"sync_status": "failed", "last_sync_error": truncateChannelError(err.Error())}).Error
+		})
+		return err
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.XiaohongshuProductConfig{}).Where("id = ? AND tenant_id = ?", config.ID, tenantID).
+			Updates(map[string]interface{}{"sync_status": "synced", "last_sync_error": "", "last_synced_at": now}).Error; err != nil {
+			return err
+		}
+		return recordAuditTx(tx, actorUserID, tenantID, actorRole, "tenant", "xiaohongshu.product.sync", "channel_product_mapping", mappingID, "同步小红书商品", "", account.Environment)
+	})
+}
+
+func (s XiaohongshuProductService) client(tenantID, accountID uint) (*xiaohongshu.Client, *model.ChannelAccount, error) {
+	var account model.ChannelAccount
+	if err := model.DB.Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", accountID, tenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
+		return nil, nil, errors.New("小红书渠道账号不可用")
+	}
+	secret, err := utils.DecryptAES(account.SecretCiphertext)
+	if err != nil || strings.TrimSpace(secret) == "" {
+		return nil, nil, errors.New("小红书渠道密钥不可用")
+	}
+	newClient := s.NewClient
+	if newClient == nil {
+		newClient = xiaohongshu.NewClient
+	}
+	return newClient(account.AppID, secret, account.Environment), &account, nil
+}
+
+func loadXiaohongshuMappingTx(tx *gorm.DB, tenantID, accountID, mappingID uint, mapping *model.ChannelProductMapping, product *model.Product) error {
+	var account model.ChannelAccount
+	if err := tx.Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", accountID, tenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
+		return errors.New("小红书渠道账号不可用")
+	}
+	var current model.ChannelProductMapping
+	if err := tx.Where("id = ? AND channel_account_id = ?", mappingID, accountID).First(&current).Error; err != nil {
+		return errors.New("小红书商品映射不存在")
+	}
+	var currentProduct model.Product
+	if err := tx.Where("id = ? AND tenant_id = ? AND status = ?", current.ProductID, tenantID, "online").First(&currentProduct).Error; err != nil {
+		return errors.New("映射的本地产品不可售")
+	}
+	if current.Status != "active" || current.ChannelSaleCents <= 0 {
+		return errors.New("小红书商品映射未启用或售价无效")
+	}
+	if mapping != nil {
+		*mapping = current
+	}
+	if product != nil {
+		*product = currentProduct
+	}
+	return nil
+}
+
+func normalizeXiaohongshuProductInput(input *XiaohongshuProductConfigInput) {
+	input.ExternalSKUID = strings.TrimSpace(input.ExternalSKUID)
+	input.CategoryID = strings.TrimSpace(input.CategoryID)
+	input.ImageURL = strings.TrimSpace(input.ImageURL)
+	input.Description = strings.TrimSpace(input.Description)
+	input.ProductPath = strings.TrimSpace(input.ProductPath)
+	input.OrderPath = strings.TrimSpace(input.OrderPath)
+	seen := make(map[string]struct{})
+	pois := make([]string, 0, len(input.POIIDs))
+	for _, id := range input.POIIDs {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			if _, exists := seen[id]; !exists {
+				seen[id] = struct{}{}
+				pois = append(pois, id)
+			}
+		}
+	}
+	input.POIIDs = pois
+}
+
+func validateXiaohongshuProductInput(input XiaohongshuProductConfigInput) error {
+	image, err := url.Parse(input.ImageURL)
+	if input.ExternalSKUID == "" || input.CategoryID == "" || input.Description == "" || err != nil || image.Scheme != "https" || image.Host == "" {
+		return errors.New("请完整填写 SKU、类目、说明和 HTTPS 商品图片")
+	}
+	if !strings.HasPrefix(input.ProductPath, "/") || !strings.HasPrefix(input.OrderPath, "/") {
+		return errors.New("小程序商品页和订单页路径必须以 / 开头")
+	}
+	if input.ProductType < xiaohongshu.ProductTypeGroupVoucher || input.ProductType > xiaohongshu.ProductTypeCalendar {
+		return errors.New("小红书商品类型无效")
+	}
+	if input.SettleType < xiaohongshu.SettleAtHeadOffice || input.SettleType > xiaohongshu.SettleByRegion {
+		return errors.New("小红书结算方式无效")
+	}
+	return nil
+}
+
+func parseXiaohongshuPOIIDs(raw string) []string {
+	var result []string
+	if json.Unmarshal([]byte(raw), &result) != nil {
+		return []string{}
+	}
+	return result
+}
+
+func truncateChannelError(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > 500 {
+		return value[:500]
+	}
+	return value
+}
+
+func (s XiaohongshuProductService) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}

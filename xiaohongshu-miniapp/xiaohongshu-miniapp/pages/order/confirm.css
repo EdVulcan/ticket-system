@@ -1,0 +1,23 @@
+.page { min-height: 100vh; background: #f5f7f4; color: #17201a; }
+.header { display: flex; flex-direction: column; padding: 54rpx 38rpx 42rpx; background: #163e2b; color: #fff; }
+.eyebrow { font-size: 24rpx; color: #bcd3c6; }
+.title { margin-top: 10rpx; font-size: 42rpx; font-weight: 700; }
+.content { padding: 28rpx; }
+.ticket, .quantity-row, .summary { padding: 30rpx; border: 1rpx solid #e0e5e1; border-radius: 10rpx; background: #fff; }
+.ticket { display: flex; flex-direction: column; }
+.ticket-name { font-size: 32rpx; font-weight: 700; }
+.ticket-scenic { margin-top: 10rpx; color: #6e756f; font-size: 24rpx; }
+.price-row, .quantity-row, .summary { display: flex; align-items: center; justify-content: space-between; }
+.price-row { margin-top: 30rpx; padding-top: 22rpx; border-top: 1rpx solid #edf0ed; color: #6e756f; }
+.price { color: #b44b18; font-size: 32rpx; font-weight: 700; }
+.quantity-row { margin-top: 18rpx; }
+.label { font-size: 28rpx; font-weight: 650; }
+.stepper { display: flex; align-items: center; gap: 24rpx; }
+.stepper button { width: 62rpx; height: 56rpx; padding: 0; border: 1rpx solid #d5dbd6; border-radius: 5rpx; background: #f8faf8; color: #174a31; line-height: 54rpx; }
+.stepper text { min-width: 42rpx; text-align: center; font-size: 30rpx; }
+.limit { display: block; margin: 14rpx 8rpx 0; color: #8a6b39; font-size: 22rpx; }
+.summary { margin-top: 30rpx; border: 0; background: transparent; }
+.total { color: #b44b18; font-size: 44rpx; font-weight: 750; }
+.pay-button { height: 86rpx; margin-top: 24rpx; border-radius: 7rpx; background: #17683f; color: #fff; font-size: 29rpx; line-height: 86rpx; }
+.inline-error, .state { display: block; padding: 30rpx; color: #c24135; text-align: center; font-size: 24rpx; }
+.state { color: #6e756f; }

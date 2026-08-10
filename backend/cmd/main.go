@@ -68,6 +68,9 @@ func main() {
 	paymentReconciliationContext, stopPaymentReconciliation := context.WithCancel(context.Background())
 	defer stopPaymentReconciliation()
 	go runPaymentReconciliationWorker(paymentReconciliationContext)
+	xiaohongshuPaymentContext, stopXiaohongshuPayment := context.WithCancel(context.Background())
+	defer stopXiaohongshuPayment()
+	go runXiaohongshuPaymentWorker(xiaohongshuPaymentContext)
 	refundContext, stopRefundWorker := context.WithCancel(context.Background())
 	defer stopRefundWorker()
 	go runDigitalRefundWorker(refundContext)
@@ -187,6 +190,26 @@ func runPaymentReconciliationWorker(ctx context.Context) {
 	}
 	// Recover pending provider payments immediately after startup, then poll
 	// with a short interval so callbacks and active queries converge quickly.
+	process(time.Now())
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			process(now)
+		}
+	}
+}
+
+func runXiaohongshuPaymentWorker(ctx context.Context) {
+	miniapp := service.NewMiniappService()
+	process := func(now time.Time) {
+		if _, err := miniapp.ProcessPendingXiaohongshuOrders(ctx, now, 20); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Log.Error(fmt.Sprintf("xiaohongshu payment reconciliation failed: %v", err))
+		}
+	}
 	process(time.Now())
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()

@@ -1,10 +1,15 @@
 package service
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/utils"
+	"ticket-backend/internal/xiaohongshu"
 )
 
 func TestXiaohongshuChannelCredentialsAreTenantScopedAndEncrypted(t *testing.T) {
@@ -114,5 +119,73 @@ func TestXiaohongshuMappingMetadataCanBeCorrectedWithinTenant(t *testing.T) {
 	}
 	if err := service.UpdateMapping(tenantID, account.ID, mapping.ID, ChannelMappingUpdate{ExternalCode: "XHS-NEW", Status: "unknown"}); err == nil {
 		t.Fatal("invalid mapping status was accepted")
+	}
+}
+
+func TestXiaohongshuProductConfigAndSyncAreTenantScoped(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	account := model.ChannelAccount{Code: "xiaohongshu-product", Status: "sandbox"}
+	if err := (&ChannelService{}).CreateXiaohongshu(tenantID, &account, "miniapp-product", "app-secret"); err != nil {
+		t.Fatal(err)
+	}
+	mapping := model.ChannelProductMapping{ChannelAccountID: account.ID, ProductID: productID, ExternalCode: "XHS-PRODUCT", DisplayName: "沙盒门票", ChannelSaleCents: 1}
+	if err := (&ChannelService{}).AddMapping(tenantID, &mapping); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/rmp/token":
+			_, _ = w.Write([]byte(`{"data":{"access_token":"ACCESS","expire_in":7200},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/apps/category":
+			_, _ = w.Write([]byte(`{"data":{"category_info":[{"category_id":"SCENIC","name":"景区门票","support_trade":true}]},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/mp/deal/poi/list":
+			_, _ = w.Write([]byte(`{"data":{"list":[{"poi_id":"POI-1","name":"测试景区"}],"total":1},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/mp/deal/poi/product/upsert":
+			var request xiaohongshu.LocalLifeProductRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request.ExternalProductID != "XHS-PRODUCT" || request.CategoryID != "SCENIC" || len(request.SKUs) != 1 || request.SKUs[0].ExternalSKUID != "XHS-SKU" || request.SKUs[0].SalePrice != 1 {
+				t.Fatalf("request=%+v", request)
+			}
+			_, _ = w.Write([]byte(`{"data":{},"success":true,"msg":"success","code":0}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	service := NewXiaohongshuProductService()
+	service.NewClient = func(appID, secret, environment string) *xiaohongshu.Client {
+		if appID != "miniapp-product" || secret != "app-secret" || environment != "sandbox" {
+			t.Fatalf("client app=%q secret=%q environment=%q", appID, secret, environment)
+		}
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
+	}
+	input := XiaohongshuProductConfigInput{ExternalSKUID: "XHS-SKU", CategoryID: "SCENIC", POIIDs: []string{"POI-1"}, ImageURL: "https://example.com/ticket.png", Description: "测试景区门票", ProductPath: "/pages/index/index", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 2}
+	config, err := service.SaveConfig(tenantID, account.ID, mapping.ID, 1, "admin", input)
+	if err != nil || config.SyncStatus != "pending" || len(config.POIIDs) != 1 {
+		t.Fatalf("config=%+v err=%v", config, err)
+	}
+	categories, err := service.ListCategories(context.Background(), tenantID, account.ID)
+	if err != nil || len(categories) != 1 || categories[0].ID != "SCENIC" {
+		t.Fatalf("categories=%+v err=%v", categories, err)
+	}
+	pois, err := service.ListPOIs(context.Background(), tenantID, account.ID, 1, 20)
+	if err != nil || pois.Total != 1 || pois.List[0].ID != "POI-1" {
+		t.Fatalf("pois=%+v err=%v", pois, err)
+	}
+	if err := service.Sync(context.Background(), tenantID, account.ID, mapping.ID, 1, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := service.GetConfig(tenantID, account.ID, mapping.ID)
+	if err != nil || stored.SyncStatus != "synced" || stored.LastSyncedAt == nil {
+		t.Fatalf("stored=%+v err=%v", stored, err)
+	}
+	otherTenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	if _, err := service.SaveConfig(otherTenantID, account.ID, mapping.ID, 1, "admin", input); err == nil {
+		t.Fatal("another tenant configured the mapping")
 	}
 }

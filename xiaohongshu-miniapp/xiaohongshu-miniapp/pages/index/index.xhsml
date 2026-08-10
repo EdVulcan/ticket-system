@@ -45,6 +45,7 @@
           <text class="currency">¥</text>
           <text class="amount">{{item.priceText}}</text>
           <text class="unit">起</text>
+          <button class="buy-button" data-id="{{item.id}}" bindtap="buy">购买</button>
         </view>
       </view>
     </view>
