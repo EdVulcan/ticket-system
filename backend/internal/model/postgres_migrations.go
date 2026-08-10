@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 77
+const CurrentPostgresSchemaVersion = 78
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -38,7 +38,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&Policy{}, &PaymentConfig{}, &Payment{}, &Refund{}, &PaymentReconciliationTask{}, &DigitalRefundTask{},
 		&AuditLog{}, &OTANonce{}, &FinancialDocument{},
 		&ChannelAccount{}, &MiniappCustomer{}, &ChannelProductMapping{}, &ChannelRequest{}, &ChannelNonce{}, &ChannelReservation{},
-		&CtripOrderLink{}, &CtripOrderItem{}, &CtripOutboundTask{},
+		&CtripOrderLink{}, &CtripOrderItem{}, &CtripOutboundTask{}, &XiaohongshuWebhookEvent{},
 		&ChannelBillRecord{}, &ChannelReconciliation{}, &ChannelReconciliationLine{},
 		&TravelContract{}, &TravelAgent{}, &TourGuide{}, &TravelVehicle{}, &TourGroup{}, &TourGroupMember{},
 		&TourEntryBatch{}, &TourGroupConfirmation{}, &TourGroupMemberChange{}, &TeamSettlementStatement{}, &TeamSettlementAdjustment{},
@@ -180,7 +180,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "xiaohongshu miniapp customer sessions",
+		Name:      "xiaohongshu encrypted webhook events",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -403,6 +403,11 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 				SELECT 1 FROM channel_accounts a
 				WHERE a.id = NEW.channel_account_id AND a.tenant_id = NEW.tenant_id AND a.type = 'xiaohongshu'
 			) THEN RAISE EXCEPTION 'miniapp customer ownership mismatch'; END IF;
+		WHEN 'xiaohongshu_webhook_events' THEN
+			IF NEW.tenant_id = 0 OR NOT EXISTS (
+				SELECT 1 FROM channel_accounts a
+				WHERE a.id = NEW.channel_account_id AND a.tenant_id = NEW.tenant_id AND a.type = 'xiaohongshu'
+			) THEN RAISE EXCEPTION 'xiaohongshu webhook ownership mismatch'; END IF;
 		END CASE;
 		RETURN NEW;
 	END;
@@ -410,7 +415,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers"} {
+	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_webhook_events"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

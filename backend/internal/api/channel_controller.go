@@ -28,9 +28,11 @@ func (c *ChannelController) List(ctx *gin.Context) {
 func (c *ChannelController) Create(ctx *gin.Context) {
 	var body struct {
 		model.ChannelAccount
-		Secret string `json:"secret"`
-		AESKey string `json:"aes_key"`
-		AESIV  string `json:"aes_iv"`
+		Secret         string `json:"secret"`
+		AESKey         string `json:"aes_key"`
+		AESIV          string `json:"aes_iv"`
+		MessageToken   string `json:"message_token"`
+		EncodingAESKey string `json:"encoding_aes_key"`
 	}
 	if err := ctx.ShouldBindJSON(&body); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -49,13 +51,15 @@ func (c *ChannelController) Create(ctx *gin.Context) {
 		return
 	}
 	if body.Type == "xiaohongshu" {
-		if err := c.Service.CreateXiaohongshu(ctx.GetUint("tenant_id"), &body.ChannelAccount, body.AppID, body.Secret); err != nil {
+		if err := c.Service.CreateXiaohongshuIntegration(ctx.GetUint("tenant_id"), &body.ChannelAccount, body.AppID, body.Secret, body.MessageToken, body.EncodingAESKey); err != nil {
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		body.ProtocolConfigured = true
+		body.ProtocolConfigured = body.SecretCiphertext != "" && body.VerifyKeyCiphertext != "" && body.ProtocolConfigCiphertext != ""
 		body.Secret = ""
 		body.SecretCiphertext = ""
+		body.VerifyKeyCiphertext = ""
+		body.ProtocolConfigCiphertext = ""
 		ctx.JSON(http.StatusCreated, body.ChannelAccount)
 		return
 	}
@@ -134,14 +138,16 @@ func (c *ChannelController) ConfigureXiaohongshu(ctx *gin.Context) {
 		return
 	}
 	var body struct {
-		AppID     string `json:"app_id" binding:"required"`
-		AppSecret string `json:"app_secret" binding:"required"`
+		AppID          string `json:"app_id" binding:"required"`
+		AppSecret      string `json:"app_secret" binding:"required"`
+		MessageToken   string `json:"message_token" binding:"required"`
+		EncodingAESKey string `json:"encoding_aes_key" binding:"required"`
 	}
 	if err := ctx.ShouldBindJSON(&body); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := c.Service.ConfigureXiaohongshu(ctx.GetUint("tenant_id"), uint(id), body.AppID, body.AppSecret); err != nil {
+	if err := c.Service.ConfigureXiaohongshuIntegration(ctx.GetUint("tenant_id"), uint(id), body.AppID, body.AppSecret, body.MessageToken, body.EncodingAESKey); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

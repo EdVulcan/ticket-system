@@ -20,6 +20,10 @@ type CtripChannelConfig struct {
 	AESIV  string `json:"aes_iv"`
 }
 
+type XiaohongshuMessageConfig struct {
+	EncodingAESKey string `json:"encoding_aes_key"`
+}
+
 type ChannelOrderSummary struct {
 	ID                  uint      `json:"id"`
 	OrderNo             string    `json:"order_no"`
@@ -131,11 +135,23 @@ func (s *ChannelService) CreateCtrip(tenantID uint, account *model.ChannelAccoun
 }
 
 func (s *ChannelService) CreateXiaohongshu(tenantID uint, account *model.ChannelAccount, appID, appSecret string) error {
+	return s.createXiaohongshu(tenantID, account, appID, appSecret, "", "")
+}
+
+func (s *ChannelService) CreateXiaohongshuIntegration(tenantID uint, account *model.ChannelAccount, appID, appSecret, token, encodingAESKey string) error {
+	return s.createXiaohongshu(tenantID, account, appID, appSecret, token, encodingAESKey)
+}
+
+func (s *ChannelService) createXiaohongshu(tenantID uint, account *model.ChannelAccount, appID, appSecret, token, encodingAESKey string) error {
 	appID, appSecret = strings.TrimSpace(appID), strings.TrimSpace(appSecret)
 	if tenantID == 0 || strings.TrimSpace(account.Code) == "" || appID == "" || appSecret == "" {
 		return errors.New("渠道编码、小红书小程序 AppID 和 AppSecret 必填")
 	}
 	secretCiphertext, err := utils.EncryptAES(appSecret)
+	if err != nil {
+		return err
+	}
+	verifyKeyCiphertext, protocolConfigCiphertext, err := encryptXiaohongshuMessageConfig(token, encodingAESKey)
 	if err != nil {
 		return err
 	}
@@ -146,7 +162,8 @@ func (s *ChannelService) CreateXiaohongshu(tenantID uint, account *model.Channel
 	account.Status = "active"
 	account.Environment = "production"
 	account.SecretCiphertext = secretCiphertext
-	account.ProtocolConfigCiphertext = ""
+	account.VerifyKeyCiphertext = verifyKeyCiphertext
+	account.ProtocolConfigCiphertext = protocolConfigCiphertext
 	account.SignAlgorithm = "access-token"
 	if account.RateLimitPerMin <= 0 {
 		account.RateLimitPerMin = 600
@@ -190,7 +207,7 @@ func (s *ChannelService) List(tenantID uint) ([]model.ChannelAccount, error) {
 		case "ctrip":
 			accounts[i].ProtocolConfigured = accounts[i].AppID != "" && accounts[i].SecretCiphertext != "" && accounts[i].ProtocolConfigCiphertext != ""
 		case "xiaohongshu":
-			accounts[i].ProtocolConfigured = accounts[i].AppID != "" && accounts[i].SecretCiphertext != ""
+			accounts[i].ProtocolConfigured = accounts[i].AppID != "" && accounts[i].SecretCiphertext != "" && accounts[i].VerifyKeyCiphertext != "" && accounts[i].ProtocolConfigCiphertext != ""
 		}
 		accounts[i].SecretCiphertext = ""
 		accounts[i].VerifyKeyCiphertext = ""
@@ -200,11 +217,23 @@ func (s *ChannelService) List(tenantID uint) ([]model.ChannelAccount, error) {
 }
 
 func (s *ChannelService) ConfigureXiaohongshu(tenantID, id uint, appID, appSecret string) error {
+	return s.configureXiaohongshu(tenantID, id, appID, appSecret, "", "")
+}
+
+func (s *ChannelService) ConfigureXiaohongshuIntegration(tenantID, id uint, appID, appSecret, token, encodingAESKey string) error {
+	return s.configureXiaohongshu(tenantID, id, appID, appSecret, token, encodingAESKey)
+}
+
+func (s *ChannelService) configureXiaohongshu(tenantID, id uint, appID, appSecret, token, encodingAESKey string) error {
 	appID, appSecret = strings.TrimSpace(appID), strings.TrimSpace(appSecret)
 	if tenantID == 0 || id == 0 || appID == "" || appSecret == "" {
 		return errors.New("小红书小程序 AppID 和 AppSecret 必填")
 	}
 	secretCiphertext, err := utils.EncryptAES(appSecret)
+	if err != nil {
+		return err
+	}
+	verifyKeyCiphertext, protocolConfigCiphertext, err := encryptXiaohongshuMessageConfig(token, encodingAESKey)
 	if err != nil {
 		return err
 	}
@@ -218,6 +247,7 @@ func (s *ChannelService) ConfigureXiaohongshu(tenantID, id uint, appID, appSecre
 		}
 		result := tx.Model(&model.ChannelAccount{}).Where("id = ? AND tenant_id = ? AND type = ?", id, tenantID, "xiaohongshu").Updates(map[string]interface{}{
 			"app_id": appID, "secret_ciphertext": secretCiphertext, "status": "active", "environment": "production",
+			"verify_key_ciphertext": verifyKeyCiphertext, "protocol_config_ciphertext": protocolConfigCiphertext,
 			"sign_algorithm": "access-token", "key_version": gorm.Expr("key_version + 1"),
 		})
 		if result.Error != nil {
@@ -228,6 +258,41 @@ func (s *ChannelService) ConfigureXiaohongshu(tenantID, id uint, appID, appSecre
 		}
 		return nil
 	})
+}
+
+func encryptXiaohongshuMessageConfig(token, encodingAESKey string) (string, string, error) {
+	token, encodingAESKey = strings.TrimSpace(token), strings.TrimSpace(encodingAESKey)
+	if token == "" && encodingAESKey == "" {
+		return "", "", nil
+	}
+	if len(token) < 3 || len(token) > 32 || !isASCIIAlphanumeric(token) {
+		return "", "", errors.New("小红书消息 Token 必须为 3 至 32 位英文字母或数字")
+	}
+	if len(encodingAESKey) != 43 || !isASCIIAlphanumeric(encodingAESKey) {
+		return "", "", errors.New("小红书 EncodingAESKey 必须为 43 位英文字母或数字")
+	}
+	verifyKeyCiphertext, err := utils.EncryptAES(token)
+	if err != nil {
+		return "", "", err
+	}
+	configJSON, err := json.Marshal(XiaohongshuMessageConfig{EncodingAESKey: encodingAESKey})
+	if err != nil {
+		return "", "", err
+	}
+	protocolConfigCiphertext, err := utils.EncryptAES(string(configJSON))
+	if err != nil {
+		return "", "", err
+	}
+	return verifyKeyCiphertext, protocolConfigCiphertext, nil
+}
+
+func isASCIIAlphanumeric(value string) bool {
+	for _, item := range value {
+		if (item < 'a' || item > 'z') && (item < 'A' || item > 'Z') && (item < '0' || item > '9') {
+			return false
+		}
+	}
+	return value != ""
 }
 
 func (s *ChannelService) ConfigureCtrip(tenantID, id uint, accountID, signKey, aesKey, aesIV string) error {

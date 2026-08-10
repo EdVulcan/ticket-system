@@ -26,7 +26,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&ProductRevision{}, &LedgerEntry{}, &ChannelAccount{}, &TourGroup{}, &POSShift{},
 		&SettlementStatement{}, &AfterSaleRequest{}, &ChannelReservation{}, &FinancialDocument{},
 		&TeamSettlementStatement{}, &ChannelReconciliation{}, &OrderVisitor{}, &BundleProduct{},
-		&CtripOrderLink{}, &CtripOrderItem{},
+		&CtripOrderLink{}, &CtripOrderItem{}, &XiaohongshuWebhookEvent{},
 	} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("table for %T is missing", table)
@@ -44,6 +44,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		{&TravelContract{}, "idx_travel_contract_scope_no"},
 		{&TourGroup{}, "idx_team_active_fulfillment_group"},
 		{&TourGroupMember{}, "idx_team_member_active_ticket"},
+		{&XiaohongshuWebhookEvent{}, "idx_xhs_webhook_payload"},
 	} {
 		if !db.Migrator().HasIndex(index.model, index.name) {
 			t.Fatalf("index %s is missing", index.name)

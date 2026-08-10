@@ -59,13 +59,25 @@
       <template #footer><el-button @click="createDialog = false">取消</el-button><el-button type="primary" :loading="saving" @click="create">创建</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="xiaohongshuConfigDialog" title="小红书小程序参数" width="520px" :close-on-click-modal="false">
-      <el-alert type="warning" :closable="false" title="保存后旧参数立即失效。AppSecret 不会在页面回显，两项内容必须重新完整填写。" />
+    <el-dialog v-model="xiaohongshuConfigDialog" title="小红书小程序参数" width="620px" :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" title="AppSecret、Token 和 EncodingAESKey 均加密保存且不会回显。更换参数后，小红书后台必须同步更新。" />
       <el-form class="mt-4" :model="xiaohongshuConfig" label-position="top">
         <el-form-item label="小程序 AppID"><el-input v-model="xiaohongshuConfig.app_id" autocomplete="off" /></el-form-item>
         <el-form-item label="小程序 AppSecret"><el-input v-model="xiaohongshuConfig.app_secret" type="password" show-password autocomplete="new-password" /></el-form-item>
+        <el-divider content-position="left">消息推送配置</el-divider>
+        <el-form-item label="URL（服务器地址）">
+          <el-input :model-value="xiaohongshuEndpoint()" readonly><template #append><el-button @click="copyText(xiaohongshuEndpoint(), 'URL')">复制</el-button></template></el-input>
+        </el-form-item>
+        <el-form-item label="Token（令牌）">
+          <el-input v-model="xiaohongshuConfig.message_token" autocomplete="new-password" maxlength="32"><template #append><el-button @click="copyText(xiaohongshuConfig.message_token, 'Token')">复制</el-button></template></el-input>
+        </el-form-item>
+        <el-form-item label="EncodingAESKey（消息加密密钥）">
+          <el-input v-model="xiaohongshuConfig.encoding_aes_key" type="password" show-password autocomplete="new-password" maxlength="43"><template #append><el-button @click="copyText(xiaohongshuConfig.encoding_aes_key, 'EncodingAESKey')">复制</el-button></template></el-input>
+        </el-form-item>
+        <el-button plain @click="generateXiaohongshuMessageKeys">随机生成 Token 和 EncodingAESKey</el-button>
+        <el-alert v-if="xiaohongshuConfigSaved" class="mt-4" type="success" :closable="false" title="参数已保存。现在将 URL、Token 和 EncodingAESKey 分别复制到小红书后台并提交校验。" />
       </el-form>
-      <template #footer><el-button @click="xiaohongshuConfigDialog = false">取消</el-button><el-button type="primary" :loading="xiaohongshuConfigSaving" @click="saveXiaohongshuConfig">保存参数</el-button></template>
+      <template #footer><el-button @click="xiaohongshuConfigDialog = false">关闭</el-button><el-button type="primary" :loading="xiaohongshuConfigSaving" @click="saveXiaohongshuConfig">保存参数</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="ctripConfigDialog" title="携程订单接口参数" width="560px" :close-on-click-modal="false">
@@ -331,7 +343,8 @@ const ctripConfigSaving = ref(false)
 const ctripConfig = reactive({ account_id: '', sign_key: '', aes_key: '', aes_iv: '' })
 const xiaohongshuConfigDialog = ref(false)
 const xiaohongshuConfigSaving = ref(false)
-const xiaohongshuConfig = reactive({ app_id: '', app_secret: '' })
+const xiaohongshuConfigSaved = ref(false)
+const xiaohongshuConfig = reactive({ app_id: '', app_secret: '', message_token: '', encoding_aes_key: '' })
 const ctripSandboxConsumeDialog = ref(false)
 const ctripSandboxConsuming = ref(false)
 const ctripSandboxSupplierOrderID = ref('')
@@ -369,14 +382,37 @@ const saveCtripConfig = async () => {
   try { await request.put(`/channel-accounts/${selectedAccount.value.id}/ctrip-config`, { ...ctripConfig }); ctripConfigDialog.value = false; ElMessage.success('携程接口参数已保存'); await load() }
   finally { ctripConfigSaving.value = false }
 }
-const openXiaohongshuConfig = (row: any) => { selectedAccount.value = row; Object.assign(xiaohongshuConfig, { app_id: row.app_id || '', app_secret: '' }); xiaohongshuConfigDialog.value = true }
+const openXiaohongshuConfig = (row: any) => {
+  selectedAccount.value = row
+  Object.assign(xiaohongshuConfig, { app_id: row.app_id || '', app_secret: '', message_token: '', encoding_aes_key: '' })
+  xiaohongshuConfigSaved.value = false
+  xiaohongshuConfigDialog.value = true
+}
+const randomAlphanumeric = (length: number) => {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+  const values = new Uint8Array(length)
+  window.crypto.getRandomValues(values)
+  return Array.from(values, value => alphabet[value % alphabet.length]).join('')
+}
+const generateXiaohongshuMessageKeys = () => {
+  xiaohongshuConfig.message_token = randomAlphanumeric(24)
+  xiaohongshuConfig.encoding_aes_key = randomAlphanumeric(43)
+  xiaohongshuConfigSaved.value = false
+}
+const xiaohongshuEndpoint = () => `${window.location.origin}/api/v1/integrations/xiaohongshu/events/${xiaohongshuConfig.app_id.trim()}`
+const copyText = async (value: string, label: string) => {
+  if (!value) { ElMessage.warning(`请先填写或生成${label}`); return }
+  await navigator.clipboard.writeText(value)
+  ElMessage.success(`${label}已复制`)
+}
 const saveXiaohongshuConfig = async () => {
-  if (!selectedAccount.value || !xiaohongshuConfig.app_id.trim() || !xiaohongshuConfig.app_secret.trim()) { ElMessage.warning('请完整填写小程序 AppID 和 AppSecret'); return }
+  if (!selectedAccount.value || !xiaohongshuConfig.app_id.trim() || !xiaohongshuConfig.app_secret.trim() || !/^[A-Za-z0-9]{3,32}$/.test(xiaohongshuConfig.message_token) || !/^[A-Za-z0-9]{43}$/.test(xiaohongshuConfig.encoding_aes_key)) { ElMessage.warning('请完整填写 AppID、AppSecret，并生成符合要求的 Token 和 EncodingAESKey'); return }
   xiaohongshuConfigSaving.value = true
   try {
     await request.put(`/channel-accounts/${selectedAccount.value.id}/xiaohongshu-config`, { ...xiaohongshuConfig })
-    xiaohongshuConfigDialog.value = false
-    ElMessage.success('小红书小程序参数已保存')
+    xiaohongshuConfig.app_secret = ''
+    xiaohongshuConfigSaved.value = true
+    ElMessage.success('参数已保存，请继续配置小红书后台')
     await load()
   } finally { xiaohongshuConfigSaving.value = false }
 }

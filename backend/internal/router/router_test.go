@@ -18,6 +18,8 @@ func TestRoutesRegisterWithoutConflicts(t *testing.T) {
 		"GET /api/v1/platform-users":                              false,
 		"POST /api/v1/platform-users":                             false,
 		"POST /api/v1/distribution/fulfillments/:id/used-refunds": false,
+		"GET /api/v1/integrations/xiaohongshu/events/:appID":      false,
+		"POST /api/v1/integrations/xiaohongshu/events/:appID":     false,
 	}
 	for _, route := range engine.Routes() {
 		key := route.Method + " " + route.Path

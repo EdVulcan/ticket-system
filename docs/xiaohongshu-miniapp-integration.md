@@ -19,6 +19,7 @@
 - 凭证核销：`POST https://miniapp.xiaohongshu.com/api/rmp/mp/deal/voucher/verify`
 - 售后新增：`POST https://miniapp.xiaohongshu.com/api/rmp/mp/deal/order/after_sales_order/add`
 - 结算请求：`POST https://miniapp.xiaohongshu.com/api/rmp/mp/deal/settle`
+- 消息加解密：`https://miniapp.xiaohongshu.com/third/api-3rd-doc/msgCrypt`
 
 ## 2. 已确认的业务语义
 
@@ -49,13 +50,14 @@
 
 - 已建立隔离的官方 API 客户端，覆盖调用凭证缓存、生活服务商品同步、订单同步、担保支付订单查询和凭证核销。
 - 已接入官方 `xhs.login -> code2session` 登录链路。一次性 `code` 只由后端交换，`open_id` 和 `session_key` 加密保存，`session_key` 不下发小程序；小程序只使用本系统生成的可轮换短期会话令牌。
-- PostgreSQL schema 77 增加按租户和小红书渠道账号隔离的游客会话。租户、渠道或相应业务能力停用后，既有小程序登录态立即失效。
+- PostgreSQL schema 78 增加按租户和小红书渠道账号隔离的游客会话及加密消息事件。租户、渠道或相应业务能力停用后，既有小程序登录态立即失效。
 - 已建立只读票种目录接口。目录只返回当前小红书渠道已启用映射且仍在线的本租户产品；客户端不能提交租户、供应商、景区或价格事实。
 - 原生小红书小程序工程位于 `xiaohongshu-miniapp/xiaohongshu-miniapp`，当前已完成中文票种首页、真实登录、加载/空状态和失败重试，不包含模拟商品或模拟下单成功。
 - 客户端已校验订单金额、商品必要字段、担保支付结算类型和单批最多 10 张凭证。
-- 管理端已支持按租户创建小红书渠道账号和更新 AppID/AppSecret；AppSecret 加密保存且不会通过接口回显，组合型供应商/分销商租户仍按销售租户隔离凭据。
+- 管理端已支持按租户创建小红书渠道账号，并配置 AppID、AppSecret、消息 Token 和 EncodingAESKey；敏感值加密保存且不会通过接口回显，组合型供应商/分销商租户仍按销售租户隔离凭据。
+- 消息推送地址为 `https://<部署域名>/api/v1/integrations/xiaohongshu/events/<AppID>`。保存配置时的 GET 请求执行 SHA-1 验签并原样返回 `echostr`；POST 事件先验签、按官方 AES-CBC/PKCS#7 协议解密、校验明文 AppID，再加密且幂等入库后返回 `success`。无法验证或无法持久化的事件不会被确认。
 - 尚未用真实小程序调用 `code2session`，也未创建或修改小红书商品；当前完成的是可测试的本地代码链路，不代表交易能力已验收。
-- 下一步先在小红书后台配置 `ymsq.edvulcan.top` 为服务器请求域名，并用开发工具验证真实登录和票种目录；随后再接入 POI/类目选择、可靠商品同步任务、订单协议关联和担保支付，不能让票种预览绕过交易组件直接收款。
+- 下一步用开发工具验证真实登录和票种目录，并在小红书后台保存管理端生成的消息推送 URL、Token 和 EncodingAESKey；随后再接入 POI/类目选择、可靠商品同步任务、订单协议关联和担保支付，不能让票种预览绕过交易组件直接收款。
 
 ## 5. 真实联调前需要的资料
 

@@ -27,6 +27,10 @@ func InitRouter(r *gin.Engine) {
 	miniappGroup := apiGroup.Group("/storefront/xiaohongshu")
 	miniappGroup.POST("/session", middleware.MiniappLoginRateLimit(), miniappController.LoginXiaohongshu)
 	miniappGroup.GET("/catalog", miniappController.ListCatalog)
+	xiaohongshuWebhookController := api.XiaohongshuWebhookController{}
+	xiaohongshuWebhookGroup := apiGroup.Group("/integrations/xiaohongshu/events")
+	xiaohongshuWebhookGroup.GET("/:appID", xiaohongshuWebhookController.Verify)
+	xiaohongshuWebhookGroup.POST("/:appID", xiaohongshuWebhookController.Receive)
 
 	// Protected Routes
 	protected := apiGroup.Group("")

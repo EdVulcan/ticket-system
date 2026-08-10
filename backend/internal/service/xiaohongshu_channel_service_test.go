@@ -11,14 +11,14 @@ func TestXiaohongshuChannelCredentialsAreTenantScopedAndEncrypted(t *testing.T) 
 	resetBusinessData(t)
 	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
 	account := model.ChannelAccount{Code: "xiaohongshu-main", Status: "sandbox"}
-	if err := (&ChannelService{}).CreateXiaohongshu(tenantID, &account, "miniapp-1", "app-secret-1"); err != nil {
+	if err := (&ChannelService{}).CreateXiaohongshuIntegration(tenantID, &account, "miniapp-1", "app-secret-1", "MessageToken123", "abcdefghijklmnopqrstuvwxyzABCDEFGH123456789"); err != nil {
 		t.Fatal(err)
 	}
 	if account.Type != "xiaohongshu" || account.Status != "active" || account.Environment != "production" {
 		t.Fatalf("account=%+v", account)
 	}
-	if account.SecretCiphertext == "" || strings.Contains(account.SecretCiphertext, "app-secret-1") {
-		t.Fatal("xiaohongshu app secret was not encrypted")
+	if account.SecretCiphertext == "" || account.VerifyKeyCiphertext == "" || account.ProtocolConfigCiphertext == "" || strings.Contains(account.SecretCiphertext, "app-secret-1") {
+		t.Fatal("xiaohongshu credentials were not encrypted")
 	}
 	plain, err := utils.DecryptAES(account.SecretCiphertext)
 	if err != nil || plain != "app-secret-1" {
@@ -35,7 +35,7 @@ func TestXiaohongshuChannelCredentialsAreTenantScopedAndEncrypted(t *testing.T) 
 	if err := (&ChannelService{}).CreateXiaohongshu(otherTenantID, &duplicate, "miniapp-1", "other-secret"); err == nil {
 		t.Fatal("same xiaohongshu appid was accepted by another tenant")
 	}
-	if err := (&ChannelService{}).ConfigureXiaohongshu(otherTenantID, account.ID, "miniapp-forged", "forged-secret"); err == nil {
+	if err := (&ChannelService{}).ConfigureXiaohongshuIntegration(otherTenantID, account.ID, "miniapp-forged", "forged-secret", "ForgedToken123", "abcdefghijklmnopqrstuvwxyzABCDEFGH123456789"); err == nil {
 		t.Fatal("another tenant updated xiaohongshu credentials")
 	}
 	var stored model.ChannelAccount
@@ -52,10 +52,10 @@ func TestXiaohongshuChannelCredentialsCanBeReplacedWithoutDisclosure(t *testing.
 	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
 	account := model.ChannelAccount{Code: "xiaohongshu-main"}
 	service := &ChannelService{}
-	if err := service.CreateXiaohongshu(tenantID, &account, "miniapp-old", "old-secret"); err != nil {
+	if err := service.CreateXiaohongshuIntegration(tenantID, &account, "miniapp-old", "old-secret", "OldToken123", "abcdefghijklmnopqrstuvwxyzABCDEFGH123456789"); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.ConfigureXiaohongshu(tenantID, account.ID, "miniapp-new", "new-secret"); err != nil {
+	if err := service.ConfigureXiaohongshuIntegration(tenantID, account.ID, "miniapp-new", "new-secret", "NewToken123", "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh123456789"); err != nil {
 		t.Fatal(err)
 	}
 	var stored model.ChannelAccount
