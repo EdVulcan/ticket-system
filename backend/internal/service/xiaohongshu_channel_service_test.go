@@ -70,3 +70,49 @@ func TestXiaohongshuChannelCredentialsCanBeReplacedWithoutDisclosure(t *testing.
 		t.Fatal("xiaohongshu secret was replaced with a generated generic channel secret")
 	}
 }
+
+func TestXiaohongshuMappingMetadataCanBeCorrectedWithinTenant(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	account := model.ChannelAccount{Code: "xiaohongshu-mapping"}
+	service := &ChannelService{}
+	if err := service.CreateXiaohongshu(tenantID, &account, "miniapp-mapping", "app-secret"); err != nil {
+		t.Fatal(err)
+	}
+	mapping := model.ChannelProductMapping{
+		ChannelAccountID: account.ID,
+		ProductID:        productID,
+		ExternalCode:     "XHS-OLD",
+		DisplayName:      "旧展示名",
+		ChannelSaleCents: 1,
+	}
+	if err := service.AddMapping(tenantID, &mapping); err != nil {
+		t.Fatal(err)
+	}
+
+	input := ChannelMappingUpdate{
+		ExternalCode:     "XHS-NEW",
+		DisplayName:      "小红书沙盒联调测试票",
+		ChannelSaleCents: 1,
+		ChannelCostCents: 1,
+		Status:           "active",
+	}
+	if err := service.UpdateMapping(tenantID, account.ID, mapping.ID, input); err != nil {
+		t.Fatal(err)
+	}
+	var stored model.ChannelProductMapping
+	if err := model.DB.First(&stored, mapping.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.ProductID != productID || stored.ChannelAccountID != account.ID || stored.ExternalCode != input.ExternalCode || stored.DisplayName != input.DisplayName || stored.ChannelSaleCents != 1 || stored.Status != "active" {
+		t.Fatalf("stored=%+v", stored)
+	}
+
+	otherTenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	if err := service.UpdateMapping(otherTenantID, account.ID, mapping.ID, ChannelMappingUpdate{ExternalCode: "FORGED", Status: "active"}); err == nil {
+		t.Fatal("another tenant updated the mapping")
+	}
+	if err := service.UpdateMapping(tenantID, account.ID, mapping.ID, ChannelMappingUpdate{ExternalCode: "XHS-NEW", Status: "unknown"}); err == nil {
+		t.Fatal("invalid mapping status was accepted")
+	}
+}

@@ -400,12 +400,61 @@ func (s *ChannelService) AddMapping(tenantID uint, mapping *model.ChannelProduct
 		if err := tx.Where("id = ? AND tenant_id = ?", mapping.ProductID, tenantID).First(&product).Error; err != nil {
 			return errors.New("product not found")
 		}
-		if account.Type == "ctrip" && (mapping.ChannelSaleCents <= 0 || mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents) {
-			return errors.New("ctrip mapping requires a positive sale price and a cost price not greater than the sale price")
+		if (account.Type == "ctrip" || account.Type == "xiaohongshu") && (mapping.ChannelSaleCents <= 0 || mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents) {
+			return errors.New("official channel mapping requires a positive sale price and a cost price not greater than the sale price")
 		}
 		mapping.Base = model.Base{}
 		mapping.Status = "active"
 		return tx.Create(mapping).Error
+	})
+}
+
+type ChannelMappingUpdate struct {
+	ExternalCode     string
+	DisplayName      string
+	ChannelSaleCents int64
+	ChannelCostCents int64
+	Status           string
+}
+
+func (s *ChannelService) UpdateMapping(tenantID, accountID, mappingID uint, input ChannelMappingUpdate) error {
+	input.ExternalCode = strings.TrimSpace(input.ExternalCode)
+	input.DisplayName = strings.TrimSpace(input.DisplayName)
+	if tenantID == 0 || accountID == 0 || mappingID == 0 || input.ExternalCode == "" {
+		return errors.New("channel, mapping and external code are required")
+	}
+	if input.Status != "active" && input.Status != "disabled" {
+		return errors.New("mapping status must be active or disabled")
+	}
+	if input.ChannelSaleCents < 0 || input.ChannelCostCents < 0 || input.ChannelCostCents > input.ChannelSaleCents {
+		return errors.New("channel prices are invalid")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var account model.ChannelAccount
+		if err := tx.Select("id", "tenant_id", "type").Where("id = ? AND tenant_id = ?", accountID, tenantID).First(&account).Error; err != nil {
+			return errors.New("channel account not found")
+		}
+		if (account.Type == "ctrip" || account.Type == "xiaohongshu") && input.ChannelSaleCents <= 0 {
+			return errors.New("official channel mapping requires a positive sale price")
+		}
+		var mapping model.ChannelProductMapping
+		if err := tx.Where("id = ? AND channel_account_id = ?", mappingID, account.ID).First(&mapping).Error; err != nil {
+			return errors.New("channel product mapping not found")
+		}
+		var productCount int64
+		if err := tx.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", mapping.ProductID, tenantID).Count(&productCount).Error; err != nil {
+			return err
+		}
+		if productCount != 1 {
+			return errors.New("mapped product does not belong to this tenant")
+		}
+		return tx.Model(&mapping).Updates(map[string]interface{}{
+			"external_code":      input.ExternalCode,
+			"display_name":       input.DisplayName,
+			"channel_sale_cents": input.ChannelSaleCents,
+			"channel_cost_cents": input.ChannelCostCents,
+			"status":             input.Status,
+		}).Error
 	})
 }
 

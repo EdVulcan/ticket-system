@@ -177,6 +177,34 @@ func (c *ChannelController) ListMappings(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"data": rows})
 }
 
+func (c *ChannelController) UpdateMapping(ctx *gin.Context) {
+	accountID, accountErr := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	mappingID, mappingErr := strconv.ParseUint(ctx.Param("mappingId"), 10, 32)
+	if accountErr != nil || mappingErr != nil || accountID == 0 || mappingID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel or mapping id"})
+		return
+	}
+	var body struct {
+		ExternalCode     string `json:"external_code" binding:"required"`
+		DisplayName      string `json:"display_name"`
+		ChannelSaleCents int64  `json:"channel_sale_cents"`
+		ChannelCostCents int64  `json:"channel_cost_cents"`
+		Status           string `json:"status" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.UpdateMapping(ctx.GetUint("tenant_id"), uint(accountID), uint(mappingID), service.ChannelMappingUpdate{
+		ExternalCode: body.ExternalCode, DisplayName: body.DisplayName,
+		ChannelSaleCents: body.ChannelSaleCents, ChannelCostCents: body.ChannelCostCents, Status: body.Status,
+	}); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"message": "mapping updated"})
+}
+
 func (c *ChannelController) SyncCtripMapping(ctx *gin.Context) {
 	accountID, accountErr := strconv.ParseUint(ctx.Param("id"), 10, 32)
 	mappingID, mappingErr := strconv.ParseUint(ctx.Param("mappingId"), 10, 32)
