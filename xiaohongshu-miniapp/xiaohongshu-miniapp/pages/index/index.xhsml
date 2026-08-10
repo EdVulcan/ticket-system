@@ -1,0 +1,52 @@
+<scroll-view class="page" scroll-y type="list">
+  <view class="store-header">
+    <text class="store-kicker">官方购票</text>
+    <text class="store-name">{{storeName}}</text>
+    <view class="store-summary" xhs:if="{{!loading && !error}}">
+      <text>在售票种</text>
+      <text class="store-count">{{products.length}}</text>
+    </view>
+  </view>
+
+  <view class="content">
+    <view class="section-heading">
+      <text class="section-title">选择门票</text>
+      <text class="section-meta" xhs:if="{{products.length}}">价格以提交订单时为准</text>
+    </view>
+
+    <view class="loading" xhs:if="{{loading}}">
+      <view class="loading-line loading-line-wide"></view>
+      <view class="loading-line"></view>
+      <view class="loading-line loading-line-short"></view>
+    </view>
+
+    <view class="state" xhs:elif="{{error}}">
+      <text class="state-title">暂时无法加载票种</text>
+      <text class="state-detail">{{error}}</text>
+      <button class="retry-button" bindtap="retry">重新加载</button>
+    </view>
+
+    <view class="state" xhs:elif="{{!products.length}}">
+      <text class="state-title">暂无可售票种</text>
+      <text class="state-detail">请稍后再来看看</text>
+    </view>
+
+    <view class="product-list" xhs:else>
+      <view class="product" xhs:for="{{products}}" xhs:key="id">
+        <view class="product-main">
+          <text class="product-name">{{item.name}}</text>
+          <text class="product-scenic" xhs:if="{{item.scenic_area_name}}">{{item.scenic_area_name}}</text>
+          <view class="tag-row" xhs:if="{{item.tags.length}}">
+            <text class="tag" xhs:for="{{item.tags}}" xhs:for-item="tag" xhs:key="*this">{{tag}}</text>
+          </view>
+          <text class="product-validity">{{item.validityText}}</text>
+        </view>
+        <view class="product-price">
+          <text class="currency">¥</text>
+          <text class="amount">{{item.priceText}}</text>
+          <text class="unit">起</text>
+        </view>
+      </view>
+    </view>
+  </view>
+</scroll-view>

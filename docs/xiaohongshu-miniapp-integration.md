@@ -8,6 +8,9 @@
 
 官方资料：
 
+- 小程序登录：`https://miniapp.xiaohongshu.com/doc/DC724193`
+- `code2session`：`GET https://miniapp.xiaohongshu.com/api/rmp/session`
+- 小程序代码构成：`https://miniapp.xiaohongshu.com/doc/DC451266`
 - 交易组件说明：`https://miniapp.xiaohongshu.com/third/api-3rd-doc/rmpDeal`
 - 小程序调用凭证：`POST https://miniapp.xiaohongshu.com/api/rmp/token`
 - 生活服务商品同步：`POST https://miniapp.xiaohongshu.com/api/rmp/mp/deal/poi/product/upsert`
@@ -35,7 +38,7 @@
 | 外部商品和 SKU | `ChannelProductMapping` 与售卖时产品版本快照 |
 | `out_order_id` | 本项目销售订单号 |
 | 小红书 `order_id` | 渠道协议关联，不覆盖本地订单号 |
-| `open_id` | 渠道用户标识，仅保存在小红书订单关联中 |
+| `open_id` | 按渠道账号隔离的游客标识；哈希检索、密文保存，不作为后台账号 |
 | 凭证码 | 绑定到对应供应商、景区和票权，不成为跨景区通用票 |
 | `verify_id` | 核销外部事实编号，与本地核销记录幂等关联 |
 | 平台结算结果 | 渠道对账事实，不覆盖供应商核销收入和上下游结算账本 |
@@ -45,10 +48,14 @@
 ## 4. 第一阶段实现状态
 
 - 已建立隔离的官方 API 客户端，覆盖调用凭证缓存、生活服务商品同步、订单同步、担保支付订单查询和凭证核销。
+- 已接入官方 `xhs.login -> code2session` 登录链路。一次性 `code` 只由后端交换，`open_id` 和 `session_key` 加密保存，`session_key` 不下发小程序；小程序只使用本系统生成的可轮换短期会话令牌。
+- PostgreSQL schema 77 增加按租户和小红书渠道账号隔离的游客会话。租户、渠道或相应业务能力停用后，既有小程序登录态立即失效。
+- 已建立只读票种目录接口。目录只返回当前小红书渠道已启用映射且仍在线的本租户产品；客户端不能提交租户、供应商、景区或价格事实。
+- 原生小红书小程序工程位于 `xiaohongshu-miniapp/xiaohongshu-miniapp`，当前已完成中文票种首页、真实登录、加载/空状态和失败重试，不包含模拟商品或模拟下单成功。
 - 客户端已校验订单金额、商品必要字段、担保支付结算类型和单批最多 10 张凭证。
 - 管理端已支持按租户创建小红书渠道账号和更新 AppID/AppSecret；AppSecret 加密保存且不会通过接口回显，组合型供应商/分销商租户仍按销售租户隔离凭据。
-- 尚未保存真实小程序参数，尚未调用真实账号，也未创建或修改小红书商品。
-- 下一步用景区现有小程序完成调用凭证验证，再接入 POI/类目选择、可靠商品同步任务和小红书订单协议关联。
+- 尚未用真实小程序调用 `code2session`，也未创建或修改小红书商品；当前完成的是可测试的本地代码链路，不代表交易能力已验收。
+- 下一步先在小红书后台配置 `ymsq.edvulcan.top` 为服务器请求域名，并用开发工具验证真实登录和票种目录；随后再接入 POI/类目选择、可靠商品同步任务、订单协议关联和担保支付，不能让票种预览绕过交易组件直接收款。
 
 ## 5. 真实联调前需要的资料
 

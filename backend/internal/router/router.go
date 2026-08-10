@@ -23,6 +23,11 @@ func InitRouter(r *gin.Engine) {
 	apiGroup.POST("/auth/staff/login", loginLimit, authController.StaffLogin)
 	apiGroup.POST("/auth/platform/login", loginLimit, authController.PlatformLogin)
 
+	miniappController := &api.MiniappController{Service: service.NewMiniappService()}
+	miniappGroup := apiGroup.Group("/storefront/xiaohongshu")
+	miniappGroup.POST("/session", middleware.MiniappLoginRateLimit(), miniappController.LoginXiaohongshu)
+	miniappGroup.GET("/catalog", miniappController.ListCatalog)
+
 	// Protected Routes
 	protected := apiGroup.Group("")
 	protected.Use(middleware.JWTAuth())

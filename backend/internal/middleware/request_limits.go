@@ -44,6 +44,22 @@ func LoginRateLimit() gin.HandlerFunc {
 	return limiter.handle
 }
 
+func MiniappLoginRateLimit() gin.HandlerFunc {
+	limiter := &loginFailureLimiter{windows: make(map[string]loginFailureWindow)}
+	return func(ctx *gin.Context) {
+		key := "ip:" + requestRemoteIP(ctx.Request)
+		now := time.Now()
+		if limiter.blocked(key, 60, now) {
+			ctx.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "登录请求过于频繁，请稍后重试"})
+			return
+		}
+		ctx.Next()
+		if ctx.Writer.Status() == http.StatusUnauthorized {
+			limiter.record(key, now)
+		}
+	}
+}
+
 func (l *loginFailureLimiter) handle(ctx *gin.Context) {
 	body, err := io.ReadAll(io.LimitReader(ctx.Request.Body, maxLoginBodyBytes+1))
 	if err != nil || len(body) > maxLoginBodyBytes {

@@ -59,6 +59,11 @@ type tokenData struct {
 	ExpireIn    int    `json:"expire_in"`
 }
 
+type Session struct {
+	OpenID     string `json:"openid"`
+	SessionKey string `json:"session_key"`
+}
+
 type PackageEntry struct {
 	Name  string `json:"name"`
 	Count int    `json:"count,omitempty"`
@@ -188,6 +193,34 @@ type VoucherVerifyRequest struct {
 
 type VoucherVerifyResponse struct {
 	VerifyID string `json:"verify_id"`
+}
+
+func (c *Client) Code2Session(ctx context.Context, code string) (*Session, error) {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return nil, errors.New("xiaohongshu temporary login code is required")
+	}
+	token, err := c.getAccessToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	endpoint, err := url.Parse(c.baseURL() + "/api/rmp/session")
+	if err != nil {
+		return nil, fmt.Errorf("create xiaohongshu session endpoint: %w", err)
+	}
+	query := endpoint.Query()
+	query.Set("app_id", strings.TrimSpace(c.AppID))
+	query.Set("access_token", token)
+	query.Set("code", code)
+	endpoint.RawQuery = query.Encode()
+	var session Session
+	if err := c.get(ctx, endpoint.String(), &session); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(session.OpenID) == "" || strings.TrimSpace(session.SessionKey) == "" {
+		return nil, errors.New("xiaohongshu session response is incomplete")
+	}
+	return &session, nil
 }
 
 func (c *Client) UpsertLocalLifeProduct(ctx context.Context, request LocalLifeProductRequest) error {
@@ -338,6 +371,20 @@ func (c *Client) post(ctx context.Context, endpoint string, payload, response an
 	}
 	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
 	req.Header.Set("User-Agent", "ticket-system-xiaohongshu/1.0")
+	return c.do(req, response)
+}
+
+func (c *Client) get(ctx context.Context, endpoint string, response any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return fmt.Errorf("create xiaohongshu request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "ticket-system-xiaohongshu/1.0")
+	return c.do(req, response)
+}
+
+func (c *Client) do(req *http.Request, response any) error {
 	httpClient := c.HTTP
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 20 * time.Second}

@@ -89,6 +89,37 @@ func TestGetGuaranteeOrderAndVerifyVoucher(t *testing.T) {
 	}
 }
 
+func TestCode2SessionUsesOfficialLoginEndpoint(t *testing.T) {
+	var tokenCalls, sessionCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/rmp/token":
+			tokenCalls++
+			_, _ = w.Write([]byte(`{"data":{"access_token":"token-1","expire_in":7200},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/session":
+			sessionCalls++
+			if r.Method != http.MethodGet || r.URL.Query().Get("app_id") != "miniapp" ||
+				r.URL.Query().Get("access_token") != "token-1" || r.URL.Query().Get("code") != "one-time-code" {
+				t.Fatalf("method=%s query=%s", r.Method, r.URL.RawQuery)
+			}
+			_, _ = w.Write([]byte(`{"data":{"openid":"OPEN-1","session_key":"SESSION-1"},"success":true,"msg":"success","code":0}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := Client{AppID: "miniapp", Secret: "secret", BaseURL: server.URL, HTTP: server.Client()}
+	session, err := client.Code2Session(context.Background(), " one-time-code ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.OpenID != "OPEN-1" || session.SessionKey != "SESSION-1" || tokenCalls != 1 || sessionCalls != 1 {
+		t.Fatalf("session=%+v tokenCalls=%d sessionCalls=%d", session, tokenCalls, sessionCalls)
+	}
+}
+
 func TestClientReturnsOfficialAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"data":null,"success":false,"msg":"trade ability is unavailable","code":40001}`))
