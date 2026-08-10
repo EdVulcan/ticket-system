@@ -121,10 +121,10 @@ func TestCode2SessionUsesOfficialLoginEndpoint(t *testing.T) {
 }
 
 func TestBaseURLForEnvironmentSeparatesSandboxAndProduction(t *testing.T) {
-	if got := BaseURLForEnvironment("sandbox"); got != SandboxBaseURL {
+	if got := BaseURLForEnvironment("sandbox"); got != "https://miniapp-sandbox.xiaohongshu.com" {
 		t.Fatalf("sandbox base URL=%q", got)
 	}
-	if got := BaseURLForEnvironment("production"); got != DefaultBaseURL {
+	if got := BaseURLForEnvironment("production"); got != "https://miniapp.xiaohongshu.com" {
 		t.Fatalf("production base URL=%q", got)
 	}
 }

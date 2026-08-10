@@ -16,7 +16,7 @@ import (
 
 const (
 	DefaultBaseURL = "https://miniapp.xiaohongshu.com"
-	SandboxBaseURL = "https://miniapp.beta.xiaohongshu.com"
+	SandboxBaseURL = "https://miniapp-sandbox.xiaohongshu.com"
 )
 
 const (
