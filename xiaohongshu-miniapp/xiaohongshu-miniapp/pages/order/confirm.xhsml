@@ -1,20 +1,21 @@
 <view class="page">
-  <view class="header"><text class="eyebrow">确认订单</text><text class="title">核对门票与数量</text></view>
+  <view class="header"><text class="eyebrow">确认订单</text><text class="title">核对票种与数量</text></view>
   <view class="state" xhs:if="{{loading}}">正在加载票种...</view>
   <view class="state error" xhs:elif="{{error && !product}}">{{error}}</view>
   <view class="content" xhs:elif="{{product}}">
     <view class="ticket">
-      <text class="ticket-name">{{product.name}}</text>
-      <text class="ticket-scenic">{{product.scenic_area_name}}</text>
-      <view class="price-row"><text>单价</text><text class="price">¥{{product.priceText}}</text></view>
+      <image class="ticket-image" xhs:if="{{product.image_url}}" src="{{product.image_url}}" mode="aspectFill" />
+      <view class="ticket-image fallback" xhs:else>门票</view>
+      <view class="ticket-info"><text class="ticket-name">{{product.name}}</text><text class="ticket-scenic">{{product.scenic_area_name}}</text><text class="price">¥{{product.priceText}}</text></view>
     </view>
     <view class="quantity-row">
-      <text class="label">购买数量</text>
+      <view><text class="label">购买数量</text><text class="hint">每人一票一码</text></view>
       <view class="stepper"><button bindtap="decrease" disabled="{{quantity <= 1}}">−</button><text>{{quantity}}</text><button bindtap="increase" disabled="{{quantity >= maxQuantity}}">+</button></view>
     </view>
     <text class="limit" xhs:if="{{maxQuantity < 100}}">测试环境本票种最多购买 {{maxQuantity}} 张</text>
-    <view class="summary"><text>应付金额</text><text class="total">¥{{totalText}}</text></view>
+    <view class="notice"><text class="notice-title">购票须知</text><text>支付结果以小红书担保交易为准，支付成功后系统自动出票。</text></view>
+    <view class="summary"><text>合计</text><text class="total">¥{{totalText}}</text></view>
     <text class="inline-error" xhs:if="{{error}}">{{error}}</text>
-    <button class="pay-button" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submit">{{submitting ? '正在创建订单' : '立即支付'}}</button>
+    <button class="pay-button" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submit">{{submitting ? '正在创建订单' : '确认并支付'}}</button>
   </view>
 </view>

@@ -28,6 +28,7 @@ func InitRouter(r *gin.Engine) {
 	miniappGroup.POST("/session", middleware.MiniappLoginRateLimit(), miniappController.LoginXiaohongshu)
 	miniappGroup.GET("/catalog", miniappController.ListCatalog)
 	miniappGroup.POST("/orders", miniappController.CreateOrder)
+	miniappGroup.GET("/orders", miniappController.ListOrders)
 	miniappGroup.GET("/orders/:orderNo", miniappController.GetOrder)
 	xiaohongshuWebhookController := api.XiaohongshuWebhookController{}
 	xiaohongshuWebhookGroup := apiGroup.Group("/integrations/xiaohongshu/events")

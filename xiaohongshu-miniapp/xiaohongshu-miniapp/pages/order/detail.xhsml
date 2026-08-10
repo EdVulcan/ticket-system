@@ -1,13 +1,18 @@
 <view class="page">
   <view class="result {{status}}">
-    <view class="status-mark">{{statusMark}}</view>
-    <text class="title">{{statusTitle}}</text>
-    <text class="detail">{{statusDetail}}</text>
+    <view class="status-mark">{{statusMark}}</view><text class="title">{{statusTitle}}</text><text class="detail">{{statusDetail}}</text>
   </view>
   <view class="error" xhs:if="{{error}}"><text>{{error}}</text><button bindtap="retry">重新查询</button></view>
+  <view class="order-card" xhs:if="{{order}}">
+    <image class="order-image" xhs:if="{{order.image_url}}" src="{{order.image_url}}" mode="aspectFill" />
+    <view class="order-image fallback" xhs:else>门票</view>
+    <view class="order-info"><text class="order-name">{{order.product_name}}</text><text class="quantity">数量 {{order.quantity}} 张</text><text class="price">实付 ¥{{order.amountText}}</text></view>
+  </view>
   <view class="tickets" xhs:if="{{ticketCodes.length}}">
-    <text class="section-title">入园票码</text>
+    <text class="section-title">入园票码</text><text class="ticket-hint">到达景区后向工作人员出示</text>
     <view class="ticket-code" xhs:for="{{ticketCodes}}" xhs:key="*this"><text>{{item}}</text></view>
   </view>
-  <view class="order-no"><text>订单号</text><text>{{orderNo}}</text></view>
+  <view class="order-meta"><text>订单号</text><text>{{orderNo}}</text></view>
+  <button class="primary-button" xhs:if="{{status === 'unpaid' && order.pay_token}}" loading="{{paying}}" disabled="{{paying}}" bindtap="continuePayment">继续支付</button>
+  <view class="action-row"><button class="secondary-button" bindtap="goOrders">查看全部订单</button><button class="secondary-button" bindtap="goHome">继续购票</button></view>
 </view>

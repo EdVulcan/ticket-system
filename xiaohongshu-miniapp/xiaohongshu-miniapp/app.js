@@ -14,9 +14,7 @@ App({
         this.globalData.session = cached;
         return Promise.resolve(cached);
       }
-      if (this.globalData.sessionPromise) {
-        return this.globalData.sessionPromise;
-      }
+      if (this.globalData.sessionPromise) return this.globalData.sessionPromise;
     }
 
     this.globalData.sessionPromise = new Promise((resolve, reject) => {
@@ -97,8 +95,5 @@ App({
     return response && response.data && response.data.error ? response.data.error : fallback;
   },
 
-  globalData: {
-    session: null,
-    sessionPromise: null
-  }
+  globalData: { session: null, sessionPromise: null }
 });

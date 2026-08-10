@@ -1,53 +1,71 @@
-<scroll-view class="page" scroll-y type="list">
+<view class="page">
   <view class="store-header">
-    <text class="store-kicker">官方购票</text>
-    <text class="store-name">{{storeName}}</text>
-    <view class="store-summary" xhs:if="{{!loading && !error}}">
-      <text>在售票种</text>
-      <text class="store-count">{{products.length}}</text>
+    <view class="brand-row">
+      <view>
+        <text class="store-kicker">官方购票</text>
+        <text class="store-name">{{storeName}}</text>
+      </view>
+      <view class="official-mark">官方</view>
+    </view>
+    <view class="search-box">
+      <text class="search-label">搜索</text>
+      <input class="search-input" value="{{keyword}}" bindinput="onKeywordInput" placeholder="输入票名、景区或标签" placeholder-class="search-placeholder" />
+      <text class="clear" xhs:if="{{keyword}}" bindtap="clearKeyword">清除</text>
+    </view>
+  </view>
+
+  <view class="filters" xhs:if="{{!loading && !error && allProducts.length}}">
+    <scroll-view class="scenic-scroll" scroll-x enhanced show-scrollbar="{{false}}">
+      <view class="scenic-row">
+        <view class="scenic-chip {{activeScenic === item ? 'active' : ''}}" xhs:for="{{scenicOptions}}" xhs:key="*this" data-scenic="{{item}}" bindtap="selectScenic">{{item}}</view>
+      </view>
+    </scroll-view>
+    <view class="sort-row">
+      <text class="result-count">共 {{products.length}} 个票种</text>
+      <view class="sort-options">
+        <text class="sort-item {{sort === 'default' ? 'active' : ''}}" data-sort="default" bindtap="selectSort">综合</text>
+        <text class="sort-item {{sort === 'priceAsc' ? 'active' : ''}}" data-sort="priceAsc" bindtap="selectSort">价格低</text>
+        <text class="sort-item {{sort === 'priceDesc' ? 'active' : ''}}" data-sort="priceDesc" bindtap="selectSort">价格高</text>
+      </view>
     </view>
   </view>
 
   <view class="content">
-    <view class="section-heading">
-      <text class="section-title">选择门票</text>
-      <text class="section-meta" xhs:if="{{products.length}}">价格以提交订单时为准</text>
-    </view>
-
     <view class="loading" xhs:if="{{loading}}">
-      <view class="loading-line loading-line-wide"></view>
-      <view class="loading-line"></view>
-      <view class="loading-line loading-line-short"></view>
+      <view class="skeleton-image"></view><view class="skeleton-line wide"></view><view class="skeleton-line"></view>
     </view>
-
     <view class="state" xhs:elif="{{error}}">
-      <text class="state-title">暂时无法加载票种</text>
-      <text class="state-detail">{{error}}</text>
+      <text class="state-title">暂时无法加载票种</text><text class="state-detail">{{error}}</text>
       <button class="retry-button" bindtap="retry">重新加载</button>
     </view>
-
-    <view class="state" xhs:elif="{{!products.length}}">
-      <text class="state-title">暂无可售票种</text>
-      <text class="state-detail">请稍后再来看看</text>
+    <view class="state" xhs:elif="{{!allProducts.length}}">
+      <text class="state-title">暂无可售票种</text><text class="state-detail">请稍后再来看看</text>
     </view>
-
+    <view class="state compact" xhs:elif="{{!products.length}}">
+      <text class="state-title">没有找到匹配票种</text><text class="state-detail">换个名称或景区试试</text>
+    </view>
     <view class="product-list" xhs:else>
-      <view class="product" xhs:for="{{products}}" xhs:key="id">
-        <view class="product-main">
+      <view class="product" xhs:for="{{products}}" xhs:key="id" data-id="{{item.id}}" bindtap="openProduct">
+        <image class="product-image" xhs:if="{{item.image_url}}" src="{{item.image_url}}" mode="aspectFill" />
+        <view class="product-image fallback" xhs:else><text>景区门票</text></view>
+        <view class="product-info">
           <text class="product-name">{{item.name}}</text>
           <text class="product-scenic" xhs:if="{{item.scenic_area_name}}">{{item.scenic_area_name}}</text>
           <view class="tag-row" xhs:if="{{item.tags.length}}">
             <text class="tag" xhs:for="{{item.tags}}" xhs:for-item="tag" xhs:key="*this">{{tag}}</text>
           </view>
-          <text class="product-validity">{{item.validityText}}</text>
-        </view>
-        <view class="product-price">
-          <text class="currency">¥</text>
-          <text class="amount">{{item.priceText}}</text>
-          <text class="unit">起</text>
-          <button class="buy-button" data-id="{{item.id}}" bindtap="buy">购买</button>
+          <view class="product-bottom">
+            <view class="price"><text class="currency">¥</text><text class="amount">{{item.priceText}}</text><text class="unit">起</text></view>
+            <text class="detail-link">查看详情</text>
+          </view>
         </view>
       </view>
     </view>
+    <view class="content-spacer"></view>
   </view>
-</scroll-view>
+
+  <view class="bottom-nav">
+    <view class="nav-item active" bindtap="goHome"><text class="nav-icon">⌂</text><text>购票</text></view>
+    <view class="nav-item" bindtap="goOrders"><text class="nav-icon">▤</text><text>订单</text></view>
+  </view>
+</view>

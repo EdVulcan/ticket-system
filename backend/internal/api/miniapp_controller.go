@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
@@ -100,6 +101,21 @@ func (c *MiniappController) CreateOrder(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusCreated, result)
+}
+
+func (c *MiniappController) ListOrders(ctx *gin.Context) {
+	customer, err := c.authenticate(ctx)
+	if err != nil {
+		return
+	}
+	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "10"))
+	result, err := c.Service.ListXiaohongshuOrders(customer, page, pageSize)
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "订单加载失败，请稍后重试"})
+		return
+	}
+	ctx.JSON(http.StatusOK, result)
 }
 
 func (c *MiniappController) GetOrder(ctx *gin.Context) {

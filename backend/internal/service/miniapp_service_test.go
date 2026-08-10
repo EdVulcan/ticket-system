@@ -89,7 +89,8 @@ func TestXiaohongshuMiniappLoginAndCatalogAreChannelScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(catalog.Products) != 1 || catalog.Products[0].Name != "小红书成人票" || catalog.Products[0].PriceCents != 7900 {
+	if len(catalog.Products) != 1 || catalog.Products[0].Name != "小红书成人票" || catalog.Products[0].PriceCents != 7900 ||
+		catalog.Products[0].ImageURL != "https://example.com/ticket.png" || catalog.Products[0].Description == "" || catalog.Products[0].ProductType != 1 {
 		t.Fatalf("catalog=%+v", catalog)
 	}
 }
@@ -187,6 +188,15 @@ func TestXiaohongshuMiniappOrderConvergesFromOfficialPaymentQuery(t *testing.T) 
 	if paid.Status != "paid" || len(paid.TicketCodes) != 2 {
 		t.Fatalf("paid=%+v", paid)
 	}
+	orders, err := miniapp.ListXiaohongshuOrders(&customer, 0, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orders.Page != 1 || orders.PageSize != 10 || orders.Total != 1 || len(orders.Items) != 1 ||
+		orders.Items[0].OrderNo != created.OrderNo || orders.Items[0].Quantity != 2 || orders.Items[0].AmountCents != 2 ||
+		orders.Items[0].Status != "paid" || orders.Items[0].ImageURL != "https://example.com/ticket.png" {
+		t.Fatalf("orders=%+v", orders)
+	}
 	var order model.Order
 	if err := model.DB.Where("order_no = ?", created.OrderNo).First(&order).Error; err != nil || order.Status != "paid" || moneyCents(order.TotalAmount) != 2 {
 		t.Fatalf("order=%+v err=%v", order, err)
@@ -201,6 +211,10 @@ func TestXiaohongshuMiniappOrderConvergesFromOfficialPaymentQuery(t *testing.T) 
 	}
 	other := customer
 	other.ID++
+	otherOrders, err := miniapp.ListXiaohongshuOrders(&other, 1, 10)
+	if err != nil || otherOrders.Total != 0 || len(otherOrders.Items) != 0 {
+		t.Fatalf("cross customer orders=%+v err=%v", otherOrders, err)
+	}
 	if _, err := miniapp.GetXiaohongshuOrder(context.Background(), &other, created.OrderNo); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("cross customer error=%v", err)
 	}

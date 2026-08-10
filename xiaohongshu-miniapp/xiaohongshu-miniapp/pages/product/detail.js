@@ -1,0 +1,38 @@
+const app = getApp();
+
+Page({
+  data: { product: null, storeName: '', loading: true, error: '' },
+
+  onLoad(options) {
+    this.mappingId = Number(options.mapping_id || 0);
+    this.loadProduct();
+  },
+
+  loadProduct() {
+    this.setData({ loading: true, error: '' });
+    app.request('/catalog').then(catalog => {
+      const product = (catalog.products || []).find(item => Number(item.id) === this.mappingId);
+      if (!product) throw new Error('票种当前不可购买');
+      product.priceText = this.formatPrice(product.price_cents);
+      product.validityText = this.formatValidity(product);
+      this.setData({ product, storeName: catalog.store_name || '景区购票', loading: false });
+    }).catch(error => this.setData({ loading: false, error: error.message || '票种加载失败' }));
+  },
+
+  buy() {
+    if (this.data.product) xhs.navigateTo({ url: `/pages/order/confirm?mapping_id=${this.data.product.id}` });
+  },
+
+  retry() { this.loadProduct(); },
+
+  formatPrice(cents) {
+    const amount = Number(cents || 0) / 100;
+    return amount % 1 === 0 ? amount.toFixed(0) : amount.toFixed(2);
+  },
+
+  formatValidity(product) {
+    if (product.validity_type === 'days' && product.validity_days > 0) return `购买后${product.validity_days}天内有效`;
+    if (product.validity_type === 'unlimited') return '有效期内可用';
+    return '按选定日期使用';
+  }
+});

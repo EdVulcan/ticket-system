@@ -39,6 +39,9 @@ type MiniappCatalogProduct struct {
 	ID             uint     `json:"id"`
 	Name           string   `json:"name"`
 	ScenicAreaName string   `json:"scenic_area_name,omitempty"`
+	ImageURL       string   `json:"image_url,omitempty"`
+	Description    string   `json:"description,omitempty"`
+	ProductType    int      `json:"product_type"`
 	PriceCents     int64    `json:"price_cents"`
 	Tags           []string `json:"tags"`
 	ValidityType   string   `json:"validity_type"`
@@ -61,11 +64,32 @@ type MiniappOrderCreateInput struct {
 type MiniappOrderResult struct {
 	OrderNo         string     `json:"order_no"`
 	PlatformOrderID string     `json:"order_id,omitempty"`
+	ProductName     string     `json:"product_name,omitempty"`
+	ImageURL        string     `json:"image_url,omitempty"`
+	Quantity        int        `json:"quantity"`
 	PayToken        string     `json:"pay_token,omitempty"`
 	AmountCents     int64      `json:"amount_cents"`
 	Status          string     `json:"status"`
 	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
 	TicketCodes     []string   `json:"ticket_codes,omitempty"`
+}
+
+type MiniappOrderSummary struct {
+	OrderNo     string     `json:"order_no"`
+	ProductName string     `json:"product_name"`
+	ImageURL    string     `json:"image_url,omitempty"`
+	Quantity    int        `json:"quantity"`
+	AmountCents int64      `json:"amount_cents"`
+	Status      string     `json:"status"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+}
+
+type MiniappOrderPage struct {
+	Items    []MiniappOrderSummary `json:"items"`
+	Total    int64                 `json:"total"`
+	Page     int                   `json:"page"`
+	PageSize int                   `json:"page_size"`
 }
 
 func NewMiniappService() MiniappService {
@@ -191,12 +215,16 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 		Tags             string
 		ValidityType     string
 		ValidityDays     int
+		ImageURL         string
+		Description      string
+		ProductType      int
 	}
 	var rows []catalogRow
 	err := model.DB.Table("channel_product_mappings AS mapping").
 		Select(`mapping.id AS mapping_id, mapping.display_name, product.name AS product_name,
 			scenic.name AS scenic_area_name, mapping.channel_sale_cents, product.price AS product_price,
-			product.tags, product.validity_type, product.validity_days`).
+			product.tags, product.validity_type, product.validity_days,
+			xhs_config.image_url, xhs_config.description, xhs_config.product_type`).
 		Joins("JOIN products AS product ON product.id = mapping.product_id AND product.tenant_id = ? AND product.deleted_at IS NULL", customer.TenantID).
 		Joins("JOIN xiaohongshu_product_configs AS xhs_config ON xhs_config.channel_product_mapping_id = mapping.id AND xhs_config.tenant_id = ? AND xhs_config.sync_status = ? AND xhs_config.deleted_at IS NULL", customer.TenantID, "synced").
 		Joins(`LEFT JOIN scenic_areas AS scenic ON scenic.id = CASE
@@ -220,6 +248,7 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 		}
 		products = append(products, MiniappCatalogProduct{
 			ID: row.MappingID, Name: name, ScenicAreaName: row.ScenicAreaName,
+			ImageURL: row.ImageURL, Description: row.Description, ProductType: row.ProductType,
 			PriceCents: priceCents, Tags: parseProductTags(row.Tags),
 			ValidityType: row.ValidityType, ValidityDays: row.ValidityDays,
 		})
@@ -229,6 +258,58 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 		catalog.MaxOrderCents = 10
 	}
 	return catalog, nil
+}
+
+func (s MiniappService) ListXiaohongshuOrders(customer *model.MiniappCustomer, page, pageSize int) (*MiniappOrderPage, error) {
+	if customer == nil || customer.ID == 0 {
+		return nil, ErrMiniappUnauthenticated
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize != 10 && pageSize != 20 && pageSize != 40 {
+		pageSize = 10
+	}
+
+	base := model.DB.Table("xiaohongshu_order_links AS link").
+		Where("link.miniapp_customer_id = ? AND link.channel_account_id = ? AND link.tenant_id = ? AND link.deleted_at IS NULL", customer.ID, customer.ChannelAccountID, customer.TenantID)
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, err
+	}
+
+	type orderRow struct {
+		OrderNo     string
+		ProductName string
+		ImageURL    string
+		Quantity    int
+		TotalAmount float64
+		Status      string
+		CreatedAt   time.Time
+		ExpiresAt   *time.Time
+	}
+	var rows []orderRow
+	err := base.
+		Select(`orders.order_no, item.product_name, COALESCE(xhs_config.image_url, '') AS image_url,
+			item.quantity, orders.total_amount, link.state AS status, orders.created_at, link.pay_token_expires_at AS expires_at`).
+		Joins("JOIN orders ON orders.id = link.order_id AND orders.tenant_id = link.tenant_id AND orders.deleted_at IS NULL").
+		Joins("JOIN order_items AS item ON item.order_id = orders.id AND item.deleted_at IS NULL").
+		Joins("LEFT JOIN channel_product_mappings AS mapping ON mapping.channel_account_id = link.channel_account_id AND mapping.product_id = item.product_id AND mapping.deleted_at IS NULL").
+		Joins("LEFT JOIN xiaohongshu_product_configs AS xhs_config ON xhs_config.channel_product_mapping_id = mapping.id AND xhs_config.tenant_id = link.tenant_id AND xhs_config.deleted_at IS NULL").
+		Order("orders.created_at DESC, orders.id DESC").
+		Offset((page - 1) * pageSize).Limit(pageSize).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	items := make([]MiniappOrderSummary, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, MiniappOrderSummary{
+			OrderNo: row.OrderNo, ProductName: row.ProductName, ImageURL: row.ImageURL,
+			Quantity: row.Quantity, AmountCents: moneyCents(row.TotalAmount), Status: row.Status,
+			CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
+		})
+	}
+	return &MiniappOrderPage{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
 func (s MiniappService) CreateXiaohongshuOrder(ctx context.Context, customer *model.MiniappCustomer, input MiniappOrderCreateInput) (*MiniappOrderResult, error) {
@@ -536,6 +617,23 @@ func (s MiniappService) loadOrderResult(customer *model.MiniappCustomer, request
 
 func (s MiniappService) orderResult(link *model.XiaohongshuOrderLink, order *model.Order, includePayToken bool) (*MiniappOrderResult, error) {
 	result := &MiniappOrderResult{OrderNo: order.OrderNo, PlatformOrderID: link.PlatformOrderID, AmountCents: moneyCents(order.TotalAmount), Status: link.State, ExpiresAt: link.PayTokenExpiresAt}
+	type presentationRow struct {
+		ProductName string
+		ImageURL    string
+		Quantity    int
+	}
+	var presentation presentationRow
+	if err := model.DB.Table("order_items AS item").
+		Select("item.product_name, item.quantity, COALESCE(xhs_config.image_url, '') AS image_url").
+		Joins("LEFT JOIN channel_product_mappings AS mapping ON mapping.channel_account_id = ? AND mapping.product_id = item.product_id AND mapping.deleted_at IS NULL", link.ChannelAccountID).
+		Joins("LEFT JOIN xiaohongshu_product_configs AS xhs_config ON xhs_config.channel_product_mapping_id = mapping.id AND xhs_config.tenant_id = ? AND xhs_config.deleted_at IS NULL", link.TenantID).
+		Where("item.order_id = ? AND item.deleted_at IS NULL", order.ID).
+		Order("item.id ASC").Limit(1).Scan(&presentation).Error; err != nil {
+		return nil, err
+	}
+	result.ProductName = presentation.ProductName
+	result.ImageURL = presentation.ImageURL
+	result.Quantity = presentation.Quantity
 	if includePayToken && link.PayTokenCiphertext != "" {
 		payToken, err := utils.DecryptAES(link.PayTokenCiphertext)
 		if err != nil {
