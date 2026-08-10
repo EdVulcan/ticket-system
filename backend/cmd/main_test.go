@@ -28,7 +28,7 @@ func TestServeAdminUIExposesXiaohongshuValidationFile(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
 	}
-	if response.Body.String() != "74e84f27de41f119d9\n" {
+	if response.Body.String() != "74e84f27de41f119d9" {
 		t.Fatalf("body = %q", response.Body.String())
 	}
 }

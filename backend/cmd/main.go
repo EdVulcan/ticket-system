@@ -331,8 +331,11 @@ func serveAdminUI(engine *gin.Engine, directory string) {
 	}
 	engine.StaticFS("/assets", http.Dir(filepath.Join(absDirectory, "assets")))
 	xiaohongshuValidationPath := filepath.Join(absDirectory, "74e84f27.txt")
-	if info, err := os.Stat(xiaohongshuValidationPath); err == nil && !info.IsDir() {
-		engine.StaticFile("/74e84f27.txt", xiaohongshuValidationPath)
+	if validationContent, err := os.ReadFile(xiaohongshuValidationPath); err == nil {
+		validationContent = []byte(strings.TrimRight(string(validationContent), "\r\n"))
+		engine.GET("/74e84f27.txt", func(ctx *gin.Context) {
+			ctx.Data(http.StatusOK, "text/plain; charset=utf-8", validationContent)
+		})
 	}
 	downloadsDirectory := filepath.Join(absDirectory, "downloads")
 	if info, err := os.Stat(downloadsDirectory); err == nil && info.IsDir() {
