@@ -263,6 +263,7 @@ func InitRouter(r *gin.Engine) {
 		channelAdminGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SetStatus)
 		channelAdminGroup.POST("/:id/rotate-secret", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.RotateSecret)
 		channelAdminGroup.PUT("/:id/ctrip-config", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.ConfigureCtrip)
+		channelAdminGroup.PUT("/:id/xiaohongshu-config", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.ConfigureXiaohongshu)
 		channelAdminGroup.GET("/mappings", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.ListMappings)
 		channelAdminGroup.POST("/mappings", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.AddMapping)
 		channelAdminGroup.POST("/:id/mappings/:mappingId/ctrip-sync", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SyncCtripMapping)

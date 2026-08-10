@@ -130,6 +130,42 @@ func (s *ChannelService) CreateCtrip(tenantID uint, account *model.ChannelAccoun
 	})
 }
 
+func (s *ChannelService) CreateXiaohongshu(tenantID uint, account *model.ChannelAccount, appID, appSecret string) error {
+	appID, appSecret = strings.TrimSpace(appID), strings.TrimSpace(appSecret)
+	if tenantID == 0 || strings.TrimSpace(account.Code) == "" || appID == "" || appSecret == "" {
+		return errors.New("渠道编码、小红书小程序 AppID 和 AppSecret 必填")
+	}
+	secretCiphertext, err := utils.EncryptAES(appSecret)
+	if err != nil {
+		return err
+	}
+	account.Base = model.Base{}
+	account.TenantID = tenantID
+	account.Type = "xiaohongshu"
+	account.AppID = appID
+	account.Status = "active"
+	account.Environment = "production"
+	account.SecretCiphertext = secretCiphertext
+	account.ProtocolConfigCiphertext = ""
+	account.SignAlgorithm = "access-token"
+	if account.RateLimitPerMin <= 0 {
+		account.RateLimitPerMin = 600
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		if err := requireAnyActiveTenantCapability(tx, tenantID, "supplier", "distributor"); err != nil {
+			return err
+		}
+		var duplicate int64
+		if err := tx.Model(&model.ChannelAccount{}).Where("type = ? AND app_id = ?", "xiaohongshu", appID).Count(&duplicate).Error; err != nil {
+			return err
+		}
+		if duplicate > 0 {
+			return errors.New("该小红书小程序 AppID 已被配置")
+		}
+		return tx.Create(account).Error
+	})
+}
+
 func normalizeChannelStatus(value string) string {
 	if value == "disabled" || value == "sandbox" {
 		return value
@@ -150,12 +186,48 @@ func (s *ChannelService) List(tenantID uint) ([]model.ChannelAccount, error) {
 		return nil, err
 	}
 	for i := range accounts {
-		accounts[i].ProtocolConfigured = accounts[i].Type == "ctrip" && accounts[i].AppID != "" && accounts[i].SecretCiphertext != "" && accounts[i].ProtocolConfigCiphertext != ""
+		switch accounts[i].Type {
+		case "ctrip":
+			accounts[i].ProtocolConfigured = accounts[i].AppID != "" && accounts[i].SecretCiphertext != "" && accounts[i].ProtocolConfigCiphertext != ""
+		case "xiaohongshu":
+			accounts[i].ProtocolConfigured = accounts[i].AppID != "" && accounts[i].SecretCiphertext != ""
+		}
 		accounts[i].SecretCiphertext = ""
 		accounts[i].VerifyKeyCiphertext = ""
 		accounts[i].ProtocolConfigCiphertext = ""
 	}
 	return accounts, nil
+}
+
+func (s *ChannelService) ConfigureXiaohongshu(tenantID, id uint, appID, appSecret string) error {
+	appID, appSecret = strings.TrimSpace(appID), strings.TrimSpace(appSecret)
+	if tenantID == 0 || id == 0 || appID == "" || appSecret == "" {
+		return errors.New("小红书小程序 AppID 和 AppSecret 必填")
+	}
+	secretCiphertext, err := utils.EncryptAES(appSecret)
+	if err != nil {
+		return err
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var duplicate int64
+		if err := tx.Model(&model.ChannelAccount{}).Where("type = ? AND app_id = ? AND id != ?", "xiaohongshu", appID, id).Count(&duplicate).Error; err != nil {
+			return err
+		}
+		if duplicate > 0 {
+			return errors.New("该小红书小程序 AppID 已被配置")
+		}
+		result := tx.Model(&model.ChannelAccount{}).Where("id = ? AND tenant_id = ? AND type = ?", id, tenantID, "xiaohongshu").Updates(map[string]interface{}{
+			"app_id": appID, "secret_ciphertext": secretCiphertext, "status": "active", "environment": "production",
+			"sign_algorithm": "access-token", "key_version": gorm.Expr("key_version + 1"),
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
 }
 
 func (s *ChannelService) ConfigureCtrip(tenantID, id uint, accountID, signKey, aesKey, aesIV string) error {
@@ -228,8 +300,8 @@ func (s *ChannelService) RotateSecret(tenantID, id uint) (string, error) {
 	if err := model.DB.Select("id", "type").Where("id = ? AND tenant_id = ?", id, tenantID).First(&account).Error; err != nil {
 		return "", err
 	}
-	if account.Type == "ctrip" {
-		return "", errors.New("携程渠道请通过“携程参数”完整更新接口密钥和 AES 参数")
+	if account.Type == "ctrip" || account.Type == "xiaohongshu" {
+		return "", errors.New("官方渠道凭据请通过对应参数页面完整更新")
 	}
 	secret := randomChannelSecret()
 	ciphertext, err := utils.EncryptAES(secret)

@@ -48,6 +48,17 @@ func (c *ChannelController) Create(ctx *gin.Context) {
 		ctx.JSON(http.StatusCreated, body.ChannelAccount)
 		return
 	}
+	if body.Type == "xiaohongshu" {
+		if err := c.Service.CreateXiaohongshu(ctx.GetUint("tenant_id"), &body.ChannelAccount, body.AppID, body.Secret); err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		body.ProtocolConfigured = true
+		body.Secret = ""
+		body.SecretCiphertext = ""
+		ctx.JSON(http.StatusCreated, body.ChannelAccount)
+		return
+	}
 	secret, err := c.Service.Create(ctx.GetUint("tenant_id"), &body.ChannelAccount, body.Secret)
 	if err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -110,6 +121,27 @@ func (c *ChannelController) ConfigureCtrip(ctx *gin.Context) {
 		return
 	}
 	if err := c.Service.ConfigureCtrip(ctx.GetUint("tenant_id"), uint(id), body.AccountID, body.SignKey, body.AESKey, body.AESIV); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"configured": true})
+}
+
+func (c *ChannelController) ConfigureXiaohongshu(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	var body struct {
+		AppID     string `json:"app_id" binding:"required"`
+		AppSecret string `json:"app_secret" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.ConfigureXiaohongshu(ctx.GetUint("tenant_id"), uint(id), body.AppID, body.AppSecret); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

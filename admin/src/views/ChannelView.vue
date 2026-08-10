@@ -14,20 +14,21 @@
     <el-table :data="accounts" v-loading="loading" stripe>
       <el-table-column prop="code" label="渠道编码" width="180" />
       <el-table-column label="适配器类型" width="140"><template #default="{row}">{{ adapterTypeText(row.type) }}</template></el-table-column>
-      <el-table-column label="接口参数" width="120"><template #default="{row}"><el-tag v-if="row.type === 'ctrip'" :type="row.protocol_configured ? 'success' : 'danger'" effect="plain">{{ row.protocol_configured ? '已配置' : '待配置' }}</el-tag><span v-else>-</span></template></el-table-column>
+      <el-table-column label="接口参数" width="120"><template #default="{row}"><el-tag v-if="['ctrip', 'xiaohongshu'].includes(row.type)" :type="row.protocol_configured ? 'success' : 'danger'" effect="plain">{{ row.protocol_configured ? '已配置' : '待配置' }}</el-tag><span v-else>-</span></template></el-table-column>
       <el-table-column prop="status" label="状态" width="120"><template #default="{row}"><el-tag :type="row.status === 'active' ? 'success' : row.status === 'sandbox' ? 'warning' : 'info'">{{ accountStatusText(row.status) }}</el-tag></template></el-table-column>
       <el-table-column prop="rate_limit_per_min" label="限流/分钟" width="120" />
       <el-table-column prop="permissions_json" label="权限" min-width="220" show-overflow-tooltip />
       <el-table-column label="操作" width="700" fixed="right">
         <template #default="{row}">
           <el-button v-if="canWrite && row.type === 'ctrip'" link type="primary" @click="openCtripConfig(row)">携程参数</el-button>
+          <el-button v-if="canWrite && row.type === 'xiaohongshu'" link type="primary" @click="openXiaohongshuConfig(row)">小红书参数</el-button>
           <el-button v-if="canWrite && row.type === 'ctrip' && row.status === 'sandbox'" link type="primary" @click="openCtripSandboxConsume(row)">沙箱核销测试</el-button>
           <el-button v-if="canWrite" link type="primary" @click="openMapping(row)">商品映射</el-button>
           <el-button link type="primary" @click="openOrders(row)">渠道订单</el-button>
           <el-button link type="primary" @click="openRequests(row)">请求日志</el-button>
           <el-button link type="primary" @click="openReconciliations(row)">账单对账</el-button>
           <el-button v-if="canWrite" link type="warning" @click="toggleStatus(row)">{{ row.status === 'disabled' ? '启用' : '停用' }}</el-button>
-          <el-button v-if="canWrite && row.type !== 'ctrip'" link type="danger" @click="rotate(row)">轮换密钥</el-button>
+          <el-button v-if="canWrite && !['ctrip', 'xiaohongshu'].includes(row.type)" link type="danger" @click="rotate(row)">轮换密钥</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -35,7 +36,7 @@
     <el-dialog v-model="createDialog" title="新增渠道账号" width="520px">
       <el-form :model="form" label-position="top">
         <el-form-item label="渠道编码"><el-input v-model="form.code" placeholder="例如：携程正式渠道" /></el-form-item>
-        <el-form-item label="适配器类型"><el-select v-model="form.type" class="w-full" @change="handleAdapterTypeChange"><el-option label="通用渠道" value="core" /><el-option label="携程" value="ctrip" /></el-select></el-form-item>
+        <el-form-item label="适配器类型"><el-select v-model="form.type" class="w-full" @change="handleAdapterTypeChange"><el-option label="通用渠道" value="core" /><el-option label="携程" value="ctrip" /><el-option label="小红书" value="xiaohongshu" /></el-select></el-form-item>
         <template v-if="form.type === 'ctrip'">
           <el-alert class="mb-4" type="info" :closable="false" title="请填写携程沙箱“订单参数”中的接口账号、接口密钥、AES 密钥和初始向量。" />
           <el-form-item label="携程接口账号"><el-input v-model="form.app_id" autocomplete="off" /></el-form-item>
@@ -43,13 +44,28 @@
           <el-form-item label="AES 加密密钥"><el-input v-model="form.aes_key" type="password" show-password autocomplete="new-password" maxlength="16" /></el-form-item>
           <el-form-item label="AES 初始向量"><el-input v-model="form.aes_iv" type="password" show-password autocomplete="new-password" maxlength="16" /></el-form-item>
         </template>
+        <template v-else-if="form.type === 'xiaohongshu'">
+          <el-alert class="mb-4" type="info" :closable="false" title="使用景区现有专业号小程序的 AppID 和 AppSecret；密钥保存后不会回显。" />
+          <el-form-item label="小程序 AppID"><el-input v-model="form.app_id" autocomplete="off" /></el-form-item>
+          <el-form-item label="小程序 AppSecret"><el-input v-model="form.secret" type="password" show-password autocomplete="new-password" /></el-form-item>
+        </template>
         <el-form-item v-else label="初始密钥"><el-input v-model="form.secret" type="password" show-password /></el-form-item>
-        <el-form-item label="运行环境"><el-radio-group v-model="form.status"><el-radio-button label="sandbox">测试环境</el-radio-button><el-radio-button label="active">正式环境</el-radio-button></el-radio-group></el-form-item>
+        <el-form-item v-if="form.type !== 'xiaohongshu'" label="运行环境"><el-radio-group v-model="form.status"><el-radio-button label="sandbox">测试环境</el-radio-button><el-radio-button label="active">正式环境</el-radio-button></el-radio-group></el-form-item>
+        <el-alert v-else class="mb-4" type="warning" :closable="false" title="小红书公开接口未提供独立沙箱地址，保存配置不会自动创建或修改商品。" />
         <el-form-item label="接口权限配置"><el-input v-model="form.permissions_json" /></el-form-item>
         <el-form-item label="每分钟请求上限"><el-input-number v-model="form.rate_limit_per_min" :min="1" :max="100000" /></el-form-item>
         <el-form-item label="允许访问的网络地址"><el-input v-model="form.allowed_ips_json" placeholder='例如 ["203.0.113.5"]' /></el-form-item>
       </el-form>
       <template #footer><el-button @click="createDialog = false">取消</el-button><el-button type="primary" :loading="saving" @click="create">创建</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="xiaohongshuConfigDialog" title="小红书小程序参数" width="520px" :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" title="保存后旧参数立即失效。AppSecret 不会在页面回显，两项内容必须重新完整填写。" />
+      <el-form class="mt-4" :model="xiaohongshuConfig" label-position="top">
+        <el-form-item label="小程序 AppID"><el-input v-model="xiaohongshuConfig.app_id" autocomplete="off" /></el-form-item>
+        <el-form-item label="小程序 AppSecret"><el-input v-model="xiaohongshuConfig.app_secret" type="password" show-password autocomplete="new-password" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="xiaohongshuConfigDialog = false">取消</el-button><el-button type="primary" :loading="xiaohongshuConfigSaving" @click="saveXiaohongshuConfig">保存参数</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="ctripConfigDialog" title="携程订单接口参数" width="560px" :close-on-click-modal="false">
@@ -74,6 +90,7 @@
 
     <el-dialog v-model="mappingDialog" title="商品映射" width="1060px">
       <el-alert v-if="selectedAccount?.type === 'ctrip'" class="mb-4" type="info" :closable="false" title="外部编码填写携程 PLU；价格按当前携程合同单独设置，不会改动景区产品原价。" />
+      <el-alert v-else-if="selectedAccount?.type === 'xiaohongshu'" class="mb-4" type="info" :closable="false" title="外部编码填写小红书 out_product_id。商品同步将在 POI、类目和小程序页面路径配置完成后开放。" />
       <div class="grid grid-cols-1 gap-2 mb-4 md:grid-cols-5">
         <el-input v-model="mapping.external_code" placeholder="外部商品编码 / PLU" />
         <el-select v-model="mapping.product_id" filterable placeholder="选择本商户产品">
@@ -312,6 +329,9 @@ const reconciliationDetail = ref<any>(null)
 const ctripConfigDialog = ref(false)
 const ctripConfigSaving = ref(false)
 const ctripConfig = reactive({ account_id: '', sign_key: '', aes_key: '', aes_iv: '' })
+const xiaohongshuConfigDialog = ref(false)
+const xiaohongshuConfigSaving = ref(false)
+const xiaohongshuConfig = reactive({ app_id: '', app_secret: '' })
 const ctripSandboxConsumeDialog = ref(false)
 const ctripSandboxConsuming = ref(false)
 const ctripSandboxSupplierOrderID = ref('')
@@ -328,10 +348,11 @@ const syncEnd = new Date(); syncEnd.setDate(syncEnd.getDate() + 30)
 const syncDateRange = ref<[string, string]>([dateValue(new Date()), dateValue(syncEnd)])
 
 const load = async () => { loading.value = true; try { accounts.value = (await request.get('/channel-accounts')).data.data || [] } finally { loading.value = false } }
-const handleAdapterTypeChange = (type: string) => { form.status = type === 'ctrip' ? 'sandbox' : 'active' }
+const handleAdapterTypeChange = (type: string) => { form.status = type === 'ctrip' ? 'sandbox' : 'active'; form.app_id = ''; form.secret = ''; form.aes_key = ''; form.aes_iv = '' }
 const create = async () => {
   if (!form.code.trim()) { ElMessage.warning('请填写渠道编码'); return }
   if (form.type === 'ctrip' && (!form.app_id.trim() || !form.secret.trim() || form.aes_key.length !== 16 || form.aes_iv.length !== 16)) { ElMessage.warning('请完整填写携程接口参数，AES 密钥和初始向量必须为 16 位'); return }
+  if (form.type === 'xiaohongshu' && (!form.app_id.trim() || !form.secret.trim())) { ElMessage.warning('请完整填写小红书小程序 AppID 和 AppSecret'); return }
   saving.value = true
   try {
     await request.post('/channel-accounts', { code: form.code, type: form.type, app_id: form.app_id, secret: form.secret, aes_key: form.aes_key, aes_iv: form.aes_iv, status: form.status, permissions_json: form.permissions_json, rate_limit_per_min: form.rate_limit_per_min, allowed_ips_json: form.allowed_ips_json })
@@ -347,6 +368,17 @@ const saveCtripConfig = async () => {
   ctripConfigSaving.value = true
   try { await request.put(`/channel-accounts/${selectedAccount.value.id}/ctrip-config`, { ...ctripConfig }); ctripConfigDialog.value = false; ElMessage.success('携程接口参数已保存'); await load() }
   finally { ctripConfigSaving.value = false }
+}
+const openXiaohongshuConfig = (row: any) => { selectedAccount.value = row; Object.assign(xiaohongshuConfig, { app_id: row.app_id || '', app_secret: '' }); xiaohongshuConfigDialog.value = true }
+const saveXiaohongshuConfig = async () => {
+  if (!selectedAccount.value || !xiaohongshuConfig.app_id.trim() || !xiaohongshuConfig.app_secret.trim()) { ElMessage.warning('请完整填写小程序 AppID 和 AppSecret'); return }
+  xiaohongshuConfigSaving.value = true
+  try {
+    await request.put(`/channel-accounts/${selectedAccount.value.id}/xiaohongshu-config`, { ...xiaohongshuConfig })
+    xiaohongshuConfigDialog.value = false
+    ElMessage.success('小红书小程序参数已保存')
+    await load()
+  } finally { xiaohongshuConfigSaving.value = false }
 }
 const copyCtripEndpoint = async () => { await navigator.clipboard.writeText(ctripEndpoint); ElMessage.success('接口地址已复制') }
 const openCtripSandboxConsume = (row: any) => { selectedAccount.value = row; ctripSandboxSupplierOrderID.value = ''; ctripSandboxConsumeDialog.value = true }
@@ -412,7 +444,7 @@ const dateTime = (value: string) => value ? new Date(value).toLocaleString('zh-C
 const cents = (value: number) => (Number(value || 0) / 100).toFixed(2)
 const signedCents = (value: number) => `${Number(value || 0) > 0 ? '+' : Number(value || 0) < 0 ? '-' : ''}¥${cents(Math.abs(Number(value || 0)))}`
 const accountStatusText = (status: string) => ({ active: '正式启用', sandbox: '测试中', disabled: '已停用' } as Record<string, string>)[status] || '未知状态'
-const adapterTypeText = (type: string) => ({ core: '通用渠道', ctrip: '携程', meituan: '美团', zyb: '智游宝上游' } as Record<string, string>)[type] || '自定义渠道'
+const adapterTypeText = (type: string) => ({ core: '通用渠道', ctrip: '携程', xiaohongshu: '小红书', meituan: '美团', zyb: '智游宝上游' } as Record<string, string>)[type] || '自定义渠道'
 const mappingStatusText = (status: string) => ({ active: '已启用', disabled: '已停用' } as Record<string, string>)[status] || '未知状态'
 const ctripTaskKindText = (kind: string) => ({ price: '价格', inventory: '库存', consumed: '核销通知' } as Record<string, string>)[kind] || '其他'
 const syncStatusText = (status: string) => ({ pending: '等待同步', processing: '同步中', succeeded: '已成功', failed: '同步失败' } as Record<string, string>)[status] || '未知状态'
