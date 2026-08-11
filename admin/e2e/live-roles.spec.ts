@@ -20,8 +20,8 @@ test('真实平台账号登录并读取治理总览', async ({ page }) => {
   await loginResponse
 
   await expect(page.getByRole('heading', { name: '平台运行总览' })).toBeVisible({ timeout: 15_000 })
-  await expect(page.getByText('租户总数').locator('..').getByText('3', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '租户治理' }).click()
+  await expect(page.getByText('商户总数').locator('..').getByText('3', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: /商户开户管理/ }).click()
   await expect(page.getByRole('heading', { name: '商户开户管理' })).toBeVisible()
   await expect(page.getByText('E2E 分销商', { exact: true })).toBeVisible()
   await expect(page.getByText('E2E 旅行社', { exact: true })).toBeVisible()
