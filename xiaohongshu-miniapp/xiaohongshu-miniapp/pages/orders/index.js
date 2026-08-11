@@ -44,6 +44,7 @@ Page({
     const orders = this.data.allOrders.filter(order => {
       if (active === 'all') return true;
       if (active === 'closed') return ['cancelled', 'failed', 'refunded'].indexOf(order.status) >= 0;
+      if (active === 'paid') return ['paid', 'completed', 'partial_refunded'].indexOf(order.status) >= 0;
       return order.status === active;
     });
     this.setData({ orders });
@@ -65,10 +66,10 @@ Page({
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
   },
   statusText(status) {
-    return { unpaid: '待支付', paid: '已支付', cancelled: '已取消', failed: '未完成', refunded: '已退款' }[status] || '处理中';
+    return { unpaid: '待支付', paid: '已支付', completed: '已使用', partial_refunded: '部分退款', cancelled: '已取消', failed: '未完成', refunded: '已退款' }[status] || '处理中';
   },
   statusClass(status) {
-    if (status === 'paid') return 'paid';
+    if (['paid', 'completed', 'partial_refunded'].indexOf(status) >= 0) return 'paid';
     if (status === 'unpaid') return 'unpaid';
     return 'closed';
   }

@@ -10,11 +10,12 @@
       <view class="tags" xhs:if="{{product.tags.length}}"><text class="tag" xhs:for="{{product.tags}}" xhs:key="*this">{{item}}</text></view>
       <view class="price"><text class="currency">¥</text><text class="amount">{{product.priceText}}</text><text class="unit">起</text></view>
     </view>
-    <view class="assurances"><view><text class="assurance-title">官方出票</text><text>订单可查</text></view><view><text class="assurance-title">快速入园</text><text>电子票码</text></view><view><text class="assurance-title">售后保障</text><text>原路退款</text></view></view>
+    <view class="assurances"><view><text class="assurance-title">小红书担保</text><text>平台交易</text></view><view><text class="assurance-title">官方出票</text><text>订单可查</text></view><view><text class="assurance-title">票码入园</text><text>方便快捷</text></view></view>
     <view class="section">
       <text class="section-title">使用说明</text>
       <view class="info-row"><text class="info-label">有效期</text><text class="info-value">{{product.validityText}}</text></view>
       <view class="info-row"><text class="info-label">入园方式</text><text class="info-value">支付成功后查看电子票码</text></view>
+      <view class="info-row"><text class="info-label">退改说明</text><text class="info-value">以票种实际规则和订单状态为准</text></view>
     </view>
     <view class="section" xhs:if="{{product.description}}">
       <text class="section-title">票种介绍</text>
@@ -23,7 +24,7 @@
     <view class="page-spacer"></view>
     <view class="purchase-bar">
       <view><text class="bar-label">售价</text><text class="bar-price">¥{{product.priceText}}</text></view>
-      <button class="buy-button" bindtap="buy">现在购买</button>
+      <button class="buy-button" bindtap="buy">立即选购</button>
     </view>
   </view>
 </view>

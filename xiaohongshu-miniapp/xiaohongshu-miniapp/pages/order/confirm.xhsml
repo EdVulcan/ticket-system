@@ -1,5 +1,5 @@
 <view class="page">
-  <view class="header"><text class="eyebrow">最后一步</text><text class="title">确认订单</text><text class="header-hint">核对票种与数量后发起担保支付</text></view>
+  <view class="header"><text class="title">确认订单</text><text class="header-hint">核对票种与数量后发起小红书担保支付</text></view>
   <view class="state" xhs:if="{{loading}}">正在加载票种...</view>
   <view class="state error" xhs:elif="{{error && !product}}">{{error}}</view>
   <view class="content" xhs:elif="{{product}}">
@@ -13,9 +13,10 @@
       <view class="stepper"><button bindtap="decrease" disabled="{{quantity <= 1}}">−</button><text>{{quantity}}</text><button bindtap="increase" disabled="{{quantity >= maxQuantity}}">+</button></view>
     </view>
     <text class="limit" xhs:if="{{maxQuantity < 100}}">测试环境本票种最多购买 {{maxQuantity}} 张</text>
-    <view class="notice"><text class="notice-title">购票须知</text><text>支付结果以小红书担保交易为准，支付成功后系统自动出票。</text></view>
-    <view class="summary"><text>合计</text><text class="total">¥{{totalText}}</text></view>
+    <view class="notice"><text class="notice-title">购票须知</text><text>支付结果以小红书担保交易为准，支付成功后系统自动出票。退改按票种实际规则执行。</text></view>
+    <view class="summary"><view><text class="summary-label">票价</text><text>¥{{product.priceText}} × {{quantity}}</text></view><view class="summary-total"><text>合计</text><text class="total">¥{{totalText}}</text></view></view>
     <text class="inline-error" xhs:if="{{error}}">{{error}}</text>
-    <button class="pay-button" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submit">{{submitting ? '正在创建订单' : '确认并支付'}}</button>
+    <view class="page-spacer"></view>
+    <view class="checkout-bar"><view><text class="checkout-label">应付</text><text class="checkout-total">¥{{totalText}}</text></view><button class="pay-button" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submit">{{submitting ? '正在创建订单' : '确认并支付'}}</button></view>
   </view>
 </view>

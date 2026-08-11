@@ -2,17 +2,17 @@
   <view class="store-header">
     <view class="brand-row">
       <view><text class="store-name">{{storeName}}</text><text class="store-kicker">官方直营</text></view>
-      <text class="orders-link" bindtap="goOrders">订单</text>
+      <text class="orders-link" bindtap="goOrders">我的订单</text>
     </view>
   </view>
 
   <view class="feature" xhs:if="{{!keyword && activeScenic === '全部'}}" data-id="{{featuredProduct.id}}" bindtap="openProduct">
     <image class="feature-image" xhs:if="{{featuredProduct && featuredProduct.image_url}}" src="{{featuredProduct.image_url}}" mode="aspectFill" />
-    <view class="feature-image fallback" xhs:else><text class="fallback-kicker">周末出发</text><text class="fallback-title">出发，去山里</text></view>
+    <view class="feature-image fallback" xhs:else><text class="fallback-title">出发，去山里</text><text class="fallback-subtitle">把今天留给山风和好天气</text></view>
     <view class="feature-copy" xhs:if="{{featuredProduct}}">
       <text class="feature-kicker">本周推荐</text>
       <text class="feature-title">{{featuredProduct.name}}</text>
-      <view class="feature-foot"><text>官方出票 · 订单内查看票码</text><text class="feature-price">¥{{featuredProduct.priceText}}起</text></view>
+      <view class="feature-foot"><text>官方出票 · 订单内查看票码</text><view class="feature-price"><text class="feature-currency">¥</text>{{featuredProduct.priceText}}<text class="feature-unit">起</text></view></view>
     </view>
     <view class="feature-copy" xhs:else>
       <text class="feature-kicker">官方购票</text>
@@ -63,14 +63,14 @@
     <view class="product-list" xhs:else>
       <view class="product" xhs:for="{{products}}" xhs:key="id" data-id="{{item.id}}" bindtap="openProduct">
         <image class="product-image" xhs:if="{{item.image_url}}" src="{{item.image_url}}" mode="aspectFill" />
-        <view class="product-image fallback" xhs:else><text>景区门票</text></view>
+        <view class="product-image fallback" xhs:else><text class="fallback-small">官方票</text><text>去山里</text></view>
         <view class="product-info">
           <text class="product-name">{{item.name}}</text>
           <text class="product-scenic" xhs:if="{{item.scenic_area_name}}">{{item.scenic_area_name}}</text>
           <view class="tag-row" xhs:if="{{item.tags.length}}">
             <text class="tag" xhs:for="{{item.tags}}" xhs:for-item="tag" xhs:key="*this">{{tag}}</text>
           </view>
-          <view class="product-bottom"><view class="price"><text class="currency">¥</text><text class="amount">{{item.priceText}}</text><text class="unit">起</text></view><text class="detail-link">购买</text></view>
+          <view class="product-bottom"><view class="price"><text class="currency">¥</text><text class="amount">{{item.priceText}}</text><text class="unit">起</text></view><text class="detail-link">选购</text></view>
         </view>
       </view>
     </view>
@@ -78,7 +78,7 @@
   </view>
 
   <view class="bottom-nav">
-    <view class="nav-item active" bindtap="goHome"><text class="nav-icon">⌂</text><text>发现</text></view>
-    <view class="nav-item" bindtap="goOrders"><text class="nav-icon">▤</text><text>订单</text></view>
+    <view class="nav-item active" bindtap="goHome"><text class="nav-mark"></text><text>购票</text></view>
+    <view class="nav-item" bindtap="goOrders"><text class="nav-mark"></text><text>订单</text></view>
   </view>
 </view>
