@@ -18,6 +18,9 @@
 .ticket-code { display: flex; align-items: center; flex-direction: column; margin-top: 15rpx; padding: 20rpx 18rpx; border: 1rpx dashed #64b69a; border-radius: 8rpx; background: #f0fbf7; color: #145f49; text-align: center; }
 .ticket-index { color: #5e8b7c; font-size: 18rpx; }
 .ticket-value { margin-top: 7rpx; font-family: monospace; font-size: 27rpx; font-weight: 750; word-break: break-all; }
+.stay-row { display: flex; justify-content: space-between; gap: 24rpx; padding: 14rpx 0; border-bottom: 1rpx solid #eef0f4; color: #858894; font-size: 21rpx; }
+.stay-row:last-child { border-bottom: 0; }
+.stay-row text:last-child { color: #272934; text-align: right; }
 .order-meta { display: flex; justify-content: space-between; gap: 20rpx; margin-top: 16rpx; padding: 19rpx 7rpx; color: #858894; font-size: 19rpx; }
 .order-meta text:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .primary-button { height: 80rpx; margin-top: 15rpx; border-radius: 8rpx; background: #ff5563; color: #fff; font-size: 27rpx; font-weight: 750; line-height: 80rpx; box-shadow: 0 8rpx 20rpx rgba(255,85,99,.22); }

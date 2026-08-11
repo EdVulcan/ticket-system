@@ -15,8 +15,8 @@
         <view class="order-head"><text class="order-time">{{item.createdText}}</text><text class="status {{item.statusClass}}">{{item.statusText}}</text></view>
         <view class="order-body">
           <image class="order-image" xhs:if="{{item.image_url}}" src="{{item.image_url}}" mode="aspectFill" />
-          <view class="order-image fallback" xhs:else>门票</view>
-          <view class="order-info"><text class="order-name">{{item.product_name}}</text><text class="quantity">共 {{item.quantity}} 张</text><text class="order-no">订单号 {{item.order_no}}</text></view>
+          <view class="order-image fallback" xhs:else>{{item.isPackage ? '酒景套餐' : '门票'}}</view>
+          <view class="order-info"><text class="order-name">{{item.product_name}}</text><text class="quantity">共 {{item.quantity}} {{item.isPackage ? '份' : '张'}}</text><text class="order-no">订单号 {{item.order_no}}</text></view>
         </view>
         <view class="order-foot"><view><text>实付</text><text class="amount">¥{{item.amountText}}</text></view><text class="detail-link">查看详情</text></view>
       </view>

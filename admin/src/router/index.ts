@@ -120,6 +120,12 @@ const router = createRouter({
             meta: { title: '商户登录' }
         },
         {
+            path: '/hotel',
+            name: 'hotel',
+            component: () => import('../views/HotelView.vue'),
+            meta: { scope: 'tenant', permission: 'catalog.read', capability: 'supplier', supplierBusinessType: 'hotel', supplierBusinessTypeAllowSuspended: true, title: '酒店经营' }
+        },
+        {
             path: '/platform/login',
             name: 'platform-login',
             component: () => import('../views/PlatformLoginView.vue'),

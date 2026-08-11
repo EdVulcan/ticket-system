@@ -92,3 +92,7 @@ func requireActiveSupplierBusinessType(tx *gorm.DB, tenantID uint, businessType 
 func requireActiveScenicSupplier(tx *gorm.DB, tenantID uint) error {
 	return requireActiveSupplierBusinessType(tx, tenantID, "scenic")
 }
+
+func requireActiveHotelSupplier(tx *gorm.DB, tenantID uint) error {
+	return requireActiveSupplierBusinessType(tx, tenantID, "hotel")
+}

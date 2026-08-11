@@ -3,7 +3,7 @@
 .title { font-size: 39rpx; font-weight: 820; }
 .header-hint { margin-top: 8rpx; color: #858894; font-size: 21rpx; }
 .content { padding: 20rpx 24rpx 0; }
-.ticket, .quantity-row, .notice, .summary { border: 1rpx solid #e5e8ef; border-radius: 10rpx; background: #fff; }
+.ticket, .date-row, .quantity-row, .guest-card, .notice, .summary { border: 1rpx solid #e5e8ef; border-radius: 10rpx; background: #fff; }
 .ticket { display: flex; gap: 19rpx; padding: 20rpx; }
 .ticket-image { display: flex; align-items: center; justify-content: center; width: 176rpx; height: 140rpx; flex-shrink: 0; border-radius: 8rpx; background: #e7f7f0; color: #176c52; font-size: 22rpx; }
 .ticket-info { display: flex; min-width: 0; flex: 1; flex-direction: column; }
@@ -11,6 +11,14 @@
 .ticket-scenic { margin-top: 7rpx; color: #858894; font-size: 20rpx; }
 .price { margin-top: auto; color: #ff5563; font-size: 31rpx; font-weight: 850; }
 .quantity-row { display: flex; align-items: center; justify-content: space-between; margin-top: 16rpx; padding: 25rpx; }
+.date-row { display: flex; align-items: center; justify-content: space-between; margin-top: 16rpx; padding: 25rpx; }
+.date-value { color: #9a9da8; font-size: 24rpx; }
+.date-value.selected { color: #171923; font-weight: 750; }
+.guest-card { margin-top: 16rpx; padding: 24rpx; }
+.field-row { display: flex; align-items: center; min-height: 78rpx; border-top: 1rpx solid #eef0f4; color: #595c68; font-size: 23rpx; }
+.field-row:first-of-type { margin-top: 16rpx; }
+.field-row > text { width: 150rpx; flex-shrink: 0; }
+.field-input { flex: 1; height: 78rpx; color: #171923; font-size: 24rpx; text-align: right; }
 .label, .hint { display: block; }
 .label { font-size: 27rpx; font-weight: 760; }
 .hint { margin-top: 6rpx; color: #9699a4; font-size: 19rpx; }

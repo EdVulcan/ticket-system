@@ -1,20 +1,32 @@
 <view class="page">
-  <view class="header"><text class="title">确认订单</text><text class="header-hint">核对票种与数量后发起小红书担保支付</text></view>
+  <view class="header"><text class="title">确认订单</text><text class="header-hint">核对商品、日期与数量后发起小红书担保支付</text></view>
   <view class="state" xhs:if="{{loading}}">正在加载票种...</view>
   <view class="state error" xhs:elif="{{error && !product}}">{{error}}</view>
   <view class="content" xhs:elif="{{product}}">
     <view class="ticket">
       <image class="ticket-image" xhs:if="{{product.image_url}}" src="{{product.image_url}}" mode="aspectFill" />
-      <view class="ticket-image fallback" xhs:else>门票</view>
-      <view class="ticket-info"><text class="ticket-name">{{product.name}}</text><text class="ticket-scenic">{{product.scenic_area_name}}</text><text class="price">¥{{product.priceText}}</text></view>
+      <view class="ticket-image fallback" xhs:else>{{product.kindLabel}}</view>
+      <view class="ticket-info"><text class="ticket-name">{{product.name}}</text><text class="ticket-scenic">{{product.isPackage ? product.stayText : product.scenic_area_name}}</text><text class="price">¥{{product.priceText}}</text></view>
+    </view>
+    <picker xhs:if="{{product.requires_use_date}}" mode="date" value="{{useDate}}" start="{{minDate}}" end="{{maxDate}}" bindchange="onDateChange">
+      <view class="date-row">
+        <view><text class="label">{{product.useDateLabel}}</text><text class="hint">{{product.isPackage ? '离店日期将按套餐晚数自动计算' : '门票按所选日期预订'}}</text></view>
+        <text class="date-value {{useDate ? 'selected' : ''}}">{{useDate || '请选择'}}</text>
+      </view>
+    </picker>
+    <view class="guest-card" xhs:if="{{product.isPackage}}">
+      <text class="label">入住联系人</text>
+      <text class="hint">用于酒店确认预订，不作为门票实名信息</text>
+      <view class="field-row"><text>入住人</text><input class="field-input" maxlength="50" placeholder="请输入姓名" value="{{guestName}}" bindinput="onGuestNameInput" /></view>
+      <view class="field-row"><text>联系电话</text><input class="field-input" type="number" maxlength="20" placeholder="用于接收住宿通知" value="{{contactPhone}}" bindinput="onContactPhoneInput" /></view>
     </view>
     <view class="quantity-row">
-      <view><text class="label">购买数量</text><text class="hint">每人一票一码</text></view>
+      <view><text class="label">{{product.quantityLabel}}</text><text class="hint">{{product.quantityHint}}</text></view>
       <view class="stepper"><button bindtap="decrease" disabled="{{quantity <= 1}}">−</button><text>{{quantity}}</text><button bindtap="increase" disabled="{{quantity >= maxQuantity}}">+</button></view>
     </view>
     <text class="limit" xhs:if="{{maxQuantity < 100}}">测试环境本票种最多购买 {{maxQuantity}} 张</text>
-    <view class="notice"><text class="notice-title">购票须知</text><text>支付结果以小红书担保交易为准，支付成功后系统自动出票。退改按票种实际规则执行。</text></view>
-    <view class="summary"><view><text class="summary-label">票价</text><text>¥{{product.priceText}} × {{quantity}}</text></view><view class="summary-total"><text>合计</text><text class="total">¥{{totalText}}</text></view></view>
+    <view class="notice"><text class="notice-title">购买须知</text><text>{{product.isPackage ? '每份套餐同时锁定门票和住宿房量，退改按整份套餐处理。' : '支付结果以小红书担保交易为准，支付成功后系统自动出票。退改按票种实际规则执行。'}}</text></view>
+    <view class="summary"><view><text class="summary-label">单价</text><text>¥{{product.priceText}} × {{quantity}}</text></view><view class="summary-total"><text>合计</text><text class="total">¥{{totalText}}</text></view></view>
     <text class="inline-error" xhs:if="{{error}}">{{error}}</text>
     <view class="page-spacer"></view>
     <view class="checkout-bar"><view><text class="checkout-label">应付</text><text class="checkout-total">¥{{totalText}}</text></view><button class="pay-button" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submit">{{submitting ? '正在创建订单' : '确认并支付'}}</button></view>

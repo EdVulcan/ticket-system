@@ -36,16 +36,23 @@ type MiniappLoginResult struct {
 }
 
 type MiniappCatalogProduct struct {
-	ID             uint     `json:"id"`
-	Name           string   `json:"name"`
-	ScenicAreaName string   `json:"scenic_area_name,omitempty"`
-	ImageURL       string   `json:"image_url,omitempty"`
-	Description    string   `json:"description,omitempty"`
-	ProductType    int      `json:"product_type"`
-	PriceCents     int64    `json:"price_cents"`
-	Tags           []string `json:"tags"`
-	ValidityType   string   `json:"validity_type"`
-	ValidityDays   int      `json:"validity_days,omitempty"`
+	ID              uint     `json:"id"`
+	Name            string   `json:"name"`
+	ScenicAreaName  string   `json:"scenic_area_name,omitempty"`
+	ImageURL        string   `json:"image_url,omitempty"`
+	Description     string   `json:"description,omitempty"`
+	ProductType     int      `json:"product_type"`
+	ProductKind     string   `json:"product_kind"`
+	PriceCents      int64    `json:"price_cents"`
+	Tags            []string `json:"tags"`
+	ValidityType    string   `json:"validity_type"`
+	ValidityDays    int      `json:"validity_days,omitempty"`
+	RequiresUseDate bool     `json:"requires_use_date"`
+	HotelName       string   `json:"hotel_name,omitempty"`
+	RoomTypeName    string   `json:"room_type_name,omitempty"`
+	RatePlanName    string   `json:"rate_plan_name,omitempty"`
+	Nights          int      `json:"nights,omitempty"`
+	RoomsPerPackage int      `json:"rooms_per_package,omitempty"`
 }
 
 type MiniappCatalog struct {
@@ -59,24 +66,41 @@ type MiniappOrderCreateInput struct {
 	MappingID       uint   `json:"mapping_id"`
 	Quantity        int    `json:"quantity"`
 	ClientRequestID string `json:"request_id"`
+	UseDate         string `json:"use_date"`
+	GuestName       string `json:"guest_name"`
+	ContactPhone    string `json:"contact_phone"`
+}
+
+type MiniappHotelStay struct {
+	HotelName    string    `json:"hotel_name"`
+	RoomTypeName string    `json:"room_type_name"`
+	RatePlanName string    `json:"rate_plan_name"`
+	CheckInDate  time.Time `json:"check_in_date"`
+	CheckOutDate time.Time `json:"check_out_date"`
+	Rooms        int       `json:"rooms"`
+	GuestName    string    `json:"guest_name"`
+	ContactPhone string    `json:"contact_phone"`
 }
 
 type MiniappOrderResult struct {
-	OrderNo         string     `json:"order_no"`
-	PlatformOrderID string     `json:"order_id,omitempty"`
-	ProductName     string     `json:"product_name,omitempty"`
-	ImageURL        string     `json:"image_url,omitempty"`
-	Quantity        int        `json:"quantity"`
-	PayToken        string     `json:"pay_token,omitempty"`
-	AmountCents     int64      `json:"amount_cents"`
-	Status          string     `json:"status"`
-	ExpiresAt       *time.Time `json:"expires_at,omitempty"`
-	TicketCodes     []string   `json:"ticket_codes,omitempty"`
+	OrderNo         string            `json:"order_no"`
+	PlatformOrderID string            `json:"order_id,omitempty"`
+	ProductName     string            `json:"product_name,omitempty"`
+	ImageURL        string            `json:"image_url,omitempty"`
+	Quantity        int               `json:"quantity"`
+	PayToken        string            `json:"pay_token,omitempty"`
+	AmountCents     int64             `json:"amount_cents"`
+	Status          string            `json:"status"`
+	ExpiresAt       *time.Time        `json:"expires_at,omitempty"`
+	TicketCodes     []string          `json:"ticket_codes,omitempty"`
+	ProductKind     string            `json:"product_kind"`
+	HotelStay       *MiniappHotelStay `json:"hotel_stay,omitempty"`
 }
 
 type MiniappOrderSummary struct {
 	OrderNo     string     `json:"order_no"`
 	ProductName string     `json:"product_name"`
+	ProductKind string     `json:"product_kind"`
 	ImageURL    string     `json:"image_url,omitempty"`
 	Quantity    int        `json:"quantity"`
 	AmountCents int64      `json:"amount_cents"`
@@ -218,13 +242,22 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 		ImageURL         string
 		Description      string
 		ProductType      int
+		StockType        string
+		PackageID        uint
+		HotelName        string
+		RoomTypeName     string
+		RatePlanName     string
+		Nights           int
+		RoomsPerPackage  int
 	}
 	var rows []catalogRow
 	err := model.DB.Table("channel_product_mappings AS mapping").
 		Select(`mapping.id AS mapping_id, mapping.display_name, product.name AS product_name,
 			scenic.name AS scenic_area_name, mapping.channel_sale_cents, product.price AS product_price,
-			product.tags, product.validity_type, product.validity_days,
-			xhs_config.image_url, xhs_config.description, xhs_config.product_type`).
+			product.tags, product.validity_type, product.validity_days, product.stock_type,
+			xhs_config.image_url, xhs_config.description, xhs_config.product_type,
+			hotel_package.id AS package_id, hotel.name AS hotel_name, room.name AS room_type_name,
+			rate.name AS rate_plan_name, hotel_package.nights, hotel_package.rooms_per_package`).
 		Joins("JOIN products AS product ON product.id = mapping.product_id AND product.tenant_id = ? AND product.deleted_at IS NULL", customer.TenantID).
 		Joins(`JOIN tenants AS fulfillment_tenant ON fulfillment_tenant.id = COALESCE(NULLIF(product.fulfillment_tenant_id, 0), NULLIF(product.source_tenant_id, 0), product.tenant_id)
 			AND fulfillment_tenant.status = 'active' AND fulfillment_tenant.deleted_at IS NULL`).
@@ -237,7 +270,14 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 			WHEN product.fulfillment_scenic_area_id != 0 THEN product.fulfillment_scenic_area_id ELSE product.scenic_area_id END
 			AND scenic.tenant_id = CASE WHEN product.fulfillment_tenant_id != 0 THEN product.fulfillment_tenant_id ELSE product.tenant_id END
 			AND scenic.deleted_at IS NULL`).
+		Joins("LEFT JOIN scenic_hotel_packages AS hotel_package ON hotel_package.product_id = product.id AND hotel_package.tenant_id = product.tenant_id AND hotel_package.deleted_at IS NULL").
+		Joins("LEFT JOIN hotel_properties AS hotel ON hotel.id = hotel_package.hotel_id AND hotel.tenant_id = hotel_package.tenant_id AND hotel.deleted_at IS NULL").
+		Joins("LEFT JOIN hotel_room_types AS room ON room.id = hotel_package.room_type_id AND room.hotel_id = hotel_package.hotel_id AND room.tenant_id = hotel_package.tenant_id AND room.deleted_at IS NULL").
+		Joins("LEFT JOIN hotel_rate_plans AS rate ON rate.id = hotel_package.rate_plan_id AND rate.room_type_id = hotel_package.room_type_id AND rate.tenant_id = hotel_package.tenant_id AND rate.deleted_at IS NULL").
+		Joins(`LEFT JOIN supplier_business_types AS hotel_business ON hotel_business.tenant_id = fulfillment_tenant.id
+			AND hotel_business.business_type = 'hotel' AND hotel_business.status = 'active' AND hotel_business.deleted_at IS NULL`).
 		Where("mapping.channel_account_id = ? AND mapping.status = ? AND mapping.deleted_at IS NULL AND product.status = ?", customer.ChannelAccountID, "active", "online").
+		Where("hotel_package.id IS NULL OR (hotel_package.status = ? AND hotel.status = ? AND room.status = ? AND rate.status = ? AND hotel_business.id IS NOT NULL)", "online", "active", "active", "active").
 		Where("supplier_capability.expires_at IS NULL OR supplier_capability.expires_at > ?", s.now()).
 		Order("mapping.created_at ASC, mapping.id ASC").Scan(&rows).Error
 	if err != nil {
@@ -253,11 +293,18 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 		if priceCents <= 0 {
 			priceCents = int64(math.Round(row.ProductPrice * 100))
 		}
+		kind := "ticket"
+		if row.PackageID != 0 {
+			kind = "scenic_hotel_package"
+		}
 		products = append(products, MiniappCatalogProduct{
 			ID: row.MappingID, Name: name, ScenicAreaName: row.ScenicAreaName,
 			ImageURL: row.ImageURL, Description: row.Description, ProductType: row.ProductType,
-			PriceCents: priceCents, Tags: parseProductTags(row.Tags),
+			ProductKind: kind, PriceCents: priceCents, Tags: parseProductTags(row.Tags),
 			ValidityType: row.ValidityType, ValidityDays: row.ValidityDays,
+			RequiresUseDate: row.PackageID != 0 || row.StockType == "daily",
+			HotelName:       row.HotelName, RoomTypeName: row.RoomTypeName, RatePlanName: row.RatePlanName,
+			Nights: row.Nights, RoomsPerPackage: row.RoomsPerPackage,
 		})
 	}
 	catalog := &MiniappCatalog{StoreName: tenant.Name, Environment: account.Environment, Products: products}
@@ -294,15 +341,18 @@ func (s MiniappService) ListXiaohongshuOrders(customer *model.MiniappCustomer, p
 		Status      string
 		CreatedAt   time.Time
 		ExpiresAt   *time.Time
+		PackageID   uint
 	}
 	var rows []orderRow
 	err := base.
 		Select(`orders.order_no, item.product_name, COALESCE(xhs_config.image_url, '') AS image_url,
-			item.quantity, orders.total_amount, link.state AS status, orders.created_at, link.pay_token_expires_at AS expires_at`).
+			item.quantity, orders.total_amount, link.state AS status, orders.created_at, link.pay_token_expires_at AS expires_at,
+			COALESCE(hotel_package.id, 0) AS package_id`).
 		Joins("JOIN orders ON orders.id = link.order_id AND orders.tenant_id = link.tenant_id AND orders.deleted_at IS NULL").
 		Joins("JOIN order_items AS item ON item.order_id = orders.id AND item.deleted_at IS NULL").
 		Joins("LEFT JOIN channel_product_mappings AS mapping ON mapping.channel_account_id = link.channel_account_id AND mapping.product_id = item.product_id AND mapping.deleted_at IS NULL").
 		Joins("LEFT JOIN xiaohongshu_product_configs AS xhs_config ON xhs_config.channel_product_mapping_id = mapping.id AND xhs_config.tenant_id = link.tenant_id AND xhs_config.deleted_at IS NULL").
+		Joins("LEFT JOIN scenic_hotel_packages AS hotel_package ON hotel_package.product_id = item.product_id AND hotel_package.tenant_id = item.fulfillment_tenant_id AND hotel_package.deleted_at IS NULL").
 		Order("orders.created_at DESC, orders.id DESC").
 		Offset((page - 1) * pageSize).Limit(pageSize).Scan(&rows).Error
 	if err != nil {
@@ -310,8 +360,12 @@ func (s MiniappService) ListXiaohongshuOrders(customer *model.MiniappCustomer, p
 	}
 	items := make([]MiniappOrderSummary, 0, len(rows))
 	for _, row := range rows {
+		kind := "ticket"
+		if row.PackageID != 0 {
+			kind = "scenic_hotel_package"
+		}
 		items = append(items, MiniappOrderSummary{
-			OrderNo: row.OrderNo, ProductName: row.ProductName, ImageURL: row.ImageURL,
+			OrderNo: row.OrderNo, ProductName: row.ProductName, ProductKind: kind, ImageURL: row.ImageURL,
 			Quantity: row.Quantity, AmountCents: moneyCents(row.TotalAmount), Status: row.Status,
 			CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
 		})
@@ -349,6 +403,34 @@ func (s MiniappService) CreateXiaohongshuOrder(ctx context.Context, customer *mo
 	if err := model.DB.Where("channel_product_mapping_id = ? AND tenant_id = ? AND channel_account_id = ? AND sync_status = ?", mapping.ID, customer.TenantID, account.ID, "synced").First(&config).Error; err != nil {
 		return nil, errors.New("票种尚未完成小红书商品同步")
 	}
+	var hotelPackage model.ScenicHotelPackage
+	hasHotelPackage := false
+	if err := model.DB.Where("tenant_id = ? AND product_id = ?", customer.TenantID, product.ID).First(&hotelPackage).Error; err == nil {
+		hasHotelPackage = true
+		if hotelPackage.Status != "online" {
+			return nil, errors.New("酒景套餐当前不可购买")
+		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	var useDate *time.Time
+	if value := strings.TrimSpace(input.UseDate); value != "" {
+		parsed, err := time.ParseInLocation("2006-01-02", value, time.Local)
+		if err != nil {
+			return nil, errors.New("请选择有效的使用日期")
+		}
+		useDate = &parsed
+	}
+	if (hasHotelPackage || product.StockType == "daily") && useDate == nil {
+		if hasHotelPackage {
+			return nil, errors.New("请选择入住日期")
+		}
+		return nil, errors.New("请选择游玩日期")
+	}
+	input.GuestName, input.ContactPhone = strings.TrimSpace(input.GuestName), strings.TrimSpace(input.ContactPhone)
+	if hasHotelPackage && (input.GuestName == "" || input.ContactPhone == "" || len(input.GuestName) > 50 || len(input.ContactPhone) > 20) {
+		return nil, errors.New("请填写有效的入住人和联系电话")
+	}
 	totalCents := mapping.ChannelSaleCents * int64(input.Quantity)
 	if totalCents <= 0 {
 		return nil, errors.New("票种售价无效")
@@ -362,7 +444,8 @@ func (s MiniappService) CreateXiaohongshuOrder(ctx context.Context, customer *mo
 	}
 	order := model.Order{
 		TenantID: customer.TenantID, Channel: "xiaohongshu", ChannelAccountID: account.ID,
-		ExternalNo: &externalID, Items: []model.OrderItem{{ProductID: product.ID, Quantity: input.Quantity}},
+		ExternalNo: &externalID, ContactName: input.GuestName, ContactPhone: input.ContactPhone,
+		Items: []model.OrderItem{{ProductID: product.ID, Quantity: input.Quantity, UseDate: useDate}},
 	}
 	if err := (&OrderService{}).Create(&order); err != nil {
 		return nil, err
@@ -628,12 +711,14 @@ func (s MiniappService) orderResult(link *model.XiaohongshuOrderLink, order *mod
 		ProductName string
 		ImageURL    string
 		Quantity    int
+		PackageID   uint
 	}
 	var presentation presentationRow
 	if err := model.DB.Table("order_items AS item").
-		Select("item.product_name, item.quantity, COALESCE(xhs_config.image_url, '') AS image_url").
+		Select("item.product_name, item.quantity, COALESCE(xhs_config.image_url, '') AS image_url, COALESCE(hotel_package.id, 0) AS package_id").
 		Joins("LEFT JOIN channel_product_mappings AS mapping ON mapping.channel_account_id = ? AND mapping.product_id = item.product_id AND mapping.deleted_at IS NULL", link.ChannelAccountID).
 		Joins("LEFT JOIN xiaohongshu_product_configs AS xhs_config ON xhs_config.channel_product_mapping_id = mapping.id AND xhs_config.tenant_id = ? AND xhs_config.deleted_at IS NULL", link.TenantID).
+		Joins("LEFT JOIN scenic_hotel_packages AS hotel_package ON hotel_package.product_id = item.product_id AND hotel_package.tenant_id = item.fulfillment_tenant_id AND hotel_package.deleted_at IS NULL").
 		Where("item.order_id = ? AND item.deleted_at IS NULL", order.ID).
 		Order("item.id ASC").Limit(1).Scan(&presentation).Error; err != nil {
 		return nil, err
@@ -641,6 +726,21 @@ func (s MiniappService) orderResult(link *model.XiaohongshuOrderLink, order *mod
 	result.ProductName = presentation.ProductName
 	result.ImageURL = presentation.ImageURL
 	result.Quantity = presentation.Quantity
+	result.ProductKind = "ticket"
+	if presentation.PackageID != 0 {
+		result.ProductKind = "scenic_hotel_package"
+		var stay MiniappHotelStay
+		if err := model.DB.Model(&model.HotelReservation{}).
+			Select("MIN(hotel_name) AS hotel_name, MIN(room_type_name) AS room_type_name, MIN(rate_plan_name) AS rate_plan_name, MIN(check_in_date) AS check_in_date, MAX(check_out_date) AS check_out_date, SUM(rooms) AS rooms").
+			Where("order_id = ? AND sales_tenant_id = ?", order.ID, order.TenantID).
+			Scan(&stay).Error; err != nil {
+			return nil, err
+		}
+		if stay.HotelName != "" {
+			stay.GuestName, stay.ContactPhone = order.ContactName, order.ContactPhone
+			result.HotelStay = &stay
+		}
+	}
 	if includePayToken && link.PayTokenCiphertext != "" {
 		payToken, err := utils.DecryptAES(link.PayTokenCiphertext)
 		if err != nil {

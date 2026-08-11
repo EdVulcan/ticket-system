@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 80
+const CurrentPostgresSchemaVersion = 81
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -36,7 +36,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	models := []interface{}{
 		&SchemaMigration{},
-		&Tenant{}, &TenantCapability{}, &SupplierBusinessType{}, &ScenicArea{}, &PlatformUser{}, &User{}, &Staff{},
+		&Tenant{}, &TenantCapability{}, &SupplierBusinessType{}, &ScenicArea{}, &HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRoomInventory{}, &ScenicHotelPackage{}, &HotelReservation{}, &PlatformUser{}, &User{}, &Staff{},
 		&CheckPoint{}, &Device{}, &TicketRule{}, &RuleGroup{}, &RuleItem{},
 		&Product{}, &ProductRevision{}, &ProductOffer{}, &SellerListing{}, &ProductInventory{},
 		&BundleProduct{}, &BundleVersion{}, &BundleComponent{},
@@ -204,7 +204,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "supplier scenic and hotel business types",
+		Name:      "hotel catalog inventory and fixed scenic hotel packages",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -310,7 +310,7 @@ func backfillPendingRefundReservations(db *gorm.DB) error {
 }
 
 func applyPostgresIndexes(db *gorm.DB) error {
-	for _, index := range []string{"idx_settlement_fulfillment_unique", "idx_settlement_lines_fulfillment_order_id", "idx_team_settlement_statements_group_id", "idx_team_settlement_group_id", "idx_devices_serial_number", "idx_travel_contracts_contract_no"} {
+	for _, index := range []string{"idx_settlement_fulfillment_unique", "idx_settlement_lines_fulfillment_order_id", "idx_team_settlement_statements_group_id", "idx_team_settlement_group_id", "idx_devices_serial_number", "idx_travel_contracts_contract_no", "idx_hotel_property_code", "idx_hotel_room_type_code", "idx_hotel_rate_plan_code", "idx_scenic_hotel_packages_product_id"} {
 		if err := db.Exec("DROP INDEX IF EXISTS " + index).Error; err != nil {
 			return fmt.Errorf("drop obsolete PostgreSQL index: %w", err)
 		}
@@ -338,6 +338,10 @@ func applyPostgresIndexes(db *gorm.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_settlement_statement_fulfillment ON settlement_lines(statement_id, fulfillment_order_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_product_revision_unique ON product_revisions(product_id, version)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_active_serial ON devices(serial_number) WHERE deleted_at IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_hotel_property_active_code ON hotel_properties(tenant_id, code) WHERE deleted_at IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_hotel_room_type_active_code ON hotel_room_types(tenant_id, hotel_id, code) WHERE deleted_at IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_hotel_rate_plan_active_code ON hotel_rate_plans(tenant_id, hotel_id, room_type_id, code) WHERE deleted_at IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_scenic_hotel_package_active_product ON scenic_hotel_packages(product_id) WHERE deleted_at IS NULL`,
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
@@ -368,6 +372,40 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 		WHEN 'product_inventories' THEN
 			IF NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM products p WHERE p.id = NEW.product_id AND p.tenant_id = NEW.tenant_id AND p.scenic_area_id = NEW.scenic_area_id) THEN
 				RAISE EXCEPTION 'inventory product ownership mismatch';
+			END IF;
+		WHEN 'hotel_properties' THEN
+			IF NEW.tenant_id = 0 OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = NEW.tenant_id AND t.deleted_at IS NULL) THEN
+				RAISE EXCEPTION 'hotel property tenant ownership mismatch';
+			END IF;
+		WHEN 'hotel_room_types' THEN
+			IF NEW.hotel_id = 0 OR NOT EXISTS (SELECT 1 FROM hotel_properties h WHERE h.id = NEW.hotel_id AND h.tenant_id = NEW.tenant_id AND h.deleted_at IS NULL) THEN
+				RAISE EXCEPTION 'hotel room type ownership mismatch';
+			END IF;
+		WHEN 'hotel_rate_plans' THEN
+			IF NEW.hotel_id = 0 OR NEW.room_type_id = 0 OR NOT EXISTS (
+				SELECT 1 FROM hotel_room_types r JOIN hotel_properties h ON h.id = r.hotel_id
+				WHERE r.id = NEW.room_type_id AND r.hotel_id = NEW.hotel_id AND r.tenant_id = NEW.tenant_id AND h.tenant_id = NEW.tenant_id
+			) THEN RAISE EXCEPTION 'hotel rate plan ownership mismatch'; END IF;
+		WHEN 'hotel_room_inventories' THEN
+			IF NEW.capacity < 0 OR NEW.reserved < 0 OR NEW.sold < 0 OR NEW.reserved + NEW.sold > NEW.capacity THEN
+				RAISE EXCEPTION 'hotel room inventory quantity is invalid';
+			END IF;
+			IF NEW.hotel_id = 0 OR NEW.room_type_id = 0 OR NOT EXISTS (
+				SELECT 1 FROM hotel_room_types r WHERE r.id = NEW.room_type_id AND r.hotel_id = NEW.hotel_id AND r.tenant_id = NEW.tenant_id
+			) THEN RAISE EXCEPTION 'hotel room inventory ownership mismatch'; END IF;
+		WHEN 'scenic_hotel_packages' THEN
+			IF NOT EXISTS (SELECT 1 FROM products p WHERE p.id = NEW.product_id AND p.tenant_id = NEW.tenant_id AND p.type = 'online')
+			   OR NOT EXISTS (SELECT 1 FROM hotel_rate_plans rp JOIN hotel_room_types rt ON rt.id = rp.room_type_id JOIN hotel_properties h ON h.id = rp.hotel_id
+			      WHERE rp.id = NEW.rate_plan_id AND rp.tenant_id = NEW.tenant_id AND rt.id = NEW.room_type_id AND rt.hotel_id = NEW.hotel_id AND h.id = NEW.hotel_id AND h.tenant_id = NEW.tenant_id) THEN
+				RAISE EXCEPTION 'scenic hotel package ownership mismatch';
+			END IF;
+		WHEN 'hotel_reservations' THEN
+			IF NEW.sales_tenant_id = 0 OR NEW.supplier_tenant_id = 0 OR NEW.sales_tenant_id != NEW.supplier_tenant_id
+			   OR NOT EXISTS (SELECT 1 FROM orders o JOIN order_items i ON i.order_id = o.id JOIN tickets t ON t.order_item_id = i.id
+			      WHERE o.id = NEW.order_id AND o.tenant_id = NEW.sales_tenant_id AND i.id = NEW.order_item_id AND t.id = NEW.ticket_id)
+			   OR NOT EXISTS (SELECT 1 FROM scenic_hotel_packages p WHERE p.id = NEW.package_id AND p.tenant_id = NEW.supplier_tenant_id AND p.hotel_id = NEW.hotel_id AND p.room_type_id = NEW.room_type_id AND p.rate_plan_id = NEW.rate_plan_id)
+			   OR NEW.check_out_date <= NEW.check_in_date OR NEW.rooms <= 0 THEN
+				RAISE EXCEPTION 'hotel reservation ownership mismatch';
 			END IF;
 		WHEN 'order_items' THEN
 			IF NEW.fulfillment_scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM products p WHERE p.id = NEW.fulfillment_product_id AND p.tenant_id = NEW.fulfillment_tenant_id AND p.scenic_area_id = NEW.fulfillment_scenic_area_id) THEN
@@ -459,7 +497,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
+	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_room_inventories", "scenic_hotel_packages", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

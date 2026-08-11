@@ -5,8 +5,18 @@
   <view class="error" xhs:if="{{error}}"><text>{{error}}</text><button bindtap="retry">重新查询</button></view>
   <view class="order-card" xhs:if="{{order}}">
     <image class="order-image" xhs:if="{{order.image_url}}" src="{{order.image_url}}" mode="aspectFill" />
-    <view class="order-image fallback" xhs:else>门票</view>
-    <view class="order-info"><text class="order-name">{{order.product_name}}</text><text class="quantity">数量 {{order.quantity}} 张</text><text class="price">实付 ¥{{order.amountText}}</text></view>
+    <view class="order-image fallback" xhs:else>{{order.isPackage ? '酒景套餐' : '门票'}}</view>
+    <view class="order-info"><text class="order-name">{{order.product_name}}</text><text class="quantity">{{order.isPackage ? '套餐' : '数量'}} {{order.quantity}} {{order.isPackage ? '份' : '张'}}</text><text class="price">实付 ¥{{order.amountText}}</text></view>
+  </view>
+  <view class="tickets" xhs:if="{{order && order.hotel_stay}}">
+    <text class="section-title">住宿预订</text>
+    <view class="stay-row"><text>酒店</text><text>{{order.hotel_stay.hotel_name}}</text></view>
+    <view class="stay-row"><text>房型</text><text>{{order.hotel_stay.room_type_name}}</text></view>
+    <view class="stay-row"><text>价格方案</text><text>{{order.hotel_stay.rate_plan_name}}</text></view>
+    <view class="stay-row"><text>入住</text><text>{{order.hotel_stay.checkInText}} 至 {{order.hotel_stay.checkOutText}}</text></view>
+    <view class="stay-row"><text>房间</text><text>{{order.hotel_stay.rooms}} 间</text></view>
+    <view class="stay-row"><text>入住人</text><text>{{order.hotel_stay.guest_name}}</text></view>
+    <view class="stay-row"><text>联系电话</text><text>{{order.hotel_stay.contactPhoneText}}</text></view>
   </view>
   <view class="tickets" xhs:if="{{ticketCodes.length}}">
     <text class="section-title">入园票码</text><text class="ticket-hint">到达景区后请调高屏幕亮度，向工作人员出示</text>

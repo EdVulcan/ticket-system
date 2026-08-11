@@ -30,7 +30,13 @@ Page({
       return;
     }
     app.request(`/orders/${encodeURIComponent(this.orderNo)}`).then(order => {
-      const view = this.statusView(order.status);
+      order.isPackage = order.product_kind === 'scenic_hotel_package';
+      if (order.hotel_stay) {
+        order.hotel_stay.checkInText = this.formatDay(order.hotel_stay.check_in_date);
+        order.hotel_stay.checkOutText = this.formatDay(order.hotel_stay.check_out_date);
+        order.hotel_stay.contactPhoneText = this.maskPhone(order.hotel_stay.contact_phone);
+      }
+      const view = this.statusView(order.status, order.product_kind);
       order.amountText = (Number(order.amount_cents || 0) / 100).toFixed(2);
       this.setData({
         order,
@@ -67,12 +73,23 @@ Page({
   goOrders() { xhs.redirectTo({ url: '/pages/orders/index' }); },
   goHome() { xhs.reLaunch({ url: '/pages/index/index' }); },
 
-  statusView(status) {
-    if (status === 'paid') return { label: '已支付', title: '支付成功', detail: '门票已经出票，请妥善保管票码' };
+  statusView(status, productKind) {
+    const isPackage = productKind === 'scenic_hotel_package';
+    if (status === 'paid') return { label: '已支付', title: '支付成功', detail: isPackage ? '门票与住宿已经确认，请核对下方履约信息' : '门票已经出票，请妥善保管票码' };
     if (status === 'completed') return { label: '已使用', title: '门票已使用', detail: '本次入园记录已经完成' };
     if (status === 'partial_refunded') return { label: '部分退款', title: '订单部分退款', detail: '剩余有效票码仍可按规则使用' };
     if (status === 'cancelled' || status === 'failed') return { label: '已关闭', title: '订单未完成', detail: '本次订单已关闭，未生成有效门票' };
     if (status === 'refunded') return { label: '已退款', title: '退款完成', detail: '款项将按小红书规则原路退回' };
     return { label: '确认中', title: '正在确认支付结果', detail: '系统正在向小红书核实，请不要重复支付' };
+  },
+
+  formatDay(value) {
+    if (!value) return '';
+    return String(value).slice(0, 10);
+  },
+
+  maskPhone(value) {
+    const phone = String(value || '');
+    return phone.length === 11 ? `${phone.slice(0, 3)}****${phone.slice(7)}` : phone;
   }
 });

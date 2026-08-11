@@ -462,6 +462,13 @@ func (s *ProductService) Delete(id, tenantID uint) error {
 		} else if err := requireActiveScenicSupplier(tx, tenantID); err != nil {
 			return err
 		}
+		var packageCount int64
+		if err := tx.Model(&model.ScenicHotelPackage{}).Where("tenant_id = ? AND product_id = ?", tenantID, product.ID).Count(&packageCount).Error; err != nil {
+			return err
+		}
+		if packageCount > 0 {
+			return errors.New("product is used by a scenic hotel package; remove the package first")
+		}
 		result := tx.Delete(&product)
 		if result.Error != nil {
 			return result.Error

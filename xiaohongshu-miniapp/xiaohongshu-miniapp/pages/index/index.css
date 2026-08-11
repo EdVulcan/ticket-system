@@ -31,6 +31,9 @@
 .scenic-row { display: inline-flex; gap: 12rpx; padding: 0 24rpx 18rpx; }
 .scenic-chip { padding: 12rpx 20rpx; border: 1rpx solid #e0e3ea; border-radius: 8rpx; background: #fff; color: #626573; font-size: 22rpx; }
 .scenic-chip.active { border-color: #3266f6; background: #edf2ff; color: #2858df; font-weight: 700; }
+.kind-row { display: flex; gap: 10rpx; margin: 15rpx 0 13rpx; }
+.kind-chip { padding: 12rpx 22rpx; border: 1rpx solid #e0e3ea; border-radius: 8rpx; background: #fff; color: #626573; font-size: 22rpx; }
+.kind-chip.active { border-color: #171923; background: #171923; color: #fff; font-weight: 700; }
 .sort-row { display: flex; align-items: center; justify-content: space-between; padding: 0 26rpx 18rpx; }
 .sort-label { color: #8a8d99; font-size: 20rpx; }
 .sort-options { display: flex; gap: 25rpx; }
@@ -41,6 +44,7 @@
 .product { display: flex; min-height: 202rpx; overflow: hidden; border: 1rpx solid #e5e8ef; border-radius: 10rpx; background: #fff; box-shadow: 0 7rpx 24rpx rgba(28,34,55,.05); }
 .product-image { display: flex; width: 226rpx; min-height: 202rpx; flex-shrink: 0; background: #dff7ec; }
 .product-image.fallback { align-items: flex-start; flex-direction: column; justify-content: flex-end; padding: 22rpx; box-sizing: border-box; background: #3266f6; color: #fff; font-size: 29rpx; font-weight: 800; }
+.product-image.fallback.package { background: #ff6675; }
 .fallback-small { margin-bottom: 5rpx; color: rgba(255,255,255,.72); font-size: 18rpx; font-weight: 650; }
 .product-info { display: flex; min-width: 0; flex: 1; flex-direction: column; padding: 19rpx 20rpx 18rpx; }
 .product-name { display: -webkit-box; overflow: hidden; font-size: 27rpx; font-weight: 780; line-height: 1.38; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }

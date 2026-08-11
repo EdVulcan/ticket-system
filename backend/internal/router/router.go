@@ -186,6 +186,38 @@ func InitRouter(r *gin.Engine) {
 		scenicAreaGroup.DELETE("/:id", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), scenicAreaController.Delete)
 	}
 
+	// Hotel catalog and room inventory remain independent from scenic tickets.
+	hotelController := &api.HotelController{Service: service.HotelService{}}
+	hotelGroup := protected.Group("/hotels")
+	hotelGroup.Use(middleware.RequireAnyTenantCapability("supplier"))
+	{
+		hotelGroup.GET("", middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogRead), hotelController.ListProperties)
+		hotelGroup.POST("", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.CreateProperty)
+		hotelGroup.PUT("/:hotelID", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.UpdateProperty)
+		hotelGroup.DELETE("/:hotelID", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.DeleteProperty)
+		hotelGroup.GET("/:hotelID/room-types", middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogRead), hotelController.ListRoomTypes)
+		hotelGroup.POST("/:hotelID/room-types", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.CreateRoomType)
+		hotelGroup.PUT("/:hotelID/room-types/:roomTypeID", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.UpdateRoomType)
+		hotelGroup.DELETE("/:hotelID/room-types/:roomTypeID", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.DeleteRoomType)
+		hotelGroup.GET("/:hotelID/room-types/:roomTypeID/rate-plans", middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogRead), hotelController.ListRatePlans)
+		hotelGroup.POST("/:hotelID/room-types/:roomTypeID/rate-plans", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.CreateRatePlan)
+		hotelGroup.PUT("/:hotelID/room-types/:roomTypeID/rate-plans/:ratePlanID", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.UpdateRatePlan)
+		hotelGroup.DELETE("/:hotelID/room-types/:roomTypeID/rate-plans/:ratePlanID", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.DeleteRatePlan)
+		hotelGroup.GET("/:hotelID/room-types/:roomTypeID/inventory", middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogRead), hotelController.ListInventory)
+		hotelGroup.PUT("/:hotelID/room-types/:roomTypeID/inventory", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.SetInventory)
+	}
+
+	packageController := &api.ScenicHotelPackageController{Service: service.ScenicHotelPackageService{}}
+	packageGroup := protected.Group("/scenic-hotel-packages")
+	packageGroup.Use(middleware.RequireAnyTenantCapability("supplier"), middleware.RequireTenantPermission(authz.PermissionCatalogRead))
+	{
+		packageGroup.GET("", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), packageController.List)
+		packageGroup.GET("/reservations", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), packageController.ListReservations)
+		packageGroup.POST("", middleware.RequireAnySupplierBusinessType("scenic"), middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), packageController.Create)
+		packageGroup.PUT("/:packageID", middleware.RequireAnySupplierBusinessType("scenic"), middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), packageController.Update)
+		packageGroup.DELETE("/:packageID", middleware.RequireAnySupplierBusinessType("scenic"), middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), packageController.Delete)
+	}
+
 	// CheckPoint Routes
 	cpController := &api.CheckPointController{}
 	cpGroup := protected.Group("/checkpoints")

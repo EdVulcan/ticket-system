@@ -25,6 +25,7 @@ Page({
     return app.request(`/orders?page=${page}&page_size=10`).then(result => {
       const incoming = (result.items || []).map(order => ({
         ...order,
+        isPackage: order.product_kind === 'scenic_hotel_package',
         amountText: this.formatPrice(order.amount_cents),
         statusText: this.statusText(order.status),
         statusClass: this.statusClass(order.status),

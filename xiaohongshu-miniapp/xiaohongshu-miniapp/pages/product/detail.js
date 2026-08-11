@@ -15,7 +15,10 @@ Page({
       if (!product) throw new Error('票种当前不可购买');
       product.priceText = this.formatPrice(product.price_cents);
       product.validityText = this.formatValidity(product);
-      this.setData({ product, storeName: catalog.store_name || '景区购票', loading: false });
+      product.isPackage = product.product_kind === 'scenic_hotel_package';
+      product.kindLabel = product.isPackage ? '酒景套餐' : '景区门票';
+      product.stayText = product.isPackage ? `${product.nights}晚 · 每份${product.rooms_per_package}间房` : '';
+      this.setData({ product, storeName: catalog.store_name || '官方商城', loading: false });
     }).catch(error => this.setData({ loading: false, error: error.message || '票种加载失败' }));
   },
 

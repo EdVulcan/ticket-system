@@ -28,6 +28,8 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&SettlementStatement{}, &AfterSaleRequest{}, &ChannelReservation{}, &FinancialDocument{},
 		&TeamSettlementStatement{}, &ChannelReconciliation{}, &OrderVisitor{}, &BundleProduct{},
 		&CtripOrderLink{}, &CtripOrderItem{}, &XiaohongshuWebhookEvent{}, &SupplierBusinessType{},
+		&HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRoomInventory{},
+		&ScenicHotelPackage{}, &HotelReservation{},
 	} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("table for %T is missing", table)

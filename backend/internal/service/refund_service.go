@@ -1164,6 +1164,9 @@ func applyRefundBusinessFactsTx(tx *gorm.DB, order *model.Order, refund *model.R
 			return err
 		}
 	}
+	if err := refundSelectedHotelReservationsTx(tx, selected); err != nil {
+		return err
+	}
 	if err := releaseTeamCreditAfterRefundTx(tx, order); err != nil {
 		return err
 	}

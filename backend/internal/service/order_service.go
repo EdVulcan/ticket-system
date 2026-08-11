@@ -136,6 +136,7 @@ func (s *OrderService) Create(req *model.Order) error {
 		expiresAt := time.Now().Add(DefaultOrderReservationTTL)
 		req.ExpiresAt = &expiresAt
 		policyContext := newSalePolicyContext()
+		hotelPackageFacts := make(map[int]*scenicHotelPackageFacts)
 
 		for i := range req.Items {
 			item := &req.Items[i]
@@ -151,6 +152,13 @@ func (s *OrderService) Create(req *model.Order) error {
 				Where("id = ? AND tenant_id = ? AND status = ?", item.ProductID, req.TenantID, "online").
 				First(&listing).Error; err != nil {
 				return fmt.Errorf("product %d is unavailable", item.ProductID)
+			}
+			packageFacts, err := loadSellableScenicHotelPackageTx(tx, req.TenantID, listing.ID, item.UseDate)
+			if err != nil {
+				return fmt.Errorf("product %s: %w", listing.Name, err)
+			}
+			if packageFacts != nil && (strings.TrimSpace(req.ContactName) == "" || strings.TrimSpace(req.ContactPhone) == "") {
+				return fmt.Errorf("product %s: hotel guest name and contact phone are required", listing.Name)
 			}
 			listingForResolution := listing
 			var channelCostCents int64
@@ -248,6 +256,12 @@ func (s *OrderService) Create(req *model.Order) error {
 					if err := reserveStock(tx, fulfillment, item.UseDate, item.StockSlot, item.Quantity); err != nil {
 						return err
 					}
+					if packageFacts != nil {
+						if err := reserveHotelPackageInventoryTx(tx, packageFacts, item.Quantity, *item.UseDate); err != nil {
+							return err
+						}
+						hotelPackageFacts[i] = packageFacts
+					}
 				}
 			} else {
 				if len(req.Items) != 1 || channelReservation.ProductID != item.ProductID || channelReservation.Quantity != item.Quantity || !sameOptionalDate(channelReservation.UseDate, item.UseDate) || channelReservation.StockSlot != item.StockSlot {
@@ -275,6 +289,11 @@ func (s *OrderService) Create(req *model.Order) error {
 
 		if err := tx.Create(req).Error; err != nil {
 			return err
+		}
+		for itemIndex, facts := range hotelPackageFacts {
+			if err := createHotelPackageReservationsTx(tx, req, &req.Items[itemIndex], facts); err != nil {
+				return err
+			}
 		}
 		if channelReservation != nil {
 			if err := tx.Model(channelReservation).Updates(map[string]interface{}{"status": "converted", "order_no": req.OrderNo}).Error; err != nil {
@@ -1270,6 +1289,9 @@ func cancelOrderTxMode(tx *gorm.DB, order *model.Order, allowPaidChannel bool) e
 			return err
 		}
 	}
+	if err := transitionOrderHotelReservationsTx(tx, order.ID, "reserved", "cancelled"); err != nil {
+		return err
+	}
 	return updateFulfillmentOrdersTx(tx, order.ID, "cancelled")
 }
 
@@ -1331,5 +1353,8 @@ func markOrderAsPaidTx(tx *gorm.DB, order *model.Order) error {
 		return err
 	}
 	order.Status = "paid"
+	if err := transitionOrderHotelReservationsTx(tx, order.ID, "reserved", "confirmed"); err != nil {
+		return err
+	}
 	return updateFulfillmentOrdersTx(tx, order.ID, "paid")
 }

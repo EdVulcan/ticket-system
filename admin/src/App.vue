@@ -191,6 +191,7 @@ const navGroups = computed<NavGroup[]>(() => {
 
   const scenicSupplier = hasCapability('supplier') && hasSupplierBusinessType('scenic')
   const scenicHistorySupplier = hasCapability('supplier') && hasConfiguredSupplierBusinessType('scenic')
+  const hotelHistorySupplier = hasCapability('supplier') && hasConfiguredSupplierBusinessType('hotel')
   const currentHistoryTenant = scenicHistorySupplier || hasAnyCapability('distributor', 'travel_agency')
   const sales: NavItem[] = []
   if (scenicHistorySupplier && can('catalog.read')) {
@@ -199,6 +200,9 @@ const navGroups = computed<NavGroup[]>(() => {
   }
   if (currentHistoryTenant && can('orders.read')) sales.push({ path: '/online-order', label: '线上订单', icon: List })
   if (scenicHistorySupplier && can('onsite.read')) sales.push({ path: '/offline-order', label: '线下/窗口订单', icon: Tickets })
+
+  const accommodation: NavItem[] = []
+  if (hotelHistorySupplier && can('catalog.read')) accommodation.push({ path: '/hotel', label: '酒店经营', icon: OfficeBuilding })
 
   const distribution: NavItem[] = []
   if ((scenicHistorySupplier || hasCapability('distributor')) && can('distribution.read')) distribution.push({ path: '/distribution', label: '供销合作', icon: Connection })
@@ -223,7 +227,7 @@ const navGroups = computed<NavGroup[]>(() => {
   if ((scenicSupplier || hasCapability('distributor')) && can('payment_config.manage')) settings.push({ path: '/payment-config', label: '支付参数配置', icon: CreditCard })
   settings.push({ path: '/settings', label: '系统设置', icon: Setting })
 
-  return [overview, { label: '销售中心', items: sales }, { label: '合作与渠道', items: distribution }, { label: '运营管理', items: operations }, { label: '数据与财务', items: data }, { label: '组织与设置', items: settings }]
+  return [overview, { label: '销售中心', items: sales }, { label: '住宿经营', items: accommodation }, { label: '合作与渠道', items: distribution }, { label: '运营管理', items: operations }, { label: '数据与财务', items: data }, { label: '组织与设置', items: settings }]
     .filter(group => group.items.length)
 })
 

@@ -44,7 +44,47 @@ test('hotel-only supplier cannot enter scenic ticketing workspaces', async ({ pa
   for (const label of ['线上门票', '窗口门票', '线下/窗口订单', '旅行社团队', '运营工作台', '政策知识库', '终端设备', '检票点位', '员工管理']) {
     await expect(page.getByRole('menuitem', { name: label })).toHaveCount(0)
   }
+  await expect(page.getByRole('menuitem', { name: '酒店经营' })).toBeVisible()
   await expect(page.getByRole('menuitem', { name: '系统设置' })).toBeVisible()
+
+  await page.goto('/hotel')
+  await expect(page.getByRole('heading', { name: '酒店经营' })).toBeVisible()
+})
+
+test('scenic-only supplier cannot see or enter hotel management', async ({ page }) => {
+  await openAs(page, 'supplier', '/hotel', undefined, ['scenic'])
+
+  await expect(page).toHaveURL('http://127.0.0.1:4173/')
+  await expect(page.getByRole('menuitem', { name: '酒店经营' })).toHaveCount(0)
+  await expect(page.getByRole('menuitem', { name: '线上门票' })).toBeVisible()
+})
+
+test('combined scenic and hotel supplier receives both independent workspaces', async ({ page }) => {
+  await openAs(page, 'supplier', '/hotel', undefined, ['scenic', 'hotel'])
+
+  await page.route('**/api/v1/hotels', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: [{ id: 21, code: 'HOTEL01', name: '测试酒店', status: 'active' }] }),
+  }))
+  await page.reload()
+
+  await expect(page.getByRole('menuitem', { name: '酒店经营' })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '线上门票' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '酒店经营' })).toBeVisible()
+  await expect(page.getByRole('tab', { name: '酒景套餐' })).toBeVisible()
+  await page.getByRole('tab', { name: '酒景套餐' }).click()
+  await expect(page.getByText('套餐配置')).toBeVisible()
+  await expect(page.getByText('住宿预订')).toBeVisible()
+})
+
+test('suspended hotel business keeps catalog read access but hides write actions', async ({ page }) => {
+  await openAs(page, 'supplier', '/hotel', undefined, [{ business_type: 'hotel', status: 'suspended' }])
+
+  await expect(page.getByRole('menuitem', { name: '酒店经营' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '酒店经营' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '新增酒店' })).toHaveCount(0)
+  await expect(page.getByText('酒店住宿业态已暂停，当前仅可查看历史配置。')).toBeVisible()
 })
 
 test('hotel supplier combined with distributor never receives scenic supplier actions', async ({ page }) => {

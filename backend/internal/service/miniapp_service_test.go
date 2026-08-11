@@ -244,6 +244,77 @@ func TestXiaohongshuSandboxOrderLimitIsServerEnforced(t *testing.T) {
 	}
 }
 
+func TestXiaohongshuMiniappScenicHotelPackageRequiresStayDateAndCreatesReservation(t *testing.T) {
+	resetBusinessData(t)
+	fixture := seedScenicHotelPackage(t, 3)
+	account := model.ChannelAccount{Code: "xiaohongshu-package", Status: "active"}
+	if err := (&ChannelService{}).CreateXiaohongshu(fixture.tenantID, &account, "miniapp-package", "app-secret"); err != nil {
+		t.Fatal(err)
+	}
+	mapping := model.ChannelProductMapping{ChannelAccountID: account.ID, ProductID: fixture.productID, ExternalCode: "XHS-PACKAGE-1", DisplayName: "门票住宿套餐", ChannelSaleCents: 1}
+	if err := (&ChannelService{}).AddMapping(fixture.tenantID, &mapping); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Create(&model.XiaohongshuProductConfig{TenantID: fixture.tenantID, ChannelAccountID: account.ID, ChannelProductMappingID: mapping.ID, ExternalSKUID: "XHS-PACKAGE-SKU-1", CategoryID: "package", ImageURL: "https://example.com/package.png", Description: "门票与住宿", ProductPath: "/pages/product/detail", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 1, SyncStatus: "synced"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	openID, _ := utils.EncryptAES("OPEN-PACKAGE")
+	sessionKey, _ := utils.EncryptAES("SESSION-PACKAGE")
+	customer := model.MiniappCustomer{TenantID: fixture.tenantID, ChannelAccountID: account.ID, OpenIDHash: hashMiniappValue("OPEN-PACKAGE"), OpenIDCiphertext: openID, SessionKeyCiphertext: sessionKey, SessionTokenHash: hashMiniappValue("TOKEN-PACKAGE"), SessionExpiresAt: time.Now().Add(time.Hour), Status: "active", LastLoginAt: time.Now()}
+	if err := model.DB.Create(&customer).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	miniapp := NewMiniappService()
+	catalog, err := miniapp.ListCatalog(&customer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Products) != 1 || catalog.Products[0].ProductKind != "scenic_hotel_package" || !catalog.Products[0].RequiresUseDate || catalog.Products[0].HotelName != fixture.hotel.Name || catalog.Products[0].Nights != 2 {
+		t.Fatalf("package catalog=%+v", catalog)
+	}
+	if _, err := miniapp.CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 1, ClientRequestID: "package-without-date"}); err == nil || !strings.Contains(err.Error(), "入住日期") {
+		t.Fatalf("missing stay date error=%v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/rmp/token":
+			_, _ = w.Write([]byte(`{"data":{"access_token":"ACCESS-PACKAGE","expire_in":7200},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/mp/deal/order/upsert":
+			_, _ = w.Write([]byte(`{"data":{"out_order_id":"XHS-PACKAGE","order_id":"XHS-PACKAGE-ORDER","final_price":1,"pay_token":"PACKAGE-PAY-TOKEN","expired_time":1786349700,"open_pay_type":"life_gpay"},"success":true,"msg":"success","code":0}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	miniapp.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
+	}
+	created, err := miniapp.CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 1, ClientRequestID: "package-with-date", UseDate: fixture.checkIn.Format("2006-01-02"), GuestName: "测试游客", ContactPhone: "13800138000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.OrderNo == "" || created.PlatformOrderID != "XHS-PACKAGE-ORDER" {
+		t.Fatalf("created=%+v", created)
+	}
+	var reservation model.HotelReservation
+	if err := model.DB.Where("sales_tenant_id = ? AND reservation_no <> ''", fixture.tenantID).First(&reservation).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reservation.Status != "reserved" || reservation.CheckInDate.Format("2006-01-02") != fixture.checkIn.Format("2006-01-02") || reservation.CheckOutDate.Sub(reservation.CheckInDate) != 48*time.Hour {
+		t.Fatalf("reservation=%+v", reservation)
+	}
+	detail, err := miniapp.loadOrderResult(&customer, "package-with-date")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.ProductKind != "scenic_hotel_package" || detail.HotelStay == nil || detail.HotelStay.HotelName != fixture.hotel.Name || detail.HotelStay.Rooms != 1 || detail.HotelStay.GuestName != "测试游客" || detail.HotelStay.ContactPhone != "13800138000" {
+		t.Fatalf("detail=%+v", detail)
+	}
+}
+
 func miniappLoginServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
