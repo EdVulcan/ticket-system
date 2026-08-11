@@ -16,7 +16,7 @@ import (
 
 func TestTeamOperatorAdmissionUsesTeamDeviceOwnershipInsteadOfStaffScope(t *testing.T) {
 	db := testdb.Open(t)
-	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.TourGroup{}, &model.StaffResourceScope{}); err != nil {
+	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.SupplierBusinessType{}, &model.TourGroup{}, &model.StaffResourceScope{}); err != nil {
 		t.Fatal(err)
 	}
 	model.DB = db
@@ -33,6 +33,9 @@ func TestTeamOperatorAdmissionUsesTeamDeviceOwnershipInsteadOfStaffScope(t *test
 		t.Fatal(err)
 	}
 	if err := db.Create(&model.TenantCapability{TenantID: tenant.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.SupplierBusinessType{TenantID: tenant.ID, BusinessType: "scenic", Status: "active"}).Error; err != nil {
 		t.Fatal(err)
 	}
 

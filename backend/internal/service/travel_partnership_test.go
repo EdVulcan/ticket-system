@@ -20,11 +20,17 @@ func TestPureTravelAgencyCanEstablishSupplierPartnership(t *testing.T) {
 				return err
 			}
 		}
-		return tx.Create(&[]model.TenantCapability{
+		if err := tx.Create(&[]model.TenantCapability{
 			{TenantID: supplier.ID, Capability: "supplier", Status: "active"},
 			{TenantID: otherSupplier.ID, Capability: "supplier", Status: "active"},
 			{TenantID: travelAgency.ID, Capability: "travel_agency", Status: "active"},
-		}).Error
+		}).Error; err != nil {
+			return err
+		}
+		if err := seedActiveScenicBusinessTypeTx(tx, supplier.ID); err != nil {
+			return err
+		}
+		return seedActiveScenicBusinessTypeTx(tx, otherSupplier.ID)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -82,11 +88,14 @@ func TestTravelPartnershipDoesNotAuthorizeDistribution(t *testing.T) {
 		if err := tx.Create(&partner).Error; err != nil {
 			return err
 		}
-		return tx.Create(&[]model.TenantCapability{
+		if err := tx.Create(&[]model.TenantCapability{
 			{TenantID: supplier.ID, Capability: "supplier", Status: "active"},
 			{TenantID: partner.ID, Capability: "travel_agency", Status: "active"},
 			{TenantID: partner.ID, Capability: "distributor", Status: "active"},
-		}).Error
+		}).Error; err != nil {
+			return err
+		}
+		return seedActiveScenicBusinessTypeTx(tx, supplier.ID)
 	}); err != nil {
 		t.Fatal(err)
 	}

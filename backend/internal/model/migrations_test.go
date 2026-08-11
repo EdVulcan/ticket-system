@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"ticket-backend/internal/testdb"
@@ -26,7 +27,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&ProductRevision{}, &LedgerEntry{}, &ChannelAccount{}, &TourGroup{}, &POSShift{},
 		&SettlementStatement{}, &AfterSaleRequest{}, &ChannelReservation{}, &FinancialDocument{},
 		&TeamSettlementStatement{}, &ChannelReconciliation{}, &OrderVisitor{}, &BundleProduct{},
-		&CtripOrderLink{}, &CtripOrderItem{}, &XiaohongshuWebhookEvent{},
+		&CtripOrderLink{}, &CtripOrderItem{}, &XiaohongshuWebhookEvent{}, &SupplierBusinessType{},
 	} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("table for %T is missing", table)
@@ -56,6 +57,131 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	}
 	if !strings.Contains(channelRequestIndex, "channel_account_id") || !strings.Contains(channelRequestIndex, "endpoint") || !strings.Contains(channelRequestIndex, "request_id") {
 		t.Fatalf("channel request idempotency index has wrong scope: %s", channelRequestIndex)
+	}
+	defaultStatusTenant := Tenant{Name: "Default Status Tenant", SystemCode: "SUPPLIER-BUSINESS-DEFAULT", Status: "active"}
+	if err := db.Create(&defaultStatusTenant).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`
+		INSERT INTO supplier_business_types (tenant_id, business_type, created_at, updated_at)
+		VALUES (?, ?, NOW(), NOW())
+	`, defaultStatusTenant.ID, "hotel").Error; err != nil {
+		t.Fatal(err)
+	}
+	var defaultStatus string
+	if err := db.Raw(`
+		SELECT status FROM supplier_business_types
+		WHERE tenant_id = ? AND business_type = ?
+	`, defaultStatusTenant.ID, "hotel").Scan(&defaultStatus).Error; err != nil {
+		t.Fatal(err)
+	}
+	if defaultStatus != "suspended" {
+		t.Fatalf("database default supplier business status=%q, want suspended", defaultStatus)
+	}
+	if err := db.Exec(`
+		INSERT INTO supplier_business_types (tenant_id, business_type, status, created_at, updated_at)
+		VALUES (?, 'restaurant', 'active', NOW(), NOW())
+	`, defaultStatusTenant.ID).Error; err == nil {
+		t.Fatal("database accepted unsupported supplier business type")
+	}
+	if err := db.Exec(`
+		INSERT INTO supplier_business_types (tenant_id, business_type, status, created_at, updated_at)
+		VALUES (?, 'scenic', 'pending', NOW(), NOW())
+	`, defaultStatusTenant.ID).Error; err == nil {
+		t.Fatal("database accepted unsupported supplier business status")
+	}
+}
+
+func TestPostgresMigrationBackfillsOnlyActiveUnexpiredSuppliersAsScenic(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	future := now.Add(time.Hour)
+	past := now.Add(-time.Hour)
+	type supplierFixture struct {
+		name       string
+		status     string
+		expiresAt  *time.Time
+		wantScenic bool
+	}
+	fixtures := []supplierFixture{
+		{name: "active-no-expiry", status: "active", wantScenic: true},
+		{name: "active-future-expiry", status: "active", expiresAt: &future, wantScenic: true},
+		{name: "active-expired", status: "active", expiresAt: &past},
+		{name: "pending", status: "pending"},
+		{name: "rejected", status: "rejected"},
+		{name: "suspended", status: "suspended"},
+	}
+	tenantIDs := make(map[string]uint, len(fixtures))
+	for index, fixture := range fixtures {
+		tenant := Tenant{
+			Name: fixture.name, SystemCode: fmt.Sprintf("SCHEMA79-SUPPLIER-%d", index), Status: "active",
+		}
+		if err := db.Create(&tenant).Error; err != nil {
+			t.Fatal(err)
+		}
+		tenantIDs[fixture.name] = tenant.ID
+		if err := db.Create(&TenantCapability{
+			TenantID: tenant.ID, Capability: "supplier", Status: fixture.status, ExpiresAt: fixture.expiresAt,
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Schema 80 only adds supplier_business_types. Removing that table from a
+	// fully migrated schema produces the exact schema 79 boundary for this change.
+	if err := db.Migrator().DropTable(&SupplierBusinessType{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("version = ?", CurrentPostgresSchemaVersion).Delete(&SchemaMigration{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&SchemaMigration{Version: 79, Name: "xiaohongshu product and guarantee payment facts", AppliedAt: time.Now()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if db.Migrator().HasTable(&SupplierBusinessType{}) {
+		t.Fatal("schema 79 fixture unexpectedly contains supplier_business_types")
+	}
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("repeat schema 80 migration: %v", err)
+	}
+	for _, fixture := range fixtures {
+		var count int64
+		if err := db.Model(&SupplierBusinessType{}).
+			Where("tenant_id = ? AND business_type = ? AND status = ?", tenantIDs[fixture.name], "scenic", "active").
+			Count(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		if got := count == 1; got != fixture.wantScenic {
+			t.Fatalf("fixture %s scenic backfill=%v, want %v", fixture.name, got, fixture.wantScenic)
+		}
+	}
+}
+
+func TestPostgresMigrationRejectsNewerSchemaVersion(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	newerVersion := CurrentPostgresSchemaVersion + 1
+	if err := db.Create(&SchemaMigration{
+		Version: newerVersion, Name: "future application schema", AppliedAt: time.Now(),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	err := runMigrations(db)
+	if err == nil {
+		t.Fatalf("application accepted newer database schema %d", newerVersion)
+	}
+	for _, expected := range []string{fmt.Sprint(newerVersion), fmt.Sprint(CurrentPostgresSchemaVersion), "refusing to start"} {
+		if !strings.Contains(err.Error(), expected) {
+			t.Fatalf("newer-schema error %q does not contain %q", err, expected)
+		}
 	}
 }
 

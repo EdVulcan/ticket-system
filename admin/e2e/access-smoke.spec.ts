@@ -9,6 +9,7 @@ const tenantUser = {
   tenant_name: '示例景区',
   system_code: 'SCENIC001',
   capabilities: [{ capability: 'supplier', status: 'active' }],
+  supplier_business_types: [{ business_type: 'scenic', status: 'active' }],
 }
 
 async function mockJSON(page: Page, pattern: string, body: unknown) {
@@ -138,13 +139,14 @@ test('商户业务能力排列清晰且强制下线有明确确认', async ({ pa
         { capability: 'distributor', status: 'disabled' },
         { capability: 'travel_agency', status: 'disabled' },
       ],
+      supplier_business_types: [{ business_type: 'scenic', status: 'active' }],
     }],
     total: 1,
   })
 
   await page.goto('/tenant')
   const capabilityButtons = [
-    page.getByRole('button', { name: '景区供应商 · 已启用' }),
+    page.getByRole('button', { name: '供应商 · 已启用' }),
     page.getByRole('button', { name: '分销商 · 未启用' }),
     page.getByRole('button', { name: '旅行社 · 未启用' }),
   ]
@@ -160,6 +162,53 @@ test('商户业务能力排列清晰且强制下线有明确确认', async ({ pa
   await page.getByRole('button', { name: '强制下线' }).click()
   await expect(page.getByText('用户需要重新登录。此操作不会删除账号或业务数据。', { exact: false })).toBeVisible()
   await page.getByRole('button', { name: '取消' }).click()
+})
+
+test('平台切换景区业态前说明影响并要求填写原因', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'platform-token')
+    localStorage.setItem('user', JSON.stringify({ id: 9, username: 'platform_admin', role: 'platform_admin', scope: 'platform' }))
+  })
+  await mockJSON(page, '**/api/v1/tenants?*', {
+    data: [{
+      id: 1, name: '示例景区', system_code: 'SCENIC001', status: 'active', qualification_status: 'approved',
+      capabilities: [{ capability: 'supplier', status: 'active' }],
+      supplier_business_types: [{ business_type: 'scenic', status: 'active' }],
+    }],
+    total: 1,
+  })
+  let submitted: Record<string, unknown> | undefined
+  await page.route('**/api/v1/tenants/1/supplier-business-types/scenic', async route => {
+    submitted = route.request().postDataJSON()
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' })
+  })
+
+  await page.goto('/tenant')
+  await page.getByRole('button', { name: '景区票务 · 已启用' }).click()
+  await expect(page.getByText('历史订单、退款、售后、财务和报表仍可查看和处理。', { exact: false })).toBeVisible()
+  await page.getByPlaceholder('请输入暂停原因').fill('合同约定暂停新交易')
+  await page.getByRole('button', { name: '确认暂停' }).click()
+
+  await expect.poll(() => submitted).toEqual({ status: 'suspended', reason: '合同约定暂停新交易' })
+})
+
+test('平台将已过期能力显示为过期而不是启用', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'platform-token')
+    localStorage.setItem('user', JSON.stringify({ id: 9, username: 'platform_admin', role: 'platform_admin', scope: 'platform' }))
+  })
+  await mockJSON(page, '**/api/v1/tenants?*', {
+    data: [{
+      id: 1, name: '过期景区', system_code: 'OLD001', status: 'active', qualification_status: 'approved',
+      capabilities: [{ capability: 'supplier', status: 'active', expires_at: '2020-01-01T00:00:00Z' }],
+      supplier_business_types: [{ business_type: 'scenic', status: 'active' }],
+    }],
+    total: 1,
+  })
+
+  await page.goto('/tenant')
+  await expect(page.getByRole('button', { name: '供应商 · 已过期' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '景区票务 · 已启用' })).toBeDisabled()
 })
 
 test('平台管理员创建租户时不提交空的生命周期日期', async ({ page }) => {

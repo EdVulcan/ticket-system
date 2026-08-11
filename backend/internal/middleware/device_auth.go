@@ -58,6 +58,11 @@ func DeviceAuth() gin.HandlerFunc {
 			ctx.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "景区供应能力不可用"})
 			return
 		}
+		var scenicBusiness model.SupplierBusinessType
+		if err := model.DB.Where("tenant_id = ? AND business_type = ? AND status = ?", tenant.ID, "scenic", "active").First(&scenicBusiness).Error; err != nil {
+			ctx.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "景区票务业态未启用"})
+			return
+		}
 		var device model.Device
 		if err := model.DB.Where("tenant_id = ? AND serial_number = ? AND status != ?", tenant.ID, serial, "disabled").First(&device).Error; err != nil {
 			ctx.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "设备未登记"})

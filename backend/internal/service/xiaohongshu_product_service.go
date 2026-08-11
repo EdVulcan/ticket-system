@@ -120,6 +120,9 @@ func (s XiaohongshuProductService) Sync(ctx context.Context, tenantID, accountID
 	if err := loadXiaohongshuMappingTx(model.DB, tenantID, accountID, mappingID, &mapping, &product); err != nil {
 		return err
 	}
+	if err := requireActiveScenicSupplier(model.DB, productFulfillmentTenantID(&product)); err != nil {
+		return errors.New("scenic supplier business is unavailable")
+	}
 	var config model.XiaohongshuProductConfig
 	if err := model.DB.Where("tenant_id = ? AND channel_account_id = ? AND channel_product_mapping_id = ?", tenantID, accountID, mappingID).First(&config).Error; err != nil {
 		return errors.New("请先完成小红书商品发布配置")

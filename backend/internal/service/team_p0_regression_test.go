@@ -41,6 +41,9 @@ func seedTeamP0Fixture(t *testing.T, creditLimitCents int64) teamP0Fixture {
 		}).Error; err != nil {
 			return err
 		}
+		if err := seedActiveScenicBusinessTypeTx(tx, fixture.supplier.ID); err != nil {
+			return err
+		}
 		if err := tx.Create(&model.DistributorRelationship{
 			AgentTenantID: fixture.travel.ID, SupplierTenantID: fixture.supplier.ID, Status: "active", TravelStatus: "active",
 		}).Error; err != nil {

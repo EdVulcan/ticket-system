@@ -17,7 +17,7 @@ type ProductService struct{}
 // CreateRuleAndProduct 创建规则和产品 (事务处理)
 func (s *ProductService) Create(product *model.Product, rule *model.TicketRule) error {
 	return model.Write(func(tx *gorm.DB) error {
-		if err := requireActiveTenantCapability(tx, product.TenantID, "supplier"); err != nil {
+		if err := requireActiveScenicSupplier(tx, product.TenantID); err != nil {
 			return err
 		}
 		if product.SourceProductID != 0 || product.SourceTenantID != 0 ||
@@ -66,11 +66,14 @@ func (s *ProductService) Update(id, tenantID uint, product *model.Product, rule 
 		if err := tx.Where("id = ? AND tenant_id = ?", id, tenantID).First(&existingProduct).Error; err != nil {
 			return err
 		}
-		capability := "supplier"
 		if isDistributedListing(&existingProduct) {
-			capability = "distributor"
-		}
-		if err := requireActiveTenantCapability(tx, tenantID, capability); err != nil {
+			if err := requireActiveTenantCapability(tx, tenantID, "distributor"); err != nil {
+				return err
+			}
+			if err := requireActiveScenicSupplier(tx, productFulfillmentTenantID(&existingProduct)); err != nil {
+				return fmt.Errorf("supplier is unavailable: %w", err)
+			}
+		} else if err := requireActiveScenicSupplier(tx, tenantID); err != nil {
 			return err
 		}
 
@@ -258,6 +261,43 @@ func (s *ProductService) List(page, pageSize int, tenantID uint, productType str
 	return products, total, err
 }
 
+// ListChannelProducts exposes only products whose actual fulfillment supplier
+// can currently sell scenic tickets. Historical mappings remain stored and
+// visible to administrators, but a suspended supplier is removed from the
+// external sale catalog immediately even before its listings are synchronized.
+func (s *ProductService) ListChannelProducts(page, pageSize int, tenantID uint, productIDs []uint) ([]model.Product, int64, error) {
+	if tenantID == 0 {
+		return nil, 0, errors.New("tenant is required")
+	}
+	if len(productIDs) == 0 {
+		return []model.Product{}, 0, nil
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 50
+	}
+	now := time.Now()
+	fulfillmentTenant := "COALESCE(NULLIF(products.fulfillment_tenant_id, 0), NULLIF(products.source_tenant_id, 0), products.tenant_id)"
+	query := model.DB.Model(&model.Product{}).
+		Joins("JOIN tenants AS fulfillment_tenant ON fulfillment_tenant.id = "+fulfillmentTenant+" AND fulfillment_tenant.deleted_at IS NULL").
+		Joins("JOIN tenant_capabilities AS supplier_capability ON supplier_capability.tenant_id = "+fulfillmentTenant+" AND supplier_capability.capability = ? AND supplier_capability.status = ? AND supplier_capability.deleted_at IS NULL", "supplier", "active").
+		Joins("JOIN supplier_business_types AS supplier_business ON supplier_business.tenant_id = "+fulfillmentTenant+" AND supplier_business.business_type = ? AND supplier_business.status = ? AND supplier_business.deleted_at IS NULL", "scenic", "active").
+		Where("products.tenant_id = ? AND products.status = ? AND products.id IN ?", tenantID, "online", productIDs).
+		Where("fulfillment_tenant.status = ?", "active").
+		Where("supplier_capability.expires_at IS NULL OR supplier_capability.expires_at > ?", now)
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var products []model.Product
+	if err := query.Order("products.id ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&products).Error; err != nil {
+		return nil, 0, err
+	}
+	return products, total, nil
+}
+
 func validateProduct(tx *gorm.DB, tenantID uint, product *model.Product, rule *model.TicketRule) error {
 	if err := validateProductFields(product); err != nil {
 		return err
@@ -375,6 +415,19 @@ func isDistributedListing(product *model.Product) bool {
 		(product.FulfillmentProductID > 0 && product.FulfillmentTenantID != 0 && product.FulfillmentTenantID != product.TenantID)
 }
 
+func productFulfillmentTenantID(product *model.Product) uint {
+	if product == nil {
+		return 0
+	}
+	if product.FulfillmentTenantID != 0 {
+		return product.FulfillmentTenantID
+	}
+	if product.SourceTenantID != 0 {
+		return product.SourceTenantID
+	}
+	return product.TenantID
+}
+
 func hydrateFulfillmentRules(products []model.Product) {
 	for i := range products {
 		productID := products[i].FulfillmentProductID
@@ -398,7 +451,18 @@ func hydrateFulfillmentRules(products []model.Product) {
 
 func (s *ProductService) Delete(id, tenantID uint) error {
 	return model.Write(func(tx *gorm.DB) error {
-		result := tx.Where("id = ? AND tenant_id = ?", id, tenantID).Delete(&model.Product{})
+		var product model.Product
+		if err := tx.Where("id = ? AND tenant_id = ?", id, tenantID).First(&product).Error; err != nil {
+			return err
+		}
+		if isDistributedListing(&product) {
+			if err := requireActiveTenantCapability(tx, tenantID, "distributor"); err != nil {
+				return err
+			}
+		} else if err := requireActiveScenicSupplier(tx, tenantID); err != nil {
+			return err
+		}
+		result := tx.Delete(&product)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -438,12 +502,22 @@ func (s *ProductService) UpdateStatus(id, tenantID uint, status string) error {
 		if err := tx.Where("id = ? AND tenant_id = ?", id, tenantID).First(&product).Error; err != nil {
 			return err
 		}
+		distributed := isDistributedListing(&product)
 		capability := "supplier"
-		if isDistributedListing(&product) {
+		if distributed {
 			capability = "distributor"
 		}
 		if err := requireActiveTenantCapability(tx, tenantID, capability); err != nil {
 			return err
+		}
+		if status == "online" {
+			fulfillmentTenantID := tenantID
+			if distributed {
+				fulfillmentTenantID = productFulfillmentTenantID(&product)
+			}
+			if err := requireActiveScenicSupplier(tx, fulfillmentTenantID); err != nil {
+				return fmt.Errorf("supplier is unavailable: %w", err)
+			}
 		}
 		result := tx.Model(&product).Where("id = ? AND tenant_id = ?", id, tenantID).Update("status", status)
 		if result.Error != nil {

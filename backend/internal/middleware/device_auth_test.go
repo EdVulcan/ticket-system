@@ -20,7 +20,7 @@ import (
 
 func TestDeviceAuthRejectsReplay(t *testing.T) {
 	db := testdb.Open(t)
-	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.Device{}, &model.DeviceRequestNonce{}); err != nil {
+	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.SupplierBusinessType{}, &model.Device{}, &model.DeviceRequestNonce{}); err != nil {
 		t.Fatal(err)
 	}
 	previousDB := model.DB
@@ -37,6 +37,9 @@ func TestDeviceAuthRejectsReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := model.DB.Create(&model.TenantCapability{TenantID: tenant.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Create(&model.SupplierBusinessType{TenantID: tenant.ID, BusinessType: "scenic", Status: "active"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	config.GlobalConfig.Security.EncryptionKey = strings.Repeat("k", 32)

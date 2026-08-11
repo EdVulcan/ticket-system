@@ -1312,7 +1312,10 @@ func TestTeamRosterAndEntryStayTenantScoped(t *testing.T) {
 		if err := tx.Create(&model.TenantCapability{TenantID: travel.ID, Capability: "travel_agency", Status: "active"}).Error; err != nil {
 			return err
 		}
-		return tx.Create(&model.TenantCapability{TenantID: supplier.ID, Capability: "supplier", Status: "active"}).Error
+		if err := tx.Create(&model.TenantCapability{TenantID: supplier.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
+			return err
+		}
+		return seedActiveScenicBusinessTypeTx(tx, supplier.ID)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1373,6 +1376,9 @@ func TestTeamRosterReplaceIsIdempotentAndStopsAfterConfirmation(t *testing.T) {
 			return err
 		}
 		if err := tx.Create(&model.TenantCapability{TenantID: supplier.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
+			return err
+		}
+		if err := seedActiveScenicBusinessTypeTx(tx, supplier.ID); err != nil {
 			return err
 		}
 		area := model.ScenicArea{TenantID: supplier.ID, Code: "AREA-REPLACE", Name: "Main", Status: "active"}

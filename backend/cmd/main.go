@@ -415,57 +415,65 @@ func serveAdminUI(engine *gin.Engine, directory string) {
 }
 
 func seedAdminUser() error {
+	bootstrap := config.GlobalConfig.Bootstrap
 	return model.Write(func(tx *gorm.DB) error {
-		var count int64
-		if err := tx.Model(&model.User{}).Count(&count).Error; err != nil {
-			return err
-		}
-		bootstrap := config.GlobalConfig.Bootstrap
-		if count == 0 && bootstrap.AdminPassword == "" {
-			return errors.New("database has no users; set TICKET_BOOTSTRAP_ADMIN_PASSWORD for the first startup")
-		}
-		if count == 0 {
-			// Create default tenant and its tenant-scoped administrator.
-			tenant := model.Tenant{
-				Name: bootstrap.TenantName, SystemCode: bootstrap.SystemCode,
-				SecretKey: utils.GenerateRandomString(32), Status: "active",
-			}
-			if err := tx.Create(&tenant).Error; err != nil {
-				return err
-			}
-			if err := tx.Create(&model.TenantCapability{TenantID: tenant.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
-				return err
-			}
-			hashedPwd, err := bcrypt.GenerateFromPassword([]byte(bootstrap.AdminPassword), 14)
-			if err != nil {
-				return err
-			}
-			if err := tx.Create(&model.User{Username: bootstrap.AdminUsername, Password: string(hashedPwd), Role: "super_admin", TenantID: tenant.ID, IsInitialAdmin: true}).Error; err != nil {
-				return err
-			}
-			fmt.Printf("Seeded bootstrap administrator %q for tenant %q\n", bootstrap.AdminUsername, bootstrap.SystemCode)
-		}
-		// Platform identity uses independent bootstrap credentials. Reusing the
-		// tenant administrator secret would collapse the highest privilege boundary.
-		var platformCount int64
-		if err := tx.Model(&model.PlatformUser{}).Count(&platformCount).Error; err != nil {
-			return err
-		}
-		if platformCount == 0 && bootstrap.PlatformPassword == "" {
-			return errors.New("database has no platform users; set TICKET_BOOTSTRAP_PLATFORM_PASSWORD for the first startup")
-		}
-		if platformCount == 0 {
-			if bootstrap.PlatformPassword == bootstrap.AdminPassword {
-				return errors.New("platform bootstrap password must differ from tenant administrator password")
-			}
-			hashedPwd, err := bcrypt.GenerateFromPassword([]byte(bootstrap.PlatformPassword), 14)
-			if err != nil {
-				return err
-			}
-			if err := tx.Create(&model.PlatformUser{Username: bootstrap.PlatformUsername, Password: string(hashedPwd), Role: "platform_admin", IsInitialAdmin: true, Status: "active"}).Error; err != nil {
-				return err
-			}
-		}
-		return nil
+		return seedAdminUserTx(tx, bootstrap)
 	})
+}
+
+func seedAdminUserTx(tx *gorm.DB, bootstrap config.BootstrapConfig) error {
+	var count int64
+	if err := tx.Model(&model.User{}).Count(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 && bootstrap.AdminPassword == "" {
+		return errors.New("database has no users; set TICKET_BOOTSTRAP_ADMIN_PASSWORD for the first startup")
+	}
+	if count == 0 {
+		// Create default tenant and its tenant-scoped administrator.
+		tenant := model.Tenant{
+			Name: bootstrap.TenantName, SystemCode: bootstrap.SystemCode,
+			SecretKey: utils.GenerateRandomString(32), Status: "active",
+		}
+		if err := tx.Create(&tenant).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&model.TenantCapability{TenantID: tenant.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
+			return err
+		}
+		now := time.Now()
+		if err := tx.Create(&model.SupplierBusinessType{TenantID: tenant.ID, BusinessType: "scenic", Status: "active", ActivatedAt: &now, Reason: "bootstrap scenic supplier"}).Error; err != nil {
+			return err
+		}
+		hashedPwd, err := bcrypt.GenerateFromPassword([]byte(bootstrap.AdminPassword), 14)
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(&model.User{Username: bootstrap.AdminUsername, Password: string(hashedPwd), Role: "super_admin", TenantID: tenant.ID, IsInitialAdmin: true}).Error; err != nil {
+			return err
+		}
+		fmt.Printf("Seeded bootstrap administrator %q for tenant %q\n", bootstrap.AdminUsername, bootstrap.SystemCode)
+	}
+	// Platform identity uses independent bootstrap credentials. Reusing the
+	// tenant administrator secret would collapse the highest privilege boundary.
+	var platformCount int64
+	if err := tx.Model(&model.PlatformUser{}).Count(&platformCount).Error; err != nil {
+		return err
+	}
+	if platformCount == 0 && bootstrap.PlatformPassword == "" {
+		return errors.New("database has no platform users; set TICKET_BOOTSTRAP_PLATFORM_PASSWORD for the first startup")
+	}
+	if platformCount == 0 {
+		if bootstrap.PlatformPassword == bootstrap.AdminPassword {
+			return errors.New("platform bootstrap password must differ from tenant administrator password")
+		}
+		hashedPwd, err := bcrypt.GenerateFromPassword([]byte(bootstrap.PlatformPassword), 14)
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(&model.PlatformUser{Username: bootstrap.PlatformUsername, Password: string(hashedPwd), Role: "platform_admin", IsInitialAdmin: true, Status: "active"}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }

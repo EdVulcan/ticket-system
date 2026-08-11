@@ -50,6 +50,9 @@ func (s *ChannelWorkflowService) Reserve(tenantID, accountID uint, channel strin
 		if err != nil {
 			return err
 		}
+		if err := requireActiveScenicSupplier(tx, fulfillment.TenantID); err != nil {
+			return fmt.Errorf("supplier is unavailable: %w", err)
+		}
 		if err := applyValidity(&model.OrderItem{UseDate: useDate, StockSlot: stockSlot}, fulfillment); err != nil {
 			return err
 		}

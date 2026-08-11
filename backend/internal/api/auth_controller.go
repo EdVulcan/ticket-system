@@ -40,16 +40,17 @@ func (c *AuthController) Login(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
-			"id":               user.ID,
-			"tenant_id":        user.TenantID,
-			"username":         user.Username,
-			"role":             user.Role,
-			"is_initial_admin": user.IsInitialAdmin,
-			"system_code":      user.Tenant.SystemCode,
-			"tenant_name":      user.Tenant.Name,
-			"scope":            "tenant",
-			"capabilities":     user.Tenant.Capabilities,
-			"permissions":      authz.PermissionsForRole(user.Role),
+			"id":                      user.ID,
+			"tenant_id":               user.TenantID,
+			"username":                user.Username,
+			"role":                    user.Role,
+			"is_initial_admin":        user.IsInitialAdmin,
+			"system_code":             user.Tenant.SystemCode,
+			"tenant_name":             user.Tenant.Name,
+			"scope":                   "tenant",
+			"capabilities":            user.Tenant.Capabilities,
+			"supplier_business_types": user.Tenant.SupplierBusinessTypes,
+			"permissions":             authz.PermissionsForRole(user.Role),
 		},
 	})
 }

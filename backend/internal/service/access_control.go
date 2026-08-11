@@ -3,6 +3,7 @@ package service
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"ticket-backend/internal/model"
 	"time"
 
@@ -10,8 +11,9 @@ import (
 )
 
 var (
-	ErrTenantUnavailable  = errors.New("tenant is unavailable")
-	ErrCapabilityInactive = errors.New("tenant capability is not active")
+	ErrTenantUnavailable            = errors.New("tenant is unavailable")
+	ErrCapabilityInactive           = errors.New("tenant capability is not active")
+	ErrSupplierBusinessTypeInactive = errors.New("supplier business type is not active")
 )
 
 func requireActiveTenant(tx *gorm.DB, tenantID uint) error {
@@ -65,4 +67,28 @@ func requireAnyActiveTenantCapability(tx *gorm.DB, tenantID uint, capabilities .
 		}
 	}
 	return ErrCapabilityInactive
+}
+
+// requireActiveSupplierBusinessType is the service-layer authorization boundary
+// for fulfillment-specific operations. It deliberately checks both the active
+// supplier market role and the requested business vertical so callers cannot
+// bypass a suspended vertical through another role held by the same tenant.
+func requireActiveSupplierBusinessType(tx *gorm.DB, tenantID uint, businessType string) error {
+	if err := requireActiveTenantCapability(tx, tenantID, "supplier"); err != nil {
+		return err
+	}
+	var count int64
+	if err := tx.Model(&model.SupplierBusinessType{}).
+		Where("tenant_id = ? AND business_type = ? AND status = ?", tenantID, strings.TrimSpace(businessType), "active").
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if count != 1 {
+		return fmt.Errorf("%w: %s", ErrSupplierBusinessTypeInactive, strings.TrimSpace(businessType))
+	}
+	return nil
+}
+
+func requireActiveScenicSupplier(tx *gorm.DB, tenantID uint) error {
+	return requireActiveSupplierBusinessType(tx, tenantID, "scenic")
 }

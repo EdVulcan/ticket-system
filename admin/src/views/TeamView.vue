@@ -168,7 +168,7 @@
         </el-table>
       </el-tab-pane>
 
-      <el-tab-pane v-if="isSupplier" label="合作旅行社" name="travel-partners">
+      <el-tab-pane v-if="isSupplierHistory" label="合作旅行社" name="travel-partners">
         <div class="mb-4 text-sm text-gray-500">确认旅行社合作申请后，即可为其创建专属产品价格和授信合同。</div>
         <el-table :data="travelAgencyPartners" v-loading="travelAgencyPartnersLoading" stripe empty-text="暂无旅行社合作申请">
           <el-table-column prop="travel_name" label="旅行社" min-width="180" />
@@ -461,7 +461,7 @@
             <el-table-column label="供应商确认" width="130">
               <template #default="{ row }">
                 <el-tag v-if="row.supplier_acknowledged_at" type="success" effect="plain">已确认</el-tag>
-                <el-button v-else-if="isGroupSupplier(selectedGroup) && can('teams.write')" link type="primary" @click="acknowledgeConfirmation(row)">确认收到</el-button>
+                <el-button v-else-if="isSupplier && isGroupSupplier(selectedGroup) && can('teams.write')" link type="primary" @click="acknowledgeConfirmation(row)">确认收到</el-button>
                 <el-tag v-else type="warning" effect="plain">待确认</el-tag>
               </template>
             </el-table-column>
@@ -629,15 +629,17 @@ import { Connection, Delete, DocumentAdd, Download, MoreFilled, Plus, Printer, R
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { hasPermission } from '@/utils/permissions'
+import { activeCapabilitySet, isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 
 const router = useRouter()
 
-const user = computed<any>(() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })
+const user = computed<any>(() => readStoredUser())
 const currentTenantID = computed(() => Number(user.value.tenant_id || 0))
 const can = (permission: string) => hasPermission(user.value, permission)
-const capabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability)))
+const capabilities = computed(() => activeCapabilitySet(user.value))
 const isTravelAgency = computed(() => capabilities.value.has('travel_agency'))
-const isSupplier = computed(() => capabilities.value.has('supplier'))
+const isSupplier = computed(() => isActiveScenicSupplier(user.value))
+const isSupplierHistory = computed(() => isScenicHistorySupplier(user.value))
 
 const activeTab = ref('groups')
 const groups = ref<any[]>([])
@@ -1125,10 +1127,10 @@ const savingRoster = ref(false)
 const canEditRoster = computed(() => can('teams.write') && isGroupOwner(selectedGroup.value) && selectedGroup.value?.status === 'draft' && !selectedGroup.value?.sales_order_id)
 const canChangeMembers = computed(() => can('teams.write') && isGroupOwner(selectedGroup.value) && ['confirmed', 'partial_entry'].includes(selectedGroup.value?.status))
 const canSubmitConfirmation = computed(() => canChangeMembers.value)
-const canEnterSelectedGroup = computed(() => can('teams.write') && isGroupSupplier(selectedGroup.value) && ['confirmed', 'partial_entry'].includes(selectedGroup.value?.status))
+const canEnterSelectedGroup = computed(() => isSupplier.value && can('teams.write') && isGroupSupplier(selectedGroup.value) && ['confirmed', 'partial_entry'].includes(selectedGroup.value?.status))
 const groupDetailActionText = (row: any) => {
   if (!isGroupSupplier(row)) return '名单详情'
-  return ['confirmed', 'partial_entry'].includes(row.status) ? '履约入园' : '履约详情'
+  return isSupplier.value && ['confirmed', 'partial_entry'].includes(row.status) ? '履约入园' : '履约详情'
 }
 const admissionDevices = computed(() => devices.value.filter(device => device.status === 'online' && Number(device.scenic_area_id) === Number(selectedGroup.value?.scenic_area_id) && device.check_point_id))
 const loadGroupDetail = async () => {
@@ -1175,7 +1177,7 @@ const openGroupDetail = async (row: any) => {
   detailDialog.value = true
   await Promise.all([
     loadGroupDetail(),
-    isGroupSupplier(row) && ['confirmed', 'partial_entry'].includes(row.status) ? loadAdmissionDevices() : Promise.resolve(),
+    isSupplier.value && isGroupSupplier(row) && ['confirmed', 'partial_entry'].includes(row.status) ? loadAdmissionDevices() : Promise.resolve(),
     isGroupOwner(row) ? loadReferenceData() : Promise.resolve(),
   ])
 }

@@ -11,11 +11,14 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type TenantService struct{}
 
 var ErrTenantActivationBlocked = errors.New("tenant activation requires approved, unexpired qualification and contract")
+var ErrSupplierCapabilityRequired = errors.New("an active supplier capability is required before enabling a supplier business type")
+var ErrAuditReasonRequired = errors.New("audit reason is required")
 
 func (s *TenantService) RevokeSessions(id uint, actorID uint, actorRole string) error {
 	if id == 0 {
@@ -234,8 +237,18 @@ var validTenantCapabilities = map[string]struct{}{
 	"travel_agency": {},
 }
 
+var validSupplierBusinessTypes = map[string]struct{}{
+	"scenic": {},
+	"hotel":  {},
+}
+
 func validTenantCapability(capability string) bool {
 	_, ok := validTenantCapabilities[capability]
+	return ok
+}
+
+func validSupplierBusinessType(businessType string) bool {
+	_, ok := validSupplierBusinessTypes[businessType]
 	return ok
 }
 
@@ -255,7 +268,7 @@ func (s *TenantService) SetCapabilityAudited(id uint, capability, status, reason
 	}
 	return model.Write(func(tx *gorm.DB) error {
 		var tenant model.Tenant
-		if err := tx.Select("id").First(&tenant, id).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&tenant, id).Error; err != nil {
 			return err
 		}
 		var capabilityRow model.TenantCapability
@@ -289,6 +302,75 @@ func (s *TenantService) SetCapabilityAudited(id uint, capability, status, reason
 	})
 }
 
+// SetSupplierBusinessTypeAudited configures a supplier's fulfillment vertical
+// without changing its market role. Scenic ticketing and hotel accommodation
+// can be enabled together for the same tenant.
+func (s *TenantService) SetSupplierBusinessTypeAudited(id uint, businessType, status, reason string, actorID uint, actorRole string) error {
+	if !validSupplierBusinessType(businessType) {
+		return errors.New("invalid supplier business type")
+	}
+	if status != "active" && status != "suspended" {
+		return errors.New("invalid supplier business type status")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return ErrAuditReasonRequired
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var tenant model.Tenant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&tenant, id).Error; err != nil {
+			return err
+		}
+		if status == "active" {
+			var supplierCount int64
+			if err := tx.Model(&model.TenantCapability{}).
+				Where("tenant_id = ? AND capability = ? AND status = ?", id, "supplier", "active").
+				Where("expires_at IS NULL OR expires_at > ?", time.Now()).
+				Count(&supplierCount).Error; err != nil {
+				return err
+			}
+			if supplierCount == 0 {
+				return ErrSupplierCapabilityRequired
+			}
+		}
+
+		var row model.SupplierBusinessType
+		err := tx.Where("tenant_id = ? AND business_type = ?", id, businessType).First(&row).Error
+		before, _ := json.Marshal(row)
+		previousStatus := row.Status
+		activatedAt := row.ActivatedAt
+		if status == "active" {
+			now := time.Now()
+			activatedAt = &now
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			row = model.SupplierBusinessType{
+				TenantID: id, BusinessType: businessType, Status: status,
+				ActivatedAt: activatedAt, Reason: reason,
+			}
+			if err := tx.Create(&row).Error; err != nil {
+				return err
+			}
+		} else {
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&row).Updates(map[string]interface{}{
+				"status": status, "activated_at": activatedAt, "reason": reason,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		if businessType == "scenic" && previousStatus == "active" && status == "suspended" {
+			if err := enqueueCtripScenicSuspensionTasksTx(tx, id, time.Now()); err != nil {
+				return err
+			}
+		}
+		after, _ := json.Marshal(map[string]interface{}{"business_type": businessType, "status": status, "reason": reason})
+		return recordAuditTx(tx, actorID, id, actorRole, "platform", "tenant.supplier_business_type.update", "supplier_business_type", row.ID, reason, string(before), string(after))
+	})
+}
+
 func (s *TenantService) Update(id uint, tenant *model.Tenant) error {
 	tenant.Name = strings.TrimSpace(tenant.Name)
 	if tenant.Name == "" {
@@ -317,7 +399,7 @@ func (s *TenantService) Delete(id uint) error {
 
 func (s *TenantService) GetByID(id uint) (*model.Tenant, error) {
 	var tenant model.Tenant
-	err := model.DB.Preload("Capabilities").First(&tenant, id).Error
+	err := model.DB.Preload("Capabilities").Preload("SupplierBusinessTypes").First(&tenant, id).Error
 	return &tenant, err
 }
 
@@ -341,6 +423,6 @@ func (s *TenantService) List(page, pageSize int) ([]model.Tenant, int64, error) 
 		return nil, 0, err
 	}
 
-	err = model.DB.Preload("Capabilities").Offset(offset).Limit(pageSize).Find(&tenants).Error
+	err = model.DB.Preload("Capabilities").Preload("SupplierBusinessTypes").Offset(offset).Limit(pageSize).Find(&tenants).Error
 	return tenants, total, err
 }

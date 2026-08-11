@@ -146,3 +146,60 @@ func RequireAnyTenantCapability(allowed ...string) gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// RequireAnySupplierBusinessType narrows supplier-only operational routes to
+// the fulfillment vertical they implement. Market role and business vertical
+// are both required; a hotel supplier must not gain scenic gate operations.
+func RequireAnySupplierBusinessType(allowed ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := c.GetUint("tenant_id")
+		if c.GetString("scope") != "tenant" || tenantID == 0 || len(allowed) == 0 || model.DB == nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有此供应业态"})
+			return
+		}
+		now := time.Now()
+		var count int64
+		err := model.DB.Table("tenant_capabilities AS capability").
+			Joins("JOIN tenants AS tenant ON tenant.id = capability.tenant_id AND tenant.deleted_at IS NULL").
+			Joins("JOIN supplier_business_types AS business ON business.tenant_id = capability.tenant_id AND business.deleted_at IS NULL").
+			Where("capability.tenant_id = ? AND capability.capability = ? AND capability.status = ?", tenantID, "supplier", "active").
+			Where("capability.deleted_at IS NULL AND (capability.expires_at IS NULL OR capability.expires_at > ?)", now).
+			Where("tenant.status = ?", "active").
+			Where("business.business_type IN ? AND business.status = ?", allowed, "active").
+			Count(&count).Error
+		if err != nil || count == 0 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有此供应业态"})
+			return
+		}
+		c.Next()
+	}
+}
+
+// RequireConfiguredSupplierBusinessType keeps read-only historical supplier
+// responsibilities available after a business vertical is suspended. The
+// supplier identity may itself be suspended or expired because financial and
+// verification history must remain available for operational close-out.
+func RequireConfiguredSupplierBusinessType(allowed ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := c.GetUint("tenant_id")
+		if c.GetString("scope") != "tenant" || tenantID == 0 || len(allowed) == 0 || model.DB == nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有此供应业态的历史查询权限"})
+			return
+		}
+
+		var count int64
+		err := model.DB.Table("tenant_capabilities AS capability").
+			Joins("JOIN tenants AS tenant ON tenant.id = capability.tenant_id AND tenant.deleted_at IS NULL").
+			Joins("JOIN supplier_business_types AS business ON business.tenant_id = capability.tenant_id AND business.deleted_at IS NULL").
+			Where("capability.tenant_id = ? AND capability.capability = ? AND capability.status IN ?", tenantID, "supplier", []string{"active", "suspended"}).
+			Where("capability.deleted_at IS NULL").
+			Where("tenant.status = ?", "active").
+			Where("business.business_type IN ? AND business.status IN ?", allowed, []string{"active", "suspended"}).
+			Count(&count).Error
+		if err != nil || count == 0 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有此供应业态的历史查询权限"})
+			return
+		}
+		c.Next()
+	}
+}

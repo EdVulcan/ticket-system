@@ -17,6 +17,7 @@ const tenantUser = (capability: 'supplier' | 'travel_agency') => ({
   tenant_name: capability === 'supplier' ? '示例景区' : '示例旅行社',
   system_code: capability === 'supplier' ? 'SCENIC001' : 'TRAVEL001',
   capabilities: [{ capability, status: 'active' }],
+  supplier_business_types: capability === 'supplier' ? [{ business_type: 'scenic', status: 'active' }] : [],
 })
 
 async function openTeamWorkspace(page: Page, capability: 'supplier' | 'travel_agency') {

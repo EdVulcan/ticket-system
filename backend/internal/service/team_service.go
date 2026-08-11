@@ -151,7 +151,7 @@ func eligibleTeamContractProductsTx(tx *gorm.DB, supplierTenantID uint) *gorm.DB
 }
 
 func (s *TeamService) ListContractProducts(supplierTenantID uint) ([]TeamContractProduct, error) {
-	if err := requireActiveTenantCapability(model.DB, supplierTenantID, "supplier"); err != nil {
+	if err := requireActiveScenicSupplier(model.DB, supplierTenantID); err != nil {
 		return nil, err
 	}
 	var products []TeamContractProduct
@@ -173,6 +173,9 @@ func (s *TeamService) SearchSupplierPartner(travelTenantID uint, systemCode stri
 	}
 	if supplier.ID == travelTenantID {
 		return nil, errors.New("a tenant cannot partner with itself")
+	}
+	if err := requireActiveScenicSupplier(model.DB, supplier.ID); err != nil {
+		return nil, errors.New("scenic supplier tenant is unavailable")
 	}
 	view := &TeamSupplierPartner{
 		SupplierTenantID: supplier.ID, SupplierName: supplier.Name, SupplierCode: supplier.SystemCode,
@@ -314,7 +317,7 @@ func (s *TeamService) CreateContract(supplierTenantID, operatorID uint, input Tr
 	}
 	var contract model.TravelContract
 	err := model.Write(func(tx *gorm.DB) error {
-		if err := requireActiveTenantCapability(tx, supplierTenantID, "supplier"); err != nil {
+		if err := requireActiveScenicSupplier(tx, supplierTenantID); err != nil {
 			return err
 		}
 		if err := requireActiveTenantCapability(tx, input.TravelTenantID, "travel_agency"); err != nil {
@@ -369,15 +372,26 @@ func (s *TeamService) UpdateContract(supplierTenantID, contractID, operatorID ui
 		if input.TravelTenantID != contract.TravelTenantID || strings.TrimSpace(input.ContractNo) != contract.ContractNo {
 			return errors.New("travel agency and contract number cannot be changed")
 		}
+		status := input.Status
+		if status == "" {
+			status = contract.Status
+		}
+		if err := requireActiveScenicSupplier(tx, supplierTenantID); err != nil {
+			if status != "suspended" {
+				return err
+			}
+			before, _ := json.Marshal(contract)
+			if err := tx.Model(&contract).Update("status", "suspended").Error; err != nil {
+				return err
+			}
+			return recordAuditTx(tx, operatorID, supplierTenantID, "admin", "tenant", "travel_contract.suspend", "travel_contract", contract.ID,
+				"supplier scenic business suspended; contract closed without other changes", string(before), `{"status":"suspended"}`)
+		}
 		_, priceJSON, err := normalizeTeamPriceRulesTx(tx, supplierTenantID, input.PriceRules)
 		if err != nil {
 			return err
 		}
 		before, _ := json.Marshal(contract)
-		status := input.Status
-		if status == "" {
-			status = contract.Status
-		}
 		if err := tx.Model(&contract).Updates(map[string]interface{}{
 			"status": status, "settlement_days": input.SettlementDays, "credit_limit_cents": input.CreditLimitCents,
 			"price_rules_json": priceJSON, "starts_at": input.StartsAt, "ends_at": input.EndsAt,
@@ -1361,7 +1375,7 @@ func (s *TeamService) EnterBatch(tenantID, groupID, deviceID, operatorID uint, m
 	var batch model.TourEntryBatch
 	err = model.Write(func(tx *gorm.DB) error {
 		var group model.TourGroup
-		if err := requireActiveTenantCapability(tx, tenantID, "supplier"); err != nil {
+		if err := requireActiveScenicSupplier(tx, tenantID); err != nil {
 			return err
 		}
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND supplier_tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
@@ -1661,7 +1675,7 @@ func (s *TeamService) CreateContractOrder(tenantID, groupID, operatorID uint, in
 			First(&product).Error; err != nil {
 			return errors.New("合同产品当前不可售或不属于团队景区")
 		}
-		if err := requireActiveTenantCapability(tx, product.TenantID, "supplier"); err != nil {
+		if err := requireActiveScenicSupplier(tx, product.TenantID); err != nil {
 			return errors.New("景区供应商当前不可用")
 		}
 		revision, err := ensureProductRevisionTx(tx, &product)
@@ -1806,7 +1820,7 @@ func validateTeamContractTx(tx *gorm.DB, tenantID uint, group *model.TourGroup) 
 	if group == nil || group.SupplierTenantID == 0 || group.VisitDate.IsZero() {
 		return errors.New("team supplier and visit date are required")
 	}
-	if err := requireActiveTenantCapability(tx, group.SupplierTenantID, "supplier"); err != nil {
+	if err := requireActiveScenicSupplier(tx, group.SupplierTenantID); err != nil {
 		return errors.New("supplier tenant is unavailable")
 	}
 	if tenantID == group.SupplierTenantID {

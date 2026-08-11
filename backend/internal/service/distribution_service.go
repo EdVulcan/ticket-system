@@ -55,6 +55,11 @@ func applySupplierRelationship(agentTenantID uint, supplierSystemCode, agentCapa
 		if err := requireActiveTenantCapability(tx, supplier.ID, "supplier"); err != nil {
 			return errors.New("supplier tenant is unavailable")
 		}
+		if agentCapability == "travel_agency" {
+			if err := requireActiveScenicSupplier(tx, supplier.ID); err != nil {
+				return errors.New("scenic supplier tenant is unavailable")
+			}
+		}
 
 		var relationship model.DistributorRelationship
 		err := tx.Where("agent_tenant_id = ? AND supplier_tenant_id = ?", agentTenantID, supplier.ID).First(&relationship).Error
@@ -172,6 +177,11 @@ func auditSupplierRelationship(supplierTenantID, relationshipID uint, agentCapab
 		if err := requireActiveTenantCapability(tx, supplierTenantID, "supplier"); err != nil {
 			return err
 		}
+		if agentCapability == "travel_agency" && status == "active" {
+			if err := requireActiveScenicSupplier(tx, supplierTenantID); err != nil {
+				return errors.New("scenic supplier tenant is unavailable")
+			}
+		}
 		var relationship model.DistributorRelationship
 		if err := tx.Where("id = ? AND supplier_tenant_id = ?", relationshipID, supplierTenantID).First(&relationship).Error; err != nil {
 			return errors.New("distribution application not found")
@@ -216,7 +226,7 @@ func (s *DistributionService) ListDistributableProducts(agentTenantID, supplierT
 	if err := requireActiveTenantCapability(model.DB, agentTenantID, "distributor"); err != nil {
 		return nil, err
 	}
-	if err := requireActiveTenantCapability(model.DB, supplierTenantID, "supplier"); err != nil {
+	if err := requireActiveScenicSupplier(model.DB, supplierTenantID); err != nil {
 		return nil, err
 	}
 	var relationship model.DistributorRelationship
@@ -251,7 +261,7 @@ func (s *DistributionService) CreateOfferWithPolicy(supplierTenantID, distributo
 	}
 	var offer model.ProductOffer
 	err := model.Write(func(tx *gorm.DB) error {
-		if err := requireActiveTenantCapability(tx, supplierTenantID, "supplier"); err != nil {
+		if err := requireActiveScenicSupplier(tx, supplierTenantID); err != nil {
 			return err
 		}
 		if err := requireActiveTenantCapability(tx, distributorTenantID, "distributor"); err != nil {
@@ -361,6 +371,9 @@ func (s *DistributionService) SetOfferStatus(supplierTenantID, offerID, operator
 			return errors.New("expired offer cannot be reactivated")
 		}
 		if status == "active" {
+			if err := requireActiveScenicSupplier(tx, supplierTenantID); err != nil {
+				return err
+			}
 			var source model.Product
 			if err := tx.Where("id = ? AND tenant_id = ? AND status = ? AND is_distributable = ?", offer.SourceProductID, supplierTenantID, "online", true).First(&source).Error; err != nil {
 				return errors.New("source product is unavailable")
@@ -686,7 +699,7 @@ func (s *DistributionService) ImportProduct(agentTenantID, sourceProductID uint,
 		if !source.IsDistributable || source.Status != "online" {
 			return errors.New("source product is not available for distribution")
 		}
-		if err := requireActiveTenantCapability(tx, source.TenantID, "supplier"); err != nil {
+		if err := requireActiveScenicSupplier(tx, source.TenantID); err != nil {
 			return errors.New("supplier tenant is unavailable")
 		}
 		var relationship model.DistributorRelationship
@@ -772,14 +785,23 @@ func syncListingTx(tx *gorm.DB, listing *model.SellerListing, offer *model.Produ
 		retailPriceCents = moneyCents(listing.RetailPrice)
 	}
 	now := time.Now()
-	eligible := sourceErr == nil && offer.Status == "active" && source.Status == "online" && source.IsDistributable &&
+	supplierAvailable := true
+	if err := requireActiveScenicSupplier(tx, offer.SupplierTenantID); err != nil {
+		if !errors.Is(err, ErrTenantUnavailable) && !errors.Is(err, ErrCapabilityInactive) && !errors.Is(err, ErrSupplierBusinessTypeInactive) {
+			return nil, err
+		}
+		supplierAvailable = false
+	}
+	eligible := supplierAvailable && sourceErr == nil && offer.Status == "active" && source.Status == "online" && source.IsDistributable &&
 		offer.ProductRevisionID > 0 && source.CurrentRevisionID == offer.ProductRevisionID &&
 		(offer.SalesStartAt == nil || !now.Before(*offer.SalesStartAt)) &&
 		(offer.SalesEndAt == nil || !now.After(*offer.SalesEndAt)) &&
 		(offer.MinimumRetailPriceCents == 0 || retailPriceCents >= offer.MinimumRetailPriceCents)
 	status := "offline"
 	reasonText := "supplier offer or source product is unavailable"
-	if sourceErr != nil {
+	if !supplierAvailable {
+		reasonText = "scenic supplier business is not active"
+	} else if sourceErr != nil {
 		reasonText = "source product is unavailable"
 	} else if eligible {
 		status = "online"

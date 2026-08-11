@@ -136,7 +136,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   CaretBottom, Connection, CopyDocument, CreditCard, Expand, Fold, Key, List, Location,
@@ -146,6 +146,13 @@ import {
 import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
 import { hasPermission, tenantRoleLabel } from '@/utils/permissions'
+import {
+  activeCapabilitySet,
+  activeSupplierBusinessTypeSet,
+  configuredSupplierBusinessTypeSet,
+  readStoredUser,
+  refreshStoredTenantIdentity,
+} from '@/utils/tenantAccess'
 
 type NavItem = { path: string; label: string; icon: any }
 type NavGroup = { label: string; items: NavItem[] }
@@ -161,11 +168,13 @@ const passwordSaving = ref(false)
 const passwordForm = reactive({ currentPassword: '', newPassword: '', confirmPassword: '' })
 
 const isLoginPage = computed(() => route.name === 'login' || route.name === 'platform-login')
-const activeCapabilities = computed(() => new Set((user.value.capabilities || [])
-  .filter((item: any) => item.status === 'active' && (!item.expires_at || new Date(item.expires_at).getTime() > Date.now()))
-  .map((item: any) => item.capability)))
+const activeCapabilities = computed(() => activeCapabilitySet(user.value))
 const hasCapability = (value: string) => activeCapabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(value => activeCapabilities.value.has(value))
+const activeSupplierBusinessTypes = computed(() => activeSupplierBusinessTypeSet(user.value))
+const configuredSupplierBusinessTypes = computed(() => configuredSupplierBusinessTypeSet(user.value))
+const hasSupplierBusinessType = (value: string) => activeSupplierBusinessTypes.value.has(value)
+const hasConfiguredSupplierBusinessType = (value: string) => configuredSupplierBusinessTypes.value.has(value)
 const can = (permission: string) => hasPermission(user.value, permission)
 
 const navGroups = computed<NavGroup[]>(() => {
@@ -180,35 +189,38 @@ const navGroups = computed<NavGroup[]>(() => {
     return [overview, { label: '平台管理', items: platformItems }]
   }
 
+  const scenicSupplier = hasCapability('supplier') && hasSupplierBusinessType('scenic')
+  const scenicHistorySupplier = hasCapability('supplier') && hasConfiguredSupplierBusinessType('scenic')
+  const currentHistoryTenant = scenicHistorySupplier || hasAnyCapability('distributor', 'travel_agency')
   const sales: NavItem[] = []
-  if (hasCapability('supplier') && can('catalog.read')) {
+  if (scenicHistorySupplier && can('catalog.read')) {
     sales.push({ path: '/product', label: '线上门票', icon: Ticket })
     sales.push({ path: '/product/offline', label: '窗口门票', icon: Monitor })
   }
-  if (can('orders.read')) sales.push({ path: '/online-order', label: '线上订单', icon: List })
-  if (hasCapability('supplier') && can('onsite.read')) sales.push({ path: '/offline-order', label: '线下/窗口订单', icon: Tickets })
+  if (currentHistoryTenant && can('orders.read')) sales.push({ path: '/online-order', label: '线上订单', icon: List })
+  if (scenicHistorySupplier && can('onsite.read')) sales.push({ path: '/offline-order', label: '线下/窗口订单', icon: Tickets })
 
   const distribution: NavItem[] = []
-  if (hasAnyCapability('supplier', 'distributor') && can('distribution.read')) distribution.push({ path: '/distribution', label: '供销合作', icon: Connection })
-  if (hasAnyCapability('supplier', 'distributor') && can('channels.read')) distribution.push({ path: '/channels', label: '渠道连接', icon: Connection })
-  if (hasAnyCapability('supplier', 'travel_agency') && can('teams.read')) distribution.push({ path: '/teams', label: '旅行社团队', icon: Tickets })
+  if ((scenicHistorySupplier || hasCapability('distributor')) && can('distribution.read')) distribution.push({ path: '/distribution', label: '供销合作', icon: Connection })
+  if ((scenicHistorySupplier || hasCapability('distributor')) && can('channels.read')) distribution.push({ path: '/channels', label: '渠道连接', icon: Connection })
+  if ((scenicHistorySupplier || hasCapability('travel_agency')) && can('teams.read')) distribution.push({ path: '/teams', label: '旅行社团队', icon: Tickets })
 
   const operations: NavItem[] = []
-  if (hasAnyCapability('supplier', 'distributor') && can('operations.read')) operations.push({ path: '/operations', label: '运营工作台', icon: Operation })
-  if (hasCapability('supplier') && can('catalog.read')) operations.push({ path: '/policy', label: '政策知识库', icon: Reading })
-  if (hasCapability('supplier') && can('onsite.manage')) operations.push({ path: '/device', label: '终端设备', icon: Monitor })
-  if (hasCapability('supplier') && can('onsite.read')) operations.push({ path: '/checkpoint', label: '检票点位', icon: Location })
+  if ((scenicSupplier || hasCapability('distributor')) && can('operations.read')) operations.push({ path: '/operations', label: '运营工作台', icon: Operation })
+  if (scenicSupplier && can('catalog.read')) operations.push({ path: '/policy', label: '政策知识库', icon: Reading })
+  if (scenicSupplier && can('onsite.manage')) operations.push({ path: '/device', label: '终端设备', icon: Monitor })
+  if (scenicSupplier && can('onsite.read')) operations.push({ path: '/checkpoint', label: '检票点位', icon: Location })
 
   const data: NavItem[] = []
-  if (hasAnyCapability('supplier', 'distributor') && can('finance.read')) data.push({ path: '/finance', label: '财务报表', icon: Money })
-  if (can('reports.read')) data.push({ path: '/report', label: '经营数据', icon: TrendCharts })
-  if (hasAnyCapability('supplier', 'distributor') && can('refunds.read')) data.push({ path: '/refund-tasks', label: '退款待办', icon: Warning })
-  if (can('after_sales.read')) data.push({ path: '/after-sales', label: '售后工作台', icon: Warning })
+  if ((scenicHistorySupplier || hasCapability('distributor')) && can('finance.read')) data.push({ path: '/finance', label: '财务报表', icon: Money })
+  if (currentHistoryTenant && can('reports.read')) data.push({ path: '/report', label: '经营数据', icon: TrendCharts })
+  if ((scenicHistorySupplier || hasCapability('distributor')) && can('refunds.read')) data.push({ path: '/refund-tasks', label: '退款待办', icon: Warning })
+  if (currentHistoryTenant && can('after_sales.read')) data.push({ path: '/after-sales', label: '售后工作台', icon: Warning })
 
   const settings: NavItem[] = []
-  if (hasCapability('supplier') && can('onsite.manage')) settings.push({ path: '/staff', label: '员工管理', icon: User })
+  if (scenicSupplier && can('onsite.manage')) settings.push({ path: '/staff', label: '员工管理', icon: User })
   if (can('tenant_accounts.manage')) settings.push({ path: '/system-user', label: '管理账号', icon: UserFilled })
-  if (hasAnyCapability('supplier', 'distributor') && can('payment_config.manage')) settings.push({ path: '/payment-config', label: '支付参数配置', icon: CreditCard })
+  if ((scenicSupplier || hasCapability('distributor')) && can('payment_config.manage')) settings.push({ path: '/payment-config', label: '支付参数配置', icon: CreditCard })
   settings.push({ path: '/settings', label: '系统设置', icon: Setting })
 
   return [overview, { label: '销售中心', items: sales }, { label: '合作与渠道', items: distribution }, { label: '运营管理', items: operations }, { label: '数据与财务', items: data }, { label: '组织与设置', items: settings }]
@@ -277,20 +289,33 @@ const copyCode = async () => {
   }
 }
 
-const loadUser = () => {
-  const userStr = localStorage.getItem('user')
-  if (!userStr) return
-  try {
-    user.value = JSON.parse(userStr)
-    isSuperAdmin.value = user.value.scope === 'platform'
-  } catch {
-    console.error('Failed to parse user info')
-  }
+const applyUser = (next: any) => {
+  user.value = next || {}
+  isSuperAdmin.value = user.value.scope === 'platform'
 }
 
-watch(() => route.path, () => {
-  loadUser()
+const loadUser = async (force = false) => {
+  applyUser(readStoredUser())
+  applyUser(await refreshStoredTenantIdentity(force))
+}
+
+const handleIdentityRefresh = (event: Event) => {
+  applyUser((event as CustomEvent).detail)
+}
+
+const handleWindowFocus = () => { void loadUser(true) }
+
+watch(() => route.path, async () => {
+  await loadUser()
   mobileSidebarOpen.value = false
 })
-onMounted(loadUser)
+onMounted(() => {
+  window.addEventListener('tenant-identity-refreshed', handleIdentityRefresh)
+  window.addEventListener('focus', handleWindowFocus)
+  void loadUser()
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('tenant-identity-refreshed', handleIdentityRefresh)
+  window.removeEventListener('focus', handleWindowFocus)
+})
 </script>

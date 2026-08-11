@@ -278,7 +278,7 @@ func loadCtripAccount(accountID string) (*model.ChannelAccount, string, CtripCha
 	if err := query.First(&account).Error; err != nil {
 		return nil, "", CtripChannelConfig{}, err
 	}
-	if err := requireAnyActiveTenantCapability(model.DB, account.TenantID, "supplier"); err != nil {
+	if err := requireAnyActiveTenantCapability(model.DB, account.TenantID, "supplier", "distributor"); err != nil {
 		return nil, "", CtripChannelConfig{}, err
 	}
 	signKey, err := utils.DecryptAES(account.SecretCiphertext)

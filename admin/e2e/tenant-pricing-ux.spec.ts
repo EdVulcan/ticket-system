@@ -9,6 +9,7 @@ const supplierUser = {
   tenant_name: '青云景区',
   system_code: 'QY001',
   capabilities: [{ capability: 'supplier', status: 'active' }],
+  supplier_business_types: [{ business_type: 'scenic', status: 'active' }],
 }
 
 async function json(route: Route, body: unknown, status = 200) {

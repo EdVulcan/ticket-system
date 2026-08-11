@@ -25,6 +25,9 @@ func addBundleSupplier(t *testing.T, distributorID uint, name string, settlement
 		if err := tx.Create(&model.TenantCapability{TenantID: supplier.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
 			return err
 		}
+		if err := seedActiveScenicBusinessTypeTx(tx, supplier.ID); err != nil {
+			return err
+		}
 		area := model.ScenicArea{TenantID: supplier.ID, Code: fmt.Sprintf("BUNDLE-AREA-%d", supplier.ID), Name: name + " Park", Status: "active"}
 		if err := tx.Create(&area).Error; err != nil {
 			return err
@@ -262,6 +265,46 @@ func TestBundleEligibleComponentsSupportPostgresBooleanProducts(t *testing.T) {
 	}
 	if len(components) != 1 || components[0].SellerProductID != scenario.listingID {
 		t.Fatalf("eligible components=%+v, want listing %d", components, scenario.listingID)
+	}
+}
+
+func TestBundleSupplierScenicSuspensionBlocksNewSalesButAllowsShutdown(t *testing.T) {
+	resetBusinessData(t)
+	distributorID, first, second, bundle := seedCrossSupplierBundle(t, 2)
+	if err := (&TenantService{}).SetSupplierBusinessTypeAudited(first.supplierID, "scenic", "suspended", "pause scenic fulfillment", 9, "platform_admin"); err != nil {
+		t.Fatal(err)
+	}
+
+	components, err := (&BundleService{}).ListEligibleComponents(distributorID, "online")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, component := range components {
+		if component.SupplierTenantID == first.supplierID {
+			t.Fatalf("suspended supplier remained eligible: %+v", component)
+		}
+	}
+	view, err := (&BundleService{}).Get(distributorID, bundle.ID)
+	if err != nil {
+		t.Fatalf("historical bundle became unreadable: %v", err)
+	}
+	if view.Available {
+		t.Fatal("bundle with suspended fulfillment supplier remained sellable")
+	}
+	if err := (&BundleService{}).SetStatus(distributorID, bundle.ID, 1, "offline", "supplier paused"); err != nil {
+		t.Fatalf("bundle could not be taken offline: %v", err)
+	}
+	if err := (&BundleService{}).SetStatus(distributorID, bundle.ID, 1, "online", ""); err == nil {
+		t.Fatal("bundle was re-enabled while a supplier scenic business was suspended")
+	}
+	if _, err := (&BundleService{}).Revise(distributorID, bundle.ID, 1, BundleUpsertInput{
+		Name: "Blocked Revision", Type: "online", RetailPriceCents: 15000,
+		Components: []BundleComponentInput{
+			{SellerProductID: first.listingID, Quantity: 1, RetailAllocationCents: 8000},
+			{SellerProductID: second.listingID, Quantity: 1, RetailAllocationCents: 7000},
+		},
+	}); err == nil {
+		t.Fatal("bundle revision accepted a suspended fulfillment supplier")
 	}
 }
 

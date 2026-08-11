@@ -67,33 +67,45 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ArrowRight, Connection, List, Monitor, OfficeBuilding, Operation, Refresh, Tickets, TrendCharts } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { tenantRoleLabel } from '@/utils/permissions'
+import {
+  activeCapabilitySet,
+  activeSupplierBusinessTypeSet,
+  configuredSupplierBusinessTypeSet,
+  readStoredUser,
+} from '@/utils/tenantAccess'
 
-const user = computed<any>(() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })
+const user = ref<any>(readStoredUser())
 const isPlatform = computed(() => user.value.scope === 'platform')
 const canManagePlatform = computed(() => user.value.role === 'platform_admin')
-const capabilities = computed(() => new Set((user.value.capabilities || [])
-  .filter((item: any) => item.status === 'active' && (!item.expires_at || new Date(item.expires_at).getTime() > Date.now()))
-  .map((item: any) => item.capability)))
+const capabilities = computed(() => activeCapabilitySet(user.value))
 const hasCapability = (value: string) => capabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(hasCapability)
+const supplierBusinessTypes = computed(() => activeSupplierBusinessTypeSet(user.value))
+const configuredSupplierBusinessTypes = computed(() => configuredSupplierBusinessTypeSet(user.value))
+const scenicSupplier = computed(() => hasCapability('supplier') && supplierBusinessTypes.value.has('scenic'))
+const scenicHistorySupplier = computed(() => hasCapability('supplier') && configuredSupplierBusinessTypes.value.has('scenic'))
+const hasHistoryWorkspace = computed(() => scenicHistorySupplier.value || hasAnyCapability('distributor', 'travel_agency'))
 const permissions = computed(() => new Set(user.value.permissions || []))
 const can = (value: string) => user.value.role === 'super_admin' || permissions.value.has(value)
 
 const workspaces = computed(() => [
-  can('orders.read') ? { path: '/online-order', label: '订单管理', description: '查询订单、支付状态和售后进度', icon: List, tone: 'is-green' } : null,
-  hasCapability('supplier') && can('catalog.read') ? { path: '/product', label: '门票与库存', description: '维护线上、窗口票种和可售库存', icon: Tickets, tone: 'is-blue' } : null,
-  hasAnyCapability('supplier', 'distributor') && can('distribution.read') ? { path: '/distribution', label: '供销合作', description: '维护合作关系、产品授权和结算价格', icon: Connection, tone: 'is-amber' } : null,
-  hasAnyCapability('supplier', 'travel_agency') && can('teams.read') ? { path: '/teams', label: '旅行社团队', description: '处理团队计划、合同、入园和结算', icon: Operation, tone: 'is-coral' } : null,
-  can('reports.read') ? { path: '/report', label: '经营报表', description: '查看营业与核销收入数据', icon: TrendCharts, tone: 'is-blue' } : null,
-  hasAnyCapability('supplier', 'distributor') && can('operations.read') ? { path: '/operations', label: '运营工作台', description: '集中处理景区、渠道、班次和设备事项', icon: Monitor, tone: 'is-green' } : null,
+  hasHistoryWorkspace.value && can('orders.read') ? { path: '/online-order', label: '订单管理', description: '查询订单、支付状态和售后进度', icon: List, tone: 'is-green' } : null,
+  scenicHistorySupplier.value && can('catalog.read') ? { path: '/product', label: '门票与库存', description: '维护线上、窗口票种和可售库存', icon: Tickets, tone: 'is-blue' } : null,
+  (scenicHistorySupplier.value || hasCapability('distributor')) && can('distribution.read') ? { path: '/distribution', label: '供销合作', description: '维护合作关系、产品授权和结算价格', icon: Connection, tone: 'is-amber' } : null,
+  (scenicHistorySupplier.value || hasCapability('travel_agency')) && can('teams.read') ? { path: '/teams', label: '旅行社团队', description: '处理团队计划、合同、入园和结算', icon: Operation, tone: 'is-coral' } : null,
+  hasHistoryWorkspace.value && can('reports.read') ? { path: '/report', label: '经营报表', description: '查看营业与核销收入数据', icon: TrendCharts, tone: 'is-blue' } : null,
+  (scenicSupplier.value || hasCapability('distributor')) && can('operations.read') ? { path: '/operations', label: '运营工作台', description: '集中处理景区、渠道、班次和设备事项', icon: Monitor, tone: 'is-green' } : null,
 ].filter(Boolean) as Array<{ path: string; label: string; description: string; icon: any; tone: string }>)
 
 const capabilityLabels = computed(() => [
-  hasCapability('supplier') ? '景区供应商' : '',
+  hasCapability('supplier') ? '供应商' : '',
+  supplierBusinessTypes.value.has('scenic') ? '景区票务' : '',
+  !supplierBusinessTypes.value.has('scenic') && configuredSupplierBusinessTypes.value.has('scenic') ? '景区票务（已暂停）' : '',
+  supplierBusinessTypes.value.has('hotel') ? '酒店住宿' : '',
   hasCapability('distributor') ? '分销商' : '',
   hasCapability('travel_agency') ? '旅行社' : ''
 ].filter(Boolean))
@@ -110,7 +122,15 @@ const loadOverview = async () => {
   loading.value = true
   try { Object.assign(overview, (await request.get('/platform/overview')).data) } finally { loading.value = false }
 }
-onMounted(loadOverview)
+const handleIdentityRefresh = (event: Event) => {
+  user.value = (event as CustomEvent).detail || {}
+}
+
+onMounted(() => {
+  window.addEventListener('tenant-identity-refreshed', handleIdentityRefresh)
+  void loadOverview()
+})
+onBeforeUnmount(() => window.removeEventListener('tenant-identity-refreshed', handleIdentityRefresh))
 </script>
 
 <style scoped>

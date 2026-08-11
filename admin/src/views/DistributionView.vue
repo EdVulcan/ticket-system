@@ -91,7 +91,7 @@
         </el-tab-pane>
 
         <!-- Tab 2: My Agents -->
-        <el-tab-pane v-if="canSupply" label="我的分销商 (我是供应商)" name="agents">
+        <el-tab-pane v-if="canViewSupplyHistory" label="我的分销商 (我是供应商)" name="agents">
             <div class="flex items-center justify-between mb-4 mt-2">
                 <h3 class="font-bold text-gray-700">代理申请列表</h3>
                 <el-button link type="primary" @click="fetchAgents"><el-icon><Refresh /></el-icon></el-button>
@@ -117,19 +117,19 @@
                 <el-table-column label="操作" width="200" fixed="right" align="center">
                 <template #default="{ row }">
                     <div v-if="row.status === 'pending'">
-                        <el-button v-if="canWrite" type="success" size="small" @click="handleAudit(row, 'active')">通过</el-button>
-                        <el-button v-if="canWrite" type="danger" size="small" @click="handleAudit(row, 'rejected')">拒绝</el-button>
+                        <el-button v-if="canSupplierWrite" type="success" size="small" @click="handleAudit(row, 'active')">通过</el-button>
+                        <el-button v-if="canSupplierWrite" type="danger" size="small" @click="handleAudit(row, 'rejected')">拒绝</el-button>
                     </div>
                     <div v-else>
-                         <el-button v-if="canWrite" type="primary" size="small" @click="handleOffers(row)">产品结算价</el-button>
-                         <el-button v-if="canWrite" type="warning" size="small" @click="handleRecharge(row)">充值</el-button>
+                         <el-button v-if="canSupplierHistoryWrite" type="primary" size="small" @click="handleOffers(row)">产品结算价</el-button>
+                         <el-button v-if="canSupplierWrite" type="warning" size="small" @click="handleRecharge(row)">充值</el-button>
                     </div>
                 </template>
                 </el-table-column>
             </el-table>
         </el-tab-pane>
 
-        <el-tab-pane v-if="canSupply" label="供应履约" name="fulfillments">
+        <el-tab-pane v-if="canViewSupplyHistory" label="供应履约" name="fulfillments">
             <div class="flex items-center justify-between mb-4 mt-2">
                 <div class="flex gap-2 items-center">
                     <el-select v-model="fulfillmentStatus" clearable placeholder="全部状态" style="width: 160px" @change="fetchFulfillments">
@@ -333,7 +333,7 @@
             <span class="text-sm text-gray-500">这里的每一行同时决定该分销商可以销售的产品和对应结算价。</span>
             <div class="flex gap-2">
                 <el-button size="small" @click="loadOffers">刷新</el-button>
-                <el-button v-if="canWrite" type="primary" size="small" @click="openOfferForm()">添加产品价格</el-button>
+                <el-button v-if="canSupplierWrite" type="primary" size="small" @click="openOfferForm()">添加产品价格</el-button>
             </div>
         </div>
         <el-table :data="offers" v-loading="loadingOffers" height="360" stripe>
@@ -345,10 +345,10 @@
             <el-table-column label="状态" width="100"><template #default="{ row }">{{ offerStatusText(row.status) }}</template></el-table-column>
             <el-table-column label="操作" width="220" fixed="right">
                 <template #default="{ row }">
-                    <el-button v-if="canWrite" link type="primary" @click="openOfferForm(row)">修改价格</el-button>
-                    <el-button v-if="canWrite && row.status === 'active'" link type="warning" @click="handleOfferStatus(row, 'suspended')">暂停</el-button>
-                    <el-button v-else-if="canWrite && row.status === 'suspended'" link type="success" @click="handleOfferStatus(row, 'active')">恢复</el-button>
-                    <el-button v-if="canWrite && row.status !== 'expired'" link type="danger" @click="handleOfferStatus(row, 'expired')">终止</el-button>
+                    <el-button v-if="canSupplierWrite" link type="primary" @click="openOfferForm(row)">修改价格</el-button>
+                    <el-button v-if="canSupplierHistoryWrite && row.status === 'active'" link type="warning" @click="handleOfferStatus(row, 'suspended')">暂停</el-button>
+                    <el-button v-else-if="canSupplierWrite && row.status === 'suspended'" link type="success" @click="handleOfferStatus(row, 'active')">恢复</el-button>
+                    <el-button v-if="canSupplierHistoryWrite && row.status !== 'expired'" link type="danger" @click="handleOfferStatus(row, 'expired')">终止</el-button>
                 </template>
             </el-table-column>
         </el-table>
@@ -438,11 +438,15 @@ import { Connection, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { hasPermission } from '@/utils/permissions'
 import request from '@/utils/request'
+import { activeCapabilitySet, isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 
-const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
-const activeCapabilities = new Set((currentUser.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability))
+const currentUser = readStoredUser()
+const activeCapabilities = activeCapabilitySet(currentUser)
 const canWrite = hasPermission(currentUser, 'distribution.write')
-const canSupply = computed(() => activeCapabilities.has('supplier'))
+const canSupply = computed(() => isActiveScenicSupplier(currentUser))
+const canViewSupplyHistory = computed(() => isScenicHistorySupplier(currentUser))
+const canSupplierWrite = computed(() => canWrite && canSupply.value)
+const canSupplierHistoryWrite = computed(() => canWrite && canViewSupplyHistory.value)
 const canDistribute = computed(() => activeCapabilities.has('distributor'))
 const activeTab = ref(canDistribute.value ? 'suppliers' : 'agents')
 
@@ -925,6 +929,6 @@ const getLevelText = (level: string) => {
 
 onMounted(() => {
     if (canDistribute.value) fetchSuppliers()
-    if (canSupply.value) fetchAgents()
+    if (canViewSupplyHistory.value) fetchAgents()
 })
 </script>

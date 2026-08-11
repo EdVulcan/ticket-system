@@ -79,7 +79,7 @@ func resetBusinessData(t *testing.T) {
 			&model.ProductRevision{}, &model.SettlementLine{}, &model.SettlementAdjustment{}, &model.SettlementStatement{},
 			&model.CheckInRecord{}, &model.OrderVisitor{}, &model.Ticket{}, &model.OrderItem{}, &model.Order{}, &model.ProductInventory{},
 			&model.Product{}, &model.RuleItem{}, &model.RuleGroup{}, &model.TicketRule{}, &model.Device{}, &model.CheckPoint{},
-			&model.TransactionRecord{}, &model.CapitalAccount{}, &model.DistributorRelationship{}, &model.TenantCapability{}, &model.ScenicArea{}, &model.PlatformUser{}, &model.TicketEntitlement{}, &model.FulfillmentOrder{}, &model.SellerListing{}, &model.ProductOffer{}, &model.Tenant{},
+			&model.TransactionRecord{}, &model.CapitalAccount{}, &model.DistributorRelationship{}, &model.SupplierBusinessType{}, &model.TenantCapability{}, &model.ScenicArea{}, &model.PlatformUser{}, &model.TicketEntitlement{}, &model.FulfillmentOrder{}, &model.SellerListing{}, &model.ProductOffer{}, &model.Tenant{},
 		} {
 			if err := tx.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(table).Error; err != nil {
 				return err
@@ -90,6 +90,12 @@ func resetBusinessData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reset database: %v", err)
 	}
+}
+
+func seedActiveScenicBusinessTypeTx(tx *gorm.DB, tenantID uint) error {
+	return tx.Create(&model.SupplierBusinessType{
+		TenantID: tenantID, BusinessType: "scenic", Status: "active",
+	}).Error
 }
 
 func verificationDeviceID(t *testing.T, tenantID, checkpointID uint) uint {
@@ -748,6 +754,9 @@ func seedSellableProduct(t *testing.T, stockType string, stock int) (uint, uint)
 		if err := tx.Create(&model.TenantCapability{TenantID: tenant.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
 			return err
 		}
+		if err := seedActiveScenicBusinessTypeTx(tx, tenant.ID); err != nil {
+			return err
+		}
 		area := model.ScenicArea{TenantID: tenant.ID, Code: fmt.Sprintf("AREA-%d", tenant.ID), Name: "Main Park", Status: "active"}
 		if err := tx.Create(&area).Error; err != nil {
 			return err
@@ -1032,6 +1041,9 @@ func seedDistributionScenario(t *testing.T) distributionScenario {
 			return err
 		}
 		if err := tx.Create(&model.TenantCapability{TenantID: supplier.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
+			return err
+		}
+		if err := seedActiveScenicBusinessTypeTx(tx, supplier.ID); err != nil {
 			return err
 		}
 		if err := tx.Create(&model.TenantCapability{TenantID: distributor.ID, Capability: "distributor", Status: "active"}).Error; err != nil {

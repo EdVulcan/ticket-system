@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
+	"sort"
 	"strings"
 	"ticket-backend/internal/ctrip"
 	"ticket-backend/internal/model"
@@ -26,9 +28,12 @@ const (
 	ctripProductionOrderEndpoint  = "https://ttdentry.ctrip.com/ttd-connect-orderentryapi/supplier/order/notice.do"
 	ctripSyncMaxAttempts          = 5
 	ctripSyncStaleAfter           = 5 * time.Minute
+	ctripProductRequestTimeout    = 5 * time.Second
 )
 
-type CtripSyncService struct{}
+type CtripSyncService struct {
+	HTTP *http.Client
+}
 
 type CtripSyncResult struct {
 	Tasks []model.CtripOutboundTask `json:"tasks"`
@@ -95,15 +100,19 @@ func (s *CtripSyncService) EnqueueMappingSync(tenantID, accountID, mappingID uin
 		if mapping.ChannelSaleCents <= 0 || mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents {
 			return errors.New("configure the Ctrip sale and cost prices before synchronization")
 		}
-		var product model.Product
-		if err := tx.Where("id = ? AND tenant_id = ?", mapping.ProductID, tenantID).First(&product).Error; err != nil {
+		var listing model.Product
+		if err := tx.Where("id = ? AND tenant_id = ?", mapping.ProductID, tenantID).First(&listing).Error; err != nil {
 			return errors.New("mapped supplier product not found")
 		}
-		if product.SourceProductID != 0 || product.FulfillmentTenantID != 0 && product.FulfillmentTenantID != tenantID {
-			return errors.New("only supplier-owned products can be synchronized to Ctrip")
-		}
-		if product.Status != "online" {
+		if listing.Status != "online" {
 			return errors.New("offline products cannot be synchronized to Ctrip")
+		}
+		product, _, err := resolveFulfillmentProduct(tx, &listing, tenantID, "ota")
+		if err != nil {
+			return err
+		}
+		if err := requireActiveScenicSupplier(tx, product.TenantID); err != nil {
+			return errors.New("scenic supplier business is unavailable")
 		}
 		if product.ValidityType == "date" {
 			if product.ValidityStartDate != nil && start.Before(startOfDay(*product.ValidityStartDate)) {
@@ -117,7 +126,7 @@ func (s *CtripSyncService) EnqueueMappingSync(tenantID, accountID, mappingID uin
 		sequence := fmt.Sprintf("%d%d%d", time.Now().UnixNano(), account.ID, mapping.ID)
 		prices := make([]ctrip.Price, 0, 90)
 		inventories := make([]ctrip.Inventory, 0, 90)
-		remainingByDate, err := ctripRemainingInventory(tx, &product, start, end)
+		remainingByDate, err := ctripRemainingInventory(tx, product, start, end)
 		if err != nil {
 			return err
 		}
@@ -175,6 +184,186 @@ func (s *CtripSyncService) EnqueueMappingSync(tenantID, accountID, mappingID uin
 		return nil, err
 	}
 	return &result, nil
+}
+
+type ctripSuspendedMapping struct {
+	MappingID       uint
+	AccountID       uint
+	AccountTenantID uint
+	AccountStatus   string
+	ExternalCode    string
+	Environment     string
+	ValidityType    string
+}
+
+// enqueueCtripScenicSuspensionTasksTx closes every active Ctrip mapping whose
+// inventory is fulfilled by the suspended scenic supplier. It runs in the
+// same transaction as the business-type transition so a successful pause
+// always leaves a durable zero-inventory task behind.
+func enqueueCtripScenicSuspensionTasksTx(tx *gorm.DB, fulfillmentTenantID uint, now time.Time) error {
+	if fulfillmentTenantID == 0 {
+		return errors.New("fulfillment supplier is required")
+	}
+	var mappings []ctripSuspendedMapping
+	actualTenantSQL := "COALESCE(NULLIF(product.fulfillment_tenant_id, 0), NULLIF(product.source_tenant_id, 0), product.tenant_id)"
+	actualProductSQL := "COALESCE(NULLIF(product.fulfillment_product_id, 0), NULLIF(product.source_product_id, 0), product.id)"
+	if err := tx.Table("channel_product_mappings AS mapping").
+		Select(`mapping.id AS mapping_id, account.id AS account_id, account.tenant_id AS account_tenant_id,
+			account.status AS account_status, mapping.external_code, account.environment,
+			COALESCE(fulfillment.validity_type, product.validity_type) AS validity_type`).
+		Joins("JOIN channel_accounts account ON account.id = mapping.channel_account_id AND account.type = 'ctrip' AND account.deleted_at IS NULL").
+		Joins("JOIN products product ON product.id = mapping.product_id AND product.tenant_id = account.tenant_id").
+		Joins("LEFT JOIN products fulfillment ON fulfillment.id = "+actualProductSQL+" AND fulfillment.tenant_id = "+actualTenantSQL).
+		Where("mapping.status = ? AND mapping.deleted_at IS NULL", "active").
+		Where(actualTenantSQL+" = ?", fulfillmentTenantID).
+		Scan(&mappings).Error; err != nil {
+		return err
+	}
+	for _, mapping := range mappings {
+		var lockedMapping model.ChannelProductMapping
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND channel_account_id = ? AND status = ?", mapping.MappingID, mapping.AccountID, "active").
+			First(&lockedMapping).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return err
+		}
+		mapping.ExternalCode = lockedMapping.ExternalCode
+		var historical []model.CtripOutboundTask
+		if err := tx.Select("payload_json").
+			Where("channel_product_mapping_id = ? AND kind IN ?", mapping.MappingID, []string{"inventory", "inventory_shutdown"}).
+			Find(&historical).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&lockedMapping).Update("status", "disabled").Error; err != nil {
+			return err
+		}
+		message := "superseded by scenic supplier suspension"
+		if err := tx.Model(&model.CtripOutboundTask{}).
+			Where("channel_product_mapping_id = ? AND kind IN ? AND status = ?", mapping.MappingID, []string{"price", "inventory", "inventory_shutdown"}, "pending").
+			Updates(map[string]interface{}{
+				"status": "failed", "next_attempt_at": nil, "locked_at": nil,
+				"last_error": message, "completed_at": now,
+			}).Error; err != nil {
+			return err
+		}
+
+		requests, err := ctripZeroInventoryRequests(mapping.ExternalCode, mapping.ValidityType, historical, now)
+		if err != nil {
+			return err
+		}
+		_, inventoryEndpoint, endpointErr := ctripSyncEndpoints(mapping.Environment)
+		for _, request := range requests {
+			payload, err := json.Marshal(request)
+			if err != nil {
+				return err
+			}
+			digest := sha256.Sum256(payload)
+			nextAttemptAt := now
+			task := model.CtripOutboundTask{
+				TenantID: mapping.AccountTenantID, ChannelAccountID: mapping.AccountID,
+				ChannelProductMappingID: mapping.MappingID, Kind: "inventory_shutdown",
+				PayloadHash: hex.EncodeToString(digest[:]), Endpoint: inventoryEndpoint,
+				PayloadJSON: string(payload), Status: "pending", NextAttemptAt: &nextAttemptAt,
+			}
+			if endpointErr != nil || mapping.AccountStatus == "disabled" {
+				reason := "manual Ctrip inventory shutdown required"
+				if endpointErr != nil {
+					reason += ": " + endpointErr.Error()
+				} else {
+					reason += ": channel account is disabled"
+				}
+				task.Status, task.NextAttemptAt, task.LastError, task.CompletedAt = "failed", nil, reason, &now
+			}
+			if err := tx.Create(&task).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func ctripZeroInventoryRequests(externalCode, validityType string, historical []model.CtripOutboundTask, now time.Time) ([]ctrip.InventoryRequest, error) {
+	type coverage struct {
+		nonDate bool
+		dates   map[string]struct{}
+	}
+	today := startOfDay(now)
+	byExternalCode := make(map[string]*coverage)
+	ensureCoverage := func(code string) *coverage {
+		code = strings.TrimSpace(code)
+		if code == "" {
+			code = strings.TrimSpace(externalCode)
+		}
+		if byExternalCode[code] == nil {
+			byExternalCode[code] = &coverage{dates: make(map[string]struct{})}
+		}
+		return byExternalCode[code]
+	}
+	current := ensureCoverage(externalCode)
+	current.nonDate = validityType == "days"
+	for _, task := range historical {
+		var payload ctrip.InventoryRequest
+		if json.Unmarshal([]byte(task.PayloadJSON), &payload) != nil {
+			continue
+		}
+		target := ensureCoverage(payload.SupplierOptionID)
+		if payload.DateType == "DATE_NOT_REQUIRED" {
+			target.nonDate = true
+		}
+		for _, inventory := range payload.Inventories {
+			date, err := time.ParseInLocation("2006-01-02", inventory.Date, today.Location())
+			if err == nil && !date.Before(today) {
+				target.dates[inventory.Date] = struct{}{}
+			}
+		}
+	}
+	if validityType != "days" {
+		for offset := 0; offset < 90; offset++ {
+			current.dates[today.AddDate(0, 0, offset).Format("2006-01-02")] = struct{}{}
+		}
+	}
+	codes := make([]string, 0, len(byExternalCode))
+	for code := range byExternalCode {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
+	requests := make([]ctrip.InventoryRequest, 0)
+	for _, code := range codes {
+		covered := byExternalCode[code]
+		if covered.nonDate {
+			sequence, err := newCtripSequenceID(now)
+			if err != nil {
+				return nil, err
+			}
+			requests = append(requests, ctrip.InventoryRequest{
+				SequenceID: sequence + "Z", SupplierOptionID: code,
+				DateType: "DATE_NOT_REQUIRED", Inventories: []ctrip.Inventory{{Quantity: 0}},
+			})
+		}
+		orderedDates := make([]string, 0, len(covered.dates))
+		for date := range covered.dates {
+			orderedDates = append(orderedDates, date)
+		}
+		sort.Strings(orderedDates)
+		for start := 0; start < len(orderedDates); start += 90 {
+			end := minInt(start+90, len(orderedDates))
+			inventories := make([]ctrip.Inventory, 0, end-start)
+			for _, date := range orderedDates[start:end] {
+				inventories = append(inventories, ctrip.Inventory{Date: date, Quantity: 0})
+			}
+			sequence, err := newCtripSequenceID(now)
+			if err != nil {
+				return nil, err
+			}
+			requests = append(requests, ctrip.InventoryRequest{
+				SequenceID: sequence + "Z", SupplierOptionID: code,
+				DateType: "DATE_REQUIRED", Inventories: inventories,
+			})
+		}
+	}
+	return requests, nil
 }
 
 func ctripRemainingInventory(tx *gorm.DB, product *model.Product, start, end time.Time) (map[string]int, error) {
@@ -403,6 +592,15 @@ func claimCtripOutboundTask(now time.Time) (*model.CtripOutboundTask, error) {
 }
 
 func (s *CtripSyncService) processTask(ctx context.Context, task *model.CtripOutboundTask, now time.Time) error {
+	if task == nil || task.LockedAt == nil {
+		return errors.New("ctrip task ownership is invalid")
+	}
+	if task.Kind == "price" || task.Kind == "inventory" || task.Kind == "inventory_shutdown" {
+		return s.processProductTask(ctx, task, now)
+	}
+	if task.Kind != "consumed" {
+		return errors.New("unsupported ctrip outbound task kind")
+	}
 	var account model.ChannelAccount
 	if err := model.DB.Where("id = ? AND tenant_id = ? AND type = ?", task.ChannelAccountID, task.TenantID, "ctrip").First(&account).Error; err != nil {
 		return errors.New("ctrip channel account is no longer available")
@@ -410,65 +608,18 @@ func (s *CtripSyncService) processTask(ctx context.Context, task *model.CtripOut
 	if account.Status == "disabled" {
 		return errors.New("ctrip channel is disabled")
 	}
-	var expectedEndpoint string
-	switch task.Kind {
-	case "price", "inventory":
-		priceEndpoint, stockEndpoint, endpointErr := ctripSyncEndpoints(account.Environment)
-		if endpointErr != nil {
-			return endpointErr
-		}
-		expectedEndpoint = stockEndpoint
-		if task.Kind == "price" {
-			expectedEndpoint = priceEndpoint
-		}
-	case "consumed":
-		var endpointErr error
-		expectedEndpoint, endpointErr = ctripOrderNoticeEndpoint(account.Environment)
-		if endpointErr != nil {
-			return endpointErr
-		}
-	default:
-		return errors.New("unsupported ctrip outbound task kind")
+	expectedEndpoint, err := ctripTaskExpectedEndpoint(&account, task.Kind)
+	if err != nil {
+		return err
 	}
 	if task.Endpoint != expectedEndpoint {
 		return errors.New("ctrip task environment no longer matches the channel environment; create a new synchronization")
 	}
-	signKey, err := utils.DecryptAES(account.SecretCiphertext)
+	client, err := s.ctripClient(&account)
 	if err != nil {
-		return fmt.Errorf("decrypt ctrip sign key: %w", err)
+		return err
 	}
-	configText, err := utils.DecryptAES(account.ProtocolConfigCiphertext)
-	if err != nil {
-		return fmt.Errorf("decrypt ctrip protocol config: %w", err)
-	}
-	var config CtripChannelConfig
-	if err := json.Unmarshal([]byte(configText), &config); err != nil {
-		return fmt.Errorf("decode ctrip protocol config: %w", err)
-	}
-	client := ctrip.Client{AccountID: account.AppID, SignKey: signKey, AESKey: config.AESKey, AESIV: config.AESIV}
-	var response *ctrip.Response
-	switch task.Kind {
-	case "price":
-		var payload ctrip.PriceRequest
-		if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
-			return err
-		}
-		response, err = client.SyncPrice(ctx, task.Endpoint, payload)
-	case "inventory":
-		var payload ctrip.InventoryRequest
-		if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
-			return err
-		}
-		response, err = client.SyncInventory(ctx, task.Endpoint, payload)
-	case "consumed":
-		var payload ctrip.ConsumedNoticeRequest
-		if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
-			return err
-		}
-		response, err = client.NotifyConsumed(ctx, task.Endpoint, payload)
-	default:
-		return errors.New("unsupported ctrip outbound task kind")
-	}
+	response, err := sendCtripTask(ctx, client, task)
 	if err != nil {
 		return err
 	}
@@ -476,10 +627,213 @@ func (s *CtripSyncService) processTask(ctx context.Context, task *model.CtripOut
 		return fmt.Errorf("ctrip rejected outbound request (%s): %s", response.Code, response.Message)
 	}
 	return model.Write(func(tx *gorm.DB) error {
-		return tx.Model(&model.CtripOutboundTask{}).Where("id = ? AND locked_at = ?", task.ID, task.LockedAt).Updates(map[string]interface{}{
-			"status": "succeeded", "result_code": response.Code, "result_message": response.Message, "last_error": "", "next_attempt_at": nil, "locked_at": nil, "completed_at": now,
-		}).Error
+		return completeCtripOutboundTaskTx(tx, task, response, now)
 	})
+}
+
+func (s *CtripSyncService) processProductTask(ctx context.Context, claimed *model.CtripOutboundTask, now time.Time) error {
+	return model.Write(func(tx *gorm.DB) error {
+		var mapping model.ChannelProductMapping
+		if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND channel_account_id = ?", claimed.ChannelProductMappingID, claimed.ChannelAccountID).
+			First(&mapping).Error; err != nil {
+			return errors.New("ctrip product mapping is unavailable")
+		}
+		var task model.CtripOutboundTask
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND status = ? AND locked_at = ?", claimed.ID, "processing", *claimed.LockedAt).
+			First(&task).Error; err != nil {
+			return errors.New("ctrip product task ownership was lost")
+		}
+		if task.Kind != "price" && task.Kind != "inventory" && task.Kind != "inventory_shutdown" {
+			return errors.New("unsupported ctrip outbound task kind")
+		}
+		var account model.ChannelAccount
+		if err := tx.Where("id = ? AND tenant_id = ? AND type = ?", task.ChannelAccountID, task.TenantID, "ctrip").First(&account).Error; err != nil {
+			return errors.New("ctrip channel account is no longer available")
+		}
+		if account.Status == "disabled" {
+			return errors.New("ctrip channel is disabled")
+		}
+		expectedEndpoint, err := ctripTaskExpectedEndpoint(&account, task.Kind)
+		if err != nil {
+			return err
+		}
+		if task.Endpoint != expectedEndpoint {
+			return errors.New("ctrip task environment no longer matches the channel environment; create a new synchronization")
+		}
+		shutdownInventory := task.Kind == "inventory_shutdown"
+		if shutdownInventory {
+			if !ctripInventoryPayloadIsZero(task.PayloadJSON) {
+				return failUnavailableCtripProductTaskTx(tx, &task, now, errors.New("Ctrip shutdown inventory task must contain only zero quantities"))
+			}
+			if mapping.Status != "disabled" {
+				return supersedeCtripOutboundTaskTx(tx, &task, now, "mapping was reactivated before shutdown inventory was sent")
+			}
+		} else {
+			if err := ctripOutboundProductAvailableTx(tx, &mapping, &task); err != nil {
+				return failUnavailableCtripProductTaskTx(tx, &task, now, err)
+			}
+		}
+		client, err := s.ctripClient(&account)
+		if err != nil {
+			return err
+		}
+		requestCtx, cancel := context.WithTimeout(tx.Statement.Context, ctripProductRequestTimeout)
+		stopOuterCancel := context.AfterFunc(ctx, cancel)
+		response, err := sendCtripTask(requestCtx, client, &task)
+		stopOuterCancel()
+		cancel()
+		if err != nil {
+			return err
+		}
+		if response.Code != "0000" {
+			return fmt.Errorf("ctrip rejected outbound request (%s): %s", response.Code, response.Message)
+		}
+		return completeCtripOutboundTaskTx(tx, &task, response, now)
+	})
+}
+
+func ctripTaskExpectedEndpoint(account *model.ChannelAccount, kind string) (string, error) {
+	if account == nil {
+		return "", errors.New("ctrip channel account is unavailable")
+	}
+	if kind == "consumed" {
+		return ctripOrderNoticeEndpoint(account.Environment)
+	}
+	priceEndpoint, stockEndpoint, err := ctripSyncEndpoints(account.Environment)
+	if err != nil {
+		return "", err
+	}
+	if kind == "price" {
+		return priceEndpoint, nil
+	}
+	if kind == "inventory" || kind == "inventory_shutdown" {
+		return stockEndpoint, nil
+	}
+	return "", errors.New("unsupported ctrip outbound task kind")
+}
+
+func (s *CtripSyncService) ctripClient(account *model.ChannelAccount) (ctrip.Client, error) {
+	signKey, err := utils.DecryptAES(account.SecretCiphertext)
+	if err != nil {
+		return ctrip.Client{}, fmt.Errorf("decrypt ctrip sign key: %w", err)
+	}
+	configText, err := utils.DecryptAES(account.ProtocolConfigCiphertext)
+	if err != nil {
+		return ctrip.Client{}, fmt.Errorf("decrypt ctrip protocol config: %w", err)
+	}
+	var config CtripChannelConfig
+	if err := json.Unmarshal([]byte(configText), &config); err != nil {
+		return ctrip.Client{}, fmt.Errorf("decode ctrip protocol config: %w", err)
+	}
+	return ctrip.Client{AccountID: account.AppID, SignKey: signKey, AESKey: config.AESKey, AESIV: config.AESIV, HTTP: s.HTTP}, nil
+}
+
+func sendCtripTask(ctx context.Context, client ctrip.Client, task *model.CtripOutboundTask) (*ctrip.Response, error) {
+	var response *ctrip.Response
+	var err error
+	switch task.Kind {
+	case "price":
+		var payload ctrip.PriceRequest
+		if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
+			return nil, err
+		}
+		response, err = client.SyncPrice(ctx, task.Endpoint, payload)
+	case "inventory", "inventory_shutdown":
+		var payload ctrip.InventoryRequest
+		if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
+			return nil, err
+		}
+		response, err = client.SyncInventory(ctx, task.Endpoint, payload)
+	case "consumed":
+		var payload ctrip.ConsumedNoticeRequest
+		if err := json.Unmarshal([]byte(task.PayloadJSON), &payload); err != nil {
+			return nil, err
+		}
+		response, err = client.NotifyConsumed(ctx, task.Endpoint, payload)
+	default:
+		return nil, errors.New("unsupported ctrip outbound task kind")
+	}
+	return response, err
+}
+
+func ctripOutboundProductAvailableTx(tx *gorm.DB, mapping *model.ChannelProductMapping, task *model.CtripOutboundTask) error {
+	if mapping == nil || task == nil || mapping.ID == 0 || mapping.Status != "active" {
+		return errors.New("ctrip product mapping is unavailable")
+	}
+	var product model.Product
+	if err := tx.Where("id = ? AND tenant_id = ? AND status = ?", mapping.ProductID, task.TenantID, "online").First(&product).Error; err != nil {
+		return errors.New("ctrip product is unavailable")
+	}
+	if err := requireActiveScenicSupplier(tx, productFulfillmentTenantID(&product)); err != nil {
+		return errors.New("scenic supplier business is unavailable")
+	}
+	return nil
+}
+
+func ctripInventoryPayloadIsZero(payloadJSON string) bool {
+	var payload ctrip.InventoryRequest
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil || len(payload.Inventories) == 0 {
+		return false
+	}
+	for _, inventory := range payload.Inventories {
+		if inventory.Quantity != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func failUnavailableCtripProductTaskTx(tx *gorm.DB, task *model.CtripOutboundTask, now time.Time, cause error) error {
+	message := strings.TrimSpace(cause.Error())
+	result := tx.Model(&model.CtripOutboundTask{}).
+		Where("id = ? AND status = ? AND locked_at = ?", task.ID, "processing", *task.LockedAt).
+		Updates(map[string]interface{}{
+			"status": "failed", "next_attempt_at": nil, "locked_at": nil, "last_error": message, "completed_at": now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("ctrip product task ownership was lost")
+	}
+	return nil
+}
+
+func supersedeCtripOutboundTaskTx(tx *gorm.DB, task *model.CtripOutboundTask, now time.Time, reason string) error {
+	result := tx.Model(&model.CtripOutboundTask{}).
+		Where("id = ? AND status = ? AND locked_at = ?", task.ID, "processing", *task.LockedAt).
+		Updates(map[string]interface{}{
+			"status": "succeeded", "result_code": "SUPERSEDED", "result_message": strings.TrimSpace(reason),
+			"last_error": "", "next_attempt_at": nil, "locked_at": nil, "completed_at": now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("ctrip product task ownership was lost")
+	}
+	return nil
+}
+
+func completeCtripOutboundTaskTx(tx *gorm.DB, task *model.CtripOutboundTask, response *ctrip.Response, now time.Time) error {
+	if task == nil || task.LockedAt == nil || response == nil {
+		return errors.New("ctrip task completion is invalid")
+	}
+	result := tx.Model(&model.CtripOutboundTask{}).
+		Where("id = ? AND status = ? AND locked_at = ?", task.ID, "processing", *task.LockedAt).
+		Updates(map[string]interface{}{
+			"status": "succeeded", "result_code": response.Code, "result_message": response.Message,
+			"last_error": "", "next_attempt_at": nil, "locked_at": nil, "completed_at": now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("ctrip task ownership was lost")
+	}
+	return nil
 }
 
 func deferCtripOutboundTask(task *model.CtripOutboundTask, now time.Time, cause error) error {
@@ -493,7 +847,19 @@ func deferCtripOutboundTask(task *model.CtripOutboundTask, now time.Time, cause 
 		message = message[:500]
 	}
 	return model.Write(func(tx *gorm.DB) error {
-		return tx.Model(&model.CtripOutboundTask{}).Where("id = ? AND locked_at = ?", task.ID, task.LockedAt).Updates(map[string]interface{}{"status": status, "next_attempt_at": next, "locked_at": nil, "last_error": message}).Error
+		if task == nil || task.LockedAt == nil {
+			return errors.New("ctrip task ownership is invalid")
+		}
+		result := tx.Model(&model.CtripOutboundTask{}).
+			Where("id = ? AND status = ? AND locked_at = ?", task.ID, "processing", *task.LockedAt).
+			Updates(map[string]interface{}{"status": status, "next_attempt_at": next, "locked_at": nil, "last_error": message})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("ctrip task ownership was lost")
+		}
+		return nil
 	})
 }
 

@@ -120,7 +120,7 @@ func (s *ChannelService) CreateCtrip(tenantID uint, account *model.ChannelAccoun
 		account.RateLimitPerMin = 600
 	}
 	return model.Write(func(tx *gorm.DB) error {
-		if err := requireAnyActiveTenantCapability(tx, tenantID, "supplier"); err != nil {
+		if err := requireAnyActiveTenantCapability(tx, tenantID, "supplier", "distributor"); err != nil {
 			return err
 		}
 		var duplicate int64
@@ -400,6 +400,9 @@ func (s *ChannelService) AddMapping(tenantID uint, mapping *model.ChannelProduct
 		if err := tx.Where("id = ? AND tenant_id = ?", mapping.ProductID, tenantID).First(&product).Error; err != nil {
 			return errors.New("product not found")
 		}
+		if err := requireActiveScenicSupplier(tx, productFulfillmentTenantID(&product)); err != nil {
+			return errors.New("scenic supplier business is unavailable")
+		}
 		if (account.Type == "ctrip" || account.Type == "xiaohongshu") && (mapping.ChannelSaleCents <= 0 || mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents) {
 			return errors.New("official channel mapping requires a positive sale price and a cost price not greater than the sale price")
 		}
@@ -441,12 +444,15 @@ func (s *ChannelService) UpdateMapping(tenantID, accountID, mappingID uint, inpu
 		if err := tx.Where("id = ? AND channel_account_id = ?", mappingID, account.ID).First(&mapping).Error; err != nil {
 			return errors.New("channel product mapping not found")
 		}
-		var productCount int64
-		if err := tx.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", mapping.ProductID, tenantID).Count(&productCount).Error; err != nil {
-			return err
-		}
-		if productCount != 1 {
+		var product model.Product
+		if err := tx.Where("id = ? AND tenant_id = ?", mapping.ProductID, tenantID).First(&product).Error; err != nil {
 			return errors.New("mapped product does not belong to this tenant")
+		}
+		if err := requireActiveScenicSupplier(tx, productFulfillmentTenantID(&product)); err != nil {
+			if input.Status != "disabled" {
+				return errors.New("scenic supplier business is unavailable")
+			}
+			return tx.Model(&mapping).Update("status", "disabled").Error
 		}
 		return tx.Model(&mapping).Updates(map[string]interface{}{
 			"external_code":      input.ExternalCode,
@@ -475,6 +481,17 @@ func (s *ChannelService) UpdateMappingPricing(tenantID, accountID, mappingID uin
 		var account model.ChannelAccount
 		if err := tx.Where("id = ? AND tenant_id = ? AND type = ?", accountID, tenantID, "ctrip").First(&account).Error; err != nil {
 			return errors.New("ctrip channel account not found")
+		}
+		var mapping model.ChannelProductMapping
+		if err := tx.Where("id = ? AND channel_account_id = ?", mappingID, account.ID).First(&mapping).Error; err != nil {
+			return gorm.ErrRecordNotFound
+		}
+		var product model.Product
+		if err := tx.Where("id = ? AND tenant_id = ?", mapping.ProductID, tenantID).First(&product).Error; err != nil {
+			return errors.New("mapped product does not belong to this tenant")
+		}
+		if err := requireActiveScenicSupplier(tx, productFulfillmentTenantID(&product)); err != nil {
+			return errors.New("scenic supplier business is unavailable")
 		}
 		result := tx.Model(&model.ChannelProductMapping{}).Where("id = ? AND channel_account_id = ?", mappingID, account.ID).
 			Updates(map[string]interface{}{"channel_sale_cents": saleCents, "channel_cost_cents": costCents})

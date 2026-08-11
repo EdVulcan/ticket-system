@@ -29,12 +29,30 @@
           <el-tag :type="row.qualification_status === 'approved' ? 'success' : 'warning'">{{ qualificationStatusText(row.qualification_status) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="业务能力" width="180">
+      <el-table-column label="业务身份" width="180">
         <template #default="{ row }">
           <div class="capability-actions">
-            <el-button v-for="capability in capabilityOptions" :key="capability" size="small" :type="capabilityStatus(row, capability) === 'active' ? 'success' : 'info'" @click="toggleCapability(row, capability)">
+            <el-button v-for="capability in capabilityOptions" :key="capability" size="small" :type="statusButtonType(capabilityStatus(row, capability))" @click="toggleCapability(row, capability)">
               {{ capabilityText(capability) }} · {{ capabilityStatusText(capabilityStatus(row, capability)) }}
             </el-button>
+          </div>
+        </template>
+      </el-table-column>
+      <el-table-column label="供应业态" width="180">
+        <template #default="{ row }">
+          <div class="capability-actions">
+            <el-button
+              v-for="businessType in supplierBusinessTypeOptions"
+              :key="businessType"
+              size="small"
+              :type="statusButtonType(supplierBusinessTypeStatus(row, businessType))"
+              :disabled="capabilityStatus(row, 'supplier') !== 'active'"
+              :loading="businessTypeUpdating === `${row.id}:${businessType}`"
+              @click="toggleSupplierBusinessType(row, businessType)"
+            >
+              {{ supplierBusinessTypeText(businessType) }} · {{ capabilityStatusText(supplierBusinessTypeStatus(row, businessType)) }}
+            </el-button>
+            <span v-if="capabilityStatus(row, 'supplier') !== 'active'" class="text-xs text-gray-400">先启用供应商身份</span>
           </div>
         </template>
       </el-table-column>
@@ -138,6 +156,7 @@ const tableData = ref([])
 const currentPage = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
+const businessTypeUpdating = ref('')
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref()
@@ -247,10 +266,19 @@ const handleSubmit = async () => {
 }
 
 const capabilityOptions = ['supplier', 'distributor', 'travel_agency']
-const capabilityStatus = (row: any, capability: string) => row.capabilities?.find((item: any) => item.capability === capability)?.status || 'disabled'
+const supplierBusinessTypeOptions = ['scenic', 'hotel']
+const capabilityRecord = (row: any, capability: string) => row.capabilities?.find((item: any) => item.capability === capability)
+const rawCapabilityStatus = (row: any, capability: string) => capabilityRecord(row, capability)?.status || 'disabled'
+const capabilityStatus = (row: any, capability: string) => {
+  const record = capabilityRecord(row, capability)
+  return record?.status === 'active' && isExpired(record.expires_at) ? 'expired' : record?.status || 'disabled'
+}
+const supplierBusinessTypeStatus = (row: any, businessType: string) => row.supplier_business_types?.find((item: any) => item.business_type === businessType)?.status || 'disabled'
 const qualificationStatusText = (status: string) => ({ pending: '待审核', approved: '已通过', rejected: '已驳回', expired: '已过期', legacy: '历史数据' } as Record<string, string>)[status || 'legacy'] || '待补充'
-const capabilityText = (capability: string) => ({ supplier: '景区供应商', distributor: '分销商', travel_agency: '旅行社' } as Record<string, string>)[capability] || '其他业务'
-const capabilityStatusText = (status: string) => ({ active: '已启用', suspended: '已暂停', disabled: '未启用' } as Record<string, string>)[status] || '未启用'
+const capabilityText = (capability: string) => ({ supplier: '供应商', distributor: '分销商', travel_agency: '旅行社' } as Record<string, string>)[capability] || '其他业务'
+const supplierBusinessTypeText = (businessType: string) => ({ scenic: '景区票务', hotel: '酒店住宿' } as Record<string, string>)[businessType] || '其他业态'
+const capabilityStatusText = (status: string) => ({ active: '已启用', suspended: '已暂停', disabled: '未启用', expired: '已过期' } as Record<string, string>)[status] || '未启用'
+const statusButtonType = (status: string) => status === 'active' ? 'success' : status === 'expired' ? 'warning' : 'info'
 
 const isExpired = (value: string | null | undefined) => {
   if (!value) return false
@@ -299,9 +327,46 @@ const updateStatus = async (row: any, status: string) => {
   }
 }
 const toggleCapability = async (row: any, capability: string) => {
-  const status = capabilityStatus(row, capability) === 'active' ? 'suspended' : 'active'
+  const status = rawCapabilityStatus(row, capability) === 'active' ? 'suspended' : 'active'
   try { await request.put(`/tenants/${row.id}/capabilities/${capability}`, { status, reason: '平台管理端调整' }); await fetchData() }
   catch (error: any) { ElMessage.error(error.response?.data?.error || '能力更新失败') }
+}
+
+const toggleSupplierBusinessType = async (row: any, businessType: string) => {
+  if (capabilityStatus(row, 'supplier') !== 'active') {
+    ElMessage.warning('请先启用该商户的供应商身份')
+    return
+  }
+  const status = supplierBusinessTypeStatus(row, businessType) === 'active' ? 'suspended' : 'active'
+  const action = status === 'active' ? '启用' : '暂停'
+  const impact = businessType === 'scenic' && status === 'suspended'
+    ? '暂停后，该商户不能新增或销售景区票种，也不能使用窗口、闸机、检票点等现场履约功能；历史订单、退款、售后、财务和报表仍可查看和处理。'
+    : status === 'suspended'
+      ? '暂停后，该商户不能继续开展该业态的新业务；已有业务记录仍会保留。'
+      : `启用后，该商户可以开展${supplierBusinessTypeText(businessType)}相关业务。`
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `${impact}\n\n请输入本次${action}原因，系统会写入审计记录。`,
+      `确认${action}${supplierBusinessTypeText(businessType)}？`,
+      {
+        confirmButtonText: `确认${action}`,
+        cancelButtonText: '取消',
+        type: status === 'active' ? 'info' : 'warning',
+        inputType: 'textarea',
+        inputPlaceholder: `请输入${action}原因`,
+        inputValidator: input => Boolean(String(input || '').trim()) || '必须填写原因',
+      }
+    )
+    businessTypeUpdating.value = `${row.id}:${businessType}`
+    await request.put(`/tenants/${row.id}/supplier-business-types/${businessType}`, { status, reason: String(value).trim() })
+    ElMessage.success(`${supplierBusinessTypeText(businessType)}已${status === 'active' ? '启用' : '暂停'}`)
+    await fetchData()
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error.response?.data?.error || '供应业态更新失败')
+  } finally {
+    businessTypeUpdating.value = ''
+  }
 }
 
 const revokeSessions = async (row: any) => {

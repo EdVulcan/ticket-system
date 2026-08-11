@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 79
+const CurrentPostgresSchemaVersion = 80
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -20,6 +20,13 @@ func runPostgresMigrations(db *gorm.DB) error {
 			return fmt.Errorf("read current PostgreSQL schema version: %w", err)
 		}
 	}
+	if previousSchemaVersion > CurrentPostgresSchemaVersion {
+		return fmt.Errorf(
+			"database schema version %d is newer than supported version %d; refusing to start",
+			previousSchemaVersion,
+			CurrentPostgresSchemaVersion,
+		)
+	}
 	hadSettlementSource := db.Migrator().HasColumn(&SettlementLine{}, "Source")
 	hadTravelRelationshipStatus := db.Migrator().HasColumn(&DistributorRelationship{}, "TravelStatus")
 	if previousSchemaVersion > 0 && previousSchemaVersion < 76 && db.Migrator().HasIndex(&ChannelRequest{}, "idx_channel_request") {
@@ -29,7 +36,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	models := []interface{}{
 		&SchemaMigration{},
-		&Tenant{}, &TenantCapability{}, &ScenicArea{}, &PlatformUser{}, &User{}, &Staff{},
+		&Tenant{}, &TenantCapability{}, &SupplierBusinessType{}, &ScenicArea{}, &PlatformUser{}, &User{}, &Staff{},
 		&CheckPoint{}, &Device{}, &TicketRule{}, &RuleGroup{}, &RuleItem{},
 		&Product{}, &ProductRevision{}, &ProductOffer{}, &SellerListing{}, &ProductInventory{},
 		&BundleProduct{}, &BundleVersion{}, &BundleComponent{},
@@ -48,6 +55,23 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
+	}
+	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
+		if err := db.Exec(`
+			INSERT INTO supplier_business_types
+				(tenant_id, business_type, status, activated_at, reason, created_at, updated_at)
+			SELECT capability.tenant_id, 'scenic', 'active',
+			       COALESCE(capability.approved_at, capability.created_at, NOW()),
+			       'existing supplier migrated to scenic ticketing', NOW(), NOW()
+			FROM tenant_capabilities AS capability
+			WHERE capability.capability = 'supplier'
+			  AND capability.status = 'active'
+			  AND (capability.expires_at IS NULL OR capability.expires_at > NOW())
+			  AND capability.deleted_at IS NULL
+			ON CONFLICT (tenant_id, business_type) DO NOTHING
+		`).Error; err != nil {
+			return fmt.Errorf("backfill existing supplier scenic business type: %w", err)
+		}
 	}
 	if !hadTravelRelationshipStatus {
 		if err := db.Exec(`
@@ -180,7 +204,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "xiaohongshu product and guarantee payment facts",
+		Name:      "supplier scenic and hotel business types",
 		AppliedAt: time.Now(),
 	}).Error
 }

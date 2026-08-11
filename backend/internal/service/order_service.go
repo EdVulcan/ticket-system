@@ -192,7 +192,7 @@ func (s *OrderService) Create(req *model.Order) error {
 			if err := requireActiveTenantCapability(tx, req.TenantID, capability); err != nil {
 				return err
 			}
-			if err := requireActiveTenantCapability(tx, fulfillment.TenantID, "supplier"); err != nil {
+			if err := requireActiveScenicSupplier(tx, fulfillment.TenantID); err != nil {
 				return fmt.Errorf("supplier is unavailable: %w", err)
 			}
 			if fulfillment.ScenicAreaID == 0 {
@@ -422,7 +422,7 @@ func resolveFulfillmentProduct(tx *gorm.DB, listing *model.Product, sellerTenant
 		if offer.SalesEndAt != nil && now.After(*offer.SalesEndAt) {
 			return nil, false, fmt.Errorf("product offer sales period has ended")
 		}
-		if !offerAllowsChannel(offer.AllowedChannels, channel) {
+		if !offerAllowsChannel(offer.AllowedChannels, fulfillmentOfferChannel(channel)) {
 			return nil, false, fmt.Errorf("product offer does not allow channel %s", channel)
 		}
 		if offer.MinimumRetailPriceCents > 0 && moneyCents(listing.Price) < offer.MinimumRetailPriceCents {
@@ -459,6 +459,14 @@ func resolveFulfillmentProduct(tx *gorm.DB, listing *model.Product, sellerTenant
 		return listing, false, nil
 	}
 	return nil, false, fmt.Errorf("distributed products require an active supplier product offer")
+}
+
+func fulfillmentOfferChannel(channel string) string {
+	channel = strings.TrimSpace(channel)
+	if channel == "xiaohongshu" || strings.HasPrefix(channel, "ctrip:") {
+		return "ota"
+	}
+	return channel
 }
 
 func offerAllowsChannel(allowed, channel string) bool {

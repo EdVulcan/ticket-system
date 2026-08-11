@@ -58,10 +58,11 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column v-if="canWrite" label="操作" width="200" fixed="right" align="center">
+      <el-table-column v-if="canHistoryWrite" label="操作" width="200" fixed="right" align="center">
         <template #default="{ row }">
-          <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
+          <el-button v-if="canWrite" link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
           <el-button 
+            v-if="canWrite || row.status === 'online'"
             link 
             :type="row.status === 'online' ? 'danger' : 'success'" 
             size="small" 
@@ -69,7 +70,7 @@
           >
             {{ row.status === 'online' ? '下架' : '上架' }}
           </el-button>
-           <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
+           <el-button v-if="canWrite" link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -333,9 +334,12 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { Plus, Minus } from '@element-plus/icons-vue'
 import { hasPermission } from '@/utils/permissions'
+import { isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 
-const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
-const canWrite = hasPermission(currentUser, 'catalog.write')
+const currentUser = readStoredUser()
+const hasCatalogWritePermission = hasPermission(currentUser, 'catalog.write')
+const canWrite = hasCatalogWritePermission && isActiveScenicSupplier(currentUser)
+const canHistoryWrite = hasCatalogWritePermission && isScenicHistorySupplier(currentUser)
 
 const loading = ref(false)
 const submitting = ref(false)

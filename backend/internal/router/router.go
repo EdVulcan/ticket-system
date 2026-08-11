@@ -72,6 +72,7 @@ func InitRouter(r *gin.Engine) {
 		tenantGroup.PATCH("/:id/lifecycle", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.UpdateLifecycle)
 		tenantGroup.POST("/:id/revoke-sessions", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.RevokeSessions)
 		tenantGroup.PUT("/:id/capabilities/:capability", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.SetCapability)
+		tenantGroup.PUT("/:id/supplier-business-types/:businessType", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.SetSupplierBusinessType)
 		tenantGroup.DELETE("/:id", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.Delete)
 	}
 
@@ -90,7 +91,7 @@ func InitRouter(r *gin.Engine) {
 	// Staff Routes (Employee Management)
 	staffController := &api.StaffController{}
 	staffGroup := protected.Group("/staff")
-	staffGroup.Use(middleware.RequireTenantPermission(authz.PermissionOnsiteManage), middleware.RequireAnyTenantCapability("supplier"))
+	staffGroup.Use(middleware.RequireTenantPermission(authz.PermissionOnsiteManage), middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
 	{
 		staffGroup.POST("", staffController.Create)
 		staffGroup.GET("", staffController.List)
@@ -116,7 +117,7 @@ func InitRouter(r *gin.Engine) {
 
 	// Admin APIs (Protected)
 	deviceGroup := protected.Group("/devices")
-	deviceGroup.Use(middleware.RequireAnyTenantCapability("supplier"))
+	deviceGroup.Use(middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
 	{
 		deviceGroup.POST("", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), deviceController.Create)
 		deviceGroup.GET("", middleware.RequireTenantPermission(authz.PermissionOnsiteRead), deviceController.List)
@@ -125,7 +126,7 @@ func InitRouter(r *gin.Engine) {
 		deviceGroup.DELETE("/:id", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), deviceController.Delete)
 	}
 	hardwareCommandGroup := protected.Group("/hardware-commands")
-	hardwareCommandGroup.Use(middleware.RequireTenantPermission(authz.PermissionOnsiteManage), middleware.RequireAnyTenantCapability("supplier"))
+	hardwareCommandGroup.Use(middleware.RequireTenantPermission(authz.PermissionOnsiteManage), middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
 	{
 		hardwareCommandGroup.POST("", deviceController.QueueCommand)
 	}
@@ -169,7 +170,7 @@ func InitRouter(r *gin.Engine) {
 	// Ticket Routes
 	ticketController := &api.TicketController{}
 	ticketGroup := protected.Group("/tickets")
-	ticketGroup.Use(middleware.RequireTenantPermission(authz.PermissionTicketsVerify), middleware.RequireAnyTenantCapability("supplier"))
+	ticketGroup.Use(middleware.RequireTenantPermission(authz.PermissionTicketsVerify), middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
 	{
 		ticketGroup.POST("/verify", ticketController.Verify)
 	}
@@ -177,7 +178,7 @@ func InitRouter(r *gin.Engine) {
 	// CheckPoint Routes
 	scenicAreaController := &api.ScenicAreaController{}
 	scenicAreaGroup := protected.Group("/scenic-areas")
-	scenicAreaGroup.Use(middleware.RequireAnyTenantCapability("supplier"))
+	scenicAreaGroup.Use(middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
 	{
 		scenicAreaGroup.GET("", middleware.RequireTenantPermission(authz.PermissionOnsiteRead), scenicAreaController.List)
 		scenicAreaGroup.POST("", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), scenicAreaController.Create)
@@ -188,7 +189,7 @@ func InitRouter(r *gin.Engine) {
 	// CheckPoint Routes
 	cpController := &api.CheckPointController{}
 	cpGroup := protected.Group("/checkpoints")
-	cpGroup.Use(middleware.RequireAnyTenantCapability("supplier"))
+	cpGroup.Use(middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
 	{
 		cpGroup.POST("", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), cpController.Create)
 		cpGroup.GET("", middleware.RequireTenantPermission(authz.PermissionOnsiteRead), cpController.List)
@@ -199,7 +200,7 @@ func InitRouter(r *gin.Engine) {
 	// Policy Routes
 	policyController := &api.PolicyController{Service: service.PolicyService{}}
 	policyGroup := protected.Group("/policies")
-	policyGroup.Use(middleware.RequireAnyTenantCapability("supplier"))
+	policyGroup.Use(middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
 	{
 		policyGroup.POST("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), policyController.Create)
 		policyGroup.GET("", middleware.RequireTenantPermission(authz.PermissionCatalogRead), policyController.List)
@@ -315,7 +316,7 @@ func InitRouter(r *gin.Engine) {
 		teamGroup.GET("/partners/travel-agencies", middleware.RequireTenantPermission(authz.PermissionTeamsRead), middleware.RequireAnyTenantCapability("supplier"), teamController.ListTravelAgencyPartners)
 		teamGroup.POST("/partners/travel-agencies/:id/audit", middleware.RequireTenantPermission(authz.PermissionTeamsWrite), middleware.RequireAnyTenantCapability("supplier"), teamController.AuditTravelAgencyPartner)
 		teamGroup.GET("/contract-partners", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListContractPartners)
-		teamGroup.GET("/contract-products", middleware.RequireTenantPermission(authz.PermissionTeamsRead), middleware.RequireAnyTenantCapability("supplier"), teamController.ListContractProducts)
+		teamGroup.GET("/contract-products", middleware.RequireTenantPermission(authz.PermissionTeamsRead), middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"), teamController.ListContractProducts)
 		teamGroup.GET("/contracts", middleware.RequireTenantPermission(authz.PermissionTeamsRead), teamController.ListContracts)
 		teamGroup.POST("/contracts", middleware.RequireTenantPermission(authz.PermissionTeamContractsWrite), teamController.CreateContract)
 		teamGroup.PUT("/contracts/:id", middleware.RequireTenantPermission(authz.PermissionTeamContractsWrite), teamController.UpdateContract)
@@ -357,7 +358,7 @@ func InitRouter(r *gin.Engine) {
 
 	operationsController := &api.OperationsController{Service: service.OperationsService{}}
 	operationsGroup := protected.Group("/operations")
-	operationsGroup.Use(middleware.RequireTenantPermission(authz.PermissionOperationsRead), middleware.RequireAnyTenantCapability("supplier"))
+	operationsGroup.Use(middleware.RequireTenantPermission(authz.PermissionOperationsRead), middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
 	{
 		operationsGroup.GET("/terminals", operationsController.ListPOSTerminals)
 		operationsGroup.GET("/shifts", operationsController.ListShifts)
@@ -412,11 +413,11 @@ func InitRouter(r *gin.Engine) {
 		reportGroup.GET("/products", middleware.RequireAnyTenantCapability("supplier", "distributor"), reportController.GetProducts)
 		reportGroup.GET("/channels", middleware.RequireAnyTenantCapability("supplier", "distributor"), reportController.GetChannels)
 		reportGroup.GET("/daily", middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"), reportController.GetDaily)
-		reportGroup.GET("/operations", middleware.RequireAnyTenantCapability("supplier"), reportController.GetOperations)
+		reportGroup.GET("/operations", middleware.RequireConfiguredSupplierBusinessType("scenic"), reportController.GetOperations)
 		reportGroup.GET("/business-summary", middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"), reportController.GetBusinessSummary)
 		reportGroup.GET("/business-details", middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"), reportController.GetBusinessDetails)
-		reportGroup.GET("/verification-summary", middleware.RequireAnyTenantCapability("supplier"), reportController.GetVerificationSummary)
-		reportGroup.GET("/verification-details", middleware.RequireAnyTenantCapability("supplier"), reportController.GetVerificationDetails)
+		reportGroup.GET("/verification-summary", middleware.RequireConfiguredSupplierBusinessType("scenic"), reportController.GetVerificationSummary)
+		reportGroup.GET("/verification-details", middleware.RequireConfiguredSupplierBusinessType("scenic"), reportController.GetVerificationDetails)
 	}
 
 	// Payment Routes

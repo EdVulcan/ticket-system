@@ -69,7 +69,7 @@ func (s *BundleService) Create(sellerTenantID, operatorID uint, input BundleUpse
 			return err
 		}
 		if input.Type == "offline" {
-			if err := requireActiveTenantCapability(tx, sellerTenantID, "supplier"); err != nil {
+			if err := requireActiveScenicSupplier(tx, sellerTenantID); err != nil {
 				return err
 			}
 		}
@@ -113,7 +113,7 @@ func (s *BundleService) Revise(sellerTenantID, bundleID, operatorID uint, input 
 			return err
 		}
 		if input.Type == "offline" {
-			if err := requireActiveTenantCapability(tx, sellerTenantID, "supplier"); err != nil {
+			if err := requireActiveScenicSupplier(tx, sellerTenantID); err != nil {
 				return err
 			}
 		}
@@ -242,7 +242,7 @@ func (s *BundleService) ListEligibleComponents(sellerTenantID uint, productType 
 		return nil, errors.New("invalid product type")
 	}
 	if productType == "offline" {
-		if err := requireActiveTenantCapability(model.DB, sellerTenantID, "supplier"); err != nil {
+		if err := requireActiveScenicSupplier(model.DB, sellerTenantID); err != nil {
 			return nil, err
 		}
 	}
@@ -260,8 +260,9 @@ func (s *BundleService) ListEligibleComponents(sellerTenantID uint, productType 
 		Joins("JOIN products p ON p.id = l.product_id AND p.tenant_id = l.seller_tenant_id AND p.status = 'online'").
 		Joins("JOIN product_offers o ON o.id = l.product_offer_id AND o.distributor_tenant_id = l.seller_tenant_id AND o.status = 'active'").
 		Joins("JOIN products source ON source.id = o.source_product_id AND source.tenant_id = o.supplier_tenant_id AND source.status = 'online' AND source.is_distributable = ? AND source.current_revision_id = o.product_revision_id", true).
-		Joins("JOIN tenants supplier ON supplier.id = o.supplier_tenant_id AND supplier.status = 'active'").
-		Joins("JOIN tenant_capabilities supplier_capability ON supplier_capability.tenant_id = o.supplier_tenant_id AND supplier_capability.capability = 'supplier' AND supplier_capability.status = 'active'").
+		Joins("JOIN tenants supplier ON supplier.id = o.supplier_tenant_id AND supplier.status = 'active' AND supplier.deleted_at IS NULL").
+		Joins("JOIN tenant_capabilities supplier_capability ON supplier_capability.tenant_id = o.supplier_tenant_id AND supplier_capability.capability = 'supplier' AND supplier_capability.status = 'active' AND supplier_capability.deleted_at IS NULL AND (supplier_capability.expires_at IS NULL OR supplier_capability.expires_at > ?)", time.Now()).
+		Joins("JOIN supplier_business_types supplier_business ON supplier_business.tenant_id = o.supplier_tenant_id AND supplier_business.business_type = 'scenic' AND supplier_business.status = 'active' AND supplier_business.deleted_at IS NULL").
 		Joins("JOIN distributor_relationships r ON r.agent_tenant_id = l.seller_tenant_id AND r.supplier_tenant_id = o.supplier_tenant_id AND r.status = 'active'").
 		Where("l.seller_tenant_id = ? AND l.status = ?", sellerTenantID, "online").
 		Where("(o.sales_start_at IS NULL OR o.sales_start_at <= ?) AND (o.sales_end_at IS NULL OR o.sales_end_at >= ?)", time.Now(), time.Now())
@@ -383,7 +384,7 @@ func validateBundleOfferTx(tx *gorm.DB, offer *model.ProductOffer, productType s
 	if !offerAllowsChannel(offer.AllowedChannels, channel) {
 		return fmt.Errorf("supplier offer does not allow %s sales", channel)
 	}
-	if err := requireActiveTenantCapability(tx, offer.SupplierTenantID, "supplier"); err != nil {
+	if err := requireActiveScenicSupplier(tx, offer.SupplierTenantID); err != nil {
 		return errors.New("supplier is unavailable")
 	}
 	var relationship model.DistributorRelationship

@@ -37,7 +37,7 @@ func (s *AuthService) Login(systemCode, username, password string) (string, *mod
 
 	// 2. Find User by Username AND TenantID
 	var user model.User
-	if err := model.DB.Preload("Tenant").Preload("Tenant.Capabilities").Where("username = ? AND tenant_id = ?", username, tenant.ID).First(&user).Error; err != nil {
+	if err := model.DB.Preload("Tenant").Preload("Tenant.Capabilities").Preload("Tenant.SupplierBusinessTypes").Where("username = ? AND tenant_id = ?", username, tenant.ID).First(&user).Error; err != nil {
 		return "", nil, errors.New("用户名或密码错误")
 	}
 

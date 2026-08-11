@@ -14,6 +14,7 @@ async function openAs(page: Page, role: string, capabilities: string[], path = '
       id: 8, username: activeRole, role: activeRole, scope: 'tenant', tenant_id: 8,
       tenant_name: '岗位测试商户', system_code: 'ROLE008', permissions: activePermissions,
       capabilities: activeCapabilities.map(capability => ({ capability, status: 'active' })),
+      supplier_business_types: activeCapabilities.includes('supplier') ? [{ business_type: 'scenic', status: 'active' }] : [],
     }))
   }, { activeRole: role, activePermissions: permissions[role], activeCapabilities: capabilities })
   await page.route('**/api/v1/**', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [], total: 0 }) }))

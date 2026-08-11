@@ -6,9 +6,68 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"ticket-backend/internal/config"
+	"ticket-backend/internal/model"
+	"ticket-backend/internal/testdb"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
+
+func TestSeedAdminUserTxCreatesScenicBootstrapSupplier(t *testing.T) {
+	db := testdb.Open(t)
+	if err := db.AutoMigrate(
+		&model.Tenant{}, &model.TenantCapability{}, &model.SupplierBusinessType{},
+		&model.User{}, &model.PlatformUser{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := config.BootstrapConfig{
+		TenantName: "Bootstrap Scenic", SystemCode: "BOOTSTRAP-SCENIC",
+		AdminUsername: "tenant-admin", AdminPassword: "tenant-bootstrap-password",
+		PlatformUsername: "platform-admin", PlatformPassword: "platform-bootstrap-password",
+	}
+	seed := func() error {
+		return db.Transaction(func(tx *gorm.DB) error { return seedAdminUserTx(tx, bootstrap) })
+	}
+	if err := seed(); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed(); err != nil {
+		t.Fatalf("repeat bootstrap seed: %v", err)
+	}
+
+	var tenant model.Tenant
+	if err := db.Where("system_code = ?", bootstrap.SystemCode).First(&tenant).Error; err != nil {
+		t.Fatal(err)
+	}
+	var capability model.TenantCapability
+	if err := db.Where("tenant_id = ? AND capability = ?", tenant.ID, "supplier").First(&capability).Error; err != nil {
+		t.Fatal(err)
+	}
+	if capability.Status != "active" {
+		t.Fatalf("bootstrap supplier capability=%q, want active", capability.Status)
+	}
+	var businessType model.SupplierBusinessType
+	if err := db.Where("tenant_id = ? AND business_type = ?", tenant.ID, "scenic").First(&businessType).Error; err != nil {
+		t.Fatal(err)
+	}
+	if businessType.Status != "active" || businessType.ActivatedAt == nil {
+		t.Fatalf("bootstrap scenic business type=%+v", businessType)
+	}
+	for name, target := range map[string]interface{}{
+		"tenant": &model.Tenant{}, "tenant user": &model.User{}, "platform user": &model.PlatformUser{},
+		"supplier capability": &model.TenantCapability{}, "supplier business type": &model.SupplierBusinessType{},
+	} {
+		var count int64
+		if err := db.Model(target).Count(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("%s rows=%d, want 1", name, count)
+		}
+	}
+}
 
 func TestServeAdminUIExposesXiaohongshuValidationFile(t *testing.T) {
 	gin.SetMode(gin.TestMode)

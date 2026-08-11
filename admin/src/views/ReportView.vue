@@ -130,6 +130,7 @@ import { Download, Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import dayjs from 'dayjs'
 import request from '@/utils/request'
+import { isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 
 type ReportTab = 'business-summary' | 'business-details' | 'verification-summary' | 'verification-details'
 
@@ -143,9 +144,8 @@ const exporting = ref(false)
 const page = ref(1)
 const pageSize = ref(20)
 const total = ref(0)
-const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
-const activeCapabilities = new Set((currentUser.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability))
-const isSupplier = computed(() => activeCapabilities.has('supplier'))
+const currentUser = readStoredUser()
+const isSupplier = computed(() => isScenicHistorySupplier(currentUser))
 
 const channelOptions = [
   { value: 'window', label: '窗口直销' },

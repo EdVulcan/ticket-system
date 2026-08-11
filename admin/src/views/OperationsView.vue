@@ -9,7 +9,7 @@
     </div>
 
     <el-tabs v-model="activeTab" @tab-change="loadActiveTab">
-      <el-tab-pane v-if="hasCapability('supplier')" label="景区" name="scenic">
+      <el-tab-pane v-if="isScenicSupplier" label="景区" name="scenic">
         <div class="flex justify-end mb-3">
           <el-button v-if="canScenicWrite" type="primary" @click="openCreateScenic">新增景区</el-button>
         </div>
@@ -23,7 +23,7 @@
         </el-table>
       </el-tab-pane>
 
-      <el-tab-pane v-if="hasAnyCapability('supplier', 'distributor')" label="渠道" name="channels">
+      <el-tab-pane v-if="isScenicSupplier || hasCapability('distributor')" label="渠道" name="channels">
         <el-table :data="rows.channels" v-loading="loading">
           <el-table-column prop="code" label="渠道编码" width="180" />
           <el-table-column prop="name" label="名称" min-width="200" />
@@ -44,10 +44,10 @@
         </el-table>
       </el-tab-pane>
 
-      <el-tab-pane v-if="hasAnyCapability('supplier', 'distributor')" label="结算" name="settlements">
+      <el-tab-pane v-if="isScenicSupplier || hasCapability('distributor')" label="结算" name="settlements">
         <div class="flex items-center justify-between mb-3">
           <span class="text-sm text-gray-500">只处理供应商与分销商之间的履约对账和付款确认。</span>
-          <el-button v-if="hasCapability('supplier') && canSettlementWrite" type="primary" @click="openGenerateSettlement">生成结算单</el-button>
+          <el-button v-if="isScenicSupplier && canSettlementWrite" type="primary" @click="openGenerateSettlement">生成结算单</el-button>
         </div>
         <el-table :data="rows.settlements" v-loading="loading">
           <el-table-column prop="statement_no" label="结算单" width="210" />
@@ -59,7 +59,7 @@
         </el-table>
       </el-tab-pane>
 
-      <el-tab-pane v-if="hasAnyCapability('supplier', 'distributor')" label="总账" name="ledger">
+      <el-tab-pane v-if="isScenicSupplier || hasCapability('distributor')" label="总账" name="ledger">
         <h3 class="detail-title">上下游账户</h3>
         <el-table :data="financialAccounts" v-loading="loading" size="small" class="mb-5">
           <el-table-column label="合作方" min-width="180"><template #default="{ row }"><div>{{ row.side === 'managed' ? row.owner_name : row.supplier_name }}</div><div class="text-xs text-gray-400">{{ row.side === 'managed' ? row.owner_code : row.supplier_code }}</div></template></el-table-column>
@@ -80,7 +80,7 @@
         </el-table>
       </el-tab-pane>
 
-      <el-tab-pane v-if="hasCapability('supplier')" label="班次" name="shifts">
+      <el-tab-pane v-if="isScenicSupplier" label="班次" name="shifts">
         <el-table :data="rows.shifts" v-loading="loading">
           <el-table-column prop="shift_no" label="班次" width="220" />
           <el-table-column prop="device_id" label="设备" width="100" />
@@ -93,7 +93,7 @@
         </el-table>
       </el-tab-pane>
 
-      <el-tab-pane v-if="hasCapability('supplier')" label="打印" name="prints">
+      <el-tab-pane v-if="isScenicSupplier" label="打印" name="prints">
         <el-table :data="rows.prints" v-loading="loading">
           <el-table-column prop="order_no" label="订单" width="220" />
           <el-table-column prop="device_id" label="设备" width="100" />
@@ -103,7 +103,7 @@
         </el-table>
       </el-tab-pane>
 
-      <el-tab-pane v-if="hasCapability('supplier')" label="告警" name="alerts">
+      <el-tab-pane v-if="isScenicSupplier" label="告警" name="alerts">
         <el-table :data="rows.alerts" v-loading="loading">
           <el-table-column prop="opened_at" label="发生时间" width="180" />
           <el-table-column prop="device_id" label="设备" width="100" />
@@ -266,18 +266,19 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { localizeDisplayText } from '@/utils/localize'
 import { hasPermission } from '@/utils/permissions'
+import { activeCapabilitySet, isActiveScenicSupplier, readStoredUser } from '@/utils/tenantAccess'
 
 const user = computed<any>(() => {
-  try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} }
+  return readStoredUser()
 })
-const capabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability)))
+const capabilities = computed(() => activeCapabilitySet(user.value))
 const hasCapability = (value: string) => capabilities.value.has(value)
-const hasAnyCapability = (...values: string[]) => values.some(hasCapability)
+const isScenicSupplier = computed(() => isActiveScenicSupplier(user.value))
 const isSupervisor = computed(() => hasPermission(user.value, 'onsite.manage'))
 const canScenicWrite = computed(() => hasPermission(user.value, 'onsite.manage'))
 const canSettlementWrite = computed(() => hasPermission(user.value, 'settlements.write'))
 const currentTenantID = computed(() => Number(user.value.tenant_id || 0))
-const firstTab = () => hasCapability('supplier') ? 'scenic' : hasCapability('travel_agency') ? 'teams' : 'channels'
+const firstTab = () => isScenicSupplier.value ? 'scenic' : hasCapability('travel_agency') ? 'teams' : 'channels'
 const activeTab = ref(firstTab())
 const loading = ref(false)
 const rows = reactive<Record<string, any[]>>({ scenic: [], channels: [], teams: [], settlements: [], ledger: [], shifts: [], prints: [], alerts: [] })
@@ -291,7 +292,7 @@ const loadActiveTab = async () => {
     if (activeTab.value === 'ledger') {
       const accountRequests: Promise<any>[] = []
       const ledgerRequests: Promise<any>[] = []
-      if (hasCapability('supplier')) {
+      if (isScenicSupplier.value) {
         accountRequests.push(request.get('/finance/managed-accounts'))
         ledgerRequests.push(request.get('/finance/managed-ledger', { params: { page: 1, page_size: 100 } }))
       }
@@ -300,7 +301,7 @@ const loadActiveTab = async () => {
         ledgerRequests.push(request.get('/finance/ledger', { params: { page: 1, page_size: 100 } }))
       }
       const [accountResponses, ledgerResponses] = await Promise.all([Promise.all(accountRequests), Promise.all(ledgerRequests)])
-      financialAccounts.value = accountResponses.flatMap((response, index) => (response.data.data || []).map((row: any) => ({ ...row, side: hasCapability('supplier') && index === 0 ? 'managed' : 'owned' })))
+      financialAccounts.value = accountResponses.flatMap((response, index) => (response.data.data || []).map((row: any) => ({ ...row, side: isScenicSupplier.value && index === 0 ? 'managed' : 'owned' })))
       rows.ledger = ledgerResponses.flatMap(response => response.data.data || []).sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)))
       return
     }

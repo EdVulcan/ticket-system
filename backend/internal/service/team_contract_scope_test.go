@@ -55,6 +55,9 @@ func TestTeamContractProductsExcludePoliciesUnsupportedByTeamRoster(t *testing.T
 		if err := tx.Create(&model.TenantCapability{TenantID: supplier.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
 			return err
 		}
+		if err := seedActiveScenicBusinessTypeTx(tx, supplier.ID); err != nil {
+			return err
+		}
 		area := model.ScenicArea{TenantID: supplier.ID, Code: "TEAM-POLICY-AREA", Name: "团队合同景区", Status: "active"}
 		if err := tx.Create(&area).Error; err != nil {
 			return err

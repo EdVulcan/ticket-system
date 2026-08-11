@@ -52,12 +52,8 @@ func (c *OTAController) ListProducts(ctx *gin.Context) {
 	var err error
 	if channelAccountID > 0 {
 		var productIDs []uint
-		if err = model.DB.Table("channel_product_mappings").Where("channel_account_id = ? AND status = ?", channelAccountID, "active").Pluck("product_id", &productIDs).Error; err == nil && len(productIDs) > 0 {
-			query := model.DB.Where("tenant_id = ? AND status = ? AND id IN ?", tenantID, "online", productIDs)
-			err = query.Count(&total).Error
-			if err == nil {
-				err = query.Order("id ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&products).Error
-			}
+		if err = model.DB.Table("channel_product_mappings").Where("channel_account_id = ? AND status = ? AND deleted_at IS NULL", channelAccountID, "active").Pluck("product_id", &productIDs).Error; err == nil && len(productIDs) > 0 {
+			products, total, err = c.ProductService.ListChannelProducts(page, pageSize, tenantID, productIDs)
 		} else if err == nil {
 			products = []model.Product{}
 		}

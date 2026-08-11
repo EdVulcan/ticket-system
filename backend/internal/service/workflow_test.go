@@ -1635,6 +1635,12 @@ func TestSupplierControlsTravelContractProductPrices(t *testing.T) {
 				return err
 			}
 		}
+		if err := seedActiveScenicBusinessTypeTx(tx, supplier.ID); err != nil {
+			return err
+		}
+		if err := seedActiveScenicBusinessTypeTx(tx, otherSupplier.ID); err != nil {
+			return err
+		}
 		if err := tx.Create(&model.DistributorRelationship{AgentTenantID: travel.ID, SupplierTenantID: supplier.ID, TravelStatus: "active"}).Error; err != nil {
 			return err
 		}

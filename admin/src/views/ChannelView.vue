@@ -7,7 +7,7 @@
       </div>
       <div class="page-actions">
         <el-button :icon="Refresh" title="刷新" @click="load">刷新</el-button>
-        <el-button v-if="canWrite" type="primary" :icon="Plus" @click="createDialog = true">新增渠道</el-button>
+        <el-button v-if="canActiveWrite" type="primary" :icon="Plus" @click="createDialog = true">新增渠道</el-button>
       </div>
     </header>
 
@@ -20,20 +20,20 @@
       <el-table-column prop="permissions_json" label="权限" min-width="220" show-overflow-tooltip />
       <el-table-column label="操作" width="330" fixed="right">
         <template #default="{row}">
-          <el-button v-if="canWrite && row.type === 'ctrip'" link type="primary" @click="openCtripConfig(row)">携程参数</el-button>
-          <el-button v-if="canWrite && row.type === 'xiaohongshu'" link type="primary" @click="openXiaohongshuConfig(row)">小红书参数</el-button>
-          <el-button v-if="canWrite" link type="primary" @click="openMapping(row)">商品映射</el-button>
+          <el-button v-if="canActiveWrite && row.type === 'ctrip'" link type="primary" @click="openCtripConfig(row)">携程参数</el-button>
+          <el-button v-if="canActiveWrite && row.type === 'xiaohongshu'" link type="primary" @click="openXiaohongshuConfig(row)">小红书参数</el-button>
+          <el-button v-if="canActiveWrite" link type="primary" @click="openMapping(row)">商品映射</el-button>
           <el-button link type="primary" @click="openOrders(row)">渠道订单</el-button>
           <el-dropdown trigger="click" @command="handleAccountCommand($event, row)">
             <el-button link type="primary" :icon="MoreFilled" title="更多操作" aria-label="更多操作" />
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item v-if="canWrite && row.type === 'xiaohongshu' && row.status !== 'disabled'" command="switch-environment">{{ row.status === 'sandbox' ? '切换正式环境' : '切换测试环境' }}</el-dropdown-item>
-                <el-dropdown-item v-if="canWrite && row.type === 'ctrip' && row.status === 'sandbox'" command="sandbox-consume">沙箱核销测试</el-dropdown-item>
+                <el-dropdown-item v-if="canActiveWrite && row.type === 'xiaohongshu' && row.status !== 'disabled'" command="switch-environment">{{ row.status === 'sandbox' ? '切换正式环境' : '切换测试环境' }}</el-dropdown-item>
+                <el-dropdown-item v-if="canActiveWrite && row.type === 'ctrip' && row.status === 'sandbox'" command="sandbox-consume">沙箱核销测试</el-dropdown-item>
                 <el-dropdown-item command="requests">请求日志</el-dropdown-item>
                 <el-dropdown-item command="reconciliations">账单对账</el-dropdown-item>
-                <el-dropdown-item v-if="canWrite" command="toggle-status" divided>{{ row.status === 'disabled' ? '启用渠道' : '停用渠道' }}</el-dropdown-item>
-                <el-dropdown-item v-if="canWrite && !['ctrip', 'xiaohongshu'].includes(row.type)" command="rotate-secret">轮换密钥</el-dropdown-item>
+                <el-dropdown-item v-if="canActiveWrite || (canHistoryWrite && row.status !== 'disabled')" command="toggle-status" divided>{{ row.status === 'disabled' ? '启用渠道' : '停用渠道' }}</el-dropdown-item>
+                <el-dropdown-item v-if="canActiveWrite && !['ctrip', 'xiaohongshu'].includes(row.type)" command="rotate-secret">轮换密钥</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -119,7 +119,7 @@
         <el-input-number v-if="selectedAccount?.type === 'xiaohongshu'" v-model="mapping.channel_sale_yuan" :min="0.01" :precision="2" :step="1" controls-position="right" placeholder="小红书售价" class="w-full" />
         <el-input-number v-if="selectedAccount?.type === 'ctrip'" v-model="mapping.channel_sale_yuan" :min="0.01" :precision="2" :step="1" controls-position="right" placeholder="携程销售价" class="w-full" />
         <el-input-number v-if="selectedAccount?.type === 'ctrip'" v-model="mapping.channel_cost_yuan" :min="0" :precision="2" :step="1" controls-position="right" placeholder="携程结算价" class="w-full" />
-        <el-button v-if="canWrite" type="primary" @click="addMapping">添加</el-button>
+        <el-button v-if="canActiveWrite" type="primary" @click="addMapping">添加</el-button>
       </div>
       <div v-if="selectedAccount?.type === 'ctrip'" class="flex flex-wrap items-center gap-2 mb-3">
         <el-date-picker v-model="syncDateRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" :clearable="false" />
@@ -133,8 +133,8 @@
         <el-table-column v-if="selectedAccount?.type === 'ctrip'" label="携程销售价" width="120"><template #default="{ row }">¥{{ cents(row.channel_sale_cents) }}</template></el-table-column>
         <el-table-column v-if="selectedAccount?.type === 'ctrip'" label="携程结算价" width="120"><template #default="{ row }">¥{{ cents(row.channel_cost_cents) }}</template></el-table-column>
         <el-table-column label="状态" width="90"><template #default="{ row }">{{ mappingStatusText(row.status) }}</template></el-table-column>
-        <el-table-column v-if="selectedAccount?.type === 'xiaohongshu'" label="操作" width="120"><template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openXiaohongshuMappingEdit(row)">发布配置</el-button></template></el-table-column>
-        <el-table-column v-if="selectedAccount?.type === 'ctrip'" label="操作" width="210"><template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openPricing(row)">修改价格</el-button><el-button v-if="canWrite" link type="primary" :loading="syncingMappingID === row.id" @click="syncMapping(row)">同步价格库存</el-button></template></el-table-column>
+        <el-table-column v-if="selectedAccount?.type === 'xiaohongshu'" label="操作" width="120"><template #default="{ row }"><el-button v-if="canActiveWrite" link type="primary" @click="openXiaohongshuMappingEdit(row)">发布配置</el-button></template></el-table-column>
+        <el-table-column v-if="selectedAccount?.type === 'ctrip'" label="操作" width="210"><template #default="{ row }"><el-button v-if="canActiveWrite" link type="primary" @click="openPricing(row)">修改价格</el-button><el-button v-if="canActiveWrite" link type="primary" :loading="syncingMappingID === row.id" @click="syncMapping(row)">同步价格库存</el-button></template></el-table-column>
       </el-table>
       <template v-if="selectedAccount?.type === 'ctrip'">
         <div class="flex items-center justify-between mt-5 mb-2"><h3 class="font-medium text-gray-900">最近出站任务</h3><el-button link type="primary" @click="loadCtripSyncTasks">刷新</el-button></div>
@@ -250,7 +250,7 @@
         <el-table-column label="最后尝试" width="180"><template #default="{ row }">{{ dateTime(row.last_attempt_at || row.created_at) }}</template></el-table-column>
         <el-table-column prop="response_json" label="响应摘要" min-width="220" show-overflow-tooltip />
         <el-table-column label="操作" width="110" fixed="right">
-          <template #default="{ row }"><el-button v-if="canWrite && row.status === 'failed'" link type="warning" @click="authorizeRetry(row)">授权重试</el-button></template>
+          <template #default="{ row }"><el-button v-if="canHistoryWrite && row.status === 'failed'" link type="warning" @click="authorizeRetry(row)">授权重试</el-button></template>
         </el-table-column>
       </el-table>
       <template #footer><el-button @click="requestsDialog = false">关闭</el-button></template>
@@ -333,7 +333,7 @@
     <el-dialog v-model="reconciliationsDialog" :title="`渠道账单对账：${selectedAccount?.code || ''}`" width="1000px" :close-on-click-modal="false">
       <div class="mb-4 flex justify-between">
         <div class="text-sm text-gray-500">导入渠道销售、支付、取消或退款账单，与本系统订单资金事实逐笔核对。</div>
-        <el-button v-if="canWrite" type="primary" :icon="Plus" @click="billImportDialog = true">导入账单</el-button>
+        <el-button v-if="canHistoryWrite" type="primary" :icon="Plus" @click="billImportDialog = true">导入账单</el-button>
       </div>
       <el-table :data="reconciliations" v-loading="reconciliationsLoading" stripe height="430" empty-text="暂无对账批次">
         <el-table-column prop="idempotency_key" label="批次号" min-width="180" />
@@ -381,9 +381,13 @@ import { ElMessage, ElMessageBox, type UploadFile, type UploadInstance } from 'e
 import request from '@/utils/request'
 import { localizeDisplayText } from '@/utils/localize'
 import { hasPermission } from '@/utils/permissions'
+import { activeCapabilitySet, isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 
-const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
-const canWrite = hasPermission(currentUser, 'channels.write')
+const currentUser = readStoredUser()
+const capabilities = activeCapabilitySet(currentUser)
+const hasWritePermission = hasPermission(currentUser, 'channels.write')
+const canActiveWrite = hasWritePermission && (capabilities.has('distributor') || isActiveScenicSupplier(currentUser))
+const canHistoryWrite = hasWritePermission && (capabilities.has('distributor') || isScenicHistorySupplier(currentUser))
 
 const accounts = ref<any[]>([])
 const mappings = ref<any[]>([])

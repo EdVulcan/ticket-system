@@ -1,7 +1,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 
 const users = {
-  supplier: { id: 1, username: 'supplier_admin', role: 'super_admin', scope: 'tenant', tenant_id: 1, tenant_name: '测试景区', system_code: 'TEST001', capabilities: [{ capability: 'supplier', status: 'active' }] },
+  supplier: { id: 1, username: 'supplier_admin', role: 'super_admin', scope: 'tenant', tenant_id: 1, tenant_name: '测试景区', system_code: 'TEST001', capabilities: [{ capability: 'supplier', status: 'active' }], supplier_business_types: [{ business_type: 'scenic', status: 'active' }] },
   distributor: { id: 2, username: 'distributor_admin', role: 'super_admin', scope: 'tenant', tenant_id: 2, tenant_name: '测试分销商', system_code: 'DIST001', capabilities: [{ capability: 'distributor', status: 'active' }] },
   travel: { id: 3, username: 'travel_admin', role: 'super_admin', scope: 'tenant', tenant_id: 3, tenant_name: '测试旅行社', system_code: 'TRAVEL001', capabilities: [{ capability: 'travel_agency', status: 'active' }] },
 }

@@ -226,12 +226,19 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 			product.tags, product.validity_type, product.validity_days,
 			xhs_config.image_url, xhs_config.description, xhs_config.product_type`).
 		Joins("JOIN products AS product ON product.id = mapping.product_id AND product.tenant_id = ? AND product.deleted_at IS NULL", customer.TenantID).
+		Joins(`JOIN tenants AS fulfillment_tenant ON fulfillment_tenant.id = COALESCE(NULLIF(product.fulfillment_tenant_id, 0), NULLIF(product.source_tenant_id, 0), product.tenant_id)
+			AND fulfillment_tenant.status = 'active' AND fulfillment_tenant.deleted_at IS NULL`).
+		Joins(`JOIN tenant_capabilities AS supplier_capability ON supplier_capability.tenant_id = fulfillment_tenant.id
+			AND supplier_capability.capability = 'supplier' AND supplier_capability.status = 'active' AND supplier_capability.deleted_at IS NULL`).
+		Joins(`JOIN supplier_business_types AS supplier_business ON supplier_business.tenant_id = fulfillment_tenant.id
+			AND supplier_business.business_type = 'scenic' AND supplier_business.status = 'active' AND supplier_business.deleted_at IS NULL`).
 		Joins("JOIN xiaohongshu_product_configs AS xhs_config ON xhs_config.channel_product_mapping_id = mapping.id AND xhs_config.tenant_id = ? AND xhs_config.sync_status = ? AND xhs_config.deleted_at IS NULL", customer.TenantID, "synced").
 		Joins(`LEFT JOIN scenic_areas AS scenic ON scenic.id = CASE
 			WHEN product.fulfillment_scenic_area_id != 0 THEN product.fulfillment_scenic_area_id ELSE product.scenic_area_id END
 			AND scenic.tenant_id = CASE WHEN product.fulfillment_tenant_id != 0 THEN product.fulfillment_tenant_id ELSE product.tenant_id END
 			AND scenic.deleted_at IS NULL`).
 		Where("mapping.channel_account_id = ? AND mapping.status = ? AND mapping.deleted_at IS NULL AND product.status = ?", customer.ChannelAccountID, "active", "online").
+		Where("supplier_capability.expires_at IS NULL OR supplier_capability.expires_at > ?", s.now()).
 		Order("mapping.created_at ASC, mapping.id ASC").Scan(&rows).Error
 	if err != nil {
 		return nil, err
