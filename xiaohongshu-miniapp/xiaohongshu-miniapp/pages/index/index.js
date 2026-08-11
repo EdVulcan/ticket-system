@@ -5,6 +5,7 @@ Page({
     storeName: '景区购票',
     allProducts: [],
     products: [],
+    featuredProduct: null,
     scenicOptions: [],
     activeScenic: '全部',
     keyword: '',
@@ -39,6 +40,7 @@ Page({
       this.setData({
         storeName: catalog.store_name || '景区购票',
         allProducts: products,
+        featuredProduct: products.length ? products[0] : null,
         scenicOptions,
         loading: false
       }, () => this.applyFilters());
@@ -68,7 +70,7 @@ Page({
     let products = this.data.allProducts.filter(product => {
       const scenic = product.scenic_area_name || '其他景区';
       const scenicMatched = this.data.activeScenic === '全部' || scenic === this.data.activeScenic;
-      const text = `${product.name || ''} ${scenic} ${(product.tags || []).join(' ')}`.toLowerCase();
+      const text = `${product.name || ''} ${scenic} ${product.priceText || ''} ${(product.tags || []).join(' ')}`.toLowerCase();
       return scenicMatched && (!keyword || text.indexOf(keyword) >= 0);
     });
     if (this.data.sort === 'priceAsc') products.sort((a, b) => a.price_cents - b.price_cents);

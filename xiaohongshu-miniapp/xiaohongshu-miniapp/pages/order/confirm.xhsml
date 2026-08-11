@@ -1,5 +1,5 @@
 <view class="page">
-  <view class="header"><text class="eyebrow">确认订单</text><text class="title">核对票种与数量</text></view>
+  <view class="header"><text class="eyebrow">最后一步</text><text class="title">确认订单</text><text class="header-hint">核对票种与数量后发起担保支付</text></view>
   <view class="state" xhs:if="{{loading}}">正在加载票种...</view>
   <view class="state error" xhs:elif="{{error && !product}}">{{error}}</view>
   <view class="content" xhs:elif="{{product}}">

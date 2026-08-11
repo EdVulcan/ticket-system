@@ -1,31 +1,47 @@
 <view class="page">
   <view class="store-header">
     <view class="brand-row">
-      <view>
-        <text class="store-kicker">官方购票</text>
-        <text class="store-name">{{storeName}}</text>
-      </view>
-      <view class="official-mark">官方</view>
+      <view><text class="store-name">{{storeName}}</text><text class="store-kicker">官方直营</text></view>
+      <text class="orders-link" bindtap="goOrders">订单</text>
     </view>
+  </view>
+
+  <view class="feature" xhs:if="{{!keyword && activeScenic === '全部'}}" data-id="{{featuredProduct.id}}" bindtap="openProduct">
+    <image class="feature-image" xhs:if="{{featuredProduct && featuredProduct.image_url}}" src="{{featuredProduct.image_url}}" mode="aspectFill" />
+    <view class="feature-image fallback" xhs:else><text class="fallback-kicker">周末出发</text><text class="fallback-title">出发，去山里</text></view>
+    <view class="feature-copy" xhs:if="{{featuredProduct}}">
+      <text class="feature-kicker">本周推荐</text>
+      <text class="feature-title">{{featuredProduct.name}}</text>
+      <view class="feature-foot"><text>官方出票 · 订单内查看票码</text><text class="feature-price">¥{{featuredProduct.priceText}}起</text></view>
+    </view>
+    <view class="feature-copy" xhs:else>
+      <text class="feature-kicker">官方购票</text>
+      <text class="feature-title">把周末交给山风和好天气</text>
+      <view class="feature-foot"><text>在售票种发布后可直接购买</text></view>
+    </view>
+  </view>
+
+  <view class="search-wrap">
     <view class="search-box">
       <text class="search-label">搜索</text>
-      <input class="search-input" value="{{keyword}}" bindinput="onKeywordInput" placeholder="输入票名、景区或标签" placeholder-class="search-placeholder" />
+      <input class="search-input" value="{{keyword}}" bindinput="onKeywordInput" placeholder="搜票名、价格或游玩标签" placeholder-class="search-placeholder" />
       <text class="clear" xhs:if="{{keyword}}" bindtap="clearKeyword">清除</text>
     </view>
   </view>
 
   <view class="filters" xhs:if="{{!loading && !error && allProducts.length}}">
+    <view class="section-heading"><text>找到适合你的门票</text><text class="result-count">{{products.length}} 种在售</text></view>
     <scroll-view class="scenic-scroll" scroll-x enhanced show-scrollbar="{{false}}">
       <view class="scenic-row">
         <view class="scenic-chip {{activeScenic === item ? 'active' : ''}}" xhs:for="{{scenicOptions}}" xhs:key="*this" data-scenic="{{item}}" bindtap="selectScenic">{{item}}</view>
       </view>
     </scroll-view>
     <view class="sort-row">
-      <text class="result-count">共 {{products.length}} 个票种</text>
+      <text class="sort-label">排序</text>
       <view class="sort-options">
         <text class="sort-item {{sort === 'default' ? 'active' : ''}}" data-sort="default" bindtap="selectSort">综合</text>
-        <text class="sort-item {{sort === 'priceAsc' ? 'active' : ''}}" data-sort="priceAsc" bindtap="selectSort">价格低</text>
-        <text class="sort-item {{sort === 'priceDesc' ? 'active' : ''}}" data-sort="priceDesc" bindtap="selectSort">价格高</text>
+        <text class="sort-item {{sort === 'priceAsc' ? 'active' : ''}}" data-sort="priceAsc" bindtap="selectSort">低价优先</text>
+        <text class="sort-item {{sort === 'priceDesc' ? 'active' : ''}}" data-sort="priceDesc" bindtap="selectSort">高价优先</text>
       </view>
     </view>
   </view>
@@ -54,10 +70,7 @@
           <view class="tag-row" xhs:if="{{item.tags.length}}">
             <text class="tag" xhs:for="{{item.tags}}" xhs:for-item="tag" xhs:key="*this">{{tag}}</text>
           </view>
-          <view class="product-bottom">
-            <view class="price"><text class="currency">¥</text><text class="amount">{{item.priceText}}</text><text class="unit">起</text></view>
-            <text class="detail-link">查看详情</text>
-          </view>
+          <view class="product-bottom"><view class="price"><text class="currency">¥</text><text class="amount">{{item.priceText}}</text><text class="unit">起</text></view><text class="detail-link">购买</text></view>
         </view>
       </view>
     </view>
@@ -65,7 +78,7 @@
   </view>
 
   <view class="bottom-nav">
-    <view class="nav-item active" bindtap="goHome"><text class="nav-icon">⌂</text><text>购票</text></view>
+    <view class="nav-item active" bindtap="goHome"><text class="nav-icon">⌂</text><text>发现</text></view>
     <view class="nav-item" bindtap="goOrders"><text class="nav-icon">▤</text><text>订单</text></view>
   </view>
 </view>

@@ -26,7 +26,7 @@
     <view class="content-spacer"></view>
   </view>
   <view class="bottom-nav">
-    <view class="nav-item" bindtap="goHome"><text class="nav-icon">⌂</text><text>购票</text></view>
+    <view class="nav-item" bindtap="goHome"><text class="nav-icon">⌂</text><text>发现</text></view>
     <view class="nav-item active" bindtap="goOrders"><text class="nav-icon">▤</text><text>订单</text></view>
   </view>
 </view>

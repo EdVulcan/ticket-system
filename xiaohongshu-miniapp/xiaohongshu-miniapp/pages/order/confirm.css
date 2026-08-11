@@ -1,27 +1,28 @@
-.page { min-height: 100vh; background: #f4f6f3; color: #17201a; }
-.header { display: flex; flex-direction: column; padding: 38rpx 30rpx 30rpx; background: #164b33; color: #fff; }
-.eyebrow { color: #c7d9ce; font-size: 22rpx; }
-.title { margin-top: 8rpx; font-size: 39rpx; font-weight: 750; }
-.content { padding: 22rpx 24rpx 44rpx; }
-.ticket, .quantity-row, .notice { border: 1rpx solid #e0e5e1; border-radius: 8rpx; background: #fff; }
-.ticket { display: flex; gap: 20rpx; padding: 22rpx; }
-.ticket-image { display: flex; align-items: center; justify-content: center; width: 176rpx; height: 140rpx; flex-shrink: 0; border-radius: 6rpx; background: #e4ebe6; color: #52705e; font-size: 22rpx; }
+.page { min-height: 100vh; background: #f6f7fb; color: #191a22; }
+.header { display: flex; flex-direction: column; padding: 35rpx 28rpx 28rpx; background: #fff; }
+.eyebrow { color: #ff4f58; font-size: 21rpx; font-weight: 700; }
+.title { margin-top: 6rpx; font-size: 40rpx; font-weight: 800; }
+.header-hint { margin-top: 8rpx; color: #858791; font-size: 21rpx; }
+.content { padding: 20rpx 24rpx 44rpx; }
+.ticket, .quantity-row, .notice { border: 1rpx solid #e5e6eb; border-radius: 8rpx; background: #fff; }
+.ticket { display: flex; gap: 19rpx; padding: 20rpx; }
+.ticket-image { display: flex; align-items: center; justify-content: center; width: 176rpx; height: 140rpx; flex-shrink: 0; border-radius: 7rpx; background: #dff8ee; color: #17664f; font-size: 22rpx; }
 .ticket-info { display: flex; min-width: 0; flex: 1; flex-direction: column; }
-.ticket-name { font-size: 28rpx; font-weight: 700; line-height: 1.4; }
-.ticket-scenic { margin-top: 7rpx; color: #717971; font-size: 21rpx; }
-.price { margin-top: auto; color: #b54d17; font-size: 31rpx; font-weight: 750; }
-.quantity-row { display: flex; align-items: center; justify-content: space-between; margin-top: 18rpx; padding: 26rpx; }
+.ticket-name { font-size: 28rpx; font-weight: 750; line-height: 1.4; }
+.ticket-scenic { margin-top: 7rpx; color: #858791; font-size: 20rpx; }
+.price { margin-top: auto; color: #ff4f58; font-size: 31rpx; font-weight: 800; }
+.quantity-row { display: flex; align-items: center; justify-content: space-between; margin-top: 16rpx; padding: 25rpx; }
 .label, .hint { display: block; }
-.label { font-size: 27rpx; font-weight: 700; }
-.hint { margin-top: 6rpx; color: #8a918b; font-size: 20rpx; }
-.stepper { display: flex; align-items: center; gap: 22rpx; }
-.stepper button { width: 60rpx; height: 54rpx; padding: 0; border: 1rpx solid #d4dbd5; border-radius: 5rpx; background: #f8faf8; color: #174a31; line-height: 52rpx; }
-.stepper text { min-width: 38rpx; text-align: center; font-size: 29rpx; }
-.limit { display: block; margin: 12rpx 8rpx 0; color: #9a651f; font-size: 21rpx; }
-.notice { display: flex; flex-direction: column; gap: 10rpx; margin-top: 18rpx; padding: 24rpx 26rpx; color: #6e766f; font-size: 22rpx; line-height: 1.6; }
-.notice-title { color: #253027; font-size: 25rpx; font-weight: 700; }
-.summary { display: flex; align-items: center; justify-content: space-between; padding: 36rpx 8rpx 14rpx; color: #697169; font-size: 24rpx; }
-.total { color: #b54d17; font-size: 44rpx; font-weight: 750; }
-.pay-button { height: 84rpx; margin-top: 20rpx; border-radius: 7rpx; background: #17683f; color: #fff; font-size: 28rpx; line-height: 84rpx; }
-.inline-error, .state { display: block; padding: 26rpx; color: #bd4036; text-align: center; font-size: 23rpx; }
-.state { color: #6e756f; }
+.label { font-size: 27rpx; font-weight: 750; }
+.hint { margin-top: 6rpx; color: #9698a1; font-size: 19rpx; }
+.stepper { display: flex; align-items: center; gap: 20rpx; }
+.stepper button { width: 60rpx; height: 54rpx; padding: 0; border: 1rpx solid #dedfe5; border-radius: 6rpx; background: #f8f8fb; color: #20212a; line-height: 52rpx; }
+.stepper text { min-width: 38rpx; text-align: center; font-size: 29rpx; font-weight: 700; }
+.limit { display: block; margin: 12rpx 8rpx 0; color: #836500; font-size: 20rpx; }
+.notice { display: flex; flex-direction: column; gap: 9rpx; margin-top: 16rpx; padding: 23rpx 25rpx; background: #fffbea; color: #706b54; font-size: 21rpx; line-height: 1.6; }
+.notice-title { color: #39362b; font-size: 24rpx; font-weight: 750; }
+.summary { display: flex; align-items: center; justify-content: space-between; padding: 34rpx 8rpx 12rpx; color: #747680; font-size: 23rpx; }
+.total { color: #ff4f58; font-size: 45rpx; font-weight: 800; }
+.pay-button { height: 84rpx; margin-top: 18rpx; border-radius: 7rpx; background: #ff4f58; color: #fff; font-size: 28rpx; font-weight: 700; line-height: 84rpx; }
+.inline-error, .state { display: block; padding: 26rpx; color: #dc3f48; text-align: center; font-size: 22rpx; }
+.state { color: #777984; }
