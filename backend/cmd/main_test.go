@@ -48,13 +48,13 @@ func TestServePublicUploadsExposesOnlyValidatedProductImagePath(t *testing.T) {
 	engine := gin.New()
 	servePublicUploads(engine, directory)
 	response := httptest.NewRecorder()
-	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/media/channel-products/3/5/"+filename, nil))
+	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/public/channel-product-images/3/5/"+filename, nil))
 	if response.Code != http.StatusOK || response.Body.String() != "image" {
 		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
 	}
 
 	invalid := httptest.NewRecorder()
-	engine.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/media/channel-products/3/5/not-an-upload.png", nil))
+	engine.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/api/v1/public/channel-product-images/3/5/not-an-upload.png", nil))
 	if invalid.Code != http.StatusNotFound {
 		t.Fatalf("invalid filename status=%d", invalid.Code)
 	}

@@ -353,7 +353,7 @@ func servePublicUploads(engine *gin.Engine, directory string) {
 		logger.Log.Error(fmt.Sprintf("Failed to create public upload directory: %v", err))
 		return
 	}
-	engine.GET("/media/channel-products/:tenant/:account/:filename", func(ctx *gin.Context) {
+	engine.GET("/api/v1/public/channel-product-images/:tenant/:account/:filename", func(ctx *gin.Context) {
 		if _, err := strconv.ParseUint(ctx.Param("tenant"), 10, 32); err != nil {
 			ctx.Status(http.StatusNotFound)
 			return

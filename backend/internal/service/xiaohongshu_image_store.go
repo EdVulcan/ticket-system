@@ -78,6 +78,6 @@ func (s XiaohongshuImageStore) Save(tenantID, accountID uint, data []byte) (stri
 		return "", fmt.Errorf("保存商品图片失败: %w", err)
 	}
 
-	publicPath := "/media/" + strings.Join(append(relativeParts, filename), "/")
+	publicPath := "/api/v1/public/channel-product-images/" + strings.Join(append(relativeParts[1:], filename), "/")
 	return strings.TrimRight(baseURL.String(), "/") + publicPath, nil
 }

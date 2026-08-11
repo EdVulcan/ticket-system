@@ -26,7 +26,7 @@ func TestXiaohongshuImageStoreSavesValidatedImage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prefix := "https://tickets.example.com/media/channel-products/3/5/"
+	prefix := "https://tickets.example.com/api/v1/public/channel-product-images/3/5/"
 	if !strings.HasPrefix(imageURL, prefix) || !strings.HasSuffix(imageURL, ".png") {
 		t.Fatalf("image URL = %q", imageURL)
 	}
