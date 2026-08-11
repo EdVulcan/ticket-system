@@ -1,14 +1,12 @@
 <template>
-  <div class="calculator bg-gray-800 p-4 rounded-lg shadow-xl w-64 select-none">
-    <!-- Display -->
-    <div class="bg-gray-100 rounded mb-4 p-2 text-right">
-      <div class="text-xs text-gray-500 h-4">{{ expression }}</div>
-      <div data-testid="calculator-display" class="text-2xl font-mono font-bold text-gray-900 truncate">{{ displayValue }}</div>
+  <div class="calculator">
+    <div class="calculator-display">
+      <div class="expression">{{ expression || ' ' }}</div>
+      <div data-testid="calculator-display" class="display-value">{{ displayValue }}</div>
     </div>
 
-    <!-- Keypad -->
-    <div class="grid grid-cols-4 gap-2">
-      <button @click="clear" class="btn-op col-span-2">清空</button>
+    <div class="calculator-keypad">
+      <button @click="clear" class="btn-op span-two">清空</button>
       <button @click="backspace" class="btn-op">←</button>
       <button @click="appendOperator('/')" class="btn-op">÷</button>
 
@@ -27,9 +25,9 @@
       <button @click="appendNumber('3')" class="btn-num">3</button>
       <button @click="appendOperator('+')" class="btn-op">+</button>
 
-      <button @click="appendNumber('0')" class="btn-num col-span-2">0</button>
+      <button @click="appendNumber('0')" class="btn-num span-two">0</button>
       <button @click="appendNumber('.')" class="btn-num">.</button>
-      <button @click="calculate" class="btn-eq bg-blue-600 text-white border-blue-700">=</button>
+      <button @click="calculate" class="btn-eq">=</button>
     </div>
   </div>
 </template>
@@ -154,13 +152,18 @@ onUnmounted(() => window.removeEventListener('keydown', handleKeydown))
 </script>
 
 <style scoped>
-.btn-num {
-  @apply bg-gray-600 text-white font-bold h-12 rounded hover:bg-gray-500 active:bg-gray-700 transition-colors shadow;
-}
-.btn-op {
-  @apply bg-orange-500 text-white font-bold h-12 rounded hover:bg-orange-400 active:bg-orange-600 transition-colors shadow;
-}
-.btn-eq {
-  @apply h-12 rounded hover:bg-blue-500 active:bg-blue-700 transition-colors shadow;
-}
+.calculator { width: 100%; user-select: none; color: #202721; }
+.calculator-display { margin-bottom: 12px; padding: 12px 14px; border: 1px solid #cbd3cc; border-radius: 7px; background: #f3f6f3; text-align: right; }
+.expression { height: 18px; color: #79837b; font-size: 12px; line-height: 18px; }
+.display-value { min-height: 34px; overflow: hidden; color: #1b241e; font-family: Consolas, "SFMono-Regular", monospace; font-size: 27px; font-weight: 700; line-height: 34px; text-overflow: ellipsis; white-space: nowrap; }
+.calculator-keypad { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+.calculator-keypad button { height: 50px; border: 1px solid #d4dad4; border-radius: 6px; cursor: pointer; font-size: 16px; font-weight: 700; }
+.calculator-keypad button:active { transform: translateY(1px); }
+.span-two { grid-column: span 2; }
+.btn-num { background: #fff; color: #303932; }
+.btn-num:hover { border-color: #9eaaa1; background: #f6f8f6; }
+.btn-op { border-color: #e3d2b6 !important; background: #fff7e9; color: #9c590d; }
+.btn-op:hover { background: #fbeed9; }
+.btn-eq { border-color: #14734a !important; background: #14734a; color: #fff; }
+.btn-eq:hover { background: #0e5a3a; }
 </style>

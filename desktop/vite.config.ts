@@ -12,6 +12,15 @@ export default defineConfig({
     }
   },
   plugins: [vue()],
+  server: process.env.VITE_DEV_PROXY_TARGET ? {
+    proxy: {
+      '/api': {
+        target: process.env.VITE_DEV_PROXY_TARGET,
+        changeOrigin: true,
+        secure: true
+      }
+    }
+  } : undefined,
   build: {
     outDir: resolve('dist'),
     emptyOutDir: true

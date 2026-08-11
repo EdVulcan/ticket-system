@@ -1,21 +1,20 @@
 <template>
   <section class="space-y-5">
-    <div class="flex flex-wrap items-start justify-between gap-3">
-      <div>
+    <header class="page-heading">
+      <div class="page-heading-copy">
         <h2 class="text-xl font-semibold text-gray-900">团队业务</h2>
         <p class="mt-1 text-sm text-gray-500">旅行社维护团队计划，景区供应商完成名单核对、分批入园和双方结算。</p>
       </div>
-      <el-button :icon="Refresh" circle title="刷新当前页面" @click="refreshActiveTab" />
-    </div>
-
-    <div class="flex flex-wrap gap-2">
-      <el-button v-if="isTravelAgency && can('teams.write')" type="primary" :icon="Plus" @click="openGroupDialog">新建团队</el-button>
-      <el-button v-if="isSupplier && can('teams.contracts.write')" type="primary" :icon="DocumentAdd" @click="openContractDialog()">新增旅行社合同</el-button>
-    </div>
+      <div class="page-actions">
+        <el-button :icon="Refresh" title="刷新当前页面" @click="refreshActiveTab">刷新</el-button>
+        <el-button v-if="isTravelAgency && can('teams.write')" type="primary" :icon="Plus" @click="openGroupDialog">新建团队</el-button>
+        <el-button v-if="isSupplier && can('teams.contracts.write')" type="primary" :icon="DocumentAdd" @click="openContractDialog()">新增旅行社合同</el-button>
+      </div>
+    </header>
 
     <el-tabs v-model="activeTab" @tab-change="handleTabChange">
       <el-tab-pane label="团队计划" name="groups">
-        <div class="mb-4 flex flex-wrap items-center gap-2">
+        <div class="filter-toolbar">
           <el-input
             v-model="groupQuery.keyword"
             clearable
@@ -44,21 +43,27 @@
           <el-button :disabled="!hasGroupFilters" @click="clearGroupFilters">清空</el-button>
         </div>
         <el-table :data="groups" v-loading="loading" stripe empty-text="暂无团队计划">
-          <el-table-column prop="group_no" label="团号" min-width="180" />
-          <el-table-column prop="name" label="团队名称" min-width="150" />
-          <el-table-column label="业务视角" width="110">
+          <el-table-column label="团队信息" min-width="230">
+            <template #default="{ row }">
+              <div class="font-medium text-gray-900">{{ row.name }}</div>
+              <div class="mt-1 text-xs text-gray-400">{{ row.group_no }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="业务视角" width="100">
             <template #default="{ row }">
               <el-tag v-if="isGroupOwner(row)" type="primary" effect="plain">旅行社</el-tag>
               <el-tag v-else type="success" effect="plain">景区履约</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="游玩日期" width="125"><template #default="{ row }">{{ dateOnly(row.visit_date) }}</template></el-table-column>
-          <el-table-column label="人数" width="90"><template #default="{ row }">{{ row.expected_count }} 人</template></el-table-column>
-          <el-table-column label="状态" width="120">
-            <template #default="{ row }"><el-tag :type="groupStatusType(row.status)">{{ groupStatusText(row.status) }}</el-tag></template>
+          <el-table-column label="游玩日期" width="115"><template #default="{ row }">{{ dateOnly(row.visit_date) }}</template></el-table-column>
+          <el-table-column label="人数" width="72"><template #default="{ row }">{{ row.expected_count }} 人</template></el-table-column>
+          <el-table-column label="进度" min-width="160">
+            <template #default="{ row }">
+              <el-tag :type="groupStatusType(row.status)">{{ groupStatusText(row.status) }}</el-tag>
+              <div class="mt-1 text-xs text-gray-500">结算：{{ settlementStatusText(row.settlement_status) }}</div>
+            </template>
           </el-table-column>
-          <el-table-column label="结算" width="110"><template #default="{ row }">{{ settlementStatusText(row.settlement_status) }}</template></el-table-column>
-          <el-table-column label="操作" width="390" fixed="right">
+          <el-table-column label="操作" width="300" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" @click="openGroupDetail(row)">{{ groupDetailActionText(row) }}</el-button>
               <el-button v-if="isGroupOwner(row) && can('teams.write')" link type="success" :disabled="row.status !== 'draft'" @click="openContractOrder(row)">生成订单</el-button>

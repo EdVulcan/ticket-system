@@ -1,6 +1,9 @@
 <template>
   <div class="payment-container">
-    <div class="amount-due"><span>本次应收</span><strong>¥{{ amount.toFixed(2) }}</strong></div>
+    <div class="amount-due">
+      <div><span>本次应收</span><small>{{ orderNo }}</small></div>
+      <strong>¥{{ amount.toFixed(2) }}</strong>
+    </div>
 
     <div class="mode-switch">
       <button type="button" :class="{ active: paymentMode === 'single' }" :disabled="partialCashRecorded || loading || !!paymentId" @click="setMode('single')">单一支付</button>
@@ -298,11 +301,13 @@ onUnmounted(stopPolling)
 </script>
 
 <style scoped>
-.payment-container { color: #252a25; }
-.amount-due { display: flex; align-items: flex-end; justify-content: space-between; padding: 4px 2px 14px; }
-.amount-due span { color: #6c746c; font-size: 13px; }
-.amount-due strong { color: #b65b0b; font-size: 30px; line-height: 34px; font-variant-numeric: tabular-nums; }
-.mode-switch { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; margin-bottom: 14px; border: 1px solid #d8ddd6; border-radius: 7px; background: #f2f4f1; }
+.payment-container { color: #202721; }
+.amount-due { min-height: 74px; display: flex; align-items: center; justify-content: space-between; margin: -2px 0 14px; padding: 12px 15px; border: 1px solid #cfe0d5; border-radius: 7px; background: #f0f7f3; }
+.amount-due > div { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.amount-due span { color: #5f6c63; font-size: 13px; font-weight: 600; }
+.amount-due small { max-width: 260px; overflow: hidden; color: #8a938c; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.amount-due strong { color: #a94e08; font-size: 31px; line-height: 36px; font-variant-numeric: tabular-nums; }
+.mode-switch { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; margin-bottom: 13px; border: 1px solid #d7ddd7; border-radius: 7px; background: #eef1ed; }
 .mode-switch button { height: 34px; border: 0; border-radius: 5px; background: transparent; color: #667066; cursor: pointer; }
 .mode-switch button.active { background: #fff; color: #12683f; font-weight: 700; box-shadow: 0 1px 3px rgba(24, 50, 33, .12); }
 .split-panel { display: grid; grid-template-columns: 1.2fr 1fr; gap: 10px; margin-bottom: 12px; }
@@ -313,12 +318,15 @@ onUnmounted(stopPolling)
 .split-remainder strong { color: #12683f; font-size: 21px; font-variant-numeric: tabular-nums; }
 .method-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
 .method-grid.compact { grid-template-columns: 1fr; }
-.method-button { min-height: 64px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; padding: 6px 4px; border: 1px solid #d9ded7; border-radius: 7px; background: #f7f8f6; color: #5e665e; cursor: pointer; }
-.method-button span { font-size: 11px; line-height: 15px; }
+.method-button { min-height: 68px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 7px 5px; border: 1px solid #d7ddd7; border-radius: 7px; background: #f8f9f7; color: #59635b; cursor: pointer; }
+.method-button span { font-size: 12px; line-height: 16px; }
 .method-button:hover { border-color: #78a88d; }
-.method-button.active { border-color: #16784a; background: #eaf5ee; color: #0f643c; font-weight: 700; }
-.cash-panel, .scan-panel { padding: 13px; border: 1px solid #dde2db; border-radius: 7px; background: #fafbf9; }
-.cash-panel > label, .scan-panel > div:first-child { display: block; margin-bottom: 8px; color: #616961; font-size: 13px; }
+.method-button.active { border-color: #14734a; background: #e8f4ed; color: #0e603c; font-weight: 700; box-shadow: 0 0 0 1px rgba(20, 115, 74, .08) inset; }
+.cash-panel, .scan-panel { padding: 14px; border: 1px solid #d9dfd9; border-radius: 7px; background: #f8faf8; }
+.cash-panel > label, .scan-panel > div:first-child { display: block; margin-bottom: 9px; color: #465149; font-size: 13px; font-weight: 600; }
+.scan-panel :deep(.el-input__wrapper) { min-height: 48px; background: #fff; box-shadow: 0 0 0 2px #9bb9a7 inset; }
+.scan-panel :deep(.el-input__inner) { font-size: 17px; font-variant-numeric: tabular-nums; }
+.scan-panel small { display: block; margin-top: 8px; color: #7a837c; line-height: 18px; }
 .cash-input-row { height: 48px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border: 2px solid #8aac97; border-radius: 7px; background: #fff; }
 .cash-input-row > span { color: #667066; font-size: 20px; }
 .cash-input-row :deep(.el-input-number) { width: 100%; }
@@ -337,9 +345,9 @@ onUnmounted(stopPolling)
 .pos-panel { padding: 13px 14px; border: 1px solid #d8dfd7; border-radius: 7px; background: #f7f9f6; }
 .pos-panel strong { color: #303730; font-size: 14px; }
 .pos-panel p { margin: 6px 0 0; color: #687168; font-size: 12px; line-height: 18px; }
-.pay-button { width: 100%; height: 46px; margin-top: 14px; border-radius: 7px; font-weight: 700; --el-button-bg-color: #16784a; --el-button-border-color: #16784a; --el-button-hover-bg-color: #0d5d38; --el-button-hover-border-color: #0d5d38; }
+.pay-button { width: 100%; height: 48px; margin-top: 14px; border-radius: 7px; font-weight: 700; --el-button-bg-color: #14734a; --el-button-border-color: #14734a; --el-button-hover-bg-color: #0d5d38; --el-button-hover-border-color: #0d5d38; }
 .return-button { width: 100%; margin-top: 8px; color: #a53d3d; }
 .query-button { width: 100%; margin-top: 8px; }
 .payment-waiting { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: #176a8a; }
-.error-message { margin-top: 12px; color: #c23f3f; font-size: 13px; line-height: 19px; }
+.error-message { margin-top: 12px; padding: 10px 12px; border: 1px solid #f0c7c5; border-radius: 6px; background: #fff3f2; color: #b73f3a; font-size: 13px; line-height: 19px; }
 </style>

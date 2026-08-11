@@ -1,223 +1,124 @@
 <template>
-  <div class="h-screen w-full">
-    <!-- Admin Layout -->
-    <el-container v-if="!isLoginPage" class="h-full w-full bg-gray-50">
-      <!-- Sidebar -->
-      <el-aside width="240px" class="bg-slate-900 text-white flex flex-col transition-all duration-300 shadow-xl z-20">
-        <!-- Logo Area -->
-        <div class="h-16 flex items-center px-6 border-b border-slate-800 bg-slate-950">
-          <div class="w-8 h-8 rounded-lg bg-indigo-500 flex items-center justify-center mr-3 shadow-lg shadow-indigo-500/30">
-            <el-icon :size="20" class="text-white"><Ticket /></el-icon>
+  <div class="app-root">
+    <el-container v-if="!isLoginPage" class="app-shell">
+      <button
+        v-if="mobileSidebarOpen"
+        class="sidebar-backdrop"
+        type="button"
+        aria-label="关闭导航"
+        @click="mobileSidebarOpen = false"
+      />
+
+      <el-aside
+        :width="sidebarWidth"
+        class="app-sidebar"
+        :class="{ 'is-collapsed': sidebarCollapsed, 'is-mobile-open': mobileSidebarOpen }"
+      >
+        <div class="brand-bar">
+          <div class="brand-mark" aria-hidden="true"><el-icon><Ticket /></el-icon></div>
+          <div v-show="!sidebarCollapsed || mobileSidebarOpen" class="brand-copy">
+            <strong>景区票务平台</strong>
+            <span>{{ isSuperAdmin ? '平台管理中心' : '商户管理中心' }}</span>
           </div>
-          <span class="text-lg font-bold tracking-wide bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">景区票务平台</span>
         </div>
 
-        <!-- Menu -->
-        <el-menu
-          active-text-color="#fff"
-          background-color="transparent"
-          class="el-menu-vertical-demo border-none flex-1 py-4"
-          :default-active="route.path"
-          text-color="#94a3b8"
-          router
-        >
-          <div class="px-4 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">概览</div>
-          <el-menu-item index="/" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-            <el-icon><Odometer /></el-icon>
-            <span>控制台</span>
-          </el-menu-item>
+        <div class="sidebar-scroll">
+          <el-menu
+            :default-active="route.path"
+            :collapse="sidebarCollapsed && !mobileSidebarOpen"
+            :collapse-transition="false"
+            class="app-menu"
+            router
+            @select="mobileSidebarOpen = false"
+          >
+            <template v-for="group in navGroups" :key="group.label">
+              <div v-if="!sidebarCollapsed || mobileSidebarOpen" class="menu-group-label">{{ group.label }}</div>
+              <el-menu-item v-for="item in group.items" :key="item.path" :index="item.path">
+                <el-icon><component :is="item.icon" /></el-icon>
+                <template #title>{{ item.label }}</template>
+              </el-menu-item>
+            </template>
+          </el-menu>
+        </div>
 
-          <!-- Super Admin Only -->
-          <template v-if="isSuperAdmin">
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">平台管理</div>
-             <el-menu-item v-if="user.role === 'platform_admin'" index="/tenant" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><OfficeBuilding /></el-icon>
-                <span>商户开户管理</span>
-             </el-menu-item>
-             <el-menu-item v-if="user.role === 'platform_admin'" index="/platform-users" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><UserFilled /></el-icon>
-                <span>平台账号</span>
-             </el-menu-item>
-             <el-menu-item index="/platform-operations" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Monitor /></el-icon>
-                <span>平台运营工作台</span>
-             </el-menu-item>
-          </template>
-
-          <!-- Tenant Only -->
-          <template v-else>
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">销售中心</div>
-             <el-menu-item v-if="hasCapability('supplier') && can('catalog.read')" index="/product" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Ticket /></el-icon>
-                <span>线上门票</span>
-             </el-menu-item>
-             <el-menu-item v-if="hasCapability('supplier') && can('catalog.read')" index="/product/offline" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Monitor /></el-icon>
-                <span>窗口门票</span>
-             </el-menu-item>
-             <el-menu-item v-if="can('orders.read')" index="/online-order" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><List /></el-icon>
-                <span>线上订单</span>
-             </el-menu-item>
-             <el-menu-item v-if="hasCapability('supplier') && can('onsite.read')" index="/offline-order" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Tickets /></el-icon>
-                <span>线下/窗口订单</span>
-             </el-menu-item>
-
-             <div v-if="hasAnyCapability('supplier', 'distributor') && (can('distribution.read') || can('channels.read'))" class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">分销中心</div>
-             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && can('distribution.read')" index="/distribution" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Connection /></el-icon>
-                <span>供销合作</span>
-             </el-menu-item>
-             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && can('channels.read')" index="/channels" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Connection /></el-icon>
-                <span>渠道连接</span>
-             </el-menu-item>
-             <el-menu-item v-if="hasAnyCapability('supplier', 'travel_agency') && can('teams.read')" index="/teams" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Tickets /></el-icon>
-                <span>旅行社团队</span>
-             </el-menu-item>
-
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">运营管理</div>
-             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && can('operations.read')" index="/operations" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Operation /></el-icon>
-                <span>运营工作台</span>
-             </el-menu-item>
-             <el-menu-item v-if="hasCapability('supplier') && can('catalog.read')" index="/policy" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Reading /></el-icon>
-                <span>政策知识库</span>
-             </el-menu-item>
-             <el-menu-item v-if="hasCapability('supplier') && can('onsite.manage')" index="/device" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Monitor /></el-icon>
-                <span>终端设备</span>
-             </el-menu-item>
-             <el-menu-item v-if="hasCapability('supplier') && can('onsite.read')" index="/checkpoint" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Location /></el-icon>
-                <span>检票点位</span>
-             </el-menu-item>
-
-             <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">数据与财务</div>
-             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && can('finance.read')" index="/finance" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Money /></el-icon>
-                <span>财务报表</span>
-             </el-menu-item>
-             <el-menu-item v-if="can('reports.read')" index="/report" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors text-indigo-400">
-                <el-icon><TrendCharts /></el-icon>
-                <span>经营数据</span>
-             </el-menu-item>
-             <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && can('refunds.read')" index="/refund-tasks" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Warning /></el-icon>
-                <span>退款待办</span>
-             </el-menu-item>
-             <el-menu-item v-if="can('after_sales.read')" index="/after-sales" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-                <el-icon><Warning /></el-icon>
-                <span>售后工作台</span>
-             </el-menu-item>
-          </template>
-          
-          <template v-if="!isSuperAdmin">
-          <div class="px-4 mt-6 mb-2 text-xs font-semibold text-slate-500 uppercase tracking-wider">组织与设置</div>
-           <el-menu-item v-if="hasCapability('supplier') && can('onsite.manage')" index="/staff" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-            <el-icon><User /></el-icon>
-            <span>员工管理</span>
-          </el-menu-item>
-          <el-menu-item v-if="can('tenant_accounts.manage')" index="/system-user" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-            <el-icon><UserFilled /></el-icon>
-            <span>管理账号</span>
-          </el-menu-item>
-           <el-menu-item v-if="hasAnyCapability('supplier', 'distributor') && can('payment_config.manage')" index="/payment-config" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-            <el-icon><CreditCard /></el-icon>
-            <span>支付参数配置</span>
-          </el-menu-item>
-          <el-menu-item index="/settings" class="mx-3 rounded-lg mb-1 hover:bg-slate-800 transition-colors">
-            <el-icon><Setting /></el-icon>
-            <span>系统设置</span>
-          </el-menu-item>
-          </template>
-        </el-menu>
-
-        <!-- User Profile (Bottom) -->
-        <!-- User Profile (Bottom) Removed -->
+        <div class="sidebar-footer">
+          <button
+            class="sidebar-collapse-button"
+            type="button"
+            :title="sidebarCollapsed ? '展开导航' : '收起导航'"
+            @click="toggleSidebar"
+          >
+            <el-icon><component :is="sidebarCollapsed ? Expand : Fold" /></el-icon>
+            <span v-if="!sidebarCollapsed">收起导航</span>
+          </button>
+        </div>
       </el-aside>
 
-      <!-- Main Content -->
-      <el-container class="flex flex-col h-full overflow-hidden">
-        <!-- Header -->
-        <el-header class="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 shadow-sm z-10">
-          <div class="flex items-center gap-4">
-            <el-breadcrumb separator="/">
-              <el-breadcrumb-item :to="{ path: '/' }">首页</el-breadcrumb-item>
-              <el-breadcrumb-item>{{ route.meta.title || '控制台' }}</el-breadcrumb-item>
-            </el-breadcrumb>
+      <el-container class="app-workspace">
+        <el-header class="app-topbar">
+          <div class="topbar-leading">
+            <button class="mobile-menu-button" type="button" title="打开导航" @click="mobileSidebarOpen = true">
+              <el-icon><MenuIcon /></el-icon>
+            </button>
+            <div class="route-context">
+              <span>{{ currentGroupLabel }}</span>
+              <strong>{{ route.meta.title || '控制台' }}</strong>
+            </div>
           </div>
-          <!-- Header Right Actions -->
-          <div class="flex items-center gap-6">
-            <!-- Account Context -->
-            <div v-if="isSuperAdmin" data-testid="account-context" class="hidden md:flex items-center gap-2 bg-indigo-50 border border-indigo-100 rounded-full px-4 py-1.5 cursor-default">
-                <el-icon class="text-indigo-600"><Monitor /></el-icon>
-                <span class="text-sm font-semibold text-indigo-900">系统服务商</span>
-            </div>
-            <div v-else data-testid="account-context" class="hidden md:flex items-center gap-2 bg-indigo-50 border border-indigo-100 rounded-full px-4 py-1.5 transition-all hover:shadow-sm hover:border-indigo-200 group cursor-default">
-                <el-icon class="text-indigo-600"><OfficeBuilding /></el-icon>
-                <span class="text-sm font-semibold text-indigo-900">{{ user.tenant_name || '商户' }}</span>
-                <div class="w-px h-3 bg-indigo-200 mx-1"></div>
-                <el-tooltip content="点击复制商户编号" placement="bottom">
-                    <span 
-                        class="text-xs font-mono font-medium text-indigo-500 hover:text-indigo-700 cursor-pointer select-none bg-white px-2 py-0.5 rounded border border-indigo-100"
-                        @click="copyCode"
-                    >
-                        {{ user.system_code || '---' }}
-                    </span>
-                </el-tooltip>
-            </div>
 
-            <!-- Vertical Divider -->
-            <div class="w-px h-6 bg-gray-200 hidden md:block"></div>
+          <div class="topbar-actions">
+            <div v-if="isSuperAdmin" data-testid="account-context" class="account-context">
+              <el-icon><Monitor /></el-icon>
+              <div><span>当前主体</span><strong>系统服务商</strong></div>
+            </div>
+            <button v-else data-testid="account-context" class="account-context tenant-context" type="button" @click="copyCode">
+              <el-icon><OfficeBuilding /></el-icon>
+              <div>
+                <span>{{ user.system_code || '商户编号' }}</span>
+                <strong>{{ user.tenant_name || '当前商户' }}</strong>
+              </div>
+              <el-icon class="copy-hint"><CopyDocument /></el-icon>
+            </button>
 
-            <!-- User Profile Dropdown -->
             <el-dropdown data-testid="profile-menu" trigger="click" @command="handleCommand">
-                <div class="flex items-center gap-3 cursor-pointer outline-none select-none transition-opacity hover:opacity-80">
-                    <div class="flex flex-col items-end">
-                        <span class="text-sm font-bold text-gray-800 leading-tight">{{ user.username || '未登录用户' }}</span>
-                        <span class="text-[10px] font-medium text-gray-500 uppercase tracking-wide bg-gray-100 px-1.5 py-px rounded mt-0.5">
-                            {{ roleText(user.role) }}
-                        </span>
-                    </div>
-                    <el-avatar :size="40" class="ring-2 ring-gray-100 shadow-sm" src="https://cube.elemecdn.com/0/88/03b0d39583f48206768a7534e55bcpng.png" />
-                    <el-icon class="text-gray-400"><CaretBottom /></el-icon>
-                </div>
-                <template #dropdown>
-                    <el-dropdown-menu class="w-48">
-                        <div class="px-4 py-3 border-b border-gray-100 mb-1">
-                            <p class="text-xs text-gray-400 mb-1">当前身份</p>
-                            <p class="text-sm font-bold text-gray-900">{{ roleText(user.role) }}</p>
-                        </div>
-                        <el-dropdown-item command="change-password">
-                            <el-icon><Key /></el-icon>
-                            修改密码
-                        </el-dropdown-item>
-                        <el-dropdown-item command="logout" class="text-red-500 focus:text-red-600">
-                            <el-icon><SwitchButton /></el-icon>
-                            退出登录
-                        </el-dropdown-item>
-                    </el-dropdown-menu>
-                </template>
+              <button class="profile-trigger" type="button">
+                <span class="profile-avatar">{{ userInitial }}</span>
+                <span class="profile-copy">
+                  <strong>{{ user.username || '未登录用户' }}</strong>
+                  <small>{{ roleText(user.role) }}</small>
+                </span>
+                <el-icon class="profile-caret"><CaretBottom /></el-icon>
+              </button>
+              <template #dropdown>
+                <el-dropdown-menu class="profile-dropdown">
+                  <div class="dropdown-identity">
+                    <span>当前身份</span>
+                    <strong>{{ roleText(user.role) }}</strong>
+                  </div>
+                  <el-dropdown-item command="change-password">
+                    <el-icon><Key /></el-icon>修改密码
+                  </el-dropdown-item>
+                  <el-dropdown-item command="logout" divided>
+                    <el-icon><SwitchButton /></el-icon>退出登录
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
             </el-dropdown>
           </div>
         </el-header>
 
-        <!-- Content Area -->
-        <el-main class="flex-1 overflow-auto bg-gray-50 p-6">
-          <RouterView v-slot="{ Component }">
-            <transition name="fade" mode="out-in">
-              <component :is="Component" />
-            </transition>
-          </RouterView>
+        <el-main class="app-content">
+          <div class="content-frame">
+            <RouterView v-slot="{ Component }">
+              <transition name="page-fade" mode="out-in">
+                <component :is="Component" />
+              </transition>
+            </RouterView>
+          </div>
         </el-main>
       </el-container>
     </el-container>
-    
-    <!-- Login Route (Full Screen, No Layout) -->
+
     <RouterView v-else />
 
     <el-dialog v-model="passwordDialogVisible" title="修改登录密码" width="440px" append-to-body>
@@ -235,122 +136,161 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, onMounted, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { 
-  Odometer, Monitor, Location, Ticket, List, Setting, User, UserFilled,
-  SwitchButton, OfficeBuilding, Connection, Money,
-  CaretBottom, Reading, TrendCharts, CreditCard, Tickets, Operation, Warning, Key
+import {
+  CaretBottom, Connection, CopyDocument, CreditCard, Expand, Fold, Key, List, Location,
+  Menu as MenuIcon, Money, Monitor, Odometer, OfficeBuilding, Operation, Reading, Setting,
+  SwitchButton, Ticket, Tickets, TrendCharts, User, UserFilled, Warning
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
 import { hasPermission, tenantRoleLabel } from '@/utils/permissions'
 
+type NavItem = { path: string; label: string; icon: any }
+type NavGroup = { label: string; items: NavItem[] }
+
 const route = useRoute()
 const router = useRouter()
 const isSuperAdmin = ref(false)
 const user = ref<any>({})
+const sidebarCollapsed = ref(localStorage.getItem('admin_sidebar_collapsed') === '1')
+const mobileSidebarOpen = ref(false)
 const passwordDialogVisible = ref(false)
 const passwordSaving = ref(false)
 const passwordForm = reactive({ currentPassword: '', newPassword: '', confirmPassword: '' })
 
 const isLoginPage = computed(() => route.name === 'login' || route.name === 'platform-login')
-const activeCapabilities = computed(() => new Set((user.value.capabilities || []).filter((item: any) => item.status === 'active' && (!item.expires_at || new Date(item.expires_at).getTime() > Date.now())).map((item: any) => item.capability)))
+const activeCapabilities = computed(() => new Set((user.value.capabilities || [])
+  .filter((item: any) => item.status === 'active' && (!item.expires_at || new Date(item.expires_at).getTime() > Date.now()))
+  .map((item: any) => item.capability)))
 const hasCapability = (value: string) => activeCapabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(value => activeCapabilities.value.has(value))
 const can = (permission: string) => hasPermission(user.value, permission)
+
+const navGroups = computed<NavGroup[]>(() => {
+  const overview: NavGroup = { label: '概览', items: [{ path: '/', label: '控制台', icon: Odometer }] }
+  if (isSuperAdmin.value) {
+    const platformItems: NavItem[] = []
+    if (user.value.role === 'platform_admin') {
+      platformItems.push({ path: '/tenant', label: '商户开户管理', icon: OfficeBuilding })
+      platformItems.push({ path: '/platform-users', label: '平台账号', icon: UserFilled })
+    }
+    platformItems.push({ path: '/platform-operations', label: '平台运营工作台', icon: Monitor })
+    return [overview, { label: '平台管理', items: platformItems }]
+  }
+
+  const sales: NavItem[] = []
+  if (hasCapability('supplier') && can('catalog.read')) {
+    sales.push({ path: '/product', label: '线上门票', icon: Ticket })
+    sales.push({ path: '/product/offline', label: '窗口门票', icon: Monitor })
+  }
+  if (can('orders.read')) sales.push({ path: '/online-order', label: '线上订单', icon: List })
+  if (hasCapability('supplier') && can('onsite.read')) sales.push({ path: '/offline-order', label: '线下/窗口订单', icon: Tickets })
+
+  const distribution: NavItem[] = []
+  if (hasAnyCapability('supplier', 'distributor') && can('distribution.read')) distribution.push({ path: '/distribution', label: '供销合作', icon: Connection })
+  if (hasAnyCapability('supplier', 'distributor') && can('channels.read')) distribution.push({ path: '/channels', label: '渠道连接', icon: Connection })
+  if (hasAnyCapability('supplier', 'travel_agency') && can('teams.read')) distribution.push({ path: '/teams', label: '旅行社团队', icon: Tickets })
+
+  const operations: NavItem[] = []
+  if (hasAnyCapability('supplier', 'distributor') && can('operations.read')) operations.push({ path: '/operations', label: '运营工作台', icon: Operation })
+  if (hasCapability('supplier') && can('catalog.read')) operations.push({ path: '/policy', label: '政策知识库', icon: Reading })
+  if (hasCapability('supplier') && can('onsite.manage')) operations.push({ path: '/device', label: '终端设备', icon: Monitor })
+  if (hasCapability('supplier') && can('onsite.read')) operations.push({ path: '/checkpoint', label: '检票点位', icon: Location })
+
+  const data: NavItem[] = []
+  if (hasAnyCapability('supplier', 'distributor') && can('finance.read')) data.push({ path: '/finance', label: '财务报表', icon: Money })
+  if (can('reports.read')) data.push({ path: '/report', label: '经营数据', icon: TrendCharts })
+  if (hasAnyCapability('supplier', 'distributor') && can('refunds.read')) data.push({ path: '/refund-tasks', label: '退款待办', icon: Warning })
+  if (can('after_sales.read')) data.push({ path: '/after-sales', label: '售后工作台', icon: Warning })
+
+  const settings: NavItem[] = []
+  if (hasCapability('supplier') && can('onsite.manage')) settings.push({ path: '/staff', label: '员工管理', icon: User })
+  if (can('tenant_accounts.manage')) settings.push({ path: '/system-user', label: '管理账号', icon: UserFilled })
+  if (hasAnyCapability('supplier', 'distributor') && can('payment_config.manage')) settings.push({ path: '/payment-config', label: '支付参数配置', icon: CreditCard })
+  settings.push({ path: '/settings', label: '系统设置', icon: Setting })
+
+  return [overview, { label: '销售中心', items: sales }, { label: '合作与渠道', items: distribution }, { label: '运营管理', items: operations }, { label: '数据与财务', items: data }, { label: '组织与设置', items: settings }]
+    .filter(group => group.items.length)
+})
+
+const sidebarWidth = computed(() => sidebarCollapsed.value ? '76px' : '232px')
+const currentGroupLabel = computed(() => navGroups.value.find(group => group.items.some(item => item.path === route.path))?.label || '工作台')
+const userInitial = computed(() => String(user.value.username || '管').trim().slice(0, 1).toUpperCase())
 const roleText = (role: string) => ({
-    platform_admin: '平台管理员', platform_operator: '平台运营员', super_admin: '商户最高管理员', admin: '商户管理员',
-    seller: '售票员', checker: '验票员'
+  platform_admin: '平台管理员', platform_operator: '平台运营员', super_admin: '商户最高管理员', admin: '商户管理员',
+  seller: '售票员', checker: '验票员'
 } as Record<string, string>)[role] || tenantRoleLabel(role)
 
+const toggleSidebar = () => {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  localStorage.setItem('admin_sidebar_collapsed', sidebarCollapsed.value ? '1' : '0')
+}
+
 const handleLogout = () => {
-    const loginPath = user.value.scope === 'platform' ? '/platform/login' : '/login'
-    localStorage.removeItem('token')
-    localStorage.removeItem('user')
-    ElMessage.success('退出登录成功')
-    router.push(loginPath)
+  const loginPath = user.value.scope === 'platform' ? '/platform/login' : '/login'
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
+  ElMessage.success('退出登录成功')
+  router.push(loginPath)
 }
 
 const handleCommand = (command: string) => {
-    if (command === 'logout') {
-        handleLogout()
-    } else if (command === 'change-password') {
-        Object.assign(passwordForm, { currentPassword: '', newPassword: '', confirmPassword: '' })
-        passwordDialogVisible.value = true
-    }
+  if (command === 'logout') handleLogout()
+  if (command === 'change-password') {
+    Object.assign(passwordForm, { currentPassword: '', newPassword: '', confirmPassword: '' })
+    passwordDialogVisible.value = true
+  }
 }
 
 const changePassword = async () => {
-    if (!passwordForm.currentPassword || passwordForm.newPassword.length < 8) {
-        ElMessage.warning('请填写当前密码，新密码长度至少8位')
-        return
-    }
-    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
-        ElMessage.warning('两次输入的新密码不一致')
-        return
-    }
-    passwordSaving.value = true
-    try {
-        const loginPath = user.value.scope === 'platform' ? '/platform/login' : '/login'
-        await request.put('/auth/password', { current_password: passwordForm.currentPassword, new_password: passwordForm.newPassword })
-        passwordDialogVisible.value = false
-        localStorage.removeItem('token')
-        localStorage.removeItem('user')
-        ElMessage.success('密码已修改，请重新登录')
-        await router.push(loginPath)
-    } finally {
-        passwordSaving.value = false
-    }
+  if (!passwordForm.currentPassword || passwordForm.newPassword.length < 8) {
+    ElMessage.warning('请填写当前密码，新密码长度至少8位')
+    return
+  }
+  if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+    ElMessage.warning('两次输入的新密码不一致')
+    return
+  }
+  passwordSaving.value = true
+  try {
+    const loginPath = user.value.scope === 'platform' ? '/platform/login' : '/login'
+    await request.put('/auth/password', { current_password: passwordForm.currentPassword, new_password: passwordForm.newPassword })
+    passwordDialogVisible.value = false
+    localStorage.removeItem('token')
+    localStorage.removeItem('user')
+    ElMessage.success('密码已修改，请重新登录')
+    await router.push(loginPath)
+  } finally {
+    passwordSaving.value = false
+  }
 }
 
-const copyCode = () => {
-    if (user.value.system_code) {
-        navigator.clipboard.writeText(user.value.system_code)
-        ElMessage.success('系统编号已复制')
-    }
+const copyCode = async () => {
+  if (!user.value.system_code) return
+  try {
+    await navigator.clipboard.writeText(user.value.system_code)
+    ElMessage.success('商户系统编号已复制')
+  } catch {
+    ElMessage.info(`商户系统编号：${user.value.system_code}`)
+  }
 }
-
 
 const loadUser = () => {
-    const userStr = localStorage.getItem('user')
-    if (userStr) {
-        try {
-            user.value = JSON.parse(userStr)
-            isSuperAdmin.value = user.value.scope === 'platform'
-        } catch (e) {
-            console.error('Failed to parse user info')
-        }
-    }
+  const userStr = localStorage.getItem('user')
+  if (!userStr) return
+  try {
+    user.value = JSON.parse(userStr)
+    isSuperAdmin.value = user.value.scope === 'platform'
+  } catch {
+    console.error('Failed to parse user info')
+  }
 }
 
 watch(() => route.path, () => {
-    loadUser()
+  loadUser()
+  mobileSidebarOpen.value = false
 })
-
-onMounted(() => {
-    loadUser()
-})
+onMounted(loadUser)
 </script>
-
-<style>
-/* Custom Menu Active State */
-.el-menu-item.is-active {
-  background-color: #4f46e5 !important; /* Indigo 600 */
-  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
-}
-
-.el-menu-item:hover {
-  background-color: #1e293b !important; /* Slate 800 */
-}
-
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-</style>

@@ -1,20 +1,16 @@
 <template>
   <div class="space-y-6">
-    <!-- Header -->
-    <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100 flex justify-between items-center">
-      <div>
+    <header class="page-heading">
+      <div class="page-heading-copy">
         <h2 class="text-lg font-bold text-gray-900">供销合作</h2>
         <p class="text-xs text-gray-500 mt-1">维护供应商授权、分销商铺货和履约关系</p>
       </div>
-      <div>
-         <el-button v-if="canDistribute && canWrite && activeTab === 'suppliers'" type="primary" size="large" @click="dialogVisible = true">
-            <el-icon class="mr-2"><Connection /></el-icon> 寻找供应商
-         </el-button>
+      <div class="page-actions">
+         <el-button v-if="canDistribute && canWrite && activeTab === 'suppliers'" type="primary" :icon="Connection" @click="dialogVisible = true">寻找供应商</el-button>
       </div>
-    </div>
+    </header>
 
-    <!-- Main Content -->
-    <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+    <div class="data-panel">
       <el-tabs v-model="activeTab" @tab-change="handleTabChange">
         
         <!-- Tab 1: My Suppliers -->

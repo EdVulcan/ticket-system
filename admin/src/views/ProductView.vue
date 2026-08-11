@@ -1,19 +1,18 @@
 <template>
   <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
-    <div class="flex justify-between items-center mb-6">
-      <div>
+    <header class="page-heading">
+      <div class="page-heading-copy">
         <h2 class="text-lg font-bold text-gray-900">线上门票管理</h2>
         <p class="text-xs text-gray-500 mt-1">管理外部销售渠道和微商城销售的票务产品</p>
       </div>
-      <el-button v-if="canWrite" type="primary" @click="handleAdd">
-        <el-icon class="mr-2"><Plus /></el-icon> 发布新门票
-      </el-button>
-    </div>
+      <div class="page-actions">
+        <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleAdd">发布新门票</el-button>
+      </div>
+    </header>
 
-    <!-- Filter / Search (Placeholder) -->
-    <div class="mb-4 flex gap-4">
+    <div class="filter-toolbar">
       <el-input v-model="searchQuery" placeholder="搜索门票名称..." class="w-64" prefix-icon="Search" />
-      <el-select v-model="filterStatus" placeholder="状态" class="w-32">
+      <el-select v-model="filterStatus" placeholder="全部状态" class="w-32">
         <el-option label="全部" value="" />
         <el-option label="上架中" value="online" />
         <el-option label="已下架" value="offline" />
@@ -44,8 +43,8 @@
       <el-table-column label="有效期 & 库存" width="180">
         <template #default="{ row }">
           <div class="text-xs">
-            <div v-if="row.validity_type === 'date'">📅 指定日期</div>
-            <div v-else>⏳ 购买后 {{ row.validity_days }} 天有效</div>
+            <div v-if="row.validity_type === 'date'">指定日期</div>
+            <div v-else>购买后 {{ row.validity_days }} 天有效</div>
             <div class="mt-1 text-gray-500">
               库存: {{ row.stock_type === 'unlimited' ? '不限' : (row.stock_type === 'daily' ? '日限 ' + row.daily_stock : '总限 ' + row.daily_stock) }}
             </div>

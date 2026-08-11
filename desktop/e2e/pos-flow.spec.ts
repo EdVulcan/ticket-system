@@ -237,7 +237,7 @@ test('窗口订单使用服务端真实退款状态筛选', async ({ page }) => 
   const refundedRow = page.getByRole('row').filter({ hasText: 'POS-REFUNDED-1' })
   await expect(refundedRow.getByText('POS-REFUNDED-1')).toBeVisible()
   await expect(refundedRow.getByText('已退款', { exact: true })).toBeVisible()
-  await expect(page.locator('.el-pagination__total')).toContainText('41')
+  await expect(page.locator('.el-pagination__total')).toHaveText('共 41 条')
   await page.locator('.el-pager li').filter({ hasText: '2' }).click()
   await expect.poll(() => orderQueries.some(url => new URL(url).searchParams.get('page') === '2')).toBe(true)
 })

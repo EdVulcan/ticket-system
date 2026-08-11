@@ -69,9 +69,9 @@ test('平台身份不能进入租户业务菜单', async ({ page }) => {
   await page.getByRole('button', { name: '登 录' }).click()
 
   await expect(page.getByRole('heading', { name: '平台运行总览' })).toBeVisible()
-  await expect(page.getByText('商户开户管理', { exact: true })).toBeVisible()
+  await expect(page.getByRole('menuitem', { name: '商户开户管理' })).toBeVisible()
   await expect(page.getByRole('menuitem', { name: '平台账号' })).toBeVisible()
-  await expect(page.getByTestId('account-context')).toHaveText('系统服务商')
+  await expect(page.getByTestId('account-context')).toContainText('系统服务商')
   await expect(page.getByRole('menuitem', { name: '平台运营工作台' })).toBeVisible()
   await expect(page.getByText('线上门票', { exact: true })).toHaveCount(0)
 

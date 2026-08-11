@@ -1,17 +1,16 @@
 <template>
   <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
-    <div class="flex justify-between items-center mb-6">
-      <div>
+    <header class="page-heading">
+      <div class="page-heading-copy">
         <h2 class="text-lg font-bold text-gray-900">订单管理</h2>
         <p class="text-xs text-gray-500 mt-1">{{ isSupplier ? '查看线上销售订单、处理退款及手动核销' : canDirectRefund ? '查看线上销售订单及处理退款' : '查看线上销售订单及售后状态' }}</p>
       </div>
-      <div class="flex gap-2">
-        <el-button @click="fetchData" icon="Refresh">刷新</el-button>
+      <div class="page-actions">
+        <el-button :icon="Refresh" @click="fetchData">刷新</el-button>
       </div>
-    </div>
+    </header>
 
-    <!-- Filter -->
-    <div class="mb-4 flex gap-4">
+    <div class="filter-toolbar">
       <el-input v-model="searchQuery" placeholder="搜索订单号/手机号..." class="w-64" prefix-icon="Search" @keyup.enter="fetchData" />
       <el-date-picker
         v-model="dateRange"
@@ -71,7 +70,7 @@
     </el-table>
 
     <!-- Pagination -->
-    <div class="flex justify-end mt-4">
+    <div class="table-footer">
       <el-pagination
         v-model:current-page="currentPage"
         v-model:page-size="pageSize"
@@ -169,6 +168,7 @@
 <script setup lang="ts">
 import { computed, ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Refresh } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 
 const loading = ref(false)

@@ -62,7 +62,7 @@ const router = createRouter({
             path: '/finance',
             name: 'finance',
             component: () => import('../views/FinanceView.vue'),
-            meta: { scope: 'tenant', permission: 'finance.read', capabilities: ['supplier', 'distributor'], title: '财务中心' }
+            meta: { scope: 'tenant', permission: 'finance.read', capabilities: ['supplier', 'distributor'], title: '财务报表' }
         },
         {
             path: '/device',
@@ -80,13 +80,13 @@ const router = createRouter({
             path: '/product',
             name: 'product',
             component: () => import('../views/ProductView.vue'),
-            meta: { scope: 'tenant', permission: 'catalog.read', capability: 'supplier', title: '产品管理' }
+            meta: { scope: 'tenant', permission: 'catalog.read', capability: 'supplier', title: '线上门票' }
         },
         {
             path: '/product/offline',
             name: 'offline-product',
             component: () => import('../views/OfflineProductView.vue'),
-            meta: { scope: 'tenant', permission: 'catalog.read', capability: 'supplier', title: '窗口产品' }
+            meta: { scope: 'tenant', permission: 'catalog.read', capability: 'supplier', title: '窗口门票' }
         },
         {
             path: '/online-order',
