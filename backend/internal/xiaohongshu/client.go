@@ -83,12 +83,12 @@ type Session struct {
 }
 
 type Category struct {
-	ID                string `json:"category_id"`
-	Name              string `json:"name"`
-	RequireClaimStore bool   `json:"require_claim_store"`
-	SupportTrade      bool   `json:"support_trade"`
-	TradeAbility      string `json:"trade_ability,omitempty"`
-	Path              string `json:"path,omitempty"`
+	ID                string          `json:"category_id"`
+	Name              string          `json:"name"`
+	RequireClaimStore bool            `json:"require_claim_store"`
+	SupportTrade      bool            `json:"support_trade"`
+	TradeAbility      string          `json:"trade_ability,omitempty"`
+	Path              json.RawMessage `json:"path,omitempty"`
 }
 
 type CategoryListResponse struct {

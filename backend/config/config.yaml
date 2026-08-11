@@ -5,6 +5,9 @@ server:
   # Public HTTPS origin used to generate provider callback URLs. Override with
   # TICKET_SERVER_PUBLIC_BASE_URL for another deployment.
   public_base_url: "https://ymsq.edvulcan.top"
+  # Persistent tenant-uploaded product images. The deployment keeps backend/data
+  # outside individual release directories.
+  upload_directory: "data/uploads"
   cors_allowed_origins: "http://127.0.0.1:5173,http://localhost:5173,http://wails.localhost,wails://wails.localhost"
   admin_static_dir: "../admin/dist"
 

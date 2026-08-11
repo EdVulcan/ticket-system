@@ -3,6 +3,7 @@ package router
 import (
 	"ticket-backend/internal/api"
 	"ticket-backend/internal/authz"
+	"ticket-backend/internal/config"
 	"ticket-backend/internal/middleware"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
@@ -247,7 +248,13 @@ func InitRouter(r *gin.Engine) {
 	channelRegistry := service.NewChannelAdapterRegistry(service.NewCoreChannelAdapter())
 	channelGateway := &service.ChannelGatewayService{Registry: channelRegistry}
 	otaController.Gateway = channelGateway
-	channelController := &api.ChannelController{Service: service.ChannelService{}, Gateway: channelGateway, CtripSync: service.CtripSyncService{}, XiaohongshuProducts: service.NewXiaohongshuProductService()}
+	channelController := &api.ChannelController{
+		Service: service.ChannelService{}, Gateway: channelGateway, CtripSync: service.CtripSyncService{},
+		XiaohongshuProducts: service.NewXiaohongshuProductService(),
+		XiaohongshuImages: service.XiaohongshuImageStore{
+			Directory: config.GlobalConfig.Server.UploadDirectory, PublicBaseURL: config.GlobalConfig.Server.PublicBaseURL,
+		},
+	}
 	ctripController := &api.CtripController{Service: service.CtripProtocolService{OrderService: service.OrderService{}}}
 	apiGroup.POST("/integrations/ctrip/order", ctripController.HandleOrder)
 
@@ -283,6 +290,7 @@ func InitRouter(r *gin.Engine) {
 		channelAdminGroup.GET("/:id/xiaohongshu-pois", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.ListXiaohongshuPOIs)
 		channelAdminGroup.GET("/:id/mappings/:mappingId/xiaohongshu-product", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.GetXiaohongshuProductConfig)
 		channelAdminGroup.PUT("/:id/mappings/:mappingId/xiaohongshu-product", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SaveXiaohongshuProductConfig)
+		channelAdminGroup.POST("/:id/mappings/:mappingId/xiaohongshu-product-image", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.UploadXiaohongshuProductImage)
 		channelAdminGroup.POST("/:id/mappings/:mappingId/xiaohongshu-sync", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SyncXiaohongshuProduct)
 		channelAdminGroup.POST("/:id/mappings/:mappingId/ctrip-sync", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SyncCtripMapping)
 		channelAdminGroup.POST("/:id/ctrip-sandbox-consume", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SimulateCtripSandboxConsumption)

@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"ticket-backend/internal/model"
@@ -8,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type ChannelController struct {
@@ -15,6 +18,7 @@ type ChannelController struct {
 	Gateway             *service.ChannelGatewayService
 	CtripSync           service.CtripSyncService
 	XiaohongshuProducts service.XiaohongshuProductService
+	XiaohongshuImages   service.XiaohongshuImageStore
 }
 
 func (c *ChannelController) List(ctx *gin.Context) {
@@ -245,10 +249,54 @@ func (c *ChannelController) GetXiaohongshuProductConfig(ctx *gin.Context) {
 	}
 	config, err := c.XiaohongshuProducts.GetConfig(ctx.GetUint("tenant_id"), uint(accountID), uint(mappingID))
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			ctx.JSON(http.StatusOK, gin.H{})
+			return
+		}
 		ctx.JSON(http.StatusNotFound, gin.H{"error": "尚未配置小红书商品发布参数"})
 		return
 	}
 	ctx.JSON(http.StatusOK, config)
+}
+
+func (c *ChannelController) UploadXiaohongshuProductImage(ctx *gin.Context) {
+	accountID, accountErr := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	mappingID, mappingErr := strconv.ParseUint(ctx.Param("mappingId"), 10, 32)
+	if accountErr != nil || mappingErr != nil || accountID == 0 || mappingID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel or mapping id"})
+		return
+	}
+	tenantID := ctx.GetUint("tenant_id")
+	if err := c.XiaohongshuProducts.EnsureMappingAccess(tenantID, uint(accountID), uint(mappingID)); err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "小红书商品映射不存在或不可用"})
+		return
+	}
+	header, err := ctx.FormFile("image")
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "请选择商品图片"})
+		return
+	}
+	if header.Size <= 0 || header.Size > service.MaxXiaohongshuImageBytes {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "商品图片必须小于 5 MB"})
+		return
+	}
+	file, err := header.Open()
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "读取商品图片失败"})
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, service.MaxXiaohongshuImageBytes+1))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "读取商品图片失败"})
+		return
+	}
+	imageURL, err := c.XiaohongshuImages.Save(tenantID, uint(accountID), data)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusCreated, gin.H{"image_url": imageURL})
 }
 
 func (c *ChannelController) SaveXiaohongshuProductConfig(ctx *gin.Context) {

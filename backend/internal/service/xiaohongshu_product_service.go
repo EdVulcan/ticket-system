@@ -70,6 +70,10 @@ func (s XiaohongshuProductService) GetConfig(tenantID, accountID, mappingID uint
 	return &XiaohongshuProductConfigView{XiaohongshuProductConfig: config, POIIDs: parseXiaohongshuPOIIDs(config.POIIDsJSON)}, nil
 }
 
+func (s XiaohongshuProductService) EnsureMappingAccess(tenantID, accountID, mappingID uint) error {
+	return loadXiaohongshuMappingTx(model.DB, tenantID, accountID, mappingID, nil, nil)
+}
+
 func (s XiaohongshuProductService) SaveConfig(tenantID, accountID, mappingID, actorUserID uint, actorRole string, input XiaohongshuProductConfigInput) (*XiaohongshuProductConfigView, error) {
 	normalizeXiaohongshuProductInput(&input)
 	if err := validateXiaohongshuProductInput(input); err != nil {

@@ -162,7 +162,39 @@
           <el-form-item label="商品类型"><el-select v-model="xiaohongshuMapping.product_type" class="w-full"><el-option label="团购券" :value="1" /><el-option label="预售券" :value="2" /><el-option label="日历商品" :value="3" /></el-select></el-form-item>
           <el-form-item label="结算方式"><el-select v-model="xiaohongshuMapping.settle_type" class="w-full"><el-option label="总部结算" :value="1" /><el-option label="门店结算" :value="2" /><el-option label="区域结算" :value="3" /></el-select></el-form-item>
         </div>
-        <el-form-item label="商品图片网址"><el-input v-model="xiaohongshuMapping.image_url" placeholder="必须是可公网访问的 HTTPS 图片" /></el-form-item>
+        <el-form-item label="商品图片">
+          <div class="w-full rounded border border-gray-200 bg-gray-50 p-3">
+            <div class="flex items-center gap-4">
+              <el-image
+                v-if="xiaohongshuMapping.image_url"
+                :src="xiaohongshuMapping.image_url"
+                :preview-src-list="[xiaohongshuMapping.image_url]"
+                fit="cover"
+                class="h-24 w-24 shrink-0 rounded border border-gray-200 bg-white"
+                preview-teleported
+              />
+              <div class="min-w-0 flex-1">
+                <el-upload
+                  ref="xiaohongshuImageUpload"
+                  :auto-upload="false"
+                  :show-file-list="false"
+                  accept="image/jpeg,image/png"
+                  :disabled="xiaohongshuImageUploading"
+                  :on-change="uploadXiaohongshuImage"
+                >
+                  <el-button :icon="UploadFilled" :loading="xiaohongshuImageUploading">
+                    {{ xiaohongshuMapping.image_url ? '替换图片' : '选择图片' }}
+                  </el-button>
+                </el-upload>
+                <p class="mt-2 text-xs leading-5 text-gray-500">支持 JPG、PNG，文件不超过 5 MB。上传后由系统生成小红书可访问的图片地址。</p>
+                <div v-if="xiaohongshuMapping.image_url" class="mt-1 flex items-center gap-2 text-xs text-green-700">
+                  <span>图片已上传</span>
+                  <el-button link type="danger" @click="xiaohongshuMapping.image_url = ''">移除</el-button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </el-form-item>
         <el-form-item label="商品说明"><el-input v-model="xiaohongshuMapping.description" type="textarea" :rows="3" maxlength="1000" show-word-limit /></el-form-item>
         <div class="grid grid-cols-1 gap-x-4 md:grid-cols-2">
           <el-form-item label="小程序商品页路径"><el-input v-model="xiaohongshuMapping.product_path" /></el-form-item>
@@ -331,8 +363,8 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { Plus, Refresh } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, Refresh, UploadFilled } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox, type UploadFile, type UploadInstance } from 'element-plus'
 import request from '@/utils/request'
 import { localizeDisplayText } from '@/utils/localize'
 import { hasPermission } from '@/utils/permissions'
@@ -395,6 +427,8 @@ const xiaohongshuMappingDialog = ref(false)
 const xiaohongshuMappingSaving = ref(false)
 const xiaohongshuMappingLoading = ref(false)
 const xiaohongshuMappingSyncing = ref(false)
+const xiaohongshuImageUploading = ref(false)
+const xiaohongshuImageUpload = ref<UploadInstance>()
 const xiaohongshuCategories = ref<any[]>([])
 const xiaohongshuPOIs = ref<any[]>([])
 const xiaohongshuMapping = reactive({ mapping_id: 0, external_code: '', external_sku_id: '', display_name: '', channel_sale_yuan: 0, category_id: '', poi_ids: [] as string[], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, status: 'active', sync_status: '', last_sync_error: '' })
@@ -527,9 +561,33 @@ const openXiaohongshuMappingEdit = async (row: any) => {
     if (poiResult.status === 'rejected') ElMessage.warning('暂时无法加载小红书门店，可稍后重试')
   } finally { xiaohongshuMappingLoading.value = false }
 }
+const uploadXiaohongshuImage = async (file: UploadFile) => {
+  if (!selectedAccount.value || !xiaohongshuMapping.mapping_id || !file.raw) return
+  if (!['image/jpeg', 'image/png'].includes(file.raw.type)) {
+    ElMessage.warning('商品图片仅支持 JPG 或 PNG 格式')
+    xiaohongshuImageUpload.value?.clearFiles()
+    return
+  }
+  if (file.raw.size > 5 * 1024 * 1024) {
+    ElMessage.warning('商品图片不能超过 5 MB')
+    xiaohongshuImageUpload.value?.clearFiles()
+    return
+  }
+  xiaohongshuImageUploading.value = true
+  try {
+    const form = new FormData()
+    form.append('image', file.raw)
+    const response = await request.post(`/channel-accounts/${selectedAccount.value.id}/mappings/${xiaohongshuMapping.mapping_id}/xiaohongshu-product-image`, form, { timeout: 30000 })
+    xiaohongshuMapping.image_url = response.data.image_url || ''
+    ElMessage.success('商品图片已上传')
+  } finally {
+    xiaohongshuImageUploading.value = false
+    xiaohongshuImageUpload.value?.clearFiles()
+  }
+}
 const saveXiaohongshuMapping = async (syncAfterSave: boolean) => {
   if (!selectedAccount.value || !xiaohongshuMapping.external_code.trim() || !xiaohongshuMapping.external_sku_id.trim() || xiaohongshuMapping.channel_sale_yuan <= 0 || !xiaohongshuMapping.category_id || !xiaohongshuMapping.image_url.trim() || !xiaohongshuMapping.description.trim()) { ElMessage.warning('请完整填写商品编码、规格编码、售价、类目、图片和商品说明'); return }
-  if (!xiaohongshuMapping.image_url.startsWith('https://') || !xiaohongshuMapping.product_path.startsWith('/') || !xiaohongshuMapping.order_path.startsWith('/')) { ElMessage.warning('商品图片必须使用 HTTPS，小程序页面路径必须以 / 开头'); return }
+  if (!xiaohongshuMapping.product_path.startsWith('/') || !xiaohongshuMapping.order_path.startsWith('/')) { ElMessage.warning('小程序页面路径必须以 / 开头'); return }
   if (selectedAccount.value.status === 'sandbox' && Math.round(xiaohongshuMapping.channel_sale_yuan * 100) > 10) { ElMessage.warning('测试小程序售价不能高于 0.10 元，否则无法完成支付测试'); return }
   xiaohongshuMappingSaving.value = true
   try {

@@ -128,7 +128,7 @@ func TestListCategoriesAndPOIsUseOfficialQueries(t *testing.T) {
 			_, _ = w.Write([]byte(`{"data":{"access_token":"token-1","expire_in":7200},"success":true,"msg":"success","code":0}`))
 		case "/api/rmp/apps/category":
 			assertAuthQuery(t, r)
-			_, _ = w.Write([]byte(`{"data":{"category_info":[{"category_id":"C-1","name":"景区门票","require_claim_store":true,"support_trade":true}]},"success":true,"msg":"success","code":0}`))
+			_, _ = w.Write([]byte(`{"data":{"category_info":[{"category_id":"C-1","name":"景区门票","require_claim_store":true,"support_trade":true,"path":[{"category_id":"ROOT","name":"本地生活"},{"category_id":"C-1","name":"景区门票"}]}]},"success":true,"msg":"success","code":0}`))
 		case "/api/rmp/mp/deal/poi/list":
 			assertAuthQuery(t, r)
 			if r.URL.Query().Get("page_no") != "2" || r.URL.Query().Get("page_size") != "40" {
@@ -145,6 +145,9 @@ func TestListCategoriesAndPOIsUseOfficialQueries(t *testing.T) {
 	categories, err := client.ListCategories(context.Background())
 	if err != nil || len(categories) != 1 || categories[0].ID != "C-1" || !categories[0].SupportTrade {
 		t.Fatalf("categories=%+v err=%v", categories, err)
+	}
+	if string(categories[0].Path) != `[{"category_id":"ROOT","name":"本地生活"},{"category_id":"C-1","name":"景区门票"}]` {
+		t.Fatalf("category path=%s", categories[0].Path)
 	}
 	pois, err := client.ListPOIs(context.Background(), 2, 40)
 	if err != nil || pois.Total != 1 || len(pois.List) != 1 || pois.List[0].ID != "P-1" {

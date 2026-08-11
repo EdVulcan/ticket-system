@@ -27,6 +27,7 @@ type ServerConfig struct {
 	Port               int    `mapstructure:"port"`
 	Mode               string `mapstructure:"mode"`
 	PublicBaseURL      string `mapstructure:"public_base_url"`
+	UploadDirectory    string `mapstructure:"upload_directory"`
 	CORSAllowedOrigins string `mapstructure:"cors_allowed_origins"`
 	AdminStaticDir     string `mapstructure:"admin_static_dir"`
 	TrustedProxyCIDRs  string `mapstructure:"trusted_proxy_cidrs"`
@@ -120,6 +121,7 @@ func InitConfig() error {
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.mode", "release")
 	viper.SetDefault("server.public_base_url", "")
+	viper.SetDefault("server.upload_directory", "data/uploads")
 	viper.SetDefault("server.cors_allowed_origins", "http://127.0.0.1:5173,http://localhost:5173,http://wails.localhost,wails://wails.localhost")
 	viper.SetDefault("server.admin_static_dir", "../admin/dist")
 	viper.SetDefault("server.trusted_proxy_cidrs", "127.0.0.1/32,::1/128")
