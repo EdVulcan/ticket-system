@@ -13,6 +13,14 @@ async function loginAs(page: Page, user: typeof users.supplier) {
     localStorage.setItem('token', 'test-token')
     localStorage.setItem('user', JSON.stringify(current))
   }, user)
+  await page.route('**/api/v1/tenants/me', route => json(route, {
+    id: user.tenant_id,
+    name: user.tenant_name,
+    system_code: user.system_code,
+    status: 'active',
+    capabilities: user.capabilities,
+    supplier_business_types: 'supplier_business_types' in user ? user.supplier_business_types : [],
+  }))
 }
 
 async function expectBlankSelect(select: ReturnType<Page['getByRole']>) {

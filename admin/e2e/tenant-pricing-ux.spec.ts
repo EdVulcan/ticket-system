@@ -24,6 +24,14 @@ async function prepareSupplier(page: Page) {
     localStorage.setItem('token', 'supplier-token')
     localStorage.setItem('user', JSON.stringify(user))
   }, supplierUser)
+  await page.route('**/api/v1/tenants/me', route => json(route, {
+    id: supplierUser.tenant_id,
+    name: supplierUser.tenant_name,
+    system_code: supplierUser.system_code,
+    status: 'active',
+    capabilities: supplierUser.capabilities,
+    supplier_business_types: supplierUser.supplier_business_types,
+  }))
   await page.route('**/api/v1/teams?page=*', route => json(route, { data: [], total: 0 }))
   await page.route('**/api/v1/teams/contracts', async route => {
     if (route.request().method() === 'POST') {

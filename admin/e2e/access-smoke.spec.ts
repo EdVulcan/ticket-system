@@ -42,6 +42,14 @@ test('未登录访问时不会短暂显示后台界面', async ({ page }) => {
 
 test('景区租户登录后只显示已授权工作区', async ({ page }) => {
   await mockJSON(page, '**/api/v1/auth/login', { token: 'tenant-token', user: tenantUser })
+  await mockJSON(page, '**/api/v1/tenants/me', {
+    id: tenantUser.tenant_id,
+    name: tenantUser.tenant_name,
+    system_code: tenantUser.system_code,
+    status: 'active',
+    capabilities: tenantUser.capabilities,
+    supplier_business_types: tenantUser.supplier_business_types,
+  })
   await page.goto('/login')
 
   await expect(page.getByText('平台登录', { exact: true })).toHaveCount(0)
@@ -275,13 +283,23 @@ test('平台管理员启用待审核租户时显式确认资质', async ({ page 
 })
 
 test('旅行社能力可以进入团队工作区', async ({ page }) => {
-  await page.addInitScript(user => {
-    localStorage.setItem('token', 'travel-token')
-    localStorage.setItem('user', JSON.stringify(user))
-  }, {
+  const travelUser = {
     ...tenantUser,
     tenant_name: '示例旅行社',
     capabilities: [{ capability: 'travel_agency', status: 'active' }],
+    supplier_business_types: [],
+  }
+  await page.addInitScript(user => {
+    localStorage.setItem('token', 'travel-token')
+    localStorage.setItem('user', JSON.stringify(user))
+  }, travelUser)
+  await mockJSON(page, '**/api/v1/tenants/me', {
+    id: travelUser.tenant_id,
+    name: travelUser.tenant_name,
+    system_code: travelUser.system_code,
+    status: 'active',
+    capabilities: travelUser.capabilities,
+    supplier_business_types: travelUser.supplier_business_types,
   })
   await mockJSON(page, '**/api/v1/teams?*', { data: [], total: 0 })
 

@@ -20,6 +20,14 @@ async function prepareDistributor(page: Page) {
     localStorage.setItem('token', 'distributor-token')
     localStorage.setItem('user', JSON.stringify(user))
   }, distributorUser)
+  await page.route('**/api/v1/tenants/me', route => json(route, {
+    id: distributorUser.tenant_id,
+    name: distributorUser.tenant_name,
+    system_code: distributorUser.system_code,
+    status: 'active',
+    capabilities: distributorUser.capabilities,
+    supplier_business_types: [],
+  }))
   await page.route('**/api/v1/distribution/suppliers', route => json(route, { data: [] }))
   await page.route('**/api/v1/distribution/bundle-components?*', route => json(route, { data: [
     { seller_product_id: 101, seller_product_name: '东园成人票', supplier_name: '东园景区' },

@@ -21,10 +21,19 @@ const tenantUser = (capability: 'supplier' | 'travel_agency') => ({
 })
 
 async function openTeamWorkspace(page: Page, capability: 'supplier' | 'travel_agency') {
+  const user = tenantUser(capability)
   await page.addInitScript(user => {
     localStorage.setItem('token', 'tenant-token')
     localStorage.setItem('user', JSON.stringify(user))
-  }, tenantUser(capability))
+  }, user)
+  await mockJSON(page, '**/api/v1/tenants/me', {
+    id: user.tenant_id,
+    name: user.tenant_name,
+    system_code: user.system_code,
+    status: 'active',
+    capabilities: user.capabilities,
+    supplier_business_types: user.supplier_business_types,
+  })
   await mockJSON(page, '**/api/v1/teams?*', { data: [], total: 0 })
   await page.goto('/teams')
   await expect(page.getByRole('heading', { name: '团队业务' })).toBeVisible()
