@@ -217,11 +217,11 @@ const verifyTicket = async () => {
 }
 
 .simulation-screen.allow {
-  background: linear-gradient(135deg, #67c23a, #95d475);
+  background: #16875f;
 }
 
 .simulation-screen.deny {
-  background: linear-gradient(135deg, #f56c6c, #fab6b6);
+  background: #d94b54;
 }
 
 .display-text {
@@ -281,7 +281,7 @@ const verifyTicket = async () => {
   margin-right: 8px;
 }
 
-.log-item .success { color: #67c23a; }
-.log-item .error { color: #f56c6c; }
+.log-item .success { color: #16875f; }
+.log-item .error { color: #d94b54; }
 .log-item .info { color: #606266; }
 </style>

@@ -513,18 +513,18 @@ onMounted(loadActiveTab)
 
 <style scoped>
 .shift-detail { min-height: 280px; }
-.shift-overview { display: grid; grid-template-columns: 1.5fr repeat(4, 1fr); gap: 10px; padding: 14px; border: 1px solid #dfe3dc; border-radius: 7px; background: #f8faf7; }
+.shift-overview { display: grid; grid-template-columns: 1.5fr repeat(4, 1fr); gap: 10px; padding: 14px; border: 1px solid #e2e7ee; border-radius: 7px; background: #f8fafc; }
 .shift-overview > div { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-.shift-overview span { color: #727a72; font-size: 12px; }
+.shift-overview span { color: #667085; font-size: 12px; }
 .shift-overview strong { overflow: hidden; text-overflow: ellipsis; font-size: 16px; white-space: nowrap; }
 .detail-title { margin: 20px 0 9px; font-size: 15px; }
 .variance-ok { color: #16814e; }
 .variance-alert { color: #c24141; }
 .supervisor-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; }
-.supervisor-actions section { padding: 14px; border: 1px solid #dfe3dc; border-radius: 7px; background: #fff; }
+.supervisor-actions section { padding: 14px; border: 1px solid #e2e7ee; border-radius: 7px; background: #fff; }
 .supervisor-actions h3 { margin: 0; font-size: 15px; }
-.supervisor-actions p { min-height: 36px; margin: 5px 0 12px; color: #737b73; font-size: 12px; line-height: 18px; }
+.supervisor-actions p { min-height: 36px; margin: 5px 0 12px; color: #667085; font-size: 12px; line-height: 18px; }
 .supervisor-actions :deep(.el-input-number), .supervisor-actions :deep(.el-input) { width: 100%; margin-bottom: 9px; }
 .supervisor-actions :deep(.el-button) { width: 100%; }
-.reconciled-state { background: #f3f8f4 !important; }
+.reconciled-state { background: #edf8f3 !important; }
 </style>

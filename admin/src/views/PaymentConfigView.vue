@@ -247,19 +247,19 @@ onMounted(() => {
 .page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 18px; }
 .page-heading h2 { margin: 0; color: #1f2937; font-size: 24px; line-height: 32px; }
 .page-heading p { margin: 5px 0 0; color: #6b7280; font-size: 13px; line-height: 20px; }
-.readiness-panel { margin-bottom: 22px; padding: 18px; border: 1px solid #dfe5e2; border-radius: 6px; background: #f8faf9; }
+.readiness-panel { margin-bottom: 22px; padding: 18px; border: 1px solid #e2e7ee; border-radius: 6px; background: #f8fafc; }
 .readiness-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
 .readiness-head > div { display: flex; flex-direction: column; gap: 3px; }
 .readiness-head strong { color: #1f2937; font-size: 16px; line-height: 22px; }
-.readiness-head span { color: #7b847e; font-size: 12px; line-height: 18px; }
+.readiness-head span { color: #667085; font-size: 12px; line-height: 18px; }
 .capability-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
-.capability-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 62px; padding: 10px 12px; border: 1px solid #e4e9e6; border-radius: 5px; background: #fff; }
-.capability-item.available { border-color: #cae5d5; background: #f6fbf8; }
+.capability-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 62px; padding: 10px 12px; border: 1px solid #e2e7ee; border-radius: 5px; background: #fff; }
+.capability-item.available { border-color: #bde2d3; background: #edf8f3; }
 .capability-copy { min-width: 0; }
-.capability-copy > span { display: block; color: #26312b; font-size: 14px; font-weight: 600; line-height: 20px; }
-.capability-copy small { display: block; margin-top: 3px; color: #7b847e; font-size: 12px; line-height: 17px; }
-.credential-upload-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 14px 16px 0; margin-bottom: 16px; border: 1px solid #e2e8e4; border-radius: 6px; background: #fafcfb; }
-.upload-tip { margin-top: 5px; color: #7b847e; font-size: 12px; line-height: 18px; }
+.capability-copy > span { display: block; color: #283445; font-size: 14px; font-weight: 600; line-height: 20px; }
+.capability-copy small { display: block; margin-top: 3px; color: #667085; font-size: 12px; line-height: 17px; }
+.credential-upload-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 14px 16px 0; margin-bottom: 16px; border: 1px solid #e2e7ee; border-radius: 6px; background: #fafbfc; }
+.upload-tip { margin-top: 5px; color: #667085; font-size: 12px; line-height: 18px; }
 :deep(.el-card__body) { padding: 18px 20px 24px; }
 :deep(.el-tabs__header) { margin-bottom: 18px; }
 @media (max-width: 720px) {
