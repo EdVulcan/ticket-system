@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
+	"ticket-backend/internal/xiaohongshu"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -218,7 +219,8 @@ func (c *ChannelController) ListXiaohongshuCategories(ctx *gin.Context) {
 	}
 	rows, err := c.XiaohongshuProducts.ListCategories(ctx.Request.Context(), ctx.GetUint("tenant_id"), uint(accountID))
 	if err != nil {
-		ctx.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		status, message := xiaohongshuUpstreamError(err)
+		ctx.JSON(status, gin.H{"error": message})
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"data": rows})
@@ -234,10 +236,24 @@ func (c *ChannelController) ListXiaohongshuPOIs(ctx *gin.Context) {
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
 	result, err := c.XiaohongshuProducts.ListPOIs(ctx.Request.Context(), ctx.GetUint("tenant_id"), uint(accountID), page, pageSize)
 	if err != nil {
-		ctx.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		status, message := xiaohongshuUpstreamError(err)
+		ctx.JSON(status, gin.H{"error": message})
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"data": result.List, "total": result.Total})
+}
+
+func xiaohongshuUpstreamError(err error) (int, string) {
+	var apiError *xiaohongshu.APIError
+	if errors.As(err, &apiError) {
+		switch apiError.Code {
+		case 420156:
+			return http.StatusConflict, "当前小程序尚未开通交易权限，请先在小红书开放平台开通本地生活交易能力"
+		case 12:
+			return http.StatusServiceUnavailable, "小红书接口繁忙，请稍后重新加载"
+		}
+	}
+	return http.StatusBadGateway, "小红书接口请求失败，请稍后重试"
 }
 
 func (c *ChannelController) GetXiaohongshuProductConfig(ctx *gin.Context) {

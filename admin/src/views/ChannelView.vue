@@ -143,6 +143,12 @@
 
     <el-dialog v-model="xiaohongshuMappingDialog" title="小红书商品发布配置" width="760px" :close-on-click-modal="false">
       <el-alert v-if="selectedAccount?.status === 'sandbox'" class="mb-4" type="warning" :closable="false" title="当前为测试小程序：不能对外发布，订单总额不能超过 0.10 元，且使用小红书自动绑定的测试门店。" />
+      <div v-if="xiaohongshuCategoryError || xiaohongshuPOIError" class="mb-4 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <div class="font-medium">小红书发布资源暂不可用</div>
+        <p v-if="xiaohongshuCategoryError" class="mt-1 leading-5">类目：{{ xiaohongshuCategoryError }}</p>
+        <p v-if="xiaohongshuPOIError" class="mt-1 leading-5">门店：{{ xiaohongshuPOIError }}</p>
+        <el-button class="mt-1" link type="warning" :icon="Refresh" :loading="xiaohongshuResourceLoading" @click="reloadXiaohongshuResources">重新加载类目和门店</el-button>
+      </div>
       <el-form v-loading="xiaohongshuMappingLoading" label-position="top">
         <div class="grid grid-cols-1 gap-x-4 md:grid-cols-2">
           <el-form-item label="外部商品编码"><el-input v-model="xiaohongshuMapping.external_code" /></el-form-item>
@@ -150,12 +156,12 @@
           <el-form-item label="小程序展示名称"><el-input v-model="xiaohongshuMapping.display_name" placeholder="留空则使用本地产品名称" /></el-form-item>
           <el-form-item label="小红书售价"><el-input-number v-model="xiaohongshuMapping.channel_sale_yuan" :min="0.01" :precision="2" :step="1" controls-position="right" class="w-full" /></el-form-item>
           <el-form-item label="小红书类目">
-            <el-select v-model="xiaohongshuMapping.category_id" filterable class="w-full" placeholder="选择支持交易的类目">
+            <el-select v-model="xiaohongshuMapping.category_id" filterable class="w-full" :placeholder="xiaohongshuCategoryError ? '当前无法获取类目' : '选择支持交易的类目'">
               <el-option v-for="category in xiaohongshuCategories" :key="category.category_id" :label="category.name" :value="category.category_id" :disabled="category.support_trade === false" />
             </el-select>
           </el-form-item>
           <el-form-item label="关联门店">
-            <el-select v-model="xiaohongshuMapping.poi_ids" multiple filterable collapse-tags class="w-full" placeholder="测试小程序可使用自动绑定门店">
+            <el-select v-model="xiaohongshuMapping.poi_ids" multiple filterable collapse-tags class="w-full" :placeholder="xiaohongshuPOIError ? '当前无法获取门店' : '测试小程序可使用自动绑定门店'">
               <el-option v-for="poi in xiaohongshuPOIs" :key="poi.poi_id" :label="`${poi.name}${poi.address ? ` · ${poi.address}` : ''}`" :value="poi.poi_id" />
             </el-select>
           </el-form-item>
@@ -429,6 +435,9 @@ const xiaohongshuMappingLoading = ref(false)
 const xiaohongshuMappingSyncing = ref(false)
 const xiaohongshuImageUploading = ref(false)
 const xiaohongshuImageUpload = ref<UploadInstance>()
+const xiaohongshuResourceLoading = ref(false)
+const xiaohongshuCategoryError = ref('')
+const xiaohongshuPOIError = ref('')
 const xiaohongshuCategories = ref<any[]>([])
 const xiaohongshuPOIs = ref<any[]>([])
 const xiaohongshuMapping = reactive({ mapping_id: 0, external_code: '', external_sku_id: '', display_name: '', channel_sale_yuan: 0, category_id: '', poi_ids: [] as string[], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, status: 'active', sync_status: '', last_sync_error: '' })
@@ -545,21 +554,38 @@ const openXiaohongshuMappingEdit = async (row: any) => {
   Object.assign(xiaohongshuMapping, { mapping_id: row.id, external_code: row.external_code || '', external_sku_id: `${row.external_code || 'XHS'}_SKU`, display_name: row.display_name || '', channel_sale_yuan: Number(row.channel_sale_cents || 0) / 100, category_id: '', poi_ids: [], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, status: row.status || 'active', sync_status: '', last_sync_error: '' })
   xiaohongshuMappingDialog.value = true
   xiaohongshuMappingLoading.value = true
+  xiaohongshuCategoryError.value = ''
+  xiaohongshuPOIError.value = ''
   try {
     const [categoryResult, poiResult, configResult] = await Promise.allSettled([
-      request.get(`/channel-accounts/${selectedAccount.value.id}/xiaohongshu-categories`),
-      request.get(`/channel-accounts/${selectedAccount.value.id}/xiaohongshu-pois`, { params: { page: 1, page_size: 100 } }),
+      request.get(`/channel-accounts/${selectedAccount.value.id}/xiaohongshu-categories`, { skipErrorToast: true } as any),
+      request.get(`/channel-accounts/${selectedAccount.value.id}/xiaohongshu-pois`, { params: { page: 1, page_size: 100 }, skipErrorToast: true } as any),
       request.get(`/channel-accounts/${selectedAccount.value.id}/mappings/${row.id}/xiaohongshu-product`),
     ])
     xiaohongshuCategories.value = categoryResult.status === 'fulfilled' ? categoryResult.value.data.data || [] : []
     xiaohongshuPOIs.value = poiResult.status === 'fulfilled' ? poiResult.value.data.data || [] : []
+    xiaohongshuCategoryError.value = categoryResult.status === 'rejected' ? categoryResult.reason?.response?.data?.error || '暂时无法加载，请稍后重试' : ''
+    xiaohongshuPOIError.value = poiResult.status === 'rejected' ? poiResult.reason?.response?.data?.error || '暂时无法加载，请稍后重试' : ''
     if (configResult.status === 'fulfilled') {
       const config = configResult.value.data
       Object.assign(xiaohongshuMapping, { external_sku_id: config.external_sku_id || xiaohongshuMapping.external_sku_id, category_id: config.category_id || '', poi_ids: config.poi_ids || [], image_url: config.image_url || '', description: config.description || '', product_path: config.product_path || '/pages/index/index', order_path: config.order_path || '/pages/order/detail', product_type: config.product_type || 1, settle_type: config.settle_type || 1, sync_status: config.sync_status || '', last_sync_error: config.last_sync_error || '' })
     }
-    if (categoryResult.status === 'rejected') ElMessage.warning('暂时无法加载小红书类目，请确认当前环境凭据')
-    if (poiResult.status === 'rejected') ElMessage.warning('暂时无法加载小红书门店，可稍后重试')
   } finally { xiaohongshuMappingLoading.value = false }
+}
+const reloadXiaohongshuResources = async () => {
+  if (!selectedAccount.value) return
+  xiaohongshuResourceLoading.value = true
+  try {
+    const [categoryResult, poiResult] = await Promise.allSettled([
+      request.get(`/channel-accounts/${selectedAccount.value.id}/xiaohongshu-categories`, { skipErrorToast: true } as any),
+      request.get(`/channel-accounts/${selectedAccount.value.id}/xiaohongshu-pois`, { params: { page: 1, page_size: 100 }, skipErrorToast: true } as any),
+    ])
+    xiaohongshuCategories.value = categoryResult.status === 'fulfilled' ? categoryResult.value.data.data || [] : []
+    xiaohongshuPOIs.value = poiResult.status === 'fulfilled' ? poiResult.value.data.data || [] : []
+    xiaohongshuCategoryError.value = categoryResult.status === 'rejected' ? categoryResult.reason?.response?.data?.error || '暂时无法加载，请稍后重试' : ''
+    xiaohongshuPOIError.value = poiResult.status === 'rejected' ? poiResult.reason?.response?.data?.error || '暂时无法加载，请稍后重试' : ''
+    if (!xiaohongshuCategoryError.value && !xiaohongshuPOIError.value) ElMessage.success('类目和门店已重新加载')
+  } finally { xiaohongshuResourceLoading.value = false }
 }
 const uploadXiaohongshuImage = async (file: UploadFile) => {
   if (!selectedAccount.value || !xiaohongshuMapping.mapping_id || !file.raw) return

@@ -32,6 +32,7 @@ service.interceptors.response.use(
     return response
   },
   (error) => {
+    const skipErrorToast = Boolean((error.config as any)?.skipErrorToast)
     if (error.response) {
       const status = error.response.status
       if (status === 401) {
@@ -53,12 +54,12 @@ service.interceptors.response.use(
         const message = localizeErrorMessage(error.response.data?.error, '请求失败，请稍后重试')
         if (error.response.data && typeof error.response.data === 'object') error.response.data.error = message
         error.message = message
-        ElMessage.error(message)
+        if (!skipErrorToast) ElMessage.error(message)
       }
     } else {
       const message = localizeErrorMessage(error.message, '网络连接异常')
       error.message = message
-      ElMessage.error(message)
+      if (!skipErrorToast) ElMessage.error(message)
     }
     return Promise.reject(error)
   }
