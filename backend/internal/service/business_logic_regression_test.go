@@ -60,6 +60,66 @@ func TestAfterSaleRescheduleFailureRollsBackOriginalReservation(t *testing.T) {
 	}
 }
 
+func TestAfterSaleRescheduleRejectsTicketReservedByRefund(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "daily", 2)
+	originalDate := startOfDay(time.Now().AddDate(0, 0, 1))
+	targetDate := startOfDay(time.Now().AddDate(0, 0, 2))
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1, UseDate: &originalDate}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "reschedule", IdempotencyKey: "pending-refund-reschedule", TargetDate: &targetDate, OperatorID: 7}
+	service := &AfterSaleService{}
+	if err := service.Create(&request, []string{ticket.TicketCode}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Approve(tenantID, request.ID, 8, "approved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&model.Ticket{}).Where("id = ?", ticket.ID).Update("pending_refund_id", 987).Error; err != nil {
+		t.Fatal(err)
+	}
+	failed, err := service.Execute(tenantID, request.ID, 7)
+	if err != nil || failed.Status != "failed" || !strings.Contains(failed.ErrorMessage, "pending refund") {
+		t.Fatalf("pending-refund reschedule=%+v err=%v", failed, err)
+	}
+	var item model.OrderItem
+	if err := model.DB.Where("order_id = ?", order.ID).First(&item).Error; err != nil {
+		t.Fatal(err)
+	}
+	if item.UseDate == nil || item.UseDate.Format("2006-01-02") != originalDate.Format("2006-01-02") {
+		t.Fatalf("pending refund changed visit date: %v", item.UseDate)
+	}
+	var originalInventory model.ProductInventory
+	if err := model.DB.Where("tenant_id = ? AND product_id = ? AND stock_date = ?", tenantID, productID, originalDate).First(&originalInventory).Error; err != nil {
+		t.Fatal(err)
+	}
+	if originalInventory.Sold != 1 {
+		t.Fatalf("original inventory sold=%d, want 1", originalInventory.Sold)
+	}
+	var targetSold int64
+	if err := model.DB.Model(&model.ProductInventory{}).
+		Where("tenant_id = ? AND product_id = ? AND stock_date = ? AND sold != 0", tenantID, productID, targetDate).
+		Count(&targetSold).Error; err != nil {
+		t.Fatal(err)
+	}
+	if targetSold != 0 {
+		t.Fatalf("pending refund reserved target inventory")
+	}
+	second := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "reschedule", IdempotencyKey: "pending-refund-reschedule-create", TargetDate: &targetDate, OperatorID: 7}
+	if err := service.Create(&second, []string{ticket.TicketCode}); err == nil || !strings.Contains(err.Error(), "pending refund") {
+		t.Fatalf("new after-sale request with pending refund error=%v", err)
+	}
+}
+
 func TestAfterSaleExchangeRejectsCodeModeChange(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)

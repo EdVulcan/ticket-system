@@ -180,6 +180,9 @@ func (s *RefundService) CreateCashRefundAs(actor RefundActor, orderNo, idempoten
 		if err != nil {
 			return err
 		}
+		if err := (PackageFulfillmentLifecycle{}).AssertRefundSupported(tx, selected, allowPolicyOverride); err != nil {
+			return err
+		}
 		if roundMoney(amount) != refundableAmount {
 			return fmt.Errorf("refund amount must equal selected ticket value %.2f", refundableAmount)
 		}
@@ -307,6 +310,9 @@ func (s *RefundService) CreateDigitalRefundAs(actor RefundActor, orderNo, idempo
 		if err != nil {
 			return err
 		}
+		if err := (PackageFulfillmentLifecycle{}).AssertRefundSupported(tx, selected, allowPolicyOverride); err != nil {
+			return err
+		}
 		if len(selected) != len(cleanCodes) || amountCents != moneyCents(refundableAmount) {
 			return fmt.Errorf("refund amount must equal selected ticket value %.2f", refundableAmount)
 		}
@@ -396,6 +402,9 @@ func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempote
 		}
 		selected, refundableAmount, err := selectRefundTickets(&order, cleanCodes, allowUsed, allowPolicyOverride, 0)
 		if err != nil {
+			return err
+		}
+		if err := (PackageFulfillmentLifecycle{}).AssertRefundSupported(tx, selected, allowPolicyOverride); err != nil {
 			return err
 		}
 		if amountCents != moneyCents(refundableAmount) {
@@ -622,6 +631,9 @@ func reacquireFailedRefundTx(tx *gorm.DB, refund *model.Refund) error {
 	}
 	if moneyCents(amount) != refundAmount {
 		return errors.New("selected ticket value changed before refund retry")
+	}
+	if err := (PackageFulfillmentLifecycle{}).AssertRefundSupported(tx, selected, refund.AuthorizedPolicyOverride); err != nil {
+		return err
 	}
 	return reserveRefundTicketsTx(tx, selected, refund.ID)
 }
@@ -1164,7 +1176,7 @@ func applyRefundBusinessFactsTx(tx *gorm.DB, order *model.Order, refund *model.R
 			return err
 		}
 	}
-	if err := refundSelectedHotelReservationsTx(tx, selected); err != nil {
+	if err := (PackageFulfillmentLifecycle{}).RefundSelected(tx, selected, refund.AuthorizedPolicyOverride); err != nil {
 		return err
 	}
 	if err := releaseTeamCreditAfterRefundTx(tx, order); err != nil {

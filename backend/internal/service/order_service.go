@@ -257,7 +257,7 @@ func (s *OrderService) Create(req *model.Order) error {
 						return err
 					}
 					if packageFacts != nil {
-						if err := reserveHotelPackageInventoryTx(tx, packageFacts, item.Quantity, *item.UseDate); err != nil {
+						if err := (PackageFulfillmentLifecycle{}).Reserve(tx, packageFacts, fulfillment, item.Quantity, *item.UseDate); err != nil {
 							return err
 						}
 						hotelPackageFacts[i] = packageFacts
@@ -291,7 +291,7 @@ func (s *OrderService) Create(req *model.Order) error {
 			return err
 		}
 		for itemIndex, facts := range hotelPackageFacts {
-			if err := createHotelPackageReservationsTx(tx, req, &req.Items[itemIndex], facts); err != nil {
+			if err := (PackageFulfillmentLifecycle{}).CreateReservations(tx, req, &req.Items[itemIndex], facts); err != nil {
 				return err
 			}
 		}
@@ -467,6 +467,9 @@ func resolveFulfillmentProduct(tx *gorm.DB, listing *model.Product, sellerTenant
 		}
 		if offer.ProductRevisionID == 0 || source.CurrentRevisionID != offer.ProductRevisionID {
 			return nil, false, fmt.Errorf("product offer revision is no longer active")
+		}
+		if err := rejectScenicHotelPackageDistributionTx(tx, source.ID); err != nil {
+			return nil, false, err
 		}
 		source.SettlementPrice = roundMoney(offer.SettlementPrice)
 		source.ResolvedCommissionBPS = offer.CommissionBPS
@@ -1220,6 +1223,7 @@ func cancelOrderTxMode(tx *gorm.DB, order *model.Order, allowPaidChannel bool) e
 	if order.Status == "cancelled" {
 		return nil
 	}
+	paidChannelCancellation := allowPaidChannel && order.Status == "paid" && order.ChannelAccountID > 0
 	if order.Status != "unpaid" && !(allowPaidChannel && order.Status == "paid" && order.ChannelAccountID > 0) {
 		return fmt.Errorf("paid orders must use the refund workflow")
 	}
@@ -1289,7 +1293,7 @@ func cancelOrderTxMode(tx *gorm.DB, order *model.Order, allowPaidChannel bool) e
 			return err
 		}
 	}
-	if err := transitionOrderHotelReservationsTx(tx, order.ID, "reserved", "cancelled"); err != nil {
+	if err := (PackageFulfillmentLifecycle{}).CancelOrder(tx, order.ID, paidChannelCancellation); err != nil {
 		return err
 	}
 	return updateFulfillmentOrdersTx(tx, order.ID, "cancelled")
@@ -1353,7 +1357,7 @@ func markOrderAsPaidTx(tx *gorm.DB, order *model.Order) error {
 		return err
 	}
 	order.Status = "paid"
-	if err := transitionOrderHotelReservationsTx(tx, order.ID, "reserved", "confirmed"); err != nil {
+	if err := (PackageFulfillmentLifecycle{}).ConfirmOrder(tx, order.ID); err != nil {
 		return err
 	}
 	return updateFulfillmentOrdersTx(tx, order.ID, "paid")

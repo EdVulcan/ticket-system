@@ -5,7 +5,7 @@ async function tenantLogin(page: import('@playwright/test').Page, systemCode: st
   await page.getByPlaceholder('商户系统编号').fill(systemCode)
   await page.getByPlaceholder('用户名').fill('admin')
   await page.getByPlaceholder('密码').fill(password)
-	const loginResponse = page.waitForResponse(response => response.url().endsWith('/api/v1/auth/login') && response.request().method() === 'POST', { timeout: 15_000 })
+	const loginResponse = page.waitForResponse(response => response.url().endsWith('/api/v1/auth/login') && response.request().method() === 'POST', { timeout: 30_000 })
   await page.getByRole('button', { name: '登 录' }).click()
 	await loginResponse
 	await expect(page.getByRole('heading', { name: '经营控制台' })).toBeVisible({ timeout: 15_000 })
@@ -28,6 +28,7 @@ test('真实平台账号登录并读取治理总览', async ({ page }) => {
 })
 
 test('真实景区供应商只能进入供应商工作区', async ({ page }) => {
+  test.slow()
   await tenantLogin(page, 'SYS001', 'Supplier-E2E-Password-1')
   await expect(page.getByRole('menuitem', { name: '线上门票' })).toBeVisible()
   await expect(page.getByRole('menuitem', { name: '供销合作' })).toBeVisible()

@@ -12,7 +12,7 @@
       </div>
     </header>
 
-    <el-alert v-if="!canWrite" type="warning" :closable="false" show-icon title="酒店住宿业态已暂停，当前仅可查看历史配置。" />
+    <el-alert v-if="historyOnly" type="warning" :closable="false" show-icon title="供应商身份或酒店住宿业态已暂停，当前仅可查看历史配置与已有预订。" />
 
     <div v-if="hotels.length" class="hotel-switcher">
       <div class="hotel-switcher-label">当前酒店</div>
@@ -121,7 +121,7 @@
         </div>
         <el-radio-group v-model="packageSection" class="package-section">
           <el-radio-button label="catalog">套餐配置</el-radio-button>
-          <el-radio-button label="reservations">住宿预订</el-radio-button>
+          <el-radio-button v-if="canViewReservations" label="reservations">住宿预订</el-radio-button>
         </el-radio-group>
         <div v-if="packageSection === 'catalog'" class="data-panel">
           <el-table :data="currentHotelPackages" empty-text="当前酒店暂无酒景套餐">
@@ -135,6 +135,7 @@
           </el-table>
         </div>
         <div v-else class="reservation-workspace">
+          <el-alert type="info" :closable="false" show-icon title="这里只登记或同步酒店、PMS、人工确认后的票务侧住宿结果，不提供排房、房卡或酒店前台入住功能。" />
           <div v-if="canViewReports" class="package-metrics">
             <div><span>净销售额</span><strong>¥{{ money(packageSummary.net_sales_cents) }}</strong><small>销售 ¥{{ money(packageSummary.gross_sales_cents) }} / 退款 ¥{{ money(packageSummary.refunded_sales_cents) }}</small></div>
             <div><span>门票履约金额</span><strong>¥{{ money(packageSummary.ticket_component_net_cents) }}</strong><small>按套餐中门票结算快照</small></div>
@@ -146,10 +147,11 @@
             <el-select v-model="reservationStatus" clearable placeholder="全部状态" @change="searchReservations">
               <el-option label="待支付" value="reserved" /><el-option label="待入住" value="confirmed" /><el-option label="已入住" value="checked_in" /><el-option label="已离店" value="checked_out" /><el-option label="未到店" value="no_show" /><el-option label="已退款" value="refunded" /><el-option label="已取消" value="cancelled" />
             </el-select>
-            <el-date-picker v-if="canViewReports" v-model="reportRange" type="daterange" range-separator="至" start-placeholder="统计开始" end-placeholder="统计结束" :clearable="false" @change="loadPackageSummary" />
+            <el-date-picker v-if="canViewReports" v-model="reportRange" type="daterange" range-separator="至" start-placeholder="预订创建开始" end-placeholder="预订创建结束" :clearable="false" @change="loadPackageSummary" />
             <el-button @click="searchReservations">查询</el-button>
-            <el-button v-if="canViewReports" @click="exportReservations">导出住宿名单</el-button>
+            <el-button v-if="canExportReservations" @click="exportReservations">导出住宿名单</el-button>
           </div>
+          <p v-if="canViewReports" class="report-basis">经营汇总按预订创建日期统计，不代表酒店夜审或入住收入周期。</p>
           <div class="data-panel">
           <el-table :data="currentHotelReservations" empty-text="当前酒店暂无套餐住宿预订">
             <el-table-column prop="reservation_no" label="预订号" min-width="190" />
@@ -162,8 +164,8 @@
             <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="reservationStatusType(row.status)">{{ reservationStatusText(row.status) }}</el-tag></template></el-table-column>
             <el-table-column v-if="canOperateReservations" label="操作" min-width="170" fixed="right">
               <template #default="{ row }">
-                <el-button v-if="row.status === 'confirmed'" link type="primary" @click="setReservationStatus(row, 'checked_in')">办理入住</el-button>
-                <el-button v-if="row.status === 'checked_in'" link type="primary" @click="setReservationStatus(row, 'checked_out')">办理离店</el-button>
+                <el-button v-if="row.status === 'confirmed'" link type="primary" @click="setReservationStatus(row, 'checked_in')">登记已入住</el-button>
+                <el-button v-if="row.status === 'checked_in'" link type="primary" @click="setReservationStatus(row, 'checked_out')">登记已离店</el-button>
                 <el-button v-if="row.status === 'confirmed'" link @click="setReservationStatus(row, 'no_show', true)">未到店</el-button>
                 <el-button v-if="['checked_in','checked_out','no_show'].includes(row.status)" link @click="correctReservationStatus(row)">纠正</el-button>
               </template>
@@ -227,7 +229,10 @@
           <el-form-item label="早餐份数"><el-input-number v-model="rateForm.breakfast_count" :min="0" :max="20" /></el-form-item>
           <el-form-item label="状态"><el-radio-group v-model="rateForm.status"><el-radio-button label="active">启用</el-radio-button><el-radio-button label="suspended">暂停</el-radio-button></el-radio-group></el-form-item>
         </div>
-        <el-form-item label="取消规则"><el-input v-model="rateForm.cancellation_policy" type="textarea" :rows="3" placeholder="例如 入住日前一天18:00前可免费取消" /></el-form-item>
+        <el-form-item label="取消规则说明（仅展示）">
+          <el-input v-model="rateForm.cancellation_policy" type="textarea" :rows="3" placeholder="例如 入住日前一天18:00前可免费取消" />
+          <small class="field-hint">当前仅作为预订说明展示，系统不会据此自动取消或退款。</small>
+        </el-form-item>
       </el-form>
       <template #footer><el-button @click="rateEditVisible = false">取消</el-button><el-button type="primary" @click="saveRate">保存</el-button></template>
     </el-dialog>
@@ -236,7 +241,10 @@
       <el-alert type="info" :closable="false" show-icon title="请选择专门用于套餐销售的线上门票。该票种的售价是套餐总售价，结算价是门票部分结算价。" />
       <el-alert v-if="packageForm.locked" type="warning" :closable="false" show-icon title="该套餐已有订单，为保护历史履约，只能调整在售状态。需要更换内容时请新建套餐。" />
       <el-form ref="packageFormRef" :model="packageForm" :rules="packageRules" label-position="top" class="package-form">
-        <el-form-item label="套餐门票" prop="product_id"><el-select v-model="packageForm.product_id" filterable class="full-width" placeholder="选择专用线上门票" :disabled="packageForm.locked"><el-option v-for="product in packageTicketProducts" :key="product.id" :label="`${product.name} · ¥${Number(product.price || 0).toFixed(2)}`" :value="product.id" /></el-select></el-form-item>
+        <el-form-item label="套餐门票" prop="product_id">
+          <el-select v-model="packageForm.product_id" filterable class="full-width" placeholder="选择专用线上门票" :disabled="packageForm.locked"><el-option v-for="product in packageTicketProducts" :key="product.id" :label="`${product.name} · ¥${Number(product.price || 0).toFixed(2)}`" :value="product.id" /></el-select>
+          <small class="field-hint">只展示每份套餐生成独立票码的线上门票。</small>
+        </el-form-item>
         <div class="form-grid">
           <el-form-item label="房型" prop="room_type_id"><el-select v-model="packageForm.room_type_id" class="full-width" :disabled="packageForm.locked" @change="packageForm.rate_plan_id = null"><el-option v-for="room in activeRoomTypes" :key="room.id" :label="room.name" :value="room.id" /></el-select></el-form-item>
           <el-form-item label="酒店价格计划" prop="rate_plan_id"><el-select v-model="packageForm.rate_plan_id" class="full-width" :disabled="packageForm.locked"><el-option v-for="rate in packageRatePlans" :key="rate.id" :label="`${rate.name} · ¥${money(rate.retail_price_cents)}`" :value="rate.id" /></el-select></el-form-item>
@@ -256,7 +264,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
-import { activeSupplierBusinessTypeSet, configuredSupplierBusinessTypeSet, readStoredUser } from '@/utils/tenantAccess'
+import { activeCapabilitySet, activeSupplierBusinessTypeSet, configuredSupplierBusinessTypeSet, readStoredUser } from '@/utils/tenantAccess'
 import { hasPermission } from '@/utils/permissions'
 
 const loading = ref(false)
@@ -278,10 +286,15 @@ const packageFormRef = ref()
 
 const activeBusinessTypes = computed(() => activeSupplierBusinessTypeSet(readStoredUser()))
 const configuredBusinessTypes = computed(() => configuredSupplierBusinessTypeSet(readStoredUser()))
-const canWrite = computed(() => activeBusinessTypes.value.has('hotel'))
+const supplierActive = computed(() => activeCapabilitySet(readStoredUser()).has('supplier'))
+const hotelBusinessActive = computed(() => activeBusinessTypes.value.has('hotel'))
+const historyOnly = computed(() => !supplierActive.value || !hotelBusinessActive.value)
+const canWrite = computed(() => supplierActive.value && hotelBusinessActive.value && hasPermission(readStoredUser(), 'catalog.write'))
 const showPackages = computed(() => configuredBusinessTypes.value.has('scenic') && configuredBusinessTypes.value.has('hotel'))
-const canPackageWrite = computed(() => activeBusinessTypes.value.has('scenic') && activeBusinessTypes.value.has('hotel'))
-const canOperateReservations = computed(() => hasPermission(readStoredUser(), 'operations.write'))
+const canPackageWrite = computed(() => supplierActive.value && activeBusinessTypes.value.has('scenic') && hotelBusinessActive.value && hasPermission(readStoredUser(), 'catalog.write'))
+const canViewReservations = computed(() => hasPermission(readStoredUser(), 'hotel_reservations.read'))
+const canOperateReservations = computed(() => supplierActive.value && hotelBusinessActive.value && hasPermission(readStoredUser(), 'hotel_reservations.write'))
+const canExportReservations = computed(() => canViewReservations.value && hasPermission(readStoredUser(), 'hotel_reservations.export'))
 const canViewReports = computed(() => hasPermission(readStoredUser(), 'reports.read'))
 const selectedHotel = computed(() => hotels.value.find(item => item.id === selectedHotelId.value))
 
@@ -331,12 +344,15 @@ const loadHotels = async () => {
 
 const loadPackageWorkspace = async () => {
   const [productsResponse, packagesResponse] = await Promise.all([
-    request.get('/products', { params: { type: 'online', page_size: 100 } }),
+    canPackageWrite.value ? request.get('/products', { params: { type: 'online', page_size: 100 } }) : Promise.resolve({ data: { data: [] } }),
     request.get('/scenic-hotel-packages'),
   ])
-  packageTicketProducts.value = (productsResponse.data.data || []).filter((row: any) => row.type === 'online')
+  packageTicketProducts.value = (productsResponse.data.data || []).filter((row: any) => row.type === 'online' && row.code_mode === 'ticket')
   hotelPackages.value = packagesResponse.data.data || []
-  await Promise.all([loadReservations(), canViewReports.value ? loadPackageSummary() : Promise.resolve()])
+  await Promise.all([
+    canViewReservations.value ? loadReservations() : Promise.resolve(),
+    canViewReservations.value && canViewReports.value ? loadPackageSummary() : Promise.resolve(),
+  ])
 }
 
 const loadReservations = async () => {
@@ -516,6 +532,7 @@ onMounted(loadHotels)
 .reservation-pagination { display: flex; justify-content: flex-end; padding: 14px 0 2px; }
 .package-form { margin-top: 18px; }
 .full-width { width: 100%; }
+.field-hint { display: block; margin-top: 6px; color: var(--ui-text-secondary); line-height: 1.5; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 @media (max-width: 900px) {
   .hotel-switcher { grid-template-columns: 1fr; }

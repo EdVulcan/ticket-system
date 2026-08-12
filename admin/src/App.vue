@@ -149,6 +149,7 @@ import { hasPermission, tenantRoleLabel } from '@/utils/permissions'
 import {
   activeCapabilitySet,
   activeSupplierBusinessTypeSet,
+  configuredCapabilitySet,
   configuredSupplierBusinessTypeSet,
   readStoredUser,
   refreshStoredTenantIdentity,
@@ -169,6 +170,7 @@ const passwordForm = reactive({ currentPassword: '', newPassword: '', confirmPas
 
 const isLoginPage = computed(() => route.name === 'login' || route.name === 'platform-login')
 const activeCapabilities = computed(() => activeCapabilitySet(user.value))
+const configuredCapabilities = computed(() => configuredCapabilitySet(user.value))
 const hasCapability = (value: string) => activeCapabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(value => activeCapabilities.value.has(value))
 const activeSupplierBusinessTypes = computed(() => activeSupplierBusinessTypeSet(user.value))
@@ -191,7 +193,7 @@ const navGroups = computed<NavGroup[]>(() => {
 
   const scenicSupplier = hasCapability('supplier') && hasSupplierBusinessType('scenic')
   const scenicHistorySupplier = hasCapability('supplier') && hasConfiguredSupplierBusinessType('scenic')
-  const hotelHistorySupplier = hasCapability('supplier') && hasConfiguredSupplierBusinessType('hotel')
+  const hotelHistorySupplier = configuredCapabilities.value.has('supplier') && hasConfiguredSupplierBusinessType('hotel')
   const currentHistoryTenant = scenicHistorySupplier || hasAnyCapability('distributor', 'travel_agency')
   const sales: NavItem[] = []
   if (scenicHistorySupplier && can('catalog.read')) {

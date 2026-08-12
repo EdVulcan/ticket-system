@@ -330,7 +330,7 @@
 
     <el-dialog v-model="offersDialogVisible" :title="`${selectedDistributor?.agent_name || '分销商'} · 产品结算价`" width="980px">
         <div class="flex justify-between items-center mb-3">
-            <span class="text-sm text-gray-500">这里的每一行同时决定该分销商可以销售的产品和对应结算价。</span>
+            <span class="text-sm text-gray-500">这里的每一行同时决定该分销商可以销售的产品和对应结算价。酒景套餐暂不支持跨租户分销。</span>
             <div class="flex gap-2">
                 <el-button size="small" @click="loadOffers">刷新</el-button>
                 <el-button v-if="canSupplierWrite" type="primary" size="small" @click="openOfferForm()">添加产品价格</el-button>
@@ -438,10 +438,11 @@ import { Connection, Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { hasPermission } from '@/utils/permissions'
 import request from '@/utils/request'
-import { activeCapabilitySet, isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
+import { activeCapabilitySet, configuredSupplierBusinessTypeSet, isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 
 const currentUser = readStoredUser()
 const activeCapabilities = activeCapabilitySet(currentUser)
+const configuredBusinessTypes = configuredSupplierBusinessTypeSet(currentUser)
 const canWrite = hasPermission(currentUser, 'distribution.write')
 const canSupply = computed(() => isActiveScenicSupplier(currentUser))
 const canViewSupplyHistory = computed(() => isScenicHistorySupplier(currentUser))
@@ -499,6 +500,7 @@ const loadingOffers = ref(false)
 const savingOffer = ref(false)
 const offers = ref<any[]>([])
 const sourceProducts = ref<any[]>([])
+const packageProductIds = ref(new Set<number>())
 const selectedDistributorId = ref(0)
 const selectedDistributor = ref<any>(null)
 const activeAgents = computed(() => agents.value.filter((agent: any) => agent.status === 'active'))
@@ -800,8 +802,14 @@ const loadOffers = async () => {
 
 const loadSourceProducts = async () => {
     try {
-        const res = await request.get('/products', { params: { page: 1, page_size: 100 } })
-        sourceProducts.value = (res.data.data || []).filter((product: any) => product.status === 'online' && product.is_distributable)
+        const productsResponse = await request.get('/products', { params: { page: 1, page_size: 100 } })
+        if (configuredBusinessTypes.has('hotel')) {
+            const packagesResponse = await request.get('/scenic-hotel-packages')
+            packageProductIds.value = new Set((packagesResponse.data.data || []).map((item: any) => Number(item.product_id)))
+        } else {
+            packageProductIds.value = new Set()
+        }
+        sourceProducts.value = (productsResponse.data.data || []).filter((product: any) => product.status === 'online' && product.is_distributable && !packageProductIds.value.has(Number(product.id)))
     } catch (e: any) {
         ElMessage.error(e.response?.data?.error || '可供货产品加载失败')
     }

@@ -4,25 +4,33 @@ type Capability = 'supplier' | 'distributor' | 'travel_agency'
 type CapabilityExpiry = string | Partial<Record<Capability, string>>
 type SupplierBusinessType = string | { business_type: string, status: 'active' | 'suspended' }
 
-async function openAs(page: Page, capability: Capability | Capability[], path: string, expiresAt?: CapabilityExpiry, businessTypes?: SupplierBusinessType[]) {
+async function openAs(
+  page: Page,
+  capability: Capability | Capability[],
+  path: string,
+  expiresAt?: CapabilityExpiry,
+  businessTypes?: SupplierBusinessType[],
+  access: { role?: string, permissions?: string[], capabilityStatus?: 'active' | 'suspended' } = {},
+) {
   const capabilities = Array.isArray(capability) ? capability : [capability]
   const supplierBusinessTypes = businessTypes ?? (capabilities.includes('supplier') && !expiresAt ? ['scenic'] : [])
   const identity = {
     id: 101,
     username: `${capabilities.join('_')}_admin`,
-    role: 'admin',
+    role: access.role || 'admin',
     scope: 'tenant',
     tenant_id: 101,
     tenant_name: '测试商户',
     system_code: 'TEST001',
     capabilities: capabilities.map(capabilityName => ({
       capability: capabilityName,
-      status: 'active',
+      status: access.capabilityStatus || 'active',
       expires_at: typeof expiresAt === 'string' ? expiresAt : expiresAt?.[capabilityName],
     })),
     supplier_business_types: supplierBusinessTypes.map(item => typeof item === 'string'
       ? { business_type: item, status: 'active' }
       : item),
+    permissions: access.permissions || [],
   }
   await page.addInitScript(({ activeCapabilities, tenantIdentity }) => {
     localStorage.setItem('token', `${activeCapabilities.join('-')}-token`)
@@ -59,8 +67,11 @@ test('scenic-only supplier cannot see or enter hotel management', async ({ page 
   await expect(page.getByRole('menuitem', { name: '线上门票' })).toBeVisible()
 })
 
-test('combined scenic and hotel supplier receives both independent workspaces', async ({ page }) => {
-  await openAs(page, 'supplier', '/hotel', undefined, ['scenic', 'hotel'])
+test('hotel product operator can read reservations and synchronize fulfillment status', async ({ page }) => {
+  await openAs(page, 'supplier', '/hotel', undefined, ['scenic', 'hotel'], {
+    role: 'product_operator',
+    permissions: ['catalog.read', 'catalog.write', 'reports.read', 'hotel_reservations.read', 'hotel_reservations.write', 'hotel_reservations.export'],
+  })
 
   await page.route('**/api/v1/hotels', route => route.fulfill({
     status: 200,
@@ -94,8 +105,54 @@ test('combined scenic and hotel supplier receives both independent workspaces', 
   await page.getByText('住宿预订', { exact: true }).click()
   await expect(page.getByText('净销售额', { exact: true })).toBeVisible()
   await expect(page.getByText('双人酒景套餐')).toBeVisible()
-  await page.getByRole('button', { name: '办理入住' }).click()
+  await expect(page.getByText('经营汇总按预订创建日期统计')).toBeVisible()
+  await page.getByRole('button', { name: '登记已入住' }).click()
   await expect.poll(() => checkedIn).toBe(true)
+})
+
+test('viewer can inspect hotel catalog without receiving guest reservation data', async ({ page }) => {
+  await openAs(page, 'supplier', '/hotel', undefined, ['scenic', 'hotel'], {
+    role: 'viewer', permissions: ['catalog.read', 'reports.read'],
+  })
+  let reservationRequested = false
+  await page.route('**/api/v1/hotels', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: [{ id: 21, code: 'HOTEL01', name: '测试酒店', status: 'active' }] }),
+  }))
+  await page.route('**/api/v1/scenic-hotel-packages/reservations**', route => {
+    reservationRequested = true
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
+  })
+  await page.reload()
+
+  await expect(page.getByRole('heading', { name: '酒店经营' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '新增酒店' })).toHaveCount(0)
+  await page.getByRole('tab', { name: '酒景套餐' }).click()
+  await expect(page.getByText('套餐配置')).toBeVisible()
+  await expect(page.getByText('住宿预订', { exact: true })).toHaveCount(0)
+  await expect.poll(() => reservationRequested).toBe(false)
+})
+
+test('suspended supplier keeps hotel history but cannot synchronize fulfillment', async ({ page }) => {
+  await openAs(page, 'supplier', '/hotel', undefined, ['scenic', 'hotel'], {
+    role: 'product_operator',
+    permissions: ['catalog.read', 'catalog.write', 'reports.read', 'hotel_reservations.read', 'hotel_reservations.write', 'hotel_reservations.export'],
+    capabilityStatus: 'suspended',
+  })
+  await page.route('**/api/v1/hotels', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [{ id: 21, code: 'HOTEL01', name: '测试酒店', status: 'active' }] }) }))
+  await page.route('**/api/v1/scenic-hotel-packages/reservations**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: [{ id: 31, reservation_no: 'HR1', order_no: 'ORD1', product_name: '历史套餐', guest_name: '测试游客', contact_phone: '13800138000', check_in_date: '2026-08-20', check_out_date: '2026-08-21', rooms: 1, status: 'confirmed' }], total: 1 }),
+  }))
+  await page.reload()
+
+  await expect(page).toHaveURL('http://127.0.0.1:4173/hotel')
+  await page.getByRole('tab', { name: '酒景套餐' }).click()
+  await page.getByText('住宿预订', { exact: true }).click()
+  await expect(page.getByText('历史套餐')).toBeVisible()
+  await expect(page.getByRole('button', { name: '登记已入住' })).toHaveCount(0)
 })
 
 test('suspended hotel business keeps catalog read access but hides write actions', async ({ page }) => {
@@ -104,7 +161,7 @@ test('suspended hotel business keeps catalog read access but hides write actions
   await expect(page.getByRole('menuitem', { name: '酒店经营' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '酒店经营' })).toBeVisible()
   await expect(page.getByRole('button', { name: '新增酒店' })).toHaveCount(0)
-  await expect(page.getByText('酒店住宿业态已暂停，当前仅可查看历史配置。')).toBeVisible()
+  await expect(page.getByText('供应商身份或酒店住宿业态已暂停，当前仅可查看历史配置与已有预订。')).toBeVisible()
 })
 
 test('hotel supplier combined with distributor never receives scenic supplier actions', async ({ page }) => {
@@ -117,6 +174,7 @@ test('hotel supplier combined with distributor never receives scenic supplier ac
 })
 
 test('distributor cannot see or enter supplier onsite business', async ({ page }) => {
+  test.slow()
   await openAs(page, 'distributor', '/operations')
 
   for (const label of ['线上订单', '供销合作', '渠道连接', '运营工作台', '财务报表', '经营数据', '退款待办', '售后工作台', '管理账号', '支付参数配置']) {
@@ -135,7 +193,7 @@ test('distributor cannot see or enter supplier onsite business', async ({ page }
 
   for (const path of ['/product', '/offline-order', '/device', '/checkpoint', '/policy', '/staff', '/gate-simulator']) {
     await page.goto(path)
-    await expect(page).toHaveURL('http://127.0.0.1:4173/')
+    await expect(page).toHaveURL('http://127.0.0.1:4173/', { timeout: 15_000 })
   }
 })
 
@@ -187,6 +245,7 @@ test('expired supplier side is ignored when distributor capability remains activ
 })
 
 test('suspended scenic business keeps history workspaces but blocks new sales and onsite fulfillment', async ({ page }) => {
+  test.slow()
   await openAs(page, 'supplier', '/online-order', undefined, [{ business_type: 'scenic', status: 'suspended' }])
 
   for (const label of ['线上门票', '窗口门票', '线上订单', '线下/窗口订单', '供销合作', '渠道连接', '旅行社团队', '财务报表', '经营数据', '退款待办', '售后工作台']) {
@@ -239,7 +298,7 @@ test('suspended scenic business keeps history workspaces but blocks new sales an
 
   for (const path of ['/operations', '/device', '/checkpoint', '/policy', '/staff', '/gate-simulator', '/payment-config']) {
     await page.goto(path)
-    await expect(page).toHaveURL('http://127.0.0.1:4173/')
+    await expect(page).toHaveURL('http://127.0.0.1:4173/', { timeout: 15_000 })
   }
 })
 

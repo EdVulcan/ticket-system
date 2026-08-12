@@ -15,6 +15,55 @@ import (
 
 type ScenicHotelPackageService struct{}
 
+// PackageFulfillmentLifecycle owns the state transitions that must keep a
+// package ticket, its hotel reservation and room inventory in agreement.
+type PackageFulfillmentLifecycle struct{}
+
+func (PackageFulfillmentLifecycle) AssertProductCodeModeSupported(tx *gorm.DB, tenantID, productID uint, codeMode string) error {
+	if codeMode == "ticket" {
+		return nil
+	}
+	var count int64
+	if err := tx.Model(&model.ScenicHotelPackage{}).Where("tenant_id = ? AND product_id = ?", tenantID, productID).Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return errors.New("hotel package ticket product must use one ticket code per package unit")
+	}
+	return nil
+}
+
+func (PackageFulfillmentLifecycle) Reserve(tx *gorm.DB, facts *scenicHotelPackageFacts, product *model.Product, quantity int, checkIn time.Time) error {
+	if facts == nil {
+		return nil
+	}
+	if product == nil || (product.CodeMode == "order" && quantity > 1) {
+		return errors.New("hotel package order-code products can only be sold one unit per order item")
+	}
+	return reserveHotelPackageInventoryTx(tx, facts, quantity, checkIn)
+}
+
+func (PackageFulfillmentLifecycle) CreateReservations(tx *gorm.DB, order *model.Order, item *model.OrderItem, facts *scenicHotelPackageFacts) error {
+	return createHotelPackageReservationsTx(tx, order, item, facts)
+}
+
+func (PackageFulfillmentLifecycle) AssertExchangeSupported(tx *gorm.DB, tenantID, targetProductID uint, ticketIDs []uint) error {
+	var sourcePackages int64
+	if len(ticketIDs) > 0 {
+		if err := tx.Model(&model.HotelReservation{}).Where("ticket_id IN ?", ticketIDs).Count(&sourcePackages).Error; err != nil {
+			return err
+		}
+	}
+	var targetPackages int64
+	if err := tx.Model(&model.ScenicHotelPackage{}).Where("tenant_id = ? AND product_id = ?", tenantID, targetProductID).Count(&targetPackages).Error; err != nil {
+		return err
+	}
+	if sourcePackages > 0 || targetPackages > 0 {
+		return errors.New("hotel package exchange is not supported; refund and create a new order instead")
+	}
+	return nil
+}
+
 type ScenicHotelPackageInput struct {
 	ProductID                 uint   `json:"product_id"`
 	HotelID                   uint   `json:"hotel_id"`
@@ -290,10 +339,11 @@ func (s *ScenicHotelPackageService) BusinessSummary(tenantID, hotelID uint, star
 			COALESCE(SUM(CASE WHEN reservation.status IN ('confirmed','checked_in','checked_out','no_show','refunded') THEN CAST(ROUND(item.price * 100.0) AS BIGINT) ELSE 0 END), 0) AS gross_sales_cents,
 			COALESCE(SUM(CASE WHEN reservation.status = 'refunded' THEN CAST(ROUND(item.price * 100.0) AS BIGINT) ELSE 0 END), 0) AS refunded_sales_cents,
 			COALESCE(SUM(CASE WHEN reservation.status IN ('confirmed','checked_in','checked_out','no_show') THEN CAST(ROUND(item.price * 100.0) AS BIGINT) ELSE 0 END), 0) AS net_sales_cents,
-			COALESCE(SUM(CASE WHEN reservation.status IN ('confirmed','checked_in','checked_out','no_show') THEN CAST(ROUND(item.settlement_price * 100.0) AS BIGINT) ELSE 0 END), 0) AS ticket_component_net_cents,
+			COALESCE(SUM(CASE WHEN reservation.status IN ('confirmed','checked_in','checked_out','no_show') THEN COALESCE(revision.settlement_cents, CAST(ROUND(item.settlement_price * 100.0) AS BIGINT)) ELSE 0 END), 0) AS ticket_component_net_cents,
 			COALESCE(SUM(CASE WHEN reservation.status IN ('confirmed','checked_in','checked_out','no_show') THEN reservation.settlement_price_cents ELSE 0 END), 0) AS hotel_component_net_cents
 		FROM hotel_reservations AS reservation
 		JOIN order_items AS item ON item.id = reservation.order_item_id AND item.order_id = reservation.order_id
+		LEFT JOIN product_revisions AS revision ON revision.id = item.product_revision_id AND revision.product_id = item.fulfillment_product_id AND revision.tenant_id = item.fulfillment_tenant_id
 		JOIN orders ON orders.id = reservation.order_id AND orders.tenant_id = reservation.sales_tenant_id
 		WHERE reservation.supplier_tenant_id = ? AND reservation.deleted_at IS NULL AND orders.deleted_at IS NULL
 		  AND reservation.created_at >= ? AND reservation.created_at < ?
@@ -331,9 +381,22 @@ func hotelReportWindow(startDate, endDate string) (time.Time, time.Time, error) 
 func (s *ScenicHotelPackageService) SetReservationStatus(tenantID, reservationID, operatorID uint, target, reason string) error {
 	target, reason = strings.TrimSpace(target), strings.TrimSpace(reason)
 	return model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveHotelSupplier(tx, tenantID); err != nil {
+			return err
+		}
 		var reservation model.HotelReservation
+		if err := tx.Where("id = ? AND supplier_tenant_id = ?", reservationID, tenantID).First(&reservation).Error; err != nil {
+			return err
+		}
+		var ticket model.Ticket
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", reservation.TicketID).First(&ticket).Error; err != nil {
+			return err
+		}
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND supplier_tenant_id = ?", reservationID, tenantID).First(&reservation).Error; err != nil {
 			return err
+		}
+		if ticket.PendingRefundID > 0 {
+			return errors.New("hotel reservation cannot change while its ticket has a pending refund")
 		}
 		allowed := map[string]map[string]bool{
 			"confirmed":   {"checked_in": true, "no_show": true},
@@ -375,7 +438,7 @@ func (s *ScenicHotelPackageService) SetReservationStatus(tenantID, reservationID
 		}
 		auditReason := reason
 		if auditReason == "" {
-			auditReason = map[string]string{"checked_in": "办理入住", "checked_out": "办理离店"}[target]
+			auditReason = map[string]string{"checked_in": "登记酒店已入住", "checked_out": "登记酒店已离店"}[target]
 		}
 		return recordAuditTx(tx, operatorID, tenantID, auditRoleTx(tx, operatorID), "tenant", "hotel.reservation.status", "hotel_reservation", reservation.ID, auditReason, fmt.Sprintf(`{"status":%q}`, reservation.Status), fmt.Sprintf(`{"status":%q}`, target))
 	})
@@ -408,6 +471,9 @@ func validateScenicHotelPackageFactsTx(tx *gorm.DB, tenantID uint, row *model.Sc
 	}
 	if product.SourceProductID != 0 || product.ProductOfferID != 0 {
 		return nil, errors.New("fixed scenic hotel package currently requires a supplier-owned ticket product")
+	}
+	if product.CodeMode == "order" {
+		return nil, errors.New("hotel package ticket product must use one ticket code per package unit")
 	}
 	var hotel model.HotelProperty
 	query = tx.Where("id = ? AND tenant_id = ?", row.HotelID, tenantID)
@@ -503,7 +569,7 @@ func transitionHotelReservationInventoryTx(tx *gorm.DB, reservation *model.Hotel
 	if target == "confirmed" && reservation.Status != "reserved" {
 		return errors.New("hotel reservation cannot be confirmed from its current status")
 	}
-	if target == "cancelled" && reservation.Status != "reserved" {
+	if target == "cancelled" && reservation.Status != "reserved" && reservation.Status != "confirmed" {
 		return errors.New("hotel reservation cannot be cancelled from its current status")
 	}
 	if target == "refunded" && reservation.Status != "confirmed" && reservation.Status != "checked_in" && reservation.Status != "checked_out" && reservation.Status != "no_show" {
@@ -522,10 +588,17 @@ func transitionHotelReservationInventoryTx(tx *gorm.DB, reservation *model.Hotel
 			}
 			updates["reserved"], updates["sold"] = inventory.Reserved-reservation.Rooms, inventory.Sold+reservation.Rooms
 		case "cancelled":
-			if inventory.Reserved < reservation.Rooms {
-				return errors.New("hotel reserved inventory projection is invalid")
+			if reservation.Status == "confirmed" {
+				if inventory.Sold < reservation.Rooms {
+					return errors.New("hotel sold inventory projection is invalid")
+				}
+				updates["sold"] = inventory.Sold - reservation.Rooms
+			} else {
+				if inventory.Reserved < reservation.Rooms {
+					return errors.New("hotel reserved inventory projection is invalid")
+				}
+				updates["reserved"] = inventory.Reserved - reservation.Rooms
 			}
-			updates["reserved"] = inventory.Reserved - reservation.Rooms
 		case "refunded":
 			if inventory.Sold < reservation.Rooms {
 				return errors.New("hotel sold inventory projection is invalid")
@@ -556,27 +629,40 @@ func transitionOrderHotelReservationsTx(tx *gorm.DB, orderID uint, from, target 
 	return nil
 }
 
-func refundSelectedHotelReservationsTx(tx *gorm.DB, selected map[string]*model.Ticket) error {
-	if len(selected) == 0 {
-		return nil
-	}
-	ids := make([]uint, 0, len(selected))
-	for _, ticket := range selected {
-		ids = append(ids, ticket.ID)
-	}
+func (PackageFulfillmentLifecycle) CancelOrder(tx *gorm.DB, orderID uint, includeConfirmed bool) error {
 	var rows []model.HotelReservation
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("ticket_id IN ? AND status IN ?", ids, []string{"confirmed", "checked_in", "checked_out", "no_show"}).Order("id ASC").Find(&rows).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_id = ?", orderID).Order("id ASC").Find(&rows).Error; err != nil {
 		return err
 	}
 	for i := range rows {
-		if err := transitionHotelReservationInventoryTx(tx, &rows[i], "refunded"); err != nil {
+		switch rows[i].Status {
+		case "cancelled":
+			continue
+		case "reserved":
+		case "confirmed":
+			if !includeConfirmed {
+				return errors.New("confirmed hotel reservation must use the refund workflow")
+			}
+		default:
+			return errors.New("hotel reservation has entered fulfillment and cannot be cancelled")
+		}
+	}
+	for i := range rows {
+		if rows[i].Status == "cancelled" {
+			continue
+		}
+		if err := transitionHotelReservationInventoryTx(tx, &rows[i], "cancelled"); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func rescheduleHotelReservationsForTicketsTx(tx *gorm.DB, tickets []model.Ticket, targetDate time.Time) error {
+func (PackageFulfillmentLifecycle) ConfirmOrder(tx *gorm.DB, orderID uint) error {
+	return transitionOrderHotelReservationsTx(tx, orderID, "reserved", "confirmed")
+}
+
+func (PackageFulfillmentLifecycle) RescheduleSelected(tx *gorm.DB, tickets []model.Ticket, targetDate time.Time) error {
 	if len(tickets) == 0 {
 		return nil
 	}
@@ -585,11 +671,14 @@ func rescheduleHotelReservationsForTicketsTx(tx *gorm.DB, tickets []model.Ticket
 		ticketIDs = append(ticketIDs, tickets[i].ID)
 	}
 	var rows []model.HotelReservation
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("ticket_id IN ? AND status IN ?", ticketIDs, []string{"reserved", "confirmed"}).Order("id ASC").Find(&rows).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("ticket_id IN ?", ticketIDs).Order("id ASC").Find(&rows).Error; err != nil {
 		return err
 	}
 	for i := range rows {
 		reservation := &rows[i]
+		if reservation.Status != "reserved" && reservation.Status != "confirmed" {
+			return errors.New("hotel reservation has entered fulfillment and cannot be rescheduled")
+		}
 		nights := int(dateOnly(reservation.CheckOutDate).Sub(dateOnly(reservation.CheckInDate)).Hours() / 24)
 		if nights < 1 {
 			return errors.New("hotel reservation stay duration is invalid")
@@ -599,6 +688,63 @@ func rescheduleHotelReservationsForTicketsTx(tx *gorm.DB, tickets []model.Ticket
 			projection = "sold"
 		}
 		if err := moveHotelReservationInventoryTx(tx, reservation, dateOnly(targetDate), nights, projection); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (PackageFulfillmentLifecycle) AssertRefundSupported(tx *gorm.DB, selected map[string]*model.Ticket, allowFulfilledException bool) error {
+	ids := selectedHotelTicketIDs(selected)
+	if len(ids) == 0 {
+		return nil
+	}
+	var lockedTickets []model.Ticket
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id IN ?", ids).Order("id ASC").Find(&lockedTickets).Error; err != nil {
+		return err
+	}
+	var reservations []model.HotelReservation
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("ticket_id IN ?", ids).Order("id ASC").Find(&reservations).Error; err != nil {
+		return err
+	}
+	for i := range reservations {
+		if (reservations[i].Status == "checked_in" || reservations[i].Status == "checked_out" || reservations[i].Status == "no_show") && !allowFulfilledException {
+			return errors.New("hotel reservation has entered fulfillment; refund requires the supplier initial administrator exception with a reason")
+		}
+	}
+	return nil
+}
+
+func (lifecycle PackageFulfillmentLifecycle) RefundSelected(tx *gorm.DB, selected map[string]*model.Ticket, allowFulfilledException bool) error {
+	if err := lifecycle.AssertRefundSupported(tx, selected, allowFulfilledException); err != nil {
+		return err
+	}
+	return refundSelectedHotelReservationsTx(tx, selected, allowFulfilledException)
+}
+
+func selectedHotelTicketIDs(selected map[string]*model.Ticket) []uint {
+	ids := make([]uint, 0, len(selected))
+	for _, ticket := range selected {
+		ids = append(ids, ticket.ID)
+	}
+	return ids
+}
+
+func refundSelectedHotelReservationsTx(tx *gorm.DB, selected map[string]*model.Ticket, allowFulfilledException bool) error {
+	if len(selected) == 0 {
+		return nil
+	}
+	ids := selectedHotelTicketIDs(selected)
+	statuses := []string{"confirmed"}
+	if allowFulfilledException {
+		statuses = append(statuses, "checked_in", "checked_out", "no_show")
+	}
+	var rows []model.HotelReservation
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("ticket_id IN ? AND status IN ?", ids, statuses).Order("id ASC").Find(&rows).Error; err != nil {
+		return err
+	}
+	for i := range rows {
+		if err := transitionHotelReservationInventoryTx(tx, &rows[i], "refunded"); err != nil {
 			return err
 		}
 	}

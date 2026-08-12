@@ -15,6 +15,8 @@ type ChannelWorkflowService struct {
 	OrderService *OrderService
 }
 
+var ErrScenicHotelPackageChannelReservationUnsupported = errors.New("酒景套餐暂不支持通用渠道预占")
+
 func (s *ChannelWorkflowService) Reserve(tenantID, accountID uint, channel string, productID uint, externalNo string, quantity int, useDate *time.Time, stockSlot string, ttl time.Duration) (*model.ChannelReservation, error) {
 	if tenantID == 0 || accountID == 0 || productID == 0 || strings.TrimSpace(externalNo) == "" || quantity <= 0 {
 		return nil, errors.New("channel, product, external order and quantity are required")
@@ -52,6 +54,15 @@ func (s *ChannelWorkflowService) Reserve(tenantID, accountID uint, channel strin
 		}
 		if err := requireActiveScenicSupplier(tx, fulfillment.TenantID); err != nil {
 			return fmt.Errorf("supplier is unavailable: %w", err)
+		}
+		var packageCount int64
+		if err := tx.Model(&model.ScenicHotelPackage{}).
+			Where("tenant_id = ? AND product_id = ?", fulfillment.TenantID, fulfillment.ID).
+			Count(&packageCount).Error; err != nil {
+			return err
+		}
+		if packageCount > 0 {
+			return ErrScenicHotelPackageChannelReservationUnsupported
 		}
 		if err := applyValidity(&model.OrderItem{UseDate: useDate, StockSlot: stockSlot}, fulfillment); err != nil {
 			return err

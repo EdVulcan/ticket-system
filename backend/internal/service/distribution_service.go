@@ -14,6 +14,21 @@ import (
 
 type DistributionService struct{}
 
+var ErrScenicHotelPackageDistributionUnsupported = errors.New("酒景套餐暂不支持跨租户分销")
+
+func rejectScenicHotelPackageDistributionTx(tx *gorm.DB, sourceProductID uint) error {
+	var count int64
+	if err := tx.Model(&model.ScenicHotelPackage{}).
+		Where("product_id = ?", sourceProductID).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return ErrScenicHotelPackageDistributionUnsupported
+	}
+	return nil
+}
+
 func (s *DistributionService) GetSupplierByCode(code string) (*model.Tenant, error) {
 	var tenant model.Tenant
 	if err := model.DB.Where("system_code = ? AND status = ?", strings.TrimSpace(code), "active").First(&tenant).Error; err != nil {
@@ -238,6 +253,7 @@ func (s *DistributionService) ListDistributableProducts(agentTenantID, supplierT
 	err := model.DB.Model(&model.Product{}).
 		Joins("JOIN product_offers ON product_offers.source_product_id = products.id AND product_offers.deleted_at IS NULL").
 		Where("products.tenant_id = ? AND products.is_distributable = ? AND products.status = ?", supplierTenantID, true, "online").
+		Where("NOT EXISTS (SELECT 1 FROM scenic_hotel_packages WHERE scenic_hotel_packages.product_id = products.id AND scenic_hotel_packages.deleted_at IS NULL)").
 		Where("product_offers.distributor_tenant_id = ? AND product_offers.status = ?", agentTenantID, "active").
 		Where("product_offers.sales_start_at IS NULL OR product_offers.sales_start_at <= ?", now).
 		Where("product_offers.sales_end_at IS NULL OR product_offers.sales_end_at >= ?", now).
@@ -274,6 +290,9 @@ func (s *DistributionService) CreateOfferWithPolicy(supplierTenantID, distributo
 		var source model.Product
 		if err := tx.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Where("id = ? AND tenant_id = ? AND status = ? AND is_distributable = ?", sourceProductID, supplierTenantID, "online", true).First(&source).Error; err != nil {
 			return errors.New("source product is not available for distribution")
+		}
+		if err := rejectScenicHotelPackageDistributionTx(tx, source.ID); err != nil {
+			return err
 		}
 		if source.ScenicAreaID == 0 {
 			return errors.New("source product has no scenic area")
@@ -372,6 +391,9 @@ func (s *DistributionService) SetOfferStatus(supplierTenantID, offerID, operator
 		}
 		if status == "active" {
 			if err := requireActiveScenicSupplier(tx, supplierTenantID); err != nil {
+				return err
+			}
+			if err := rejectScenicHotelPackageDistributionTx(tx, offer.SourceProductID); err != nil {
 				return err
 			}
 			var source model.Product
@@ -699,6 +721,9 @@ func (s *DistributionService) ImportProduct(agentTenantID, sourceProductID uint,
 		if !source.IsDistributable || source.Status != "online" {
 			return errors.New("source product is not available for distribution")
 		}
+		if err := rejectScenicHotelPackageDistributionTx(tx, source.ID); err != nil {
+			return err
+		}
 		if err := requireActiveScenicSupplier(tx, source.TenantID); err != nil {
 			return errors.New("supplier tenant is unavailable")
 		}
@@ -792,7 +817,16 @@ func syncListingTx(tx *gorm.DB, listing *model.SellerListing, offer *model.Produ
 		}
 		supplierAvailable = false
 	}
-	eligible := supplierAvailable && sourceErr == nil && offer.Status == "active" && source.Status == "online" && source.IsDistributable &&
+	packageUnsupported := false
+	if sourceErr == nil {
+		if err := rejectScenicHotelPackageDistributionTx(tx, source.ID); err != nil {
+			if !errors.Is(err, ErrScenicHotelPackageDistributionUnsupported) {
+				return nil, err
+			}
+			packageUnsupported = true
+		}
+	}
+	eligible := supplierAvailable && !packageUnsupported && sourceErr == nil && offer.Status == "active" && source.Status == "online" && source.IsDistributable &&
 		offer.ProductRevisionID > 0 && source.CurrentRevisionID == offer.ProductRevisionID &&
 		(offer.SalesStartAt == nil || !now.Before(*offer.SalesStartAt)) &&
 		(offer.SalesEndAt == nil || !now.After(*offer.SalesEndAt)) &&
@@ -803,6 +837,8 @@ func syncListingTx(tx *gorm.DB, listing *model.SellerListing, offer *model.Produ
 		reasonText = "scenic supplier business is not active"
 	} else if sourceErr != nil {
 		reasonText = "source product is unavailable"
+	} else if packageUnsupported {
+		reasonText = ErrScenicHotelPackageDistributionUnsupported.Error()
 	} else if eligible {
 		status = "online"
 		reasonText = "supplier offer and product revision are valid"

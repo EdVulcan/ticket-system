@@ -11,36 +11,39 @@ const (
 )
 
 const (
-	PermissionTenantAccounts     = "tenant_accounts.manage"
-	PermissionCatalogRead        = "catalog.read"
-	PermissionCatalogWrite       = "catalog.write"
-	PermissionOrdersRead         = "orders.read"
-	PermissionOrdersWrite        = "orders.write"
-	PermissionAfterSalesRead     = "after_sales.read"
-	PermissionAfterSalesWrite    = "after_sales.write"
-	PermissionAfterSalesApprove  = "after_sales.approve"
-	PermissionDistributionRead   = "distribution.read"
-	PermissionDistributionWrite  = "distribution.write"
-	PermissionChannelsRead       = "channels.read"
-	PermissionChannelsWrite      = "channels.write"
-	PermissionTeamsRead          = "teams.read"
-	PermissionTeamsWrite         = "teams.write"
-	PermissionTeamContractsWrite = "teams.contracts.write"
-	PermissionFinanceRead        = "finance.read"
-	PermissionFinanceWrite       = "finance.write"
-	PermissionSettlementsRead    = "settlements.read"
-	PermissionSettlementsWrite   = "settlements.write"
-	PermissionRefundsRead        = "refunds.read"
-	PermissionRefundsWrite       = "refunds.write"
-	PermissionReportsRead        = "reports.read"
-	PermissionOperationsRead     = "operations.read"
-	PermissionOperationsWrite    = "operations.write"
-	PermissionOnsiteRead         = "onsite.read"
-	PermissionOnsiteManage       = "onsite.manage"
-	PermissionTicketsVerify      = "tickets.verify"
-	PermissionPaymentsRead       = "payments.read"
-	PermissionPaymentsWrite      = "payments.write"
-	PermissionPaymentConfig      = "payment_config.manage"
+	PermissionTenantAccounts          = "tenant_accounts.manage"
+	PermissionCatalogRead             = "catalog.read"
+	PermissionCatalogWrite            = "catalog.write"
+	PermissionOrdersRead              = "orders.read"
+	PermissionOrdersWrite             = "orders.write"
+	PermissionAfterSalesRead          = "after_sales.read"
+	PermissionAfterSalesWrite         = "after_sales.write"
+	PermissionAfterSalesApprove       = "after_sales.approve"
+	PermissionDistributionRead        = "distribution.read"
+	PermissionDistributionWrite       = "distribution.write"
+	PermissionChannelsRead            = "channels.read"
+	PermissionChannelsWrite           = "channels.write"
+	PermissionTeamsRead               = "teams.read"
+	PermissionTeamsWrite              = "teams.write"
+	PermissionTeamContractsWrite      = "teams.contracts.write"
+	PermissionFinanceRead             = "finance.read"
+	PermissionFinanceWrite            = "finance.write"
+	PermissionSettlementsRead         = "settlements.read"
+	PermissionSettlementsWrite        = "settlements.write"
+	PermissionRefundsRead             = "refunds.read"
+	PermissionRefundsWrite            = "refunds.write"
+	PermissionReportsRead             = "reports.read"
+	PermissionOperationsRead          = "operations.read"
+	PermissionOperationsWrite         = "operations.write"
+	PermissionOnsiteRead              = "onsite.read"
+	PermissionOnsiteManage            = "onsite.manage"
+	PermissionTicketsVerify           = "tickets.verify"
+	PermissionPaymentsRead            = "payments.read"
+	PermissionPaymentsWrite           = "payments.write"
+	PermissionPaymentConfig           = "payment_config.manage"
+	PermissionHotelReservationsRead   = "hotel_reservations.read"
+	PermissionHotelReservationsWrite  = "hotel_reservations.write"
+	PermissionHotelReservationsExport = "hotel_reservations.export"
 )
 
 var rolePermissions = map[string][]string{
@@ -50,6 +53,7 @@ var rolePermissions = map[string][]string{
 		PermissionDistributionRead, PermissionDistributionWrite,
 		PermissionChannelsRead, PermissionChannelsWrite,
 		PermissionReportsRead, PermissionOperationsRead, PermissionOnsiteRead,
+		PermissionHotelReservationsRead, PermissionHotelReservationsWrite, PermissionHotelReservationsExport,
 	},
 	RoleTeamOperator: {
 		PermissionOrdersRead, PermissionAfterSalesRead, PermissionAfterSalesWrite,

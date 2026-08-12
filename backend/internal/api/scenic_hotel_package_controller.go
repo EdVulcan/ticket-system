@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"net/http"
 	"strconv"
+	"strings"
 	"ticket-backend/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -69,8 +70,11 @@ func (c *ScenicHotelPackageController) Delete(ctx *gin.Context) {
 func (c *ScenicHotelPackageController) ListReservations(ctx *gin.Context) {
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
-	hotelID, _ := strconv.ParseUint(ctx.Query("hotel_id"), 10, 64)
-	result, err := c.Service.ListReservations(ctx.GetUint("tenant_id"), uint(hotelID), ctx.Query("status"), ctx.Query("order_no"), page, pageSize)
+	hotelID, ok := optionalHotelID(ctx)
+	if !ok {
+		return
+	}
+	result, err := c.Service.ListReservations(ctx.GetUint("tenant_id"), hotelID, ctx.Query("status"), ctx.Query("order_no"), page, pageSize)
 	if err != nil {
 		hotelError(ctx, err)
 		return
@@ -99,8 +103,11 @@ func (c *ScenicHotelPackageController) SetReservationStatus(ctx *gin.Context) {
 }
 
 func (c *ScenicHotelPackageController) BusinessSummary(ctx *gin.Context) {
-	hotelID, _ := strconv.ParseUint(ctx.Query("hotel_id"), 10, 64)
-	result, err := c.Service.BusinessSummary(ctx.GetUint("tenant_id"), uint(hotelID), ctx.Query("start_date"), ctx.Query("end_date"))
+	hotelID, ok := optionalHotelID(ctx)
+	if !ok {
+		return
+	}
+	result, err := c.Service.BusinessSummary(ctx.GetUint("tenant_id"), hotelID, ctx.Query("start_date"), ctx.Query("end_date"))
 	if err != nil {
 		hotelError(ctx, err)
 		return
@@ -109,8 +116,11 @@ func (c *ScenicHotelPackageController) BusinessSummary(ctx *gin.Context) {
 }
 
 func (c *ScenicHotelPackageController) ExportReservations(ctx *gin.Context) {
-	hotelID, _ := strconv.ParseUint(ctx.Query("hotel_id"), 10, 64)
-	rows, err := c.Service.ExportReservations(ctx.GetUint("tenant_id"), uint(hotelID), ctx.Query("status"), ctx.Query("order_no"))
+	hotelID, ok := optionalHotelID(ctx)
+	if !ok {
+		return
+	}
+	rows, err := c.Service.ExportReservations(ctx.GetUint("tenant_id"), hotelID, ctx.Query("status"), ctx.Query("order_no"))
 	if err != nil {
 		hotelError(ctx, err)
 		return
@@ -130,6 +140,19 @@ func (c *ScenicHotelPackageController) ExportReservations(ctx *gin.Context) {
 	}
 	ctx.Header("Content-Disposition", `attachment; filename="hotel-reservations.csv"`)
 	ctx.Data(http.StatusOK, "text/csv; charset=utf-8", buffer.Bytes())
+}
+
+func optionalHotelID(ctx *gin.Context) (uint, bool) {
+	raw := strings.TrimSpace(ctx.Query("hotel_id"))
+	if raw == "" {
+		return 0, true
+	}
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || value == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid hotel_id"})
+		return 0, false
+	}
+	return uint(value), true
 }
 
 func hotelReservationStatusText(status string) string {

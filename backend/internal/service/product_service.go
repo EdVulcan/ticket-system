@@ -81,6 +81,15 @@ func (s *ProductService) Update(id, tenantID uint, product *model.Product, rule 
 		// It may change its sell-side presentation, but its source and settlement
 		// ownership stay immutable and its local rule is never rewritten.
 		if isDistributedListing(&existingProduct) {
+			if product.Status == "online" {
+				fulfillmentProductID := existingProduct.FulfillmentProductID
+				if fulfillmentProductID == 0 {
+					fulfillmentProductID = existingProduct.SourceProductID
+				}
+				if err := rejectScenicHotelPackageDistributionTx(tx, fulfillmentProductID); err != nil {
+					return err
+				}
+			}
 			if err := validateSellerListingFields(product); err != nil {
 				return err
 			}
@@ -101,6 +110,9 @@ func (s *ProductService) Update(id, tenantID uint, product *model.Product, rule 
 				Omit("id", "created_at", "updated_at", "deleted_at", "tenant_id", "rule_id",
 					"source_product_id", "source_tenant_id", "fulfillment_product_id", "fulfillment_tenant_id", "fulfillment_scenic_area_id", "product_offer_id", "settlement_price", "scenic_area_id").
 				Updates(product).Error
+		}
+		if err := (PackageFulfillmentLifecycle{}).AssertProductCodeModeSupported(tx, tenantID, id, product.CodeMode); err != nil {
+			return err
 		}
 
 		if err := validateProduct(tx, tenantID, product, rule); err != nil {
@@ -521,6 +533,13 @@ func (s *ProductService) UpdateStatus(id, tenantID uint, status string) error {
 			fulfillmentTenantID := tenantID
 			if distributed {
 				fulfillmentTenantID = productFulfillmentTenantID(&product)
+				fulfillmentProductID := product.FulfillmentProductID
+				if fulfillmentProductID == 0 {
+					fulfillmentProductID = product.SourceProductID
+				}
+				if err := rejectScenicHotelPackageDistributionTx(tx, fulfillmentProductID); err != nil {
+					return err
+				}
 			}
 			if err := requireActiveScenicSupplier(tx, fulfillmentTenantID); err != nil {
 				return fmt.Errorf("supplier is unavailable: %w", err)

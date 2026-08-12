@@ -66,6 +66,30 @@ func TestFrontlineStaffCannotOperateAfterSalesOrRefunds(t *testing.T) {
 	}
 }
 
+func TestHotelReservationPermissionsStayOutOfCatalogAndFrontlineOperations(t *testing.T) {
+	for _, role := range []string{"seller", "checker", "seller,checker", RoleViewer, RoleTeamOperator, RoleSettlementOperator} {
+		for _, permission := range []string{
+			PermissionHotelReservationsRead,
+			PermissionHotelReservationsWrite,
+			PermissionHotelReservationsExport,
+		} {
+			if HasTenantPermission(role, permission) {
+				t.Fatalf("role %s must not have hotel reservation permission %s", role, permission)
+			}
+		}
+	}
+
+	for _, permission := range []string{
+		PermissionHotelReservationsRead,
+		PermissionHotelReservationsWrite,
+		PermissionHotelReservationsExport,
+	} {
+		if !HasTenantPermission(RoleProductOperator, permission) {
+			t.Fatalf("product operator should have hotel reservation permission %s", permission)
+		}
+	}
+}
+
 func TestOnlyFixedDelegatedRolesCanBeCreated(t *testing.T) {
 	for _, role := range []string{RoleTenantAdmin, RoleProductOperator, RoleTeamOperator, RoleSettlementOperator, RoleViewer} {
 		if !IsDelegatedTenantRole(role) {

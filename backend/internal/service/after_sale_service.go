@@ -99,6 +99,9 @@ func validateAfterSaleTickets(order *model.Order, codes []string, kind string, a
 				continue
 			}
 			seen++
+			if kind != "refund" && ticket.PendingRefundID != 0 {
+				return fmt.Errorf("ticket %s has a pending refund", ticket.TicketCode)
+			}
 			unused := ticket.Status == "unused" && ticket.CheckInCount == 0
 			usedRefund := kind == "refund" && allowUsed && ticket.CheckInCount > 0 && (ticket.Status == "used" || ticket.Status == "active" || ticket.Status == "unused")
 			if !unused && !usedRefund {
@@ -419,11 +422,22 @@ func executeExchangeTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 	if len(wanted) == 0 {
 		return errors.New("exchange requires ticket codes")
 	}
+	selectedTicketIDs := make([]uint, 0, len(wanted))
+	for _, item := range order.Items {
+		for _, ticket := range item.Tickets {
+			if _, ok := wanted[ticket.TicketCode]; ok {
+				selectedTicketIDs = append(selectedTicketIDs, ticket.ID)
+			}
+		}
+	}
 
 	var targetListing model.Product
 	if err := tx.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").
 		Where("id = ? AND tenant_id = ? AND status = ?", req.TargetProductID, req.TenantID, "online").First(&targetListing).Error; err != nil {
 		return errors.New("target product is unavailable")
+	}
+	if err := (PackageFulfillmentLifecycle{}).AssertExchangeSupported(tx, req.TenantID, targetListing.ID, selectedTicketIDs); err != nil {
+		return err
 	}
 	target, _, err := resolveFulfillmentProduct(tx, &targetListing, req.TenantID, order.Channel)
 	if err != nil {
@@ -620,6 +634,20 @@ func executeRescheduleTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 		return err
 	}
 	wanted := codeSet(codes)
+	var lockedTickets []model.Ticket
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("tenant_id = ? AND order_id = ? AND ticket_code IN ?", req.TenantID, order.ID, codes).
+		Find(&lockedTickets).Error; err != nil {
+		return err
+	}
+	if len(lockedTickets) != len(wanted) {
+		return errors.New("one or more ticket codes do not belong to the order")
+	}
+	for _, ticket := range lockedTickets {
+		if ticket.PendingRefundID != 0 {
+			return fmt.Errorf("ticket %s has a pending refund", ticket.TicketCode)
+		}
+	}
 	for itemIndex := range order.Items {
 		item := &order.Items[itemIndex]
 		selected := 0
@@ -649,7 +677,7 @@ func executeRescheduleTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 		if err := validateTimeSlot(product.TimeSlotConfig, &model.OrderItem{UseDate: req.TargetDate, StockSlot: stockSlot}); err != nil {
 			return err
 		}
-		if err := rescheduleHotelReservationsForTicketsTx(tx, selectedItem.Tickets, *req.TargetDate); err != nil {
+		if err := (PackageFulfillmentLifecycle{}).RescheduleSelected(tx, selectedItem.Tickets, *req.TargetDate); err != nil {
 			return err
 		}
 		if err := releaseStock(tx, stockProductForRelease(&product, selectedItem.ReservedStockType), selectedItem.UseDate, selectedItem.StockSlot, selectedItem.Quantity); err != nil {

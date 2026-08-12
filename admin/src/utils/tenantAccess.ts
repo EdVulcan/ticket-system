@@ -23,6 +23,12 @@ export const activeCapabilitySet = (user: TenantIdentity) => new Set<string>(
   (user.capabilities || []).filter((item: any) => capabilityIsActive(item)).map((item: any) => item.capability)
 )
 
+export const configuredCapabilitySet = (user: TenantIdentity) => new Set<string>(
+  (user.capabilities || [])
+    .filter((item: any) => item.status === 'active' || item.status === 'suspended')
+    .map((item: any) => item.capability)
+)
+
 export const activeSupplierBusinessTypeSet = (user: TenantIdentity) => new Set<string>(
   (user.supplier_business_types || [])
     .filter((item: any) => item.status === 'active')
