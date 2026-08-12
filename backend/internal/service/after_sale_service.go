@@ -649,6 +649,9 @@ func executeRescheduleTx(tx *gorm.DB, req *model.AfterSaleRequest) error {
 		if err := validateTimeSlot(product.TimeSlotConfig, &model.OrderItem{UseDate: req.TargetDate, StockSlot: stockSlot}); err != nil {
 			return err
 		}
+		if err := rescheduleHotelReservationsForTicketsTx(tx, selectedItem.Tickets, *req.TargetDate); err != nil {
+			return err
+		}
 		if err := releaseStock(tx, stockProductForRelease(&product, selectedItem.ReservedStockType), selectedItem.UseDate, selectedItem.StockSlot, selectedItem.Quantity); err != nil {
 			return err
 		}
@@ -727,6 +730,9 @@ func splitOrderItemForTicketsTx(tx *gorm.DB, item *model.OrderItem, wanted map[s
 		return nil, err
 	}
 	if err := tx.Model(&model.OrderVisitor{}).Where("ticket_id IN ?", ticketIDs).Update("order_item_id", selectedItem.ID).Error; err != nil {
+		return nil, err
+	}
+	if err := tx.Model(&model.HotelReservation{}).Where("ticket_id IN ?", ticketIDs).Update("order_item_id", selectedItem.ID).Error; err != nil {
 		return nil, err
 	}
 	selectedItem.Tickets = selectedTickets

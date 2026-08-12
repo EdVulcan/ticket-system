@@ -67,6 +67,21 @@ test('combined scenic and hotel supplier receives both independent workspaces', 
     contentType: 'application/json',
     body: JSON.stringify({ data: [{ id: 21, code: 'HOTEL01', name: '测试酒店', status: 'active' }] }),
   }))
+  await page.route('**/api/v1/scenic-hotel-packages/business-summary**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ net_sales_cents: 99800, gross_sales_cents: 99800, refunded_sales_cents: 0, ticket_component_net_cents: 16000, hotel_component_net_cents: 60000, unallocated_margin_cents: 23800 }),
+  }))
+  await page.route('**/api/v1/scenic-hotel-packages/reservations**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: [{ id: 31, reservation_no: 'HR202608120001', order_no: 'ORD202608120001', product_name: '双人酒景套餐', guest_name: '测试游客', contact_phone: '13800138000', room_type_name: '山景大床房', rate_plan_name: '含双早', check_in_date: '2026-08-20', check_out_date: '2026-08-21', rooms: 1, status: 'confirmed' }], total: 1 }),
+  }))
+  let checkedIn = false
+  await page.route('**/api/v1/scenic-hotel-packages/reservations/31/status', async route => {
+    checkedIn = (await route.request().postDataJSON()).status === 'checked_in'
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ message: 'ok' }) })
+  })
   await page.reload()
 
   await expect(page.getByRole('menuitem', { name: '酒店经营' })).toBeVisible()
@@ -76,6 +91,11 @@ test('combined scenic and hotel supplier receives both independent workspaces', 
   await page.getByRole('tab', { name: '酒景套餐' }).click()
   await expect(page.getByText('套餐配置')).toBeVisible()
   await expect(page.getByText('住宿预订')).toBeVisible()
+  await page.getByText('住宿预订', { exact: true }).click()
+  await expect(page.getByText('净销售额', { exact: true })).toBeVisible()
+  await expect(page.getByText('双人酒景套餐')).toBeVisible()
+  await page.getByRole('button', { name: '办理入住' }).click()
+  await expect.poll(() => checkedIn).toBe(true)
 })
 
 test('suspended hotel business keeps catalog read access but hides write actions', async ({ page }) => {

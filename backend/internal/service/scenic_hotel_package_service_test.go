@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -85,7 +86,7 @@ func TestScenicHotelPackageOrderPaymentAndPartialRefund(t *testing.T) {
 	if len(reservations) != 2 || reservations[0].Status != "reserved" || reservations[0].CheckOutDate.Sub(reservations[0].CheckInDate) != 48*time.Hour {
 		t.Fatalf("reservations=%+v", reservations)
 	}
-	page, err := (&ScenicHotelPackageService{}).ListReservations(fixture.tenantID, "reserved", order.OrderNo, 1, 20)
+	page, err := (&ScenicHotelPackageService{}).ListReservations(fixture.tenantID, fixture.hotel.ID, "reserved", order.OrderNo, 1, 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,6 +134,102 @@ func TestScenicHotelPackageOrderPaymentAndPartialRefund(t *testing.T) {
 	}
 	if err := model.DB.Where("order_id = ? AND status = ?", order.ID, "refunded").First(&model.HotelReservation{}).Error; err != nil {
 		t.Fatal(err)
+	}
+	summary, err := (&ScenicHotelPackageService{}).BusinessSummary(fixture.tenantID, fixture.hotel.ID, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.PackageUnits != 2 || summary.RefundedUnits != 1 || summary.GrossSalesCents != 99800 || summary.RefundedSalesCents != 49900 || summary.NetSalesCents != 49900 || summary.TicketComponentNetCents != 8000 || summary.HotelComponentNetCents != 30000 || summary.UnallocatedMarginCents != 11900 {
+		t.Fatalf("package business summary=%+v", summary)
+	}
+}
+
+func TestHotelReservationFulfillmentStatusIsAudited(t *testing.T) {
+	resetBusinessData(t)
+	fixture := seedScenicHotelPackage(t, 1)
+	useDate := fixture.checkIn
+	order := model.Order{TenantID: fixture.tenantID, Channel: "online", ContactName: "入住游客", ContactPhone: "13800138000", Items: []model.OrderItem{{ProductID: fixture.productID, Quantity: 1, UseDate: &useDate}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, fixture.tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var reservation model.HotelReservation
+	if err := model.DB.Where("order_id = ?", order.ID).First(&reservation).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := &ScenicHotelPackageService{}
+	if err := service.SetReservationStatus(fixture.tenantID, reservation.ID, 1, "no_show", ""); err == nil {
+		t.Fatal("no-show without reason was accepted")
+	}
+	if err := service.SetReservationStatus(fixture.tenantID, reservation.ID, 1, "no_show", "客人确认不入住"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetReservationStatus(fixture.tenantID, reservation.ID, 1, "confirmed", "客人恢复行程"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetReservationStatus(fixture.tenantID, reservation.ID, 1, "checked_in", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetReservationStatus(fixture.tenantID, reservation.ID, 1, "checked_out", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Where("id = ?", reservation.ID).First(&reservation).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reservation.Status != "checked_out" || reservation.CheckedInAt == nil || reservation.CheckedOutAt == nil || reservation.NoShowAt != nil {
+		t.Fatalf("reservation fulfillment=%+v", reservation)
+	}
+	var audits int64
+	if err := model.DB.Model(&model.AuditLog{}).Where("tenant_id = ? AND action = ? AND target_id = ?", fixture.tenantID, "hotel.reservation.status", reservation.ID).Count(&audits).Error; err != nil {
+		t.Fatal(err)
+	}
+	if audits != 4 {
+		t.Fatalf("fulfillment audits=%d, want 4", audits)
+	}
+}
+
+func TestScenicHotelPackageRescheduleMovesTicketAndHotelInventory(t *testing.T) {
+	resetBusinessData(t)
+	fixture := seedScenicHotelPackage(t, 1)
+	target := fixture.checkIn.AddDate(0, 0, 5)
+	if err := (&HotelService{}).SetInventory(fixture.tenantID, fixture.hotel.ID, fixture.room.ID, 1, []HotelInventoryInput{{StayDate: target.Format("2006-01-02"), Capacity: 1}, {StayDate: target.AddDate(0, 0, 1).Format("2006-01-02"), Capacity: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	useDate := fixture.checkIn
+	order := model.Order{TenantID: fixture.tenantID, Channel: "online", ContactName: "改期游客", ContactPhone: "13800138000", Items: []model.OrderItem{{ProductID: fixture.productID, Quantity: 1, UseDate: &useDate}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, fixture.tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Joins("JOIN order_items ON order_items.id = tickets.order_item_id").Where("order_items.order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	codes, _ := json.Marshal([]string{ticket.TicketCode})
+	err := model.Write(func(tx *gorm.DB) error {
+		return executeRescheduleTx(tx, &model.AfterSaleRequest{TenantID: fixture.tenantID, OrderNo: order.OrderNo, TicketCodesJSON: string(codes), TargetDate: &target})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reservation model.HotelReservation
+	if err := model.DB.Where("ticket_id = ?", ticket.ID).First(&reservation).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reservation.CheckInDate.Format("2006-01-02") != target.Format("2006-01-02") || reservation.CheckOutDate.Format("2006-01-02") != target.AddDate(0, 0, 2).Format("2006-01-02") {
+		t.Fatalf("rescheduled reservation=%+v", reservation)
+	}
+	for _, row := range loadPackageInventory(t, fixture) {
+		if row.StayDate.Before(target) && row.Sold != 0 {
+			t.Fatalf("old hotel inventory not released: %+v", row)
+		}
+		if !row.StayDate.Before(target) && row.Sold != 1 {
+			t.Fatalf("target hotel inventory not sold: %+v", row)
+		}
 	}
 }
 

@@ -213,6 +213,9 @@ func InitRouter(r *gin.Engine) {
 	{
 		packageGroup.GET("", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), packageController.List)
 		packageGroup.GET("/reservations", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), packageController.ListReservations)
+		packageGroup.GET("/reservations/export", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionReportsRead), packageController.ExportReservations)
+		packageGroup.GET("/business-summary", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionReportsRead), packageController.BusinessSummary)
+		packageGroup.PATCH("/reservations/:reservationID/status", middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionOperationsWrite), packageController.SetReservationStatus)
 		packageGroup.POST("", middleware.RequireAnySupplierBusinessType("scenic"), middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), packageController.Create)
 		packageGroup.PUT("/:packageID", middleware.RequireAnySupplierBusinessType("scenic"), middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), packageController.Update)
 		packageGroup.DELETE("/:packageID", middleware.RequireAnySupplierBusinessType("scenic"), middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), packageController.Delete)

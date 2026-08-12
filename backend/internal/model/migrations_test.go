@@ -80,6 +80,17 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	if defaultStatus != "suspended" {
 		t.Fatalf("database default supplier business status=%q, want suspended", defaultStatus)
 	}
+	var hotelStatusConstraint string
+	if err := db.Raw(`
+		SELECT pg_get_constraintdef(oid)
+		FROM pg_constraint
+		WHERE conname = 'chk_hotel_reservations_status'
+	`).Scan(&hotelStatusConstraint).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(hotelStatusConstraint, "checked_in") || !strings.Contains(hotelStatusConstraint, "checked_out") || !strings.Contains(hotelStatusConstraint, "no_show") {
+		t.Fatalf("hotel reservation status constraint=%q", hotelStatusConstraint)
+	}
 	if err := db.Exec(`
 		INSERT INTO supplier_business_types (tenant_id, business_type, status, created_at, updated_at)
 		VALUES (?, 'restaurant', 'active', NOW(), NOW())

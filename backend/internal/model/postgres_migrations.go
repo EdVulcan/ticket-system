@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 81
+const CurrentPostgresSchemaVersion = 82
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -55,6 +55,15 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
+	}
+	if previousSchemaVersion > 0 && previousSchemaVersion < 82 {
+		if err := db.Exec(`
+			ALTER TABLE hotel_reservations DROP CONSTRAINT IF EXISTS chk_hotel_reservations_status;
+			ALTER TABLE hotel_reservations ADD CONSTRAINT chk_hotel_reservations_status
+				CHECK (status IN ('reserved','confirmed','checked_in','checked_out','no_show','cancelled','refunded'))
+		`).Error; err != nil {
+			return fmt.Errorf("expand hotel reservation fulfillment states: %w", err)
+		}
 	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
 		if err := db.Exec(`

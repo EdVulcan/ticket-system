@@ -16,7 +16,7 @@
 
     <div v-if="hotels.length" class="hotel-switcher">
       <div class="hotel-switcher-label">当前酒店</div>
-      <el-select v-model="selectedHotelId" filterable @change="loadHotelWorkspace">
+      <el-select v-model="selectedHotelId" filterable @change="switchHotel">
         <el-option v-for="hotel in hotels" :key="hotel.id" :label="hotel.name" :value="hotel.id" />
       </el-select>
       <div v-if="selectedHotel" class="hotel-summary">
@@ -134,17 +134,43 @@
             <el-table-column label="操作" width="140" fixed="right"><template #default="{ row }"><el-button v-if="canPackageWrite" link type="primary" @click="openPackageDialog(row)">编辑</el-button><el-button v-if="canPackageWrite" link type="danger" @click="removePackage(row)">删除</el-button></template></el-table-column>
           </el-table>
         </div>
-        <div v-else class="data-panel">
+        <div v-else class="reservation-workspace">
+          <div v-if="canViewReports" class="package-metrics">
+            <div><span>净销售额</span><strong>¥{{ money(packageSummary.net_sales_cents) }}</strong><small>销售 ¥{{ money(packageSummary.gross_sales_cents) }} / 退款 ¥{{ money(packageSummary.refunded_sales_cents) }}</small></div>
+            <div><span>门票履约金额</span><strong>¥{{ money(packageSummary.ticket_component_net_cents) }}</strong><small>按套餐中门票结算快照</small></div>
+            <div><span>住宿履约金额</span><strong>¥{{ money(packageSummary.hotel_component_net_cents) }}</strong><small>按住宿预订结算快照</small></div>
+            <div><span>套餐经营余量</span><strong>¥{{ money(packageSummary.unallocated_margin_cents) }}</strong><small>净销售额减门票和住宿履约金额</small></div>
+          </div>
+          <div class="reservation-toolbar">
+            <el-input v-model="reservationOrderNo" clearable placeholder="订单号" @keyup.enter="searchReservations" />
+            <el-select v-model="reservationStatus" clearable placeholder="全部状态" @change="searchReservations">
+              <el-option label="待支付" value="reserved" /><el-option label="待入住" value="confirmed" /><el-option label="已入住" value="checked_in" /><el-option label="已离店" value="checked_out" /><el-option label="未到店" value="no_show" /><el-option label="已退款" value="refunded" /><el-option label="已取消" value="cancelled" />
+            </el-select>
+            <el-date-picker v-if="canViewReports" v-model="reportRange" type="daterange" range-separator="至" start-placeholder="统计开始" end-placeholder="统计结束" :clearable="false" @change="loadPackageSummary" />
+            <el-button @click="searchReservations">查询</el-button>
+            <el-button v-if="canViewReports" @click="exportReservations">导出住宿名单</el-button>
+          </div>
+          <div class="data-panel">
           <el-table :data="currentHotelReservations" empty-text="当前酒店暂无套餐住宿预订">
             <el-table-column prop="reservation_no" label="预订号" min-width="190" />
             <el-table-column prop="order_no" label="订单号" min-width="190" />
+            <el-table-column prop="product_name" label="套餐" min-width="170" />
             <el-table-column label="入住联系人" min-width="160"><template #default="{ row }"><div>{{ row.guest_name || '-' }}</div><small>{{ row.contact_phone || '-' }}</small></template></el-table-column>
-            <el-table-column prop="hotel_name" label="酒店" min-width="140" />
             <el-table-column label="房型与价格" min-width="180"><template #default="{ row }">{{ row.room_type_name }} · {{ row.rate_plan_name }}</template></el-table-column>
             <el-table-column label="入住日期" width="210"><template #default="{ row }">{{ shortDate(row.check_in_date) }} 至 {{ shortDate(row.check_out_date) }}</template></el-table-column>
             <el-table-column prop="rooms" label="房间" width="80"><template #default="{ row }">{{ row.rooms }}间</template></el-table-column>
             <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="reservationStatusType(row.status)">{{ reservationStatusText(row.status) }}</el-tag></template></el-table-column>
+            <el-table-column v-if="canOperateReservations" label="操作" min-width="170" fixed="right">
+              <template #default="{ row }">
+                <el-button v-if="row.status === 'confirmed'" link type="primary" @click="setReservationStatus(row, 'checked_in')">办理入住</el-button>
+                <el-button v-if="row.status === 'checked_in'" link type="primary" @click="setReservationStatus(row, 'checked_out')">办理离店</el-button>
+                <el-button v-if="row.status === 'confirmed'" link @click="setReservationStatus(row, 'no_show', true)">未到店</el-button>
+                <el-button v-if="['checked_in','checked_out','no_show'].includes(row.status)" link @click="correctReservationStatus(row)">纠正</el-button>
+              </template>
+            </el-table-column>
           </el-table>
+          <div class="reservation-pagination"><el-pagination v-model:current-page="reservationPage" v-model:page-size="reservationPageSize" :page-sizes="[10,20,40]" layout="total, sizes, prev, pager, next" :total="reservationTotal" @current-change="loadReservations" @size-change="changeReservationPageSize" /></div>
+          </div>
         </div>
       </el-tab-pane>
     </el-tabs>
@@ -231,6 +257,7 @@ import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { activeSupplierBusinessTypeSet, configuredSupplierBusinessTypeSet, readStoredUser } from '@/utils/tenantAccess'
+import { hasPermission } from '@/utils/permissions'
 
 const loading = ref(false)
 const hotels = ref<any[]>([])
@@ -254,6 +281,8 @@ const configuredBusinessTypes = computed(() => configuredSupplierBusinessTypeSet
 const canWrite = computed(() => activeBusinessTypes.value.has('hotel'))
 const showPackages = computed(() => configuredBusinessTypes.value.has('scenic') && configuredBusinessTypes.value.has('hotel'))
 const canPackageWrite = computed(() => activeBusinessTypes.value.has('scenic') && activeBusinessTypes.value.has('hotel'))
+const canOperateReservations = computed(() => hasPermission(readStoredUser(), 'operations.write'))
+const canViewReports = computed(() => hasPermission(readStoredUser(), 'reports.read'))
 const selectedHotel = computed(() => hotels.value.find(item => item.id === selectedHotelId.value))
 
 const hotelForm = reactive<any>({ id: 0, code: '', name: '', address: '', contact_name: '', contact_phone: '', check_in_time: '14:00', check_out_time: '12:00', status: 'active' })
@@ -270,7 +299,16 @@ const packageTicketProducts = ref<any[]>([])
 const hotelPackages = ref<any[]>([])
 const hotelReservations = ref<any[]>([])
 const currentHotelPackages = computed(() => hotelPackages.value.filter(row => row.hotel_id === selectedHotelId.value))
-const currentHotelReservations = computed(() => hotelReservations.value.filter(row => row.hotel_id === selectedHotelId.value))
+const currentHotelReservations = computed(() => hotelReservations.value)
+const reservationStatus = ref('')
+const reservationOrderNo = ref('')
+const reservationPage = ref(1)
+const reservationPageSize = ref(20)
+const reservationTotal = ref(0)
+const packageSummary = ref<any>({})
+const reportStart = new Date(); reportStart.setHours(0, 0, 0, 0); reportStart.setDate(1)
+const reportEnd = new Date(); reportEnd.setHours(0, 0, 0, 0)
+const reportRange = ref<[Date, Date]>([reportStart, reportEnd])
 const activeRoomTypes = computed(() => roomTypes.value.filter(row => row.status === 'active'))
 const packageRatePlans = computed(() => (ratePlans.value[packageForm.room_type_id] || []).filter(row => row.status === 'active'))
 
@@ -292,14 +330,51 @@ const loadHotels = async () => {
 }
 
 const loadPackageWorkspace = async () => {
-  const [productsResponse, packagesResponse, reservationsResponse] = await Promise.all([
+  const [productsResponse, packagesResponse] = await Promise.all([
     request.get('/products', { params: { type: 'online', page_size: 100 } }),
     request.get('/scenic-hotel-packages'),
-    request.get('/scenic-hotel-packages/reservations', { params: { page: 1, page_size: 40 } }),
   ])
   packageTicketProducts.value = (productsResponse.data.data || []).filter((row: any) => row.type === 'online')
   hotelPackages.value = packagesResponse.data.data || []
-  hotelReservations.value = reservationsResponse.data.data || []
+  await Promise.all([loadReservations(), canViewReports.value ? loadPackageSummary() : Promise.resolve()])
+}
+
+const loadReservations = async () => {
+  if (!selectedHotelId.value) { hotelReservations.value = []; reservationTotal.value = 0; return }
+  const response = await request.get('/scenic-hotel-packages/reservations', { params: { hotel_id: selectedHotelId.value, status: reservationStatus.value || undefined, order_no: reservationOrderNo.value.trim() || undefined, page: reservationPage.value, page_size: reservationPageSize.value } })
+  hotelReservations.value = response.data.data || []
+  reservationTotal.value = Number(response.data.total || 0)
+}
+
+const loadPackageSummary = async () => {
+  if (!selectedHotelId.value || !reportRange.value?.length || !canViewReports.value) return
+  const response = await request.get('/scenic-hotel-packages/business-summary', { params: { hotel_id: selectedHotelId.value, start_date: formatDate(reportRange.value[0]), end_date: formatDate(reportRange.value[1]) } })
+  packageSummary.value = response.data || {}
+}
+
+const searchReservations = async () => { reservationPage.value = 1; await loadReservations() }
+const changeReservationPageSize = async () => { reservationPage.value = 1; await loadReservations() }
+
+const setReservationStatus = async (row: any, status: string, requireReason = false) => {
+  let reason = ''
+  if (requireReason) {
+    const result = await ElMessageBox.prompt('请填写原因，操作会写入审计记录。', status === 'no_show' ? '登记未到店' : '纠正住宿状态', { inputValidator: value => Boolean(String(value || '').trim()) || '必须填写原因' })
+    reason = String(result.value || '').trim()
+  }
+  await request.patch(`/scenic-hotel-packages/reservations/${row.id}/status`, { status, reason })
+  ElMessage.success('住宿履约状态已更新')
+  await Promise.all([loadReservations(), canViewReports.value ? loadPackageSummary() : Promise.resolve()])
+}
+
+const correctReservationStatus = async (row: any) => {
+  const target = row.status === 'checked_in' ? 'confirmed' : row.status === 'checked_out' ? 'checked_in' : 'confirmed'
+  await setReservationStatus(row, target, true)
+}
+
+const exportReservations = async () => {
+  const response = await request.get('/scenic-hotel-packages/reservations/export', { params: { hotel_id: selectedHotelId.value, status: reservationStatus.value || undefined, order_no: reservationOrderNo.value.trim() || undefined }, responseType: 'blob' })
+  const url = URL.createObjectURL(response.data)
+  const link = document.createElement('a'); link.href = url; link.download = `${selectedHotel.value?.name || '酒店'}-住宿名单.csv`; link.click(); URL.revokeObjectURL(url)
 }
 
 const loadHotelWorkspace = async () => {
@@ -310,6 +385,12 @@ const loadHotelWorkspace = async () => {
   ratePlans.value = Object.fromEntries(plans)
   if (!roomTypes.value.some(item => item.id === inventoryRoomTypeId.value)) inventoryRoomTypeId.value = roomTypes.value[0]?.id || null
   if (activeTab.value === 'inventory') await loadInventory()
+}
+
+const switchHotel = async () => {
+  reservationPage.value = 1
+  await loadHotelWorkspace()
+  if (showPackages.value) await loadPackageWorkspace()
 }
 
 const openHotelDialog = (row?: any) => {
@@ -404,8 +485,8 @@ const weekday = (value: string) => `周${'日一二三四五六'[new Date(`${val
 const disablePastDate = (value: Date) => value.getTime() < start.getTime()
 const money = (cents: number) => (Number(cents || 0) / 100).toFixed(2)
 const shortDate = (value: string) => String(value || '').slice(0, 10)
-const reservationStatusText = (status: string) => ({ reserved: '待支付', confirmed: '已确认', cancelled: '已取消', refunded: '已退款' } as Record<string, string>)[status] || status
-const reservationStatusType = (status: string) => ({ reserved: 'warning', confirmed: 'success', cancelled: 'info', refunded: 'danger' } as Record<string, string>)[status] || 'info'
+const reservationStatusText = (status: string) => ({ reserved: '待支付', confirmed: '待入住', checked_in: '已入住', checked_out: '已离店', no_show: '未到店', cancelled: '已取消', refunded: '已退款' } as Record<string, string>)[status] || status
+const reservationStatusType = (status: string) => ({ reserved: 'warning', confirmed: 'primary', checked_in: 'success', checked_out: 'info', no_show: 'warning', cancelled: 'info', refunded: 'danger' } as Record<string, string>)[status] || 'info'
 
 onMounted(loadHotels)
 </script>
@@ -426,6 +507,13 @@ onMounted(loadHotels)
 .inventory-filters .el-select { width: 180px; }
 .dialog-toolbar { justify-content: space-between; margin-bottom: 14px; color: var(--ui-text-secondary); }
 .package-section { margin-bottom: 14px; }
+.reservation-workspace { display: flex; flex-direction: column; gap: 14px; }
+.package-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-border); }
+.package-metrics > div { display: flex; min-width: 0; flex-direction: column; gap: 5px; padding: 16px; background: #fff; }
+.package-metrics span, .package-metrics small { color: var(--ui-text-secondary); }
+.package-metrics strong { font-size: 22px; }
+.reservation-toolbar { display: grid; grid-template-columns: minmax(160px, 240px) 140px minmax(260px, 360px) auto auto; gap: 8px; }
+.reservation-pagination { display: flex; justify-content: flex-end; padding: 14px 0 2px; }
 .package-form { margin-top: 18px; }
 .full-width { width: 100%; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
@@ -437,6 +525,9 @@ onMounted(loadHotels)
   .inventory-toolbar { align-items: stretch; flex-direction: column; }
   .inventory-filters { align-items: stretch; flex-direction: column; }
   .inventory-filters .el-select, .inventory-filters :deep(.el-date-editor) { width: 100% !important; }
+  .package-metrics { grid-template-columns: 1fr 1fr; }
+  .reservation-toolbar { grid-template-columns: 1fr 1fr; }
+  .reservation-toolbar :deep(.el-date-editor) { width: 100%; }
 }
-@media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .form-grid, .package-metrics, .reservation-toolbar { grid-template-columns: 1fr; } }
 </style>
