@@ -211,6 +211,12 @@ func runXiaohongshuPaymentWorker(ctx context.Context) {
 		if _, err := miniapp.ProcessPendingXiaohongshuOrders(ctx, now, 20); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Log.Error(fmt.Sprintf("xiaohongshu payment reconciliation failed: %v", err))
 		}
+		if _, err := miniapp.ProcessPendingXiaohongshuBookingSyncs(ctx, 20); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Log.Error(fmt.Sprintf("xiaohongshu booking status reconciliation failed: %v", err))
+		}
+		if _, err := (service.PackageFulfillmentLifecycle{}).ExpirePendingEntitlements(now, 100); err != nil {
+			logger.Log.Error(fmt.Sprintf("package entitlement expiry processing failed: %v", err))
+		}
 	}
 	process(time.Now())
 	ticker := time.NewTicker(30 * time.Second)

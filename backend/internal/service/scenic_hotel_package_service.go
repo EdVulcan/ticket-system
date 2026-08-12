@@ -72,6 +72,10 @@ type ScenicHotelPackageInput struct {
 	Nights                    int    `json:"nights"`
 	RoomsPerPackage           int    `json:"rooms_per_package"`
 	HotelSettlementPriceCents int64  `json:"hotel_settlement_price_cents"`
+	BookingMode               string `json:"booking_mode"`
+	VoucherValidityDays       int    `json:"voucher_validity_days"`
+	MinAdvanceDays            int    `json:"min_advance_days"`
+	MaxReschedules            int    `json:"max_reschedules"`
 	Status                    string `json:"status"`
 }
 
@@ -84,6 +88,7 @@ type ScenicHotelPackageView struct {
 	RoomTypeName               string `json:"room_type_name"`
 	RatePlanName               string `json:"rate_plan_name"`
 	ReservationCount           int64  `json:"reservation_count"`
+	EntitlementCount           int64  `json:"entitlement_count"`
 }
 
 type HotelReservationPage struct {
@@ -102,8 +107,34 @@ type HotelReservationView struct {
 	TicketCode   string `json:"ticket_code"`
 }
 
+type PackageEntitlementPage struct {
+	Data     []PackageEntitlementView `json:"data"`
+	Total    int64                    `json:"total"`
+	Page     int                      `json:"page"`
+	PageSize int                      `json:"page_size"`
+}
+
+type PackageEntitlementView struct {
+	model.ScenicHotelPackageEntitlement
+	OrderNo      string `json:"order_no"`
+	ProductName  string `json:"product_name"`
+	HotelName    string `json:"hotel_name"`
+	RoomTypeName string `json:"room_type_name"`
+}
+
+type PackageEntitlementBookingInput struct {
+	EntitlementNo       string
+	CheckInDate         time.Time
+	GuestName           string
+	ContactPhone        string
+	ClientRequestID     string
+	ExternalBookOrderID string
+	PlatformBookID      string
+}
+
 type HotelPackageBusinessSummary struct {
 	PackageUnits            int64 `json:"package_units"`
+	AwaitingBookingUnits    int64 `json:"awaiting_booking_units"`
 	PendingUnits            int64 `json:"pending_units"`
 	ConfirmedUnits          int64 `json:"confirmed_units"`
 	CheckedInUnits          int64 `json:"checked_in_units"`
@@ -138,6 +169,26 @@ func normalizeScenicHotelPackageInput(input ScenicHotelPackageInput) (ScenicHote
 	if input.HotelSettlementPriceCents < 0 {
 		return input, errors.New("hotel settlement price cannot be negative")
 	}
+	input.BookingMode = strings.TrimSpace(input.BookingMode)
+	if input.BookingMode == "" {
+		input.BookingMode = "at_purchase"
+	}
+	if input.BookingMode != "at_purchase" && input.BookingMode != "after_purchase" {
+		return input, errors.New("package booking mode must be at_purchase or after_purchase")
+	}
+	if input.BookingMode == "after_purchase" {
+		if input.VoucherValidityDays < 1 || input.VoucherValidityDays > 730 {
+			return input, errors.New("voucher validity days must be between 1 and 730")
+		}
+		if input.MinAdvanceDays < 0 || input.MinAdvanceDays > 365 {
+			return input, errors.New("minimum advance days must be between 0 and 365")
+		}
+		if input.MaxReschedules < 0 || input.MaxReschedules > 20 {
+			return input, errors.New("maximum reschedules must be between 0 and 20")
+		}
+	} else {
+		input.VoucherValidityDays, input.MinAdvanceDays, input.MaxReschedules = 0, 0, 0
+	}
 	input.Status = strings.TrimSpace(input.Status)
 	if input.Status == "" {
 		input.Status = "offline"
@@ -153,7 +204,7 @@ func (s *ScenicHotelPackageService) Create(tenantID, operatorID uint, input Scen
 	if err != nil {
 		return nil, err
 	}
-	row := model.ScenicHotelPackage{TenantID: tenantID, ProductID: input.ProductID, HotelID: input.HotelID, RoomTypeID: input.RoomTypeID, RatePlanID: input.RatePlanID, Nights: input.Nights, RoomsPerPackage: input.RoomsPerPackage, HotelSettlementPriceCents: input.HotelSettlementPriceCents, Status: input.Status}
+	row := model.ScenicHotelPackage{TenantID: tenantID, ProductID: input.ProductID, HotelID: input.HotelID, RoomTypeID: input.RoomTypeID, RatePlanID: input.RatePlanID, Nights: input.Nights, RoomsPerPackage: input.RoomsPerPackage, HotelSettlementPriceCents: input.HotelSettlementPriceCents, BookingMode: input.BookingMode, VoucherValidityDays: input.VoucherValidityDays, MinAdvanceDays: input.MinAdvanceDays, MaxReschedules: input.MaxReschedules, Status: input.Status}
 	err = model.Write(func(tx *gorm.DB) error {
 		if err := requireActiveScenicSupplier(tx, tenantID); err != nil {
 			return err
@@ -194,17 +245,22 @@ func (s *ScenicHotelPackageService) Update(tenantID, packageID, operatorID uint,
 		candidate := row
 		candidate.ProductID, candidate.HotelID, candidate.RoomTypeID, candidate.RatePlanID = input.ProductID, input.HotelID, input.RoomTypeID, input.RatePlanID
 		candidate.Nights, candidate.RoomsPerPackage, candidate.HotelSettlementPriceCents, candidate.Status = input.Nights, input.RoomsPerPackage, input.HotelSettlementPriceCents, input.Status
+		candidate.BookingMode, candidate.VoucherValidityDays, candidate.MinAdvanceDays, candidate.MaxReschedules = input.BookingMode, input.VoucherValidityDays, input.MinAdvanceDays, input.MaxReschedules
 		var reservationCount int64
 		if err := tx.Model(&model.HotelReservation{}).Where("package_id = ?", row.ID).Count(&reservationCount).Error; err != nil {
 			return err
 		}
-		if reservationCount > 0 && (row.ProductID != candidate.ProductID || row.HotelID != candidate.HotelID || row.RoomTypeID != candidate.RoomTypeID || row.RatePlanID != candidate.RatePlanID || row.Nights != candidate.Nights || row.RoomsPerPackage != candidate.RoomsPerPackage || row.HotelSettlementPriceCents != candidate.HotelSettlementPriceCents) {
+		var entitlementCount int64
+		if err := tx.Model(&model.ScenicHotelPackageEntitlement{}).Where("package_id = ?", row.ID).Count(&entitlementCount).Error; err != nil {
+			return err
+		}
+		if reservationCount+entitlementCount > 0 && (row.ProductID != candidate.ProductID || row.HotelID != candidate.HotelID || row.RoomTypeID != candidate.RoomTypeID || row.RatePlanID != candidate.RatePlanID || row.Nights != candidate.Nights || row.RoomsPerPackage != candidate.RoomsPerPackage || row.HotelSettlementPriceCents != candidate.HotelSettlementPriceCents || row.BookingMode != candidate.BookingMode || row.VoucherValidityDays != candidate.VoucherValidityDays || row.MinAdvanceDays != candidate.MinAdvanceDays || row.MaxReschedules != candidate.MaxReschedules) {
 			return errors.New("package has orders; only its sale status can be changed")
 		}
 		if _, err := validateScenicHotelPackageFactsTx(tx, tenantID, &candidate, input.Status == "online"); err != nil {
 			return err
 		}
-		if err := tx.Model(&row).Updates(map[string]interface{}{"product_id": input.ProductID, "hotel_id": input.HotelID, "room_type_id": input.RoomTypeID, "rate_plan_id": input.RatePlanID, "nights": input.Nights, "rooms_per_package": input.RoomsPerPackage, "hotel_settlement_price_cents": input.HotelSettlementPriceCents, "status": input.Status}).Error; err != nil {
+		if err := tx.Model(&row).Updates(map[string]interface{}{"product_id": input.ProductID, "hotel_id": input.HotelID, "room_type_id": input.RoomTypeID, "rate_plan_id": input.RatePlanID, "nights": input.Nights, "rooms_per_package": input.RoomsPerPackage, "hotel_settlement_price_cents": input.HotelSettlementPriceCents, "booking_mode": input.BookingMode, "voucher_validity_days": input.VoucherValidityDays, "min_advance_days": input.MinAdvanceDays, "max_reschedules": input.MaxReschedules, "status": input.Status}).Error; err != nil {
 			return err
 		}
 		return recordAuditTx(tx, operatorID, tenantID, "admin", "tenant", "scenic_hotel_package.update", "scenic_hotel_package", row.ID, "update fixed scenic hotel package", "{}", fmt.Sprintf(`{"status":%q}`, input.Status))
@@ -229,6 +285,12 @@ func (s *ScenicHotelPackageService) Delete(tenantID, packageID, operatorID uint)
 		}
 		if count > 0 {
 			return errors.New("package has orders and cannot be deleted; take it offline instead")
+		}
+		if err := tx.Model(&model.ScenicHotelPackageEntitlement{}).Where("package_id = ?", row.ID).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return errors.New("package has sold entitlements and cannot be deleted; take it offline instead")
 		}
 		if err := tx.Delete(&row).Error; err != nil {
 			return err
@@ -290,6 +352,41 @@ func (s *ScenicHotelPackageService) ListReservations(tenantID, hotelID uint, sta
 	return &HotelReservationPage{Data: rows, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
+func (s *ScenicHotelPackageService) ListEntitlements(tenantID, hotelID uint, status, orderNo string, page, pageSize int) (*PackageEntitlementPage, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize != 10 && pageSize != 20 && pageSize != 40 {
+		pageSize = 20
+	}
+	query := model.DB.Table("scenic_hotel_package_entitlements AS entitlement").
+		Joins("JOIN scenic_hotel_packages AS package ON package.id = entitlement.package_id AND package.tenant_id = entitlement.supplier_tenant_id").
+		Joins("JOIN orders ON orders.id = entitlement.order_id AND orders.tenant_id = entitlement.sales_tenant_id").
+		Joins("JOIN order_items AS item ON item.id = entitlement.order_item_id AND item.order_id = entitlement.order_id").
+		Joins("JOIN hotel_properties AS hotel ON hotel.id = package.hotel_id AND hotel.tenant_id = package.tenant_id").
+		Joins("JOIN hotel_room_types AS room ON room.id = package.room_type_id AND room.hotel_id = package.hotel_id").
+		Where("entitlement.supplier_tenant_id = ? AND entitlement.deleted_at IS NULL AND orders.status IN ?", tenantID, []string{"paid", "completed", "partial_refunded"})
+	if hotelID != 0 {
+		query = query.Where("package.hotel_id = ?", hotelID)
+	}
+	if status = strings.TrimSpace(status); status != "" {
+		query = query.Where("entitlement.status = ?", status)
+	}
+	if orderNo = strings.TrimSpace(orderNo); orderNo != "" {
+		query = query.Where("orders.order_no ILIKE ?", "%"+orderNo+"%")
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, err
+	}
+	var rows []PackageEntitlementView
+	if err := query.Select("entitlement.*, orders.order_no, item.product_name, hotel.name AS hotel_name, room.name AS room_type_name").
+		Order("entitlement.valid_until ASC, entitlement.created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	return &PackageEntitlementPage{Data: rows, Total: total, Page: page, PageSize: pageSize}, nil
+}
+
 func hotelReservationViewQuery(tenantID uint) *gorm.DB {
 	return model.DB.Table("hotel_reservations AS reservation").
 		Joins("JOIN orders ON orders.id = reservation.order_id AND orders.tenant_id = reservation.sales_tenant_id").
@@ -299,7 +396,7 @@ func hotelReservationViewQuery(tenantID uint) *gorm.DB {
 }
 
 func scanHotelReservationViews(query *gorm.DB, offset, limit int, rows *[]HotelReservationView) error {
-	return query.Select("reservation.*, orders.order_no, orders.contact_name AS guest_name, orders.contact_phone, order_items.product_name, tickets.ticket_code").
+	return query.Select("reservation.*, orders.order_no, COALESCE(NULLIF(tickets.visitor_name, ''), orders.contact_name) AS guest_name, COALESCE(NULLIF(tickets.visitor_phone, ''), orders.contact_phone) AS contact_phone, order_items.product_name, tickets.ticket_code").
 		Order("reservation.check_in_date ASC, reservation.created_at DESC").Offset(offset).Limit(limit).Scan(rows).Error
 }
 
@@ -349,6 +446,13 @@ func (s *ScenicHotelPackageService) BusinessSummary(tenantID, hotelID uint, star
 		  AND reservation.created_at >= ? AND reservation.created_at < ?
 		  AND (? = 0 OR reservation.hotel_id = ?)`
 	if err := model.DB.Raw(query, tenantID, start, end, hotelID, hotelID).Scan(&result).Error; err != nil {
+		return nil, err
+	}
+	if err := model.DB.Table("scenic_hotel_package_entitlements AS entitlement").
+		Joins("JOIN scenic_hotel_packages AS package ON package.id = entitlement.package_id").
+		Joins("JOIN orders ON orders.id = entitlement.order_id AND orders.tenant_id = entitlement.sales_tenant_id").
+		Where("entitlement.supplier_tenant_id = ? AND entitlement.status = ? AND entitlement.created_at >= ? AND entitlement.created_at < ? AND orders.status IN ?", tenantID, "pending_booking", start, end, []string{"paid", "completed", "partial_refunded"}).
+		Where("? = 0 OR package.hotel_id = ?", hotelID, hotelID).Count(&result.AwaitingBookingUnits).Error; err != nil {
 		return nil, err
 	}
 	result.UnallocatedMarginCents = result.NetSalesCents - result.TicketComponentNetCents - result.HotelComponentNetCents
@@ -457,7 +561,11 @@ func packageViewTx(tx *gorm.DB, tenantID uint, row *model.ScenicHotelPackage) (*
 	if err := tx.Model(&model.HotelReservation{}).Where("package_id = ?", row.ID).Count(&reservationCount).Error; err != nil {
 		return nil, err
 	}
-	return &ScenicHotelPackageView{ScenicHotelPackage: *row, ProductName: product.Name, RetailPriceCents: moneyCents(product.Price), TicketSettlementPriceCents: moneyCents(product.SettlementPrice), HotelName: facts.Hotel.Name, RoomTypeName: facts.RoomType.Name, RatePlanName: facts.RatePlan.Name, ReservationCount: reservationCount}, nil
+	var entitlementCount int64
+	if err := tx.Model(&model.ScenicHotelPackageEntitlement{}).Where("package_id = ?", row.ID).Count(&entitlementCount).Error; err != nil {
+		return nil, err
+	}
+	return &ScenicHotelPackageView{ScenicHotelPackage: *row, ProductName: product.Name, RetailPriceCents: moneyCents(product.Price), TicketSettlementPriceCents: moneyCents(product.SettlementPrice), HotelName: facts.Hotel.Name, RoomTypeName: facts.RoomType.Name, RatePlanName: facts.RatePlan.Name, ReservationCount: reservationCount, EntitlementCount: entitlementCount}, nil
 }
 
 func validateScenicHotelPackageFactsTx(tx *gorm.DB, tenantID uint, row *model.ScenicHotelPackage, requireSellable bool) (*scenicHotelPackageFacts, error) {
@@ -517,7 +625,7 @@ func loadSellableScenicHotelPackageTx(tx *gorm.DB, tenantID, productID uint, use
 	if row.Status != "online" {
 		return nil, errors.New("scenic hotel package is offline")
 	}
-	if useDate == nil {
+	if useDate == nil && row.BookingMode != "after_purchase" {
 		return nil, errors.New("scenic hotel package requires a check-in date")
 	}
 	if err := requireActiveScenicSupplier(tx, tenantID); err != nil {
@@ -527,6 +635,247 @@ func loadSellableScenicHotelPackageTx(tx *gorm.DB, tenantID, productID uint, use
 		return nil, err
 	}
 	return validateScenicHotelPackageFactsTx(tx, tenantID, &row, true)
+}
+
+func (PackageFulfillmentLifecycle) CreateEntitlements(tx *gorm.DB, order *model.Order, item *model.OrderItem, facts *scenicHotelPackageFacts) error {
+	if facts == nil || facts.Package.BookingMode != "after_purchase" {
+		return nil
+	}
+	if order == nil || item == nil || len(item.Tickets) != item.Quantity {
+		return errors.New("package entitlement quantity does not match package quantity")
+	}
+	validFrom := time.Now()
+	validUntil := time.Date(validFrom.Year(), validFrom.Month(), validFrom.Day(), 23, 59, 59, 0, validFrom.Location()).AddDate(0, 0, facts.Package.VoucherValidityDays-1)
+	for index := range item.Tickets {
+		row := model.ScenicHotelPackageEntitlement{
+			EntitlementNo: generateHotelPackageEntitlementNo(), SalesTenantID: order.TenantID,
+			SupplierTenantID: facts.Package.TenantID, OrderID: order.ID, OrderItemID: item.ID,
+			TicketID: item.Tickets[index].ID, PackageID: facts.Package.ID, Status: "pending_booking",
+			ValidFrom: validFrom, ValidUntil: validUntil, PlatformSyncStatus: "not_required",
+		}
+		if err := tx.Create(&row).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (lifecycle PackageFulfillmentLifecycle) BookEntitlementTx(tx *gorm.DB, input PackageEntitlementBookingInput) (*model.ScenicHotelPackageEntitlement, error) {
+	input.EntitlementNo, input.ClientRequestID = strings.TrimSpace(input.EntitlementNo), strings.TrimSpace(input.ClientRequestID)
+	input.GuestName, input.ContactPhone = strings.TrimSpace(input.GuestName), strings.TrimSpace(input.ContactPhone)
+	if input.EntitlementNo == "" || input.ClientRequestID == "" || len(input.ClientRequestID) > 100 {
+		return nil, errors.New("package entitlement and booking request id are required")
+	}
+	if input.GuestName == "" || input.ContactPhone == "" || len(input.GuestName) > 50 || len(input.ContactPhone) > 20 {
+		return nil, errors.New("package booking requires a valid guest name and contact phone")
+	}
+	checkIn := dateOnly(input.CheckInDate)
+	var entitlement model.ScenicHotelPackageEntitlement
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("entitlement_no = ?", input.EntitlementNo).First(&entitlement).Error; err != nil {
+		return nil, err
+	}
+	if entitlement.ClientRequestID == input.ClientRequestID && entitlement.Status == "booked" {
+		return &entitlement, nil
+	}
+	if entitlement.Status != "pending_booking" {
+		return nil, errors.New("package entitlement is not awaiting booking")
+	}
+	now := time.Now()
+	if now.Before(entitlement.ValidFrom) || now.After(entitlement.ValidUntil) {
+		return nil, errors.New("package entitlement is outside its booking validity")
+	}
+	var order model.Order
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", entitlement.OrderID, entitlement.SalesTenantID).First(&order).Error; err != nil {
+		return nil, err
+	}
+	if order.Status != "paid" && order.Status != "partial_refunded" {
+		return nil, errors.New("package order is not paid")
+	}
+	var item model.OrderItem
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Tickets").Where("id = ? AND order_id = ?", entitlement.OrderItemID, order.ID).First(&item).Error; err != nil {
+		return nil, err
+	}
+	var ticket model.Ticket
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND order_id = ?", entitlement.TicketID, order.ID).First(&ticket).Error; err != nil {
+		return nil, err
+	}
+	if ticket.PendingRefundID != 0 {
+		return nil, errors.New("package entitlement has a pending refund")
+	}
+	if ticket.Status != "pending_booking" || ticket.CheckInCount != 0 {
+		return nil, errors.New("package entitlement ticket is not bookable")
+	}
+	var packageRow model.ScenicHotelPackage
+	if err := tx.Where("id = ? AND tenant_id = ? AND booking_mode = ?", entitlement.PackageID, entitlement.SupplierTenantID, "after_purchase").First(&packageRow).Error; err != nil {
+		return nil, errors.New("package booking configuration is unavailable")
+	}
+	if checkIn.Before(dateOnly(now).AddDate(0, 0, packageRow.MinAdvanceDays)) {
+		return nil, fmt.Errorf("package booking requires at least %d days advance", packageRow.MinAdvanceDays)
+	}
+	checkOut := checkIn.AddDate(0, 0, packageRow.Nights)
+	if checkOut.After(dateOnly(entitlement.ValidUntil).AddDate(0, 0, 1)) {
+		return nil, errors.New("package stay is outside voucher validity")
+	}
+	if err := requireActiveScenicSupplier(tx, entitlement.SupplierTenantID); err != nil {
+		return nil, err
+	}
+	if err := requireActiveHotelSupplier(tx, entitlement.SupplierTenantID); err != nil {
+		return nil, err
+	}
+	facts, err := validateScenicHotelPackageFactsTx(tx, entitlement.SupplierTenantID, &packageRow, false)
+	if err != nil {
+		return nil, err
+	}
+	if facts.Hotel.Status != "active" || facts.RoomType.Status != "active" || facts.RatePlan.Status != "active" {
+		return nil, errors.New("package hotel fulfillment is unavailable")
+	}
+	for index := range item.Tickets {
+		if item.Tickets[index].ID == ticket.ID {
+			item.Tickets[index].Status = "unused"
+		}
+	}
+	selected, err := splitOrderItemForTicketsTx(tx, &item, map[string]struct{}{ticket.TicketCode: {}})
+	if err != nil {
+		return nil, err
+	}
+	var product model.Product
+	if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", selected.FulfillmentProductID, selected.FulfillmentTenantID).First(&product).Error; err != nil {
+		return nil, err
+	}
+	if !isVisitDateValid(&checkIn, product.ValidityStartDate, product.ValidityEndDate) {
+		return nil, errors.New("booking date is outside product validity")
+	}
+	if selected.ReservedStockType == "voucher_daily" {
+		if err := reserveStock(tx, &product, &checkIn, selected.StockSlot, 1); err != nil {
+			return nil, err
+		}
+		selected.ReservedStockType = "daily"
+	}
+	if err := reserveHotelPackageInventoryTx(tx, facts, 1, checkIn); err != nil {
+		return nil, err
+	}
+	selected.UseDate = &checkIn
+	selected.ValidityStart = &checkIn
+	validEnd := time.Date(checkIn.Year(), checkIn.Month(), checkIn.Day(), 23, 59, 59, 0, checkIn.Location())
+	selected.ValidityEnd = &validEnd
+	if err := tx.Model(selected).Updates(map[string]interface{}{"use_date": checkIn, "validity_start": checkIn, "validity_end": validEnd, "reserved_stock_type": selected.ReservedStockType}).Error; err != nil {
+		return nil, err
+	}
+	if err := tx.Model(&ticket).Updates(map[string]interface{}{
+		"status": "unused", "order_item_id": selected.ID,
+		"visitor_name": input.GuestName, "visitor_phone": input.ContactPhone,
+	}).Error; err != nil {
+		return nil, err
+	}
+	reservation := model.HotelReservation{
+		ReservationNo: generateHotelReservationNo(), SalesTenantID: order.TenantID, SupplierTenantID: packageRow.TenantID,
+		OrderID: order.ID, OrderItemID: selected.ID, TicketID: ticket.ID, PackageID: packageRow.ID,
+		HotelID: packageRow.HotelID, RoomTypeID: packageRow.RoomTypeID, RatePlanID: packageRow.RatePlanID,
+		HotelName: facts.Hotel.Name, RoomTypeName: facts.RoomType.Name, RatePlanName: facts.RatePlan.Name,
+		CheckInDate: checkIn, CheckOutDate: checkOut, Rooms: packageRow.RoomsPerPackage,
+		SettlementPriceCents: packageRow.HotelSettlementPriceCents, Status: "reserved",
+	}
+	if err := tx.Create(&reservation).Error; err != nil {
+		return nil, err
+	}
+	if err := transitionHotelReservationInventoryTx(tx, &reservation, "confirmed"); err != nil {
+		return nil, err
+	}
+	bookedAt := time.Now()
+	rescheduleCount := entitlement.RescheduleCount
+	if entitlement.BookingCancelledAt != nil {
+		if rescheduleCount >= packageRow.MaxReschedules {
+			return nil, errors.New("package entitlement has reached its reschedule limit")
+		}
+		rescheduleCount++
+	}
+	updates := map[string]interface{}{
+		"order_item_id": selected.ID, "reservation_id": reservation.ID, "status": "booked",
+		"client_request_id": input.ClientRequestID, "external_book_order_id": input.ExternalBookOrderID,
+		"platform_book_id": input.PlatformBookID, "booked_at": bookedAt, "booking_cancelled_at": nil,
+		"reschedule_count": rescheduleCount,
+	}
+	if strings.TrimSpace(input.PlatformBookID) != "" {
+		updates["platform_sync_status"] = "pending"
+	}
+	if err := tx.Model(&entitlement).Updates(updates).Error; err != nil {
+		return nil, err
+	}
+	if err := tx.First(&entitlement, entitlement.ID).Error; err != nil {
+		return nil, err
+	}
+	return &entitlement, nil
+}
+
+func (PackageFulfillmentLifecycle) CancelEntitlementBookingTx(tx *gorm.DB, entitlementNo string) (*model.ScenicHotelPackageEntitlement, error) {
+	var entitlement model.ScenicHotelPackageEntitlement
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("entitlement_no = ?", strings.TrimSpace(entitlementNo)).First(&entitlement).Error; err != nil {
+		return nil, err
+	}
+	if entitlement.Status == "pending_booking" {
+		return &entitlement, nil
+	}
+	if entitlement.Status != "booked" || entitlement.ReservationID == 0 {
+		return nil, errors.New("package entitlement has no cancellable booking")
+	}
+	var ticket model.Ticket
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", entitlement.TicketID).First(&ticket).Error; err != nil {
+		return nil, err
+	}
+	if ticket.PendingRefundID != 0 || ticket.CheckInCount != 0 || ticket.Status != "unused" {
+		return nil, errors.New("package booking cannot be cancelled after refund or admission processing")
+	}
+	var reservation model.HotelReservation
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND ticket_id = ?", entitlement.ReservationID, ticket.ID).First(&reservation).Error; err != nil {
+		return nil, err
+	}
+	if reservation.Status != "reserved" && reservation.Status != "confirmed" {
+		return nil, errors.New("hotel reservation has entered fulfillment and cannot be cancelled")
+	}
+	var packageRow model.ScenicHotelPackage
+	if err := tx.Where("id = ? AND tenant_id = ?", entitlement.PackageID, entitlement.SupplierTenantID).First(&packageRow).Error; err != nil {
+		return nil, err
+	}
+	if entitlement.RescheduleCount >= packageRow.MaxReschedules {
+		return nil, errors.New("package entitlement has no remaining reschedule opportunity; refund it instead")
+	}
+	if err := transitionHotelReservationInventoryTx(tx, &reservation, "cancelled"); err != nil {
+		return nil, err
+	}
+	var item model.OrderItem
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", ticket.OrderItemID).First(&item).Error; err != nil {
+		return nil, err
+	}
+	var product model.Product
+	if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", item.FulfillmentProductID, item.FulfillmentTenantID).First(&product).Error; err != nil {
+		return nil, err
+	}
+	if item.ReservedStockType == "daily" {
+		if err := releaseStock(tx, &product, item.UseDate, item.StockSlot, 1); err != nil {
+			return nil, err
+		}
+	}
+	nextReservedStockType := item.ReservedStockType
+	if item.ReservedStockType == "daily" {
+		nextReservedStockType = "voucher_daily"
+	}
+	if err := tx.Model(&item).Updates(map[string]interface{}{"use_date": nil, "validity_start": entitlement.ValidFrom, "validity_end": entitlement.ValidUntil, "reserved_stock_type": nextReservedStockType}).Error; err != nil {
+		return nil, err
+	}
+	if err := tx.Model(&ticket).Updates(map[string]interface{}{"status": "pending_booking", "visitor_name": "", "visitor_phone": ""}).Error; err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	if err := tx.Model(&entitlement).Updates(map[string]interface{}{
+		"status": "pending_booking", "reservation_id": 0, "platform_sync_status": "pending",
+		"booking_cancelled_at": now, "client_request_id": "",
+	}).Error; err != nil {
+		return nil, err
+	}
+	if err := tx.First(&entitlement, entitlement.ID).Error; err != nil {
+		return nil, err
+	}
+	return &entitlement, nil
 }
 
 func reserveHotelPackageInventoryTx(tx *gorm.DB, facts *scenicHotelPackageFacts, packageQuantity int, checkIn time.Time) error {
@@ -560,6 +909,14 @@ func createHotelPackageReservationsTx(tx *gorm.DB, order *model.Order, item *mod
 		}
 	}
 	return nil
+}
+
+func generateHotelPackageEntitlementNo() string {
+	buffer := make([]byte, 5)
+	if _, err := rand.Read(buffer); err != nil {
+		panic("secure random source unavailable: " + err.Error())
+	}
+	return fmt.Sprintf("PKG%d%s", time.Now().UnixMilli(), strings.ToUpper(hex.EncodeToString(buffer)))
 }
 
 func transitionHotelReservationInventoryTx(tx *gorm.DB, reservation *model.HotelReservation, target string) error {
@@ -655,7 +1012,7 @@ func (PackageFulfillmentLifecycle) CancelOrder(tx *gorm.DB, orderID uint, includ
 			return err
 		}
 	}
-	return nil
+	return tx.Model(&model.ScenicHotelPackageEntitlement{}).Where("order_id = ? AND status = ?", orderID, "pending_booking").Update("status", "cancelled").Error
 }
 
 func (PackageFulfillmentLifecycle) ConfirmOrder(tx *gorm.DB, orderID uint) error {
@@ -719,7 +1076,65 @@ func (lifecycle PackageFulfillmentLifecycle) RefundSelected(tx *gorm.DB, selecte
 	if err := lifecycle.AssertRefundSupported(tx, selected, allowFulfilledException); err != nil {
 		return err
 	}
-	return refundSelectedHotelReservationsTx(tx, selected, allowFulfilledException)
+	if err := refundSelectedHotelReservationsTx(tx, selected, allowFulfilledException); err != nil {
+		return err
+	}
+	ids := selectedHotelTicketIDs(selected)
+	if len(ids) == 0 {
+		return nil
+	}
+	return tx.Model(&model.ScenicHotelPackageEntitlement{}).Where("ticket_id IN ? AND status IN ?", ids, []string{"pending_booking", "booked", "cancelled"}).Updates(map[string]interface{}{
+		"status":               "refunded",
+		"platform_sync_status": gorm.Expr("CASE WHEN platform_book_id <> '' THEN 'pending' ELSE platform_sync_status END"),
+	}).Error
+}
+
+func (PackageFulfillmentLifecycle) ExpirePendingEntitlements(now time.Time, limit int) (int, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	var ids []uint
+	if err := model.DB.Model(&model.ScenicHotelPackageEntitlement{}).
+		Where("status = ? AND valid_until < ?", "pending_booking", now).
+		Order("valid_until ASC, id ASC").Limit(limit).Pluck("id", &ids).Error; err != nil {
+		return 0, err
+	}
+	expired := 0
+	for _, id := range ids {
+		err := model.Write(func(tx *gorm.DB) error {
+			var entitlement model.ScenicHotelPackageEntitlement
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ? AND valid_until < ?", id, "pending_booking", now).First(&entitlement).Error; err != nil {
+				return err
+			}
+			var ticket model.Ticket
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND status = ? AND pending_refund_id = 0", entitlement.TicketID, "pending_booking").First(&ticket).Error; err != nil {
+				return err
+			}
+			var item model.OrderItem
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", ticket.OrderItemID).First(&item).Error; err != nil {
+				return err
+			}
+			var product model.Product
+			if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", item.FulfillmentProductID, item.FulfillmentTenantID).First(&product).Error; err != nil {
+				return err
+			}
+			if err := releaseStock(tx, stockProductForRelease(&product, item.ReservedStockType), item.UseDate, item.StockSlot, 1); err != nil {
+				return err
+			}
+			if err := tx.Model(&ticket).Update("status", "expired").Error; err != nil {
+				return err
+			}
+			return tx.Model(&entitlement).Update("status", "expired").Error
+		})
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			continue
+		}
+		if err != nil {
+			return expired, err
+		}
+		expired++
+	}
+	return expired, nil
 }
 
 func selectedHotelTicketIDs(selected map[string]*model.Ticket) []uint {

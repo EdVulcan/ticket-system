@@ -3,6 +3,7 @@
     "pages/index/index",
     "pages/product/detail",
     "pages/order/confirm",
+    "pages/booking/index",
     "pages/orders/index",
     "pages/order/detail"
   ],

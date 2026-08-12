@@ -21,6 +21,9 @@
 .stay-row { display: flex; justify-content: space-between; gap: 24rpx; padding: 14rpx 0; border-bottom: 1rpx solid #eef0f4; color: #858894; font-size: 21rpx; }
 .stay-row:last-child { border-bottom: 0; }
 .stay-row text:last-child { color: #272934; text-align: right; }
+.package-booking { margin-top: 18rpx; padding: 18rpx; border: 1rpx solid #e8eaf0; border-radius: 9rpx; background: #fafbfc; }
+.package-booking + .package-booking { margin-top: 14rpx; }
+.compact { height: 66rpx; margin-top: 13rpx; font-size: 22rpx; line-height: 64rpx; }
 .order-meta { display: flex; justify-content: space-between; gap: 20rpx; margin-top: 16rpx; padding: 19rpx 7rpx; color: #858894; font-size: 19rpx; }
 .order-meta text:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .primary-button { height: 80rpx; margin-top: 15rpx; border-radius: 8rpx; background: #ff5563; color: #fff; font-size: 27rpx; font-weight: 750; line-height: 80rpx; box-shadow: 0 8rpx 20rpx rgba(255,85,99,.22); }

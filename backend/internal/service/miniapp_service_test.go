@@ -315,6 +315,124 @@ func TestXiaohongshuMiniappScenicHotelPackageRequiresStayDateAndCreatesReservati
 	}
 }
 
+func TestXiaohongshuMiniappDeferredPackageBooksIdempotentlyAndCancels(t *testing.T) {
+	resetBusinessData(t)
+	fixture := seedScenicHotelPackage(t, 3)
+	if err := model.DB.Model(&model.ScenicHotelPackage{}).Where("id = ?", fixture.packageView.ID).Updates(map[string]interface{}{
+		"booking_mode": "after_purchase", "voucher_validity_days": 90,
+		"min_advance_days": 1, "max_reschedules": 2,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	account := model.ChannelAccount{Code: "xiaohongshu-deferred-package", Status: "active"}
+	if err := (&ChannelService{}).CreateXiaohongshu(fixture.tenantID, &account, "miniapp-deferred-package", "app-secret"); err != nil {
+		t.Fatal(err)
+	}
+	mapping := model.ChannelProductMapping{ChannelAccountID: account.ID, ProductID: fixture.productID, ExternalCode: "XHS-DEFERRED-PACKAGE", DisplayName: "先购后约酒景套餐", ChannelSaleCents: 1}
+	if err := (&ChannelService{}).AddMapping(fixture.tenantID, &mapping); err != nil {
+		t.Fatal(err)
+	}
+	poiJSON, _ := json.Marshal([]string{"POI-1"})
+	if err := model.DB.Create(&model.XiaohongshuProductConfig{
+		TenantID: fixture.tenantID, ChannelAccountID: account.ID, ChannelProductMappingID: mapping.ID,
+		ExternalSKUID: "XHS-DEFERRED-SKU", CategoryID: "package", POIIDsJSON: string(poiJSON),
+		ImageURL: "https://example.com/package.png", Description: "购买后预约入住",
+		ProductPath: "/pages/product/detail", OrderPath: "/pages/order/detail",
+		ProductType: xiaohongshu.ProductTypePresaleVoucher, SettleType: 1, SyncStatus: "synced",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	openID, _ := utils.EncryptAES("OPEN-DEFERRED-PACKAGE")
+	sessionKey, _ := utils.EncryptAES("SESSION-DEFERRED-PACKAGE")
+	customer := model.MiniappCustomer{
+		TenantID: fixture.tenantID, ChannelAccountID: account.ID,
+		OpenIDHash: hashMiniappValue("OPEN-DEFERRED-PACKAGE"), OpenIDCiphertext: openID,
+		SessionKeyCiphertext: sessionKey, SessionTokenHash: hashMiniappValue("TOKEN-DEFERRED-PACKAGE"),
+		SessionExpiresAt: time.Now().Add(time.Hour), Status: "active", LastLoginAt: time.Now(),
+	}
+	if err := model.DB.Create(&customer).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	bookCalls, confirmCalls, cancelCalls := 0, 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/rmp/token":
+			_, _ = w.Write([]byte(`{"data":{"access_token":"ACCESS-DEFERRED","expire_in":7200},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/mp/deal/order/upsert":
+			_, _ = w.Write([]byte(`{"data":{"out_order_id":"XHS-DEFERRED","order_id":"XHS-DEFERRED-ORDER","final_price":1,"pay_token":"DEFERRED-PAY","expired_time":1786349700,"open_pay_type":"life_gpay"},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/mp/deal/gpay_order/get":
+			_, _ = w.Write([]byte(`{"data":{"order_id":"XHS-DEFERRED-ORDER","pay_amount":1,"order_status":6,"voucher_infos":[{"voucher_code":"VOUCHER-DEFERRED","voucher_status":1,"pay_amount":1}],"third_trade_no":"TRADE-DEFERRED","pay_channel":1},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/component/deal/pre_sale/book":
+			bookCalls++
+			var request xiaohongshu.PresaleBookRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request.ProductType != xiaohongshu.ProductTypePresaleVoucher || request.OpenID != "OPEN-DEFERRED-PACKAGE" || request.POIID != "POI-1" || len(request.BookInfo.Details) != 1 || request.BookInfo.Details[0].VoucherCode != "VOUCHER-DEFERRED" || request.BookInfo.Details[0].CheckInDate != fixture.checkIn.Format("2006-01-02") {
+				t.Fatalf("booking request=%+v", request)
+			}
+			_, _ = w.Write([]byte(`{"data":{"out_order_id":"XHS-DEFERRED","book_result":[{"book_id":"PLATFORM-BOOK-DEFERRED","voucher_code":"VOUCHER-DEFERRED"}]},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/component/deal/pre_sale/sync_status":
+			var request xiaohongshu.PresaleBookStatusRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			switch request.Status {
+			case 1:
+				confirmCalls++
+			case 4:
+				cancelCalls++
+			default:
+				t.Fatalf("unexpected booking status=%d", request.Status)
+			}
+			_, _ = w.Write([]byte(`{"data":{},"success":true,"msg":"success","code":0}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	miniapp := NewMiniappService()
+	miniapp.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
+	}
+
+	catalog, err := miniapp.ListCatalog(&customer)
+	if err != nil || len(catalog.Products) != 1 || catalog.Products[0].RequiresUseDate || catalog.Products[0].BookingMode != "after_purchase" {
+		t.Fatalf("catalog=%+v err=%v", catalog, err)
+	}
+	created, err := miniapp.CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 1, ClientRequestID: "deferred-order"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paid, err := miniapp.GetXiaohongshuOrder(context.Background(), &customer, created.OrderNo)
+	if err != nil || paid.Status != "paid" || len(paid.TicketCodes) != 0 || len(paid.PackageEntitlements) != 1 || paid.PackageEntitlements[0].Status != "pending_booking" {
+		t.Fatalf("paid=%+v err=%v", paid, err)
+	}
+	entitlementNo := paid.PackageEntitlements[0].EntitlementNo
+	booking := MiniappPackageBookingInput{EntitlementNo: entitlementNo, CheckInDate: fixture.checkIn.Format("2006-01-02"), GuestName: "预约游客", ContactPhone: "13800138000", ClientRequestID: "booking-1"}
+	booked, err := miniapp.BookXiaohongshuPackage(context.Background(), &customer, created.OrderNo, booking)
+	if err != nil || len(booked.TicketCodes) != 1 || len(booked.PackageEntitlements) != 1 || booked.PackageEntitlements[0].Status != "booked" || booked.PackageEntitlements[0].GuestName != "预约游客" || bookCalls != 1 || confirmCalls != 1 {
+		t.Fatalf("booked=%+v calls=%d/%d err=%v", booked, bookCalls, confirmCalls, err)
+	}
+	if _, err := miniapp.BookXiaohongshuPackage(context.Background(), &customer, created.OrderNo, booking); err != nil || bookCalls != 1 || confirmCalls != 1 {
+		t.Fatalf("idempotent calls=%d/%d err=%v", bookCalls, confirmCalls, err)
+	}
+	cancelled, err := miniapp.CancelXiaohongshuPackageBooking(context.Background(), &customer, created.OrderNo, entitlementNo)
+	if err != nil || len(cancelled.TicketCodes) != 0 || len(cancelled.PackageEntitlements) != 1 || cancelled.PackageEntitlements[0].Status != "pending_booking" || cancelCalls != 1 {
+		t.Fatalf("cancelled=%+v calls=%d err=%v", cancelled, cancelCalls, err)
+	}
+	var order model.Order
+	if err := model.DB.Where("order_no = ?", created.OrderNo).First(&order).Error; err != nil {
+		t.Fatal(err)
+	}
+	var reservations []model.HotelReservation
+	if err := model.DB.Where("order_id = ?", order.ID).Find(&reservations).Error; err != nil || len(reservations) != 1 || reservations[0].Status != "cancelled" {
+		t.Fatalf("reservations=%+v err=%v", reservations, err)
+	}
+}
+
 func miniappLoginServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

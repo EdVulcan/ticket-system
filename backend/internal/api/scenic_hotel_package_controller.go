@@ -82,6 +82,21 @@ func (c *ScenicHotelPackageController) ListReservations(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, result)
 }
 
+func (c *ScenicHotelPackageController) ListEntitlements(ctx *gin.Context) {
+	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
+	hotelID, ok := optionalHotelID(ctx)
+	if !ok {
+		return
+	}
+	result, err := c.Service.ListEntitlements(ctx.GetUint("tenant_id"), hotelID, ctx.Query("status"), ctx.Query("order_no"), page, pageSize)
+	if err != nil {
+		hotelError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, result)
+}
+
 func (c *ScenicHotelPackageController) SetReservationStatus(ctx *gin.Context) {
 	id, ok := pathID(ctx, "reservationID")
 	if !ok {

@@ -85,6 +85,18 @@ func (s XiaohongshuProductService) SaveConfig(tenantID, accountID, mappingID, ac
 		if err := loadXiaohongshuMappingTx(tx, tenantID, accountID, mappingID, nil, nil); err != nil {
 			return err
 		}
+		var mapping model.ChannelProductMapping
+		if err := tx.Where("id = ? AND channel_account_id = ?", mappingID, accountID).First(&mapping).Error; err != nil {
+			return err
+		}
+		var hotelPackage model.ScenicHotelPackage
+		packageErr := tx.Where("tenant_id = ? AND product_id = ?", tenantID, mapping.ProductID).First(&hotelPackage).Error
+		if packageErr == nil && hotelPackage.BookingMode == "after_purchase" && input.ProductType != xiaohongshu.ProductTypePresaleVoucher {
+			return errors.New("book-after-purchase hotel packages must be published as a Xiaohongshu presale voucher")
+		}
+		if packageErr != nil && !errors.Is(packageErr, gorm.ErrRecordNotFound) {
+			return packageErr
+		}
 		config := model.XiaohongshuProductConfig{
 			TenantID: tenantID, ChannelAccountID: accountID, ChannelProductMappingID: mappingID,
 			ExternalSKUID: input.ExternalSKUID, CategoryID: input.CategoryID, POIIDsJSON: string(poiJSON),

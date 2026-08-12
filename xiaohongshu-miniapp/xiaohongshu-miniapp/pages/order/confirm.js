@@ -36,6 +36,7 @@ Page({
       product.quantityHint = product.isPackage
         ? `每份含${product.rooms_per_package}间房住${product.nights}晚`
         : '每人一票一码';
+      product.isDeferredPackage = product.isPackage && product.booking_mode === 'after_purchase';
       product.useDateLabel = product.isPackage ? '入住日期' : '游玩日期';
       product.stayText = product.isPackage ? `${product.hotel_name} · ${product.room_type_name} · ${product.nights}晚` : '';
       const maxQuantity = catalog.max_order_cents
@@ -78,11 +79,11 @@ Page({
       this.setData({ error: `请选择${this.data.product.useDateLabel}` });
       return;
     }
-    if (this.data.product.isPackage && !this.data.guestName.trim()) {
+    if (this.data.product.isPackage && !this.data.product.isDeferredPackage && !this.data.guestName.trim()) {
       this.setData({ error: '请填写入住人姓名' });
       return;
     }
-    if (this.data.product.isPackage && !/^[0-9+\-\s]{6,20}$/.test(this.data.contactPhone.trim())) {
+    if (this.data.product.isPackage && !this.data.product.isDeferredPackage && !/^[0-9+\-\s]{6,20}$/.test(this.data.contactPhone.trim())) {
       this.setData({ error: '请填写有效的联系电话' });
       return;
     }

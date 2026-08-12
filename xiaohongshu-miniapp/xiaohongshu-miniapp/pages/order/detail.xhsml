@@ -18,6 +18,23 @@
     <view class="stay-row"><text>入住人</text><text>{{order.hotel_stay.guest_name}}</text></view>
     <view class="stay-row"><text>联系电话</text><text>{{order.hotel_stay.contactPhoneText}}</text></view>
   </view>
+  <view class="tickets" xhs:if="{{order && order.package_entitlements && order.package_entitlements.length}}">
+    <text class="section-title">套餐预约</text>
+    <text class="ticket-hint">每份套餐独立预约，预约成功后生成对应日期的门票与住宿预订。</text>
+    <view class="package-booking" xhs:for="{{order.package_entitlements}}" xhs:key="entitlement_no">
+      <view class="stay-row"><text>第 {{item.index}} 份</text><text>{{item.statusLabel}}</text></view>
+      <view class="stay-row" xhs:if="{{item.status === 'pending_booking'}}"><text>预约有效期</text><text>至 {{item.validUntilText}}</text></view>
+      <view xhs:if="{{item.status === 'booked'}}">
+        <view class="stay-row"><text>入住</text><text>{{item.checkInText}} 至 {{item.checkOutText}}</text></view>
+        <view class="stay-row"><text>酒店</text><text>{{item.hotel_name}}</text></view>
+        <view class="stay-row"><text>房型</text><text>{{item.room_type_name}}</text></view>
+        <view class="stay-row"><text>入住人</text><text>{{item.guest_name}} {{item.phoneText}}</text></view>
+      </view>
+      <button class="primary-button compact" xhs:if="{{item.canBook}}" data-entitlement="{{item.entitlement_no}}" bindtap="bookPackage">预约入住</button>
+      <button class="secondary-button compact" xhs:if="{{item.canCancel}}" data-entitlement="{{item.entitlement_no}}" bindtap="cancelPackage">取消本次预约</button>
+      <text class="ticket-hint" xhs:if="{{item.platform_sync_status === 'failed'}}">预约已经保留，平台状态正在重试同步</text>
+    </view>
+  </view>
   <view class="tickets" xhs:if="{{ticketCodes.length}}">
     <text class="section-title">入园票码</text><text class="ticket-hint">到达景区后请调高屏幕亮度，向工作人员出示</text>
     <view class="ticket-code" xhs:for="{{ticketCodes}}" xhs:key="code"><text class="ticket-index">第 {{item.index}} 张</text><text class="ticket-value">{{item.code}}</text></view>

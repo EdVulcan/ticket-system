@@ -544,7 +544,7 @@ func selectRefundTickets(order *model.Order, cleanCodes []string, allowUsed, all
 			if ticket.PendingRefundID != 0 && ticket.PendingRefundID != allowedPendingRefundID {
 				return nil, 0, fmt.Errorf("ticket %s already has a pending refund", ticket.TicketCode)
 			}
-			unused := ticket.Status == "unused" && ticket.CheckInCount == 0
+			unused := (ticket.Status == "unused" || ticket.Status == "pending_booking") && ticket.CheckInCount == 0
 			used := ticket.CheckInCount > 0 && (ticket.Status == "used" || ticket.Status == "active" || ticket.Status == "unused")
 			if !unused && !(allowUsed && used) {
 				return nil, 0, fmt.Errorf("ticket %s is already used", ticket.TicketCode)

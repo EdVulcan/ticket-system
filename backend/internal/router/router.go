@@ -31,6 +31,8 @@ func InitRouter(r *gin.Engine) {
 	miniappGroup.POST("/orders", miniappController.CreateOrder)
 	miniappGroup.GET("/orders", miniappController.ListOrders)
 	miniappGroup.GET("/orders/:orderNo", miniappController.GetOrder)
+	miniappGroup.POST("/orders/:orderNo/package-bookings", miniappController.BookPackage)
+	miniappGroup.POST("/orders/:orderNo/package-bookings/:entitlementNo/cancel", miniappController.CancelPackageBooking)
 	xiaohongshuWebhookController := api.XiaohongshuWebhookController{}
 	xiaohongshuWebhookGroup := apiGroup.Group("/integrations/xiaohongshu/events")
 	xiaohongshuWebhookGroup.GET("/:appID", xiaohongshuWebhookController.Verify)
@@ -211,6 +213,7 @@ func InitRouter(r *gin.Engine) {
 	{
 		packageGroup.GET("", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogRead), packageController.List)
 		packageGroup.GET("/reservations", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionHotelReservationsRead), packageController.ListReservations)
+		packageGroup.GET("/entitlements", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionHotelReservationsRead), packageController.ListEntitlements)
 		packageGroup.GET("/reservations/export", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionHotelReservationsExport), packageController.ExportReservations)
 		packageGroup.GET("/business-summary", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionReportsRead), packageController.BusinessSummary)
 		packageGroup.PATCH("/reservations/:reservationID/status", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionHotelReservationsWrite), packageController.SetReservationStatus)

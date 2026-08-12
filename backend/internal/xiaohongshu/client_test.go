@@ -89,6 +89,58 @@ func TestGetGuaranteeOrderAndVerifyVoucher(t *testing.T) {
 	}
 }
 
+func TestPresaleBookingUsesComponentDealEndpoints(t *testing.T) {
+	var bookCalls, syncCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/rmp/token":
+			_, _ = w.Write([]byte(`{"data":{"access_token":"token-1","expire_in":7200},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/component/deal/pre_sale/book":
+			bookCalls++
+			assertAuthQuery(t, r)
+			var request PresaleBookRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request.ProductType != ProductTypePresaleVoucher || request.OpenID != "OPEN-1" || request.BookInfo.ExternalBookOrderID != "BOOK-1" || len(request.BookInfo.Details) != 1 || request.BookInfo.Details[0].VoucherCode != "V-1" || request.BookInfo.Details[0].CheckInDate != "2026-09-01" || request.BookInfo.Details[0].CheckOutDate != "2026-09-03" {
+				t.Fatalf("book request=%+v", request)
+			}
+			_, _ = w.Write([]byte(`{"data":{"out_order_id":"ORD-1","book_result":[{"book_id":"PLATFORM-BOOK-1","voucher_code":"V-1"}]},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/component/deal/pre_sale/sync_status":
+			syncCalls++
+			assertAuthQuery(t, r)
+			var request PresaleBookStatusRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request.ExternalBookOrderID != "BOOK-1" || request.Status != 1 || len(request.BookIDs) != 1 || request.BookIDs[0] != "PLATFORM-BOOK-1" {
+				t.Fatalf("sync request=%+v", request)
+			}
+			_, _ = w.Write([]byte(`{"data":{},"success":true,"msg":"success","code":0}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := Client{AppID: "miniapp", Secret: "secret", BaseURL: server.URL, HTTP: server.Client()}
+	response, err := client.BookPresaleVoucher(context.Background(), PresaleBookRequest{
+		ProductType: ProductTypePresaleVoucher, OpenID: "OPEN-1", ExternalOrderID: "ORD-1",
+		ExternalProductID: "PRODUCT-1", ExternalSKUID: "SKU-1",
+		BookInfo: PresaleBookInfo{ExternalBookOrderID: "BOOK-1", Details: []PresaleBookDetail{{VoucherCode: "V-1", CheckInDate: "2026-09-01", CheckOutDate: "2026-09-03"}}},
+	})
+	if err != nil || len(response.Results) != 1 || response.Results[0].BookID != "PLATFORM-BOOK-1" {
+		t.Fatalf("book response=%+v err=%v", response, err)
+	}
+	if err := client.SyncPresaleBookStatus(context.Background(), PresaleBookStatusRequest{ExternalBookOrderID: "BOOK-1", BookIDs: []string{"PLATFORM-BOOK-1"}, Status: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if bookCalls != 1 || syncCalls != 1 {
+		t.Fatalf("bookCalls=%d syncCalls=%d", bookCalls, syncCalls)
+	}
+}
+
 func TestCode2SessionUsesOfficialLoginEndpoint(t *testing.T) {
 	var tokenCalls, sessionCalls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

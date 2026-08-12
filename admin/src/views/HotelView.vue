@@ -121,6 +121,7 @@
         </div>
         <el-radio-group v-model="packageSection" class="package-section">
           <el-radio-button label="catalog">套餐配置</el-radio-button>
+          <el-radio-button v-if="canViewReservations" label="entitlements">预约权益</el-radio-button>
           <el-radio-button v-if="canViewReservations" label="reservations">住宿预订</el-radio-button>
         </el-radio-group>
         <div v-if="packageSection === 'catalog'" class="data-panel">
@@ -128,15 +129,39 @@
             <el-table-column prop="product_name" label="套餐名称" min-width="180" />
             <el-table-column label="住宿内容" min-width="190"><template #default="{ row }">{{ row.room_type_name }} · {{ row.nights }}晚 × {{ row.rooms_per_package }}间</template></el-table-column>
             <el-table-column prop="rate_plan_name" label="价格计划" min-width="130" />
+            <el-table-column label="预约方式" min-width="150"><template #default="{ row }"><div>{{ row.booking_mode === 'after_purchase' ? '购买后预约' : '下单时选日期' }}</div><small v-if="row.booking_mode === 'after_purchase'">{{ row.voucher_validity_days }}天内预约</small></template></el-table-column>
             <el-table-column label="套餐售价" width="110"><template #default="{ row }">¥{{ money(row.retail_price_cents) }}</template></el-table-column>
             <el-table-column label="结算拆分" min-width="180"><template #default="{ row }">门票 ¥{{ money(row.ticket_settlement_price_cents) }} / 酒店 ¥{{ money(row.hotel_settlement_price_cents) }}</template></el-table-column>
             <el-table-column label="状态" width="90"><template #default="{ row }"><el-tag :type="row.status === 'online' ? 'success' : 'info'">{{ row.status === 'online' ? '在售' : '下架' }}</el-tag></template></el-table-column>
             <el-table-column label="操作" width="140" fixed="right"><template #default="{ row }"><el-button v-if="canPackageWrite" link type="primary" @click="openPackageDialog(row)">编辑</el-button><el-button v-if="canPackageWrite" link type="danger" @click="removePackage(row)">删除</el-button></template></el-table-column>
           </el-table>
         </div>
+        <div v-else-if="packageSection === 'entitlements'" class="reservation-workspace">
+          <el-alert type="info" :closable="false" show-icon title="预约权益表示已经售出但尚未指定入住日期的酒景套餐。游客完成预约后，系统才锁定对应日期的门票库存和酒店房量。" />
+          <div class="reservation-toolbar">
+            <el-input v-model="reservationOrderNo" clearable placeholder="订单号" @keyup.enter="searchReservations" />
+            <el-select v-model="entitlementStatus" clearable placeholder="全部状态" @change="searchReservations">
+              <el-option label="待预约" value="pending_booking" /><el-option label="已预约" value="booked" /><el-option label="已退款" value="refunded" /><el-option label="已关闭" value="cancelled" />
+            </el-select>
+            <el-button @click="searchReservations">查询</el-button>
+          </div>
+          <div class="data-panel">
+            <el-table :data="packageEntitlements" empty-text="当前酒店暂无套餐预约权益">
+              <el-table-column prop="entitlement_no" label="权益编号" min-width="210" show-overflow-tooltip />
+              <el-table-column prop="order_no" label="订单号" min-width="190" />
+              <el-table-column prop="product_name" label="套餐" min-width="170" />
+              <el-table-column label="住宿内容" min-width="180"><template #default="{ row }">{{ row.hotel_name }} · {{ row.room_type_name }}</template></el-table-column>
+              <el-table-column label="预约有效期" width="220"><template #default="{ row }">{{ shortDate(row.valid_from) }} 至 {{ shortDate(row.valid_until) }}</template></el-table-column>
+              <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="entitlementStatusType(row.status)">{{ entitlementStatusText(row.status) }}</el-tag></template></el-table-column>
+              <el-table-column label="平台同步" width="110"><template #default="{ row }"><el-tag :type="row.platform_sync_status === 'failed' ? 'danger' : (row.platform_sync_status === 'synced' ? 'success' : 'info')">{{ row.platform_sync_status === 'failed' ? '同步失败' : (row.platform_sync_status === 'synced' ? '已同步' : (row.platform_sync_status === 'pending' ? '待同步' : '未触发')) }}</el-tag></template></el-table-column>
+            </el-table>
+            <div class="reservation-pagination"><el-pagination v-model:current-page="entitlementPage" v-model:page-size="reservationPageSize" :page-sizes="[10,20,40]" layout="total, sizes, prev, pager, next" :total="entitlementTotal" @current-change="loadEntitlements" @size-change="changeReservationPageSize" /></div>
+          </div>
+        </div>
         <div v-else class="reservation-workspace">
           <el-alert type="info" :closable="false" show-icon title="这里只登记或同步酒店、PMS、人工确认后的票务侧住宿结果，不提供排房、房卡或酒店前台入住功能。" />
           <div v-if="canViewReports" class="package-metrics">
+            <div><span>待预约套餐</span><strong>{{ packageSummary.awaiting_booking_units || 0 }} 份</strong><small>已支付但尚未选择入住日期</small></div>
             <div><span>净销售额</span><strong>¥{{ money(packageSummary.net_sales_cents) }}</strong><small>销售 ¥{{ money(packageSummary.gross_sales_cents) }} / 退款 ¥{{ money(packageSummary.refunded_sales_cents) }}</small></div>
             <div><span>门票履约金额</span><strong>¥{{ money(packageSummary.ticket_component_net_cents) }}</strong><small>按套餐中门票结算快照</small></div>
             <div><span>住宿履约金额</span><strong>¥{{ money(packageSummary.hotel_component_net_cents) }}</strong><small>按住宿预订结算快照</small></div>
@@ -253,6 +278,18 @@
           <el-form-item label="酒店结算价（元）" prop="hotel_settlement_price"><el-input-number v-model="packageForm.hotel_settlement_price" :min="0" :precision="2" :step="10" :disabled="packageForm.locked" /></el-form-item>
           <el-form-item label="状态"><el-radio-group v-model="packageForm.status"><el-radio-button label="offline">先保存下架</el-radio-button><el-radio-button label="online">立即在售</el-radio-button></el-radio-group></el-form-item>
         </div>
+        <el-form-item label="预约方式" prop="booking_mode">
+          <el-radio-group v-model="packageForm.booking_mode" :disabled="packageForm.locked">
+            <el-radio-button label="at_purchase">下单时选择入住日期</el-radio-button>
+            <el-radio-button label="after_purchase">先购买，后预约入住</el-radio-button>
+          </el-radio-group>
+          <small class="field-hint">后预约模式支付时不占用指定日期房量，游客预约成功后才锁定门票日期与酒店房量。</small>
+        </el-form-item>
+        <div v-if="packageForm.booking_mode === 'after_purchase'" class="form-grid">
+          <el-form-item label="预约有效期（天）" prop="voucher_validity_days"><el-input-number v-model="packageForm.voucher_validity_days" :min="1" :max="730" :disabled="packageForm.locked" /></el-form-item>
+          <el-form-item label="至少提前（天）" prop="min_advance_days"><el-input-number v-model="packageForm.min_advance_days" :min="0" :max="365" :disabled="packageForm.locked" /></el-form-item>
+          <el-form-item label="允许取消后重约次数" prop="max_reschedules"><el-input-number v-model="packageForm.max_reschedules" :min="0" :max="20" :disabled="packageForm.locked" /></el-form-item>
+        </div>
       </el-form>
       <template #footer><el-button @click="packageDialogVisible = false">取消</el-button><el-button type="primary" @click="savePackage">保存</el-button></template>
     </el-dialog>
@@ -301,23 +338,27 @@ const selectedHotel = computed(() => hotels.value.find(item => item.id === selec
 const hotelForm = reactive<any>({ id: 0, code: '', name: '', address: '', contact_name: '', contact_phone: '', check_in_time: '14:00', check_out_time: '12:00', status: 'active' })
 const roomForm = reactive<any>({ id: 0, code: '', name: '', max_guests: 2, bed_type: '', description: '', status: 'active' })
 const rateForm = reactive<any>({ id: 0, code: '', name: '', retail_price: 0.01, settlement_price: 0, breakfast_count: 0, cancellation_policy: '', status: 'active' })
-const packageForm = reactive<any>({ id: 0, product_id: null, room_type_id: null, rate_plan_id: null, nights: 1, rooms_per_package: 1, hotel_settlement_price: 0, status: 'offline', locked: false })
+const packageForm = reactive<any>({ id: 0, product_id: null, room_type_id: null, rate_plan_id: null, nights: 1, rooms_per_package: 1, hotel_settlement_price: 0, booking_mode: 'at_purchase', voucher_validity_days: 90, min_advance_days: 0, max_reschedules: 1, status: 'offline', locked: false })
 const hotelRules = { code: [{ required: true, message: '请输入酒店编号', trigger: 'blur' }], name: [{ required: true, message: '请输入酒店名称', trigger: 'blur' }], check_in_time: [{ required: true, message: '请选择入住时间', trigger: 'change' }], check_out_time: [{ required: true, message: '请选择退房时间', trigger: 'change' }] }
 const roomRules = { code: [{ required: true, message: '请输入房型编号', trigger: 'blur' }], name: [{ required: true, message: '请输入房型名称', trigger: 'blur' }], max_guests: [{ required: true, type: 'number', min: 1, message: '入住人数至少为1人', trigger: 'change' }] }
 const rateRules = { code: [{ required: true, message: '请输入价格编号', trigger: 'blur' }], name: [{ required: true, message: '请输入价格名称', trigger: 'blur' }], retail_price: [{ required: true, type: 'number', min: 0.01, message: '零售价必须大于0', trigger: 'change' }] }
-const packageRules = { product_id: [{ required: true, type: 'number', min: 1, message: '请选择套餐门票', trigger: 'change' }], room_type_id: [{ required: true, type: 'number', min: 1, message: '请选择房型', trigger: 'change' }], rate_plan_id: [{ required: true, type: 'number', min: 1, message: '请选择价格计划', trigger: 'change' }], nights: [{ required: true, type: 'number', min: 1, message: '连住晚数至少为1', trigger: 'change' }], rooms_per_package: [{ required: true, type: 'number', min: 1, message: '房间数至少为1', trigger: 'change' }] }
+const packageRules = { product_id: [{ required: true, type: 'number', min: 1, message: '请选择套餐门票', trigger: 'change' }], room_type_id: [{ required: true, type: 'number', min: 1, message: '请选择房型', trigger: 'change' }], rate_plan_id: [{ required: true, type: 'number', min: 1, message: '请选择价格计划', trigger: 'change' }], nights: [{ required: true, type: 'number', min: 1, message: '连住晚数至少为1', trigger: 'change' }], rooms_per_package: [{ required: true, type: 'number', min: 1, message: '房间数至少为1', trigger: 'change' }], booking_mode: [{ required: true, message: '请选择预约方式', trigger: 'change' }] }
 
 const packageSection = ref('catalog')
 const packageTicketProducts = ref<any[]>([])
 const hotelPackages = ref<any[]>([])
 const hotelReservations = ref<any[]>([])
+const packageEntitlements = ref<any[]>([])
 const currentHotelPackages = computed(() => hotelPackages.value.filter(row => row.hotel_id === selectedHotelId.value))
 const currentHotelReservations = computed(() => hotelReservations.value)
 const reservationStatus = ref('')
+const entitlementStatus = ref('')
 const reservationOrderNo = ref('')
 const reservationPage = ref(1)
 const reservationPageSize = ref(20)
 const reservationTotal = ref(0)
+const entitlementPage = ref(1)
+const entitlementTotal = ref(0)
 const packageSummary = ref<any>({})
 const reportStart = new Date(); reportStart.setHours(0, 0, 0, 0); reportStart.setDate(1)
 const reportEnd = new Date(); reportEnd.setHours(0, 0, 0, 0)
@@ -351,6 +392,7 @@ const loadPackageWorkspace = async () => {
   hotelPackages.value = packagesResponse.data.data || []
   await Promise.all([
     canViewReservations.value ? loadReservations() : Promise.resolve(),
+    canViewReservations.value ? loadEntitlements() : Promise.resolve(),
     canViewReservations.value && canViewReports.value ? loadPackageSummary() : Promise.resolve(),
   ])
 }
@@ -362,14 +404,21 @@ const loadReservations = async () => {
   reservationTotal.value = Number(response.data.total || 0)
 }
 
+const loadEntitlements = async () => {
+  if (!selectedHotelId.value) { packageEntitlements.value = []; entitlementTotal.value = 0; return }
+  const response = await request.get('/scenic-hotel-packages/entitlements', { params: { hotel_id: selectedHotelId.value, status: entitlementStatus.value || undefined, order_no: reservationOrderNo.value.trim() || undefined, page: entitlementPage.value, page_size: reservationPageSize.value } })
+  packageEntitlements.value = response.data.data || []
+  entitlementTotal.value = Number(response.data.total || 0)
+}
+
 const loadPackageSummary = async () => {
   if (!selectedHotelId.value || !reportRange.value?.length || !canViewReports.value) return
   const response = await request.get('/scenic-hotel-packages/business-summary', { params: { hotel_id: selectedHotelId.value, start_date: formatDate(reportRange.value[0]), end_date: formatDate(reportRange.value[1]) } })
   packageSummary.value = response.data || {}
 }
 
-const searchReservations = async () => { reservationPage.value = 1; await loadReservations() }
-const changeReservationPageSize = async () => { reservationPage.value = 1; await loadReservations() }
+const searchReservations = async () => { reservationPage.value = 1; entitlementPage.value = 1; await Promise.all([loadReservations(), loadEntitlements()]) }
+const changeReservationPageSize = async () => { reservationPage.value = 1; entitlementPage.value = 1; await Promise.all([loadReservations(), loadEntitlements()]) }
 
 const setReservationStatus = async (row: any, status: string, requireReason = false) => {
   let reason = ''
@@ -461,7 +510,7 @@ const removeRate = async (row: any) => {
 }
 
 const openPackageDialog = (row?: any) => {
-  Object.assign(packageForm, row ? { id: row.id, product_id: row.product_id, room_type_id: row.room_type_id, rate_plan_id: row.rate_plan_id, nights: row.nights, rooms_per_package: row.rooms_per_package, hotel_settlement_price: row.hotel_settlement_price_cents / 100, status: row.status, locked: Number(row.reservation_count || 0) > 0 } : { id: 0, product_id: null, room_type_id: activeRoomTypes.value[0]?.id || null, rate_plan_id: null, nights: 1, rooms_per_package: 1, hotel_settlement_price: 0, status: 'offline', locked: false })
+  Object.assign(packageForm, row ? { id: row.id, product_id: row.product_id, room_type_id: row.room_type_id, rate_plan_id: row.rate_plan_id, nights: row.nights, rooms_per_package: row.rooms_per_package, hotel_settlement_price: row.hotel_settlement_price_cents / 100, booking_mode: row.booking_mode || 'at_purchase', voucher_validity_days: row.voucher_validity_days || 90, min_advance_days: row.min_advance_days || 0, max_reschedules: row.max_reschedules || 0, status: row.status, locked: Number(row.reservation_count || 0) + Number(row.entitlement_count || 0) > 0 } : { id: 0, product_id: null, room_type_id: activeRoomTypes.value[0]?.id || null, rate_plan_id: null, nights: 1, rooms_per_package: 1, hotel_settlement_price: 0, booking_mode: 'at_purchase', voucher_validity_days: 90, min_advance_days: 0, max_reschedules: 1, status: 'offline', locked: false })
   packageDialogVisible.value = true
 }
 const savePackage = async () => {
@@ -469,7 +518,7 @@ const savePackage = async () => {
   const product = packageTicketProducts.value.find(row => row.id === packageForm.product_id)
   const ticketSettlement = Number(product?.settlement_price || 0)
   if (ticketSettlement + packageForm.hotel_settlement_price > Number(product?.price || 0)) { ElMessage.warning('门票与酒店结算价之和不能高于套餐售价'); return }
-  const payload = { product_id: packageForm.product_id, hotel_id: selectedHotelId.value, room_type_id: packageForm.room_type_id, rate_plan_id: packageForm.rate_plan_id, nights: packageForm.nights, rooms_per_package: packageForm.rooms_per_package, hotel_settlement_price_cents: Math.round(packageForm.hotel_settlement_price * 100), status: packageForm.status }
+  const payload = { product_id: packageForm.product_id, hotel_id: selectedHotelId.value, room_type_id: packageForm.room_type_id, rate_plan_id: packageForm.rate_plan_id, nights: packageForm.nights, rooms_per_package: packageForm.rooms_per_package, hotel_settlement_price_cents: Math.round(packageForm.hotel_settlement_price * 100), booking_mode: packageForm.booking_mode, voucher_validity_days: packageForm.booking_mode === 'after_purchase' ? packageForm.voucher_validity_days : 0, min_advance_days: packageForm.booking_mode === 'after_purchase' ? packageForm.min_advance_days : 0, max_reschedules: packageForm.booking_mode === 'after_purchase' ? packageForm.max_reschedules : 0, status: packageForm.status }
   if (packageForm.id) await request.put(`/scenic-hotel-packages/${packageForm.id}`, payload); else await request.post('/scenic-hotel-packages', payload)
   packageDialogVisible.value = false; ElMessage.success('酒景套餐已保存'); await loadPackageWorkspace()
 }
@@ -503,6 +552,8 @@ const money = (cents: number) => (Number(cents || 0) / 100).toFixed(2)
 const shortDate = (value: string) => String(value || '').slice(0, 10)
 const reservationStatusText = (status: string) => ({ reserved: '待支付', confirmed: '待入住', checked_in: '已入住', checked_out: '已离店', no_show: '未到店', cancelled: '已取消', refunded: '已退款' } as Record<string, string>)[status] || status
 const reservationStatusType = (status: string) => ({ reserved: 'warning', confirmed: 'primary', checked_in: 'success', checked_out: 'info', no_show: 'warning', cancelled: 'info', refunded: 'danger' } as Record<string, string>)[status] || 'info'
+const entitlementStatusText = (status: string) => ({ pending_booking: '待预约', booked: '已预约', cancelled: '已关闭', refunded: '已退款', expired: '已过期' } as Record<string, string>)[status] || status
+const entitlementStatusType = (status: string) => ({ pending_booking: 'warning', booked: 'success', cancelled: 'info', refunded: 'danger', expired: 'info' } as Record<string, string>)[status] || 'info'
 
 onMounted(loadHotels)
 </script>

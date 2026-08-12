@@ -135,6 +135,92 @@ func (c *MiniappController) GetOrder(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, result)
 }
 
+func (c *MiniappController) BookPackage(ctx *gin.Context) {
+	customer, err := c.authenticate(ctx)
+	if err != nil {
+		return
+	}
+	var body service.MiniappPackageBookingInput
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "请填写完整的预约信息"})
+		return
+	}
+	result, err := c.Service.BookXiaohongshuPackage(ctx.Request.Context(), customer, ctx.Param("orderNo"), body)
+	if err != nil {
+		status := http.StatusConflict
+		message := miniappPackageBookingError(err)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, service.ErrMiniappUnavailable) {
+			status = http.StatusServiceUnavailable
+		} else {
+			var platformError *xiaohongshu.APIError
+			if errors.As(err, &platformError) {
+				status = http.StatusBadGateway
+				message = "小红书预约服务暂时不可用，请稍后重试"
+			}
+		}
+		ctx.JSON(status, gin.H{"error": message})
+		return
+	}
+	ctx.JSON(http.StatusOK, result)
+}
+
+func (c *MiniappController) CancelPackageBooking(ctx *gin.Context) {
+	customer, err := c.authenticate(ctx)
+	if err != nil {
+		return
+	}
+	result, err := c.Service.CancelXiaohongshuPackageBooking(ctx.Request.Context(), customer, ctx.Param("orderNo"), ctx.Param("entitlementNo"))
+	if err != nil {
+		status := http.StatusConflict
+		message := miniappPackageBookingError(err)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, service.ErrMiniappUnavailable) {
+			status = http.StatusServiceUnavailable
+		} else {
+			var platformError *xiaohongshu.APIError
+			if errors.As(err, &platformError) {
+				status = http.StatusBadGateway
+				message = "小红书预约服务暂时不可用，请稍后重试"
+			}
+		}
+		ctx.JSON(status, gin.H{"error": message})
+		return
+	}
+	ctx.JSON(http.StatusOK, result)
+}
+
+func miniappPackageBookingError(err error) string {
+	if err == nil {
+		return "预约失败，请稍后重试"
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return "订单或套餐预约权益不存在"
+	case errors.Is(err, service.ErrMiniappUnavailable):
+		return "小程序服务暂时不可用，请稍后重试"
+	case strings.Contains(message, "validity") || strings.Contains(message, "expired"):
+		return "该套餐已超过预约有效期"
+	case strings.Contains(message, "advance"):
+		return "所选日期不满足提前预约要求"
+	case strings.Contains(message, "hotel inventory") || strings.Contains(message, "hotel rooms"):
+		return "所选日期房量不足或尚未开放"
+	case strings.Contains(message, "stock"):
+		return "所选日期门票库存不足"
+	case strings.Contains(message, "reschedule"):
+		return "该套餐已达到允许改约次数"
+	case strings.Contains(message, "pending refund"):
+		return "该套餐正在退款，暂不能预约或改约"
+	case strings.Contains(message, "bookable") || strings.Contains(message, "awaiting booking"):
+		return "该套餐当前不可预约"
+	default:
+		return "预约处理失败，请稍后重试或联系景区客服"
+	}
+}
+
 func (c *MiniappController) authenticate(ctx *gin.Context) (*model.MiniappCustomer, error) {
 	token := bearerToken(ctx.GetHeader("Authorization"))
 	customer, err := c.Service.Authenticate(token)

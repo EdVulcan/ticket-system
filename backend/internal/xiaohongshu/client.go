@@ -218,6 +218,46 @@ type BookDetail struct {
 	Status  int    `json:"book_status"`
 }
 
+type PresaleBookRequest struct {
+	ProductType       int             `json:"product_type"`
+	OpenID            string          `json:"open_id"`
+	ExternalOrderID   string          `json:"out_order_id"`
+	ExternalProductID string          `json:"out_product_id"`
+	ExternalSKUID     string          `json:"out_sku_id"`
+	POIID             string          `json:"poi_id,omitempty"`
+	BookInfo          PresaleBookInfo `json:"book_info"`
+	Path              string          `json:"path,omitempty"`
+}
+
+type PresaleBookInfo struct {
+	ExternalBookOrderID string              `json:"out_book_order_id"`
+	TotalPrice          int64               `json:"total_price"`
+	Details             []PresaleBookDetail `json:"book_detail"`
+}
+
+type PresaleBookDetail struct {
+	VoucherCode  string `json:"voucher_code"`
+	Price        int64  `json:"price"`
+	CheckInDate  string `json:"check_in_date"`
+	CheckOutDate string `json:"check_out_date"`
+}
+
+type PresaleBookResult struct {
+	BookID      string `json:"book_id"`
+	VoucherCode string `json:"voucher_code"`
+}
+
+type PresaleBookResponse struct {
+	ExternalOrderID string              `json:"out_order_id"`
+	Results         []PresaleBookResult `json:"book_result"`
+}
+
+type PresaleBookStatusRequest struct {
+	ExternalBookOrderID string   `json:"out_book_order_id"`
+	BookIDs             []string `json:"book_id_list"`
+	Status              int      `json:"status"`
+}
+
 type GuaranteeOrderResponse struct {
 	OrderID     string         `json:"order_id"`
 	PayAmount   int64          `json:"pay_amount"`
@@ -346,6 +386,52 @@ func (c *Client) VerifyVouchers(ctx context.Context, request VoucherVerifyReques
 		return nil, errors.New("xiaohongshu voucher response is missing verify_id")
 	}
 	return &response, nil
+}
+
+func (c *Client) BookPresaleVoucher(ctx context.Context, request PresaleBookRequest) (*PresaleBookResponse, error) {
+	if request.ProductType != ProductTypePresaleVoucher || strings.TrimSpace(request.OpenID) == "" ||
+		strings.TrimSpace(request.ExternalOrderID) == "" || strings.TrimSpace(request.ExternalProductID) == "" ||
+		strings.TrimSpace(request.ExternalSKUID) == "" || strings.TrimSpace(request.BookInfo.ExternalBookOrderID) == "" ||
+		len(request.BookInfo.Details) == 0 {
+		return nil, errors.New("xiaohongshu presale booking request is incomplete")
+	}
+	for _, detail := range request.BookInfo.Details {
+		if strings.TrimSpace(detail.VoucherCode) == "" || detail.Price < 0 {
+			return nil, errors.New("xiaohongshu presale booking voucher is invalid")
+		}
+		if _, err := time.Parse("2006-01-02", detail.CheckInDate); err != nil {
+			return nil, errors.New("xiaohongshu presale booking check-in date is invalid")
+		}
+		if _, err := time.Parse("2006-01-02", detail.CheckOutDate); err != nil {
+			return nil, errors.New("xiaohongshu presale booking check-out date is invalid")
+		}
+	}
+	var response PresaleBookResponse
+	if err := c.authenticatedPost(ctx, "/api/rmp/component/deal/pre_sale/book", request, &response); err != nil {
+		return nil, err
+	}
+	if len(response.Results) != len(request.BookInfo.Details) {
+		return nil, errors.New("xiaohongshu presale booking response is incomplete")
+	}
+	for _, result := range response.Results {
+		if strings.TrimSpace(result.BookID) == "" {
+			return nil, errors.New("xiaohongshu presale booking response is missing book_id")
+		}
+	}
+	return &response, nil
+}
+
+func (c *Client) SyncPresaleBookStatus(ctx context.Context, request PresaleBookStatusRequest) error {
+	if strings.TrimSpace(request.ExternalBookOrderID) == "" || len(request.BookIDs) == 0 || request.Status < 1 || request.Status > 4 {
+		return errors.New("xiaohongshu presale booking status request is invalid")
+	}
+	for _, id := range request.BookIDs {
+		if strings.TrimSpace(id) == "" {
+			return errors.New("xiaohongshu presale booking book_id is required")
+		}
+	}
+	var response struct{}
+	return c.authenticatedPost(ctx, "/api/rmp/component/deal/pre_sale/sync_status", request, &response)
 }
 
 func validateProduct(request LocalLifeProductRequest) error {

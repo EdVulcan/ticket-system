@@ -145,6 +145,125 @@ func TestScenicHotelPackageOrderPaymentAndPartialRefund(t *testing.T) {
 	}
 }
 
+func TestDeferredScenicHotelPackageBooksAndReleasesOneEntitlement(t *testing.T) {
+	resetBusinessData(t)
+	fixture := seedScenicHotelPackage(t, 2)
+	input := ScenicHotelPackageInput{
+		ProductID: fixture.productID, HotelID: fixture.hotel.ID, RoomTypeID: fixture.room.ID,
+		RatePlanID: fixture.rate.ID, Nights: 2, RoomsPerPackage: 1,
+		HotelSettlementPriceCents: 30000, BookingMode: "after_purchase",
+		VoucherValidityDays: 90, MinAdvanceDays: 1, MaxReschedules: 1, Status: "online",
+	}
+	if err := (&ScenicHotelPackageService{}).Update(fixture.tenantID, fixture.packageView.ID, 1, input); err != nil {
+		t.Fatal(err)
+	}
+
+	order := model.Order{TenantID: fixture.tenantID, Channel: "online", Items: []model.OrderItem{{ProductID: fixture.productID, Quantity: 2}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	var entitlements []model.ScenicHotelPackageEntitlement
+	if err := model.DB.Where("order_id = ?", order.ID).Order("id ASC").Find(&entitlements).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(entitlements) != 2 || entitlements[0].Status != "pending_booking" || entitlements[1].Status != "pending_booking" {
+		t.Fatalf("deferred entitlements=%+v", entitlements)
+	}
+	var tickets []model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).Order("id ASC").Find(&tickets).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(tickets) != 2 || tickets[0].Status != "pending_booking" || tickets[1].Status != "pending_booking" {
+		t.Fatalf("deferred tickets=%+v", tickets)
+	}
+	for _, row := range loadPackageInventory(t, fixture) {
+		if row.Reserved != 0 || row.Sold != 0 {
+			t.Fatalf("purchase unexpectedly occupied dated hotel inventory: %+v", row)
+		}
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, fixture.tenantID); err != nil {
+		t.Fatal(err)
+	}
+
+	err := model.Write(func(tx *gorm.DB) error {
+		_, err := (PackageFulfillmentLifecycle{}).BookEntitlementTx(tx, PackageEntitlementBookingInput{
+			EntitlementNo: entitlements[0].EntitlementNo, CheckInDate: fixture.checkIn,
+			GuestName: "预约游客", ContactPhone: "13800138000", ClientRequestID: "booking-1",
+		})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var booked model.ScenicHotelPackageEntitlement
+	if err := model.DB.Where("id = ?", entitlements[0].ID).First(&booked).Error; err != nil {
+		t.Fatal(err)
+	}
+	if booked.Status != "booked" || booked.ReservationID == 0 || booked.RescheduleCount != 0 {
+		t.Fatalf("booked entitlement=%+v", booked)
+	}
+	var bookedTicket model.Ticket
+	if err := model.DB.First(&bookedTicket, booked.TicketID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if bookedTicket.Status != "unused" || bookedTicket.VisitorName != "预约游客" || bookedTicket.VisitorPhone != "13800138000" {
+		t.Fatalf("booked ticket=%+v", bookedTicket)
+	}
+	for _, row := range loadPackageInventory(t, fixture) {
+		if row.Reserved != 0 || row.Sold != 1 {
+			t.Fatalf("booked inventory=%+v", row)
+		}
+	}
+
+	if err := model.Write(func(tx *gorm.DB) error {
+		_, err := (PackageFulfillmentLifecycle{}).CancelEntitlementBookingTx(tx, booked.EntitlementNo)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.First(&booked, booked.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if booked.Status != "pending_booking" || booked.ReservationID != 0 || booked.BookingCancelledAt == nil {
+		t.Fatalf("cancelled booking entitlement=%+v", booked)
+	}
+	if err := model.DB.First(&bookedTicket, bookedTicket.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if bookedTicket.Status != "pending_booking" || bookedTicket.VisitorName != "" || bookedTicket.VisitorPhone != "" {
+		t.Fatalf("cancelled booking ticket=%+v", bookedTicket)
+	}
+	for _, row := range loadPackageInventory(t, fixture) {
+		if row.Reserved != 0 || row.Sold != 0 {
+			t.Fatalf("cancelled booking inventory=%+v", row)
+		}
+	}
+
+	err = model.Write(func(tx *gorm.DB) error {
+		_, err := (PackageFulfillmentLifecycle{}).BookEntitlementTx(tx, PackageEntitlementBookingInput{
+			EntitlementNo: booked.EntitlementNo, CheckInDate: fixture.checkIn,
+			GuestName: "重约游客", ContactPhone: "13900139000", ClientRequestID: "booking-2",
+		})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.First(&booked, booked.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if booked.Status != "booked" || booked.RescheduleCount != 1 {
+		t.Fatalf("rebooked entitlement=%+v", booked)
+	}
+	err = model.Write(func(tx *gorm.DB) error {
+		_, err := (PackageFulfillmentLifecycle{}).CancelEntitlementBookingTx(tx, booked.EntitlementNo)
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "no remaining reschedule") {
+		t.Fatalf("cancel beyond reschedule limit error=%v", err)
+	}
+}
+
 func TestScenicHotelPackageBusinessSummaryUsesSaleTimeTicketSettlementForCtrip(t *testing.T) {
 	resetBusinessData(t)
 	fixture := seedScenicHotelPackage(t, 1)

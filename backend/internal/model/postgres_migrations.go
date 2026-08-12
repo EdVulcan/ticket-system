@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 82
+const CurrentPostgresSchemaVersion = 83
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -36,7 +36,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	models := []interface{}{
 		&SchemaMigration{},
-		&Tenant{}, &TenantCapability{}, &SupplierBusinessType{}, &ScenicArea{}, &HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRoomInventory{}, &ScenicHotelPackage{}, &HotelReservation{}, &PlatformUser{}, &User{}, &Staff{},
+		&Tenant{}, &TenantCapability{}, &SupplierBusinessType{}, &ScenicArea{}, &HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRoomInventory{}, &ScenicHotelPackage{}, &ScenicHotelPackageEntitlement{}, &HotelReservation{}, &PlatformUser{}, &User{}, &Staff{},
 		&CheckPoint{}, &Device{}, &TicketRule{}, &RuleGroup{}, &RuleItem{},
 		&Product{}, &ProductRevision{}, &ProductOffer{}, &SellerListing{}, &ProductInventory{},
 		&BundleProduct{}, &BundleVersion{}, &BundleComponent{},
@@ -63,6 +63,17 @@ func runPostgresMigrations(db *gorm.DB) error {
 				CHECK (status IN ('reserved','confirmed','checked_in','checked_out','no_show','cancelled','refunded'))
 		`).Error; err != nil {
 			return fmt.Errorf("expand hotel reservation fulfillment states: %w", err)
+		}
+	}
+	if previousSchemaVersion > 0 && previousSchemaVersion < 83 {
+		if err := db.Exec(`
+			DROP INDEX IF EXISTS idx_hotel_reservations_ticket_id;
+			CREATE INDEX IF NOT EXISTS idx_hotel_reservations_ticket_id ON hotel_reservations(ticket_id);
+			UPDATE scenic_hotel_packages
+			SET voucher_validity_days = 0, min_advance_days = 0, max_reschedules = 0
+			WHERE booking_mode = 'at_purchase';
+		`).Error; err != nil {
+			return fmt.Errorf("allow package booking history per ticket: %w", err)
 		}
 	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
@@ -213,7 +224,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "hotel catalog inventory and fixed scenic hotel packages",
+		Name:      "book-after-purchase scenic hotel package entitlements",
 		AppliedAt: time.Now(),
 	}).Error
 }

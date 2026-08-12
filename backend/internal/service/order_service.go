@@ -137,6 +137,7 @@ func (s *OrderService) Create(req *model.Order) error {
 		req.ExpiresAt = &expiresAt
 		policyContext := newSalePolicyContext()
 		hotelPackageFacts := make(map[int]*scenicHotelPackageFacts)
+		deferredHotelPackageFacts := make(map[int]*scenicHotelPackageFacts)
 
 		for i := range req.Items {
 			item := &req.Items[i]
@@ -157,7 +158,7 @@ func (s *OrderService) Create(req *model.Order) error {
 			if err != nil {
 				return fmt.Errorf("product %s: %w", listing.Name, err)
 			}
-			if packageFacts != nil && (strings.TrimSpace(req.ContactName) == "" || strings.TrimSpace(req.ContactPhone) == "") {
+			if packageFacts != nil && packageFacts.Package.BookingMode != "after_purchase" && (strings.TrimSpace(req.ContactName) == "" || strings.TrimSpace(req.ContactPhone) == "") {
 				return fmt.Errorf("product %s: hotel guest name and contact phone are required", listing.Name)
 			}
 			listingForResolution := listing
@@ -235,6 +236,10 @@ func (s *OrderService) Create(req *model.Order) error {
 			item.ProductOfferID = listing.ProductOfferID
 			item.ProductRevisionID = revision.ID
 			item.CommissionBPS = fulfillment.ResolvedCommissionBPS
+			deferredPackage := packageFacts != nil && packageFacts.Package.BookingMode == "after_purchase"
+			if deferredPackage && fulfillment.StockType == "daily" {
+				item.ReservedStockType = "voucher_daily"
+			}
 			if err := applyValidity(item, fulfillment); err != nil {
 				return fmt.Errorf("%s: %w", listing.Name, err)
 			}
@@ -253,14 +258,16 @@ func (s *OrderService) Create(req *model.Order) error {
 			}
 			if channelReservation == nil {
 				if req.Environment == "production" {
-					if err := reserveStock(tx, fulfillment, item.UseDate, item.StockSlot, item.Quantity); err != nil {
+					if err := reserveStock(tx, stockProductForReservation(fulfillment, item.ReservedStockType), item.UseDate, item.StockSlot, item.Quantity); err != nil {
 						return err
 					}
-					if packageFacts != nil {
+					if packageFacts != nil && !deferredPackage {
 						if err := (PackageFulfillmentLifecycle{}).Reserve(tx, packageFacts, fulfillment, item.Quantity, *item.UseDate); err != nil {
 							return err
 						}
 						hotelPackageFacts[i] = packageFacts
+					} else if deferredPackage {
+						deferredHotelPackageFacts[i] = packageFacts
 					}
 				}
 			} else {
@@ -277,6 +284,11 @@ func (s *OrderService) Create(req *model.Order) error {
 			if err := assignTicketVisitors(item); err != nil {
 				return fmt.Errorf("%s: %w", listing.Name, err)
 			}
+			if deferredPackage {
+				for ticketIndex := range item.Tickets {
+					item.Tickets[ticketIndex].Status = "pending_booking"
+				}
+			}
 			for ticketIndex := range item.Tickets {
 				if len(item.Visitors) == 0 {
 					item.Tickets[ticketIndex].VisitorName = item.VisitorName
@@ -292,6 +304,11 @@ func (s *OrderService) Create(req *model.Order) error {
 		}
 		for itemIndex, facts := range hotelPackageFacts {
 			if err := (PackageFulfillmentLifecycle{}).CreateReservations(tx, req, &req.Items[itemIndex], facts); err != nil {
+				return err
+			}
+		}
+		for itemIndex, facts := range deferredHotelPackageFacts {
+			if err := (PackageFulfillmentLifecycle{}).CreateEntitlements(tx, req, &req.Items[itemIndex], facts); err != nil {
 				return err
 			}
 		}
@@ -624,7 +641,7 @@ func applyValidity(item *model.OrderItem, product *model.Product) error {
 		return fmt.Errorf("invalid validity type")
 	}
 
-	if product.StockType == "daily" && item.UseDate == nil {
+	if product.StockType == "daily" && item.UseDate == nil && item.ReservedStockType != "voucher_daily" {
 		return fmt.Errorf("visit date is required for daily stock")
 	}
 	return nil
@@ -636,7 +653,7 @@ func startOfDay(value time.Time) time.Time {
 
 func reserveStock(tx *gorm.DB, product *model.Product, useDate *time.Time, stockSlot string, quantity int) error {
 	switch product.StockType {
-	case "", "unlimited":
+	case "", "unlimited", "voucher_daily":
 		return nil
 	case "total":
 		result := tx.Model(&model.Product{}).
@@ -682,7 +699,7 @@ func reserveStock(tx *gorm.DB, product *model.Product, useDate *time.Time, stock
 
 func releaseStock(tx *gorm.DB, product *model.Product, useDate *time.Time, stockSlot string, quantity int) error {
 	switch product.StockType {
-	case "", "unlimited":
+	case "", "unlimited", "voucher_daily":
 		return nil
 	case "total":
 		return tx.Unscoped().Model(&model.Product{}).Where("id = ?", product.ID).
@@ -704,6 +721,10 @@ func releaseStock(tx *gorm.DB, product *model.Product, useDate *time.Time, stock
 	default:
 		return fmt.Errorf("invalid stock type for %s", product.Name)
 	}
+}
+
+func stockProductForReservation(product *model.Product, reservedStockType string) *model.Product {
+	return stockProductForRelease(product, reservedStockType)
 }
 
 func stockProductForRelease(product *model.Product, reservedStockType string) *model.Product {
