@@ -75,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, CircleCheck, Close, Promotion, Refresh, Right } from '@element-plus/icons-vue'
 import request from '@/utils/request'
@@ -154,8 +154,6 @@ const resetPlan = () => {
   idempotencyKey.value = newKey()
 }
 
-watch(open, value => { if (value) void loadStatus() })
-onMounted(() => { void loadStatus() })
 </script>
 
 <style scoped>
