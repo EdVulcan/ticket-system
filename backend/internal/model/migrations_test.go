@@ -33,6 +33,8 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRoomInventory{},
 		&ScenicHotelPackage{}, &ScenicHotelPackageEntitlement{}, &HotelReservation{},
 		&XiaohongshuBookingOperation{}, &XiaohongshuOrderOperation{},
+		&CatalogBatchChangePlan{}, &CatalogBatchChangeLine{},
+		&PlatformAIConfig{}, &AIUsageMonth{},
 	} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("table for %T is missing", table)
@@ -105,6 +107,108 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		VALUES (?, 'scenic', 'pending', NOW(), NOW())
 	`, defaultStatusTenant.ID).Error; err == nil {
 		t.Fatal("database accepted unsupported supplier business status")
+	}
+}
+
+func TestPostgresSchema87CatalogBatchChangeOwnershipGuards(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if CurrentPostgresSchemaVersion < 87 {
+		t.Fatalf("current schema version=%d, want at least 87", CurrentPostgresSchemaVersion)
+	}
+	first := Tenant{Name: "Catalog Batch Guard A", SystemCode: "CATALOG-BATCH-GUARD-A", SecretKey: "a", Status: "active"}
+	second := Tenant{Name: "Catalog Batch Guard B", SystemCode: "CATALOG-BATCH-GUARD-B", SecretKey: "b", Status: "active"}
+	if err := db.Create(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	area := ScenicArea{TenantID: first.ID, Code: "CATALOG-BATCH-GUARD-SCENIC", Name: "Catalog Batch Guard Scenic", Status: "active"}
+	if err := db.Create(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	rule := TicketRule{TenantID: first.ID, Name: "Catalog Batch Guard Rule", ValidityType: "date"}
+	if err := db.Create(&rule).Error; err != nil {
+		t.Fatal(err)
+	}
+	product := Product{TenantID: first.ID, ScenicAreaID: area.ID, RuleID: rule.ID, Name: "Catalog Batch Guard Product", Type: "online", Status: "online", CodeMode: "ticket", ValidityType: "date", StockType: "unlimited", GateVoiceCode: "welcome"}
+	if err := db.Create(&product).Error; err != nil {
+		t.Fatal(err)
+	}
+	revision := ProductRevision{ProductID: product.ID, TenantID: first.ID, ScenicAreaID: area.ID, Version: 1, Status: "active", SnapshotJSON: "{}", EffectiveFrom: time.Now()}
+	if err := db.Create(&revision).Error; err != nil {
+		t.Fatal(err)
+	}
+	plan := CatalogBatchChangePlan{TenantID: first.ID, ActorRole: "admin", InputText: "guard", OperationJSON: "{}", PlanHash: strings.Repeat("a", 64), IdempotencyKey: "CATALOG-GUARD-KEY", Status: "previewed", PreviewJSON: "{}", ExpiresAt: time.Now().Add(time.Hour)}
+	if err := db.Create(&plan).Error; err != nil {
+		t.Fatal(err)
+	}
+	validLine := CatalogBatchChangeLine{PlanID: plan.ID, TenantID: first.ID, ProductID: product.ID, ProductName: product.Name, ScenicAreaID: area.ID, BeforeRevisionID: revision.ID, BeforeJSON: "{}", AfterJSON: "{}", Status: "pending"}
+	if err := db.Create(&validLine).Error; err != nil {
+		t.Fatal(err)
+	}
+	crossTenantLine := validLine
+	crossTenantLine.ID = 0
+	crossTenantLine.TenantID = second.ID
+	if err := db.Create(&crossTenantLine).Error; err == nil {
+		t.Fatal("cross-tenant catalog batch line was accepted")
+	}
+	crossProductLine := validLine
+	crossProductLine.ID = 0
+	crossProductLine.ProductID = product.ID
+	crossProductLine.ScenicAreaID = area.ID + 999
+	if err := db.Create(&crossProductLine).Error; err == nil {
+		t.Fatal("catalog batch line with mismatched scenic area was accepted")
+	}
+	afterRevisionLine := validLine
+	afterRevisionLine.ID = 0
+	afterRevisionLine.Status = "applied"
+	afterRevisionLine.AfterRevisionID = revision.ID + 999
+	if err := db.Create(&afterRevisionLine).Error; err == nil {
+		t.Fatal("catalog batch line with mismatched after revision was accepted")
+	}
+}
+
+func TestPostgresSchema88AIUsageOwnershipGuard(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if CurrentPostgresSchemaVersion < 88 {
+		t.Fatalf("current schema version=%d, want at least 88", CurrentPostgresSchemaVersion)
+	}
+	first := Tenant{Name: "AI Usage Guard A", SystemCode: "AI-USAGE-GUARD-A", SecretKey: "a", Status: "active"}
+	second := Tenant{Name: "AI Usage Guard B", SystemCode: "AI-USAGE-GUARD-B", SecretKey: "b", Status: "active"}
+	if err := db.Create(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	valid := AIUsageMonth{TenantID: first.ID, Period: "2026-08", RequestCount: 1, TokenCount: 10}
+	if err := db.Create(&valid).Error; err != nil {
+		t.Fatal(err)
+	}
+	invalidTenant := valid
+	invalidTenant.ID = 0
+	invalidTenant.TenantID = second.ID + 999
+	if err := db.Create(&invalidTenant).Error; err == nil {
+		t.Fatal("AI usage row for an unknown tenant was accepted")
+	}
+	invalidPeriod := valid
+	invalidPeriod.ID = 0
+	invalidPeriod.Period = "202608"
+	if err := db.Create(&invalidPeriod).Error; err == nil {
+		t.Fatal("AI usage row with invalid period was accepted")
+	}
+	negativeUsage := valid
+	negativeUsage.ID = 0
+	negativeUsage.RequestCount = -1
+	if err := db.Create(&negativeUsage).Error; err == nil {
+		t.Fatal("AI usage row with negative request count was accepted")
 	}
 }
 

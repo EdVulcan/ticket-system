@@ -37,6 +37,12 @@ const router = createRouter({
             meta: { scope: 'platform', roles: ['platform_admin'], title: '平台账号' }
         },
         {
+            path: '/platform-ai',
+            name: 'platform-ai',
+            component: () => import('../views/PlatformAIConfigView.vue'),
+            meta: { scope: 'platform', roles: ['platform_admin'], title: 'AI 助手配置' }
+        },
+        {
             path: '/distribution',
             name: 'distribution',
             component: () => import('../views/DistributionView.vue'),
@@ -89,6 +95,12 @@ const router = createRouter({
             name: 'product',
             component: () => import('../views/ProductView.vue'),
             meta: { scope: 'tenant', permission: 'catalog.read', capability: 'supplier', supplierBusinessType: 'scenic', supplierBusinessTypeAllowSuspended: true, title: '线上门票' }
+        },
+        {
+            path: '/product/batch',
+            name: 'product-batch',
+            component: () => import('../views/CatalogBatchChangeView.vue'),
+            meta: { scope: 'tenant', permission: 'catalog.read', capability: 'supplier', supplierBusinessType: 'scenic', supplierBusinessTypeAllowSuspended: true, title: '批量规则操作' }
         },
         {
             path: '/product/offline',

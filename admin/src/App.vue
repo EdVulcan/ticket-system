@@ -121,6 +121,8 @@
 
     <RouterView v-else />
 
+    <AIAssistantBubble v-if="showAIAssistant" />
+
     <el-dialog v-model="passwordDialogVisible" title="修改登录密码" width="440px" append-to-body>
       <el-form label-position="top">
         <el-form-item label="当前密码"><el-input v-model="passwordForm.currentPassword" type="password" show-password autocomplete="current-password" /></el-form-item>
@@ -145,6 +147,7 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
+import AIAssistantBubble from '@/components/AIAssistantBubble.vue'
 import { hasPermission, tenantRoleLabel } from '@/utils/permissions'
 import {
   activeCapabilitySet,
@@ -178,6 +181,7 @@ const configuredSupplierBusinessTypes = computed(() => configuredSupplierBusines
 const hasSupplierBusinessType = (value: string) => activeSupplierBusinessTypes.value.has(value)
 const hasConfiguredSupplierBusinessType = (value: string) => configuredSupplierBusinessTypes.value.has(value)
 const can = (permission: string) => hasPermission(user.value, permission)
+const showAIAssistant = computed(() => !isLoginPage.value && !isSuperAdmin.value && hasCapability('supplier') && hasSupplierBusinessType('scenic') && can('catalog.write'))
 
 const navGroups = computed<NavGroup[]>(() => {
   const overview: NavGroup = { label: '概览', items: [{ path: '/', label: '控制台', icon: Odometer }] }
@@ -186,6 +190,7 @@ const navGroups = computed<NavGroup[]>(() => {
     if (user.value.role === 'platform_admin') {
       platformItems.push({ path: '/tenant', label: '商户开户管理', icon: OfficeBuilding })
       platformItems.push({ path: '/platform-users', label: '平台账号', icon: UserFilled })
+      platformItems.push({ path: '/platform-ai', label: 'AI 助手配置', icon: Setting })
     }
     platformItems.push({ path: '/platform-operations', label: '平台运营工作台', icon: Monitor })
     return [overview, { label: '平台管理', items: platformItems }]
@@ -216,6 +221,7 @@ const navGroups = computed<NavGroup[]>(() => {
   if (scenicSupplier && can('catalog.read')) operations.push({ path: '/policy', label: '政策知识库', icon: Reading })
   if (scenicSupplier && can('onsite.manage')) operations.push({ path: '/device', label: '终端设备', icon: Monitor })
   if (scenicSupplier && can('onsite.read')) operations.push({ path: '/checkpoint', label: '检票点位', icon: Location })
+  if (scenicSupplier && can('catalog.read')) operations.push({ path: '/product/batch', label: '批量规则操作', icon: Operation })
 
   const data: NavItem[] = []
   if ((scenicHistorySupplier || hasCapability('distributor')) && can('finance.read')) data.push({ path: '/finance', label: '财务报表', icon: Money })

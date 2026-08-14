@@ -195,10 +195,10 @@ func (s *ProductService) Update(id, tenantID uint, product *model.Product, rule 
 		}
 		if err := tx.Model(&model.ProductOffer{}).
 			Where("source_product_id = ? AND supplier_tenant_id = ? AND status = ? AND product_revision_id != ?", revised.ID, tenantID, "active", revised.CurrentRevisionID).
-			Update("status", "suspended").Error; err != nil {
+			Update("product_revision_id", revised.CurrentRevisionID).Error; err != nil {
 			return err
 		}
-		return syncListingsForSourceProductTx(tx, tenantID, revised.ID, 0, "supplier product revision changed")
+		return syncListingsForSourceProductTx(tx, tenantID, revised.ID, 0, "supplier product revision changed; active offers follow the new rule revision")
 	})
 }
 

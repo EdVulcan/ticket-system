@@ -62,6 +62,13 @@ func InitRouter(r *gin.Engine) {
 	platformUserGroup.PUT("/:id/password", platformUserController.ResetPassword)
 	platformUserGroup.DELETE("/:id", platformUserController.Delete)
 
+	platformAIController := &api.PlatformAIController{Service: service.PlatformAIService{}}
+	platformAIGroup := protected.Group("/platform/ai-config")
+	platformAIGroup.Use(middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"))
+	platformAIGroup.GET("", platformAIController.GetConfig)
+	platformAIGroup.PUT("", platformAIController.SaveConfig)
+	platformAIGroup.POST("/test", platformAIController.TestConfig)
+
 	// Tenant Routes
 	tenantController := &api.TenantController{}
 	tenantGroup := protected.Group("/tenants")
@@ -144,6 +151,19 @@ func InitRouter(r *gin.Engine) {
 		productGroup.GET("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogRead), productController.Get)
 		productGroup.DELETE("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), productController.Delete)
 		productGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), productController.UpdateStatus)
+	}
+
+	// Catalog batch changes are supplier-owned, approval-gated rule operations.
+	// They never accept distributor listing fields or client-controlled tenant IDs.
+	catalogBatchController := &api.CatalogBatchChangeController{}
+	catalogBatchGroup := protected.Group("/catalog/batch-changes")
+	catalogBatchGroup.Use(middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
+	{
+		catalogBatchGroup.POST("/preview", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), catalogBatchController.Preview)
+		catalogBatchGroup.GET("/ai-status", middleware.RequireTenantPermission(authz.PermissionCatalogRead), catalogBatchController.AIStatus)
+		catalogBatchGroup.POST("/ai-preview", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), catalogBatchController.AIPreview)
+		catalogBatchGroup.GET("/:planID", middleware.RequireTenantPermission(authz.PermissionCatalogRead), catalogBatchController.Get)
+		catalogBatchGroup.POST("/:planID/confirm", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), catalogBatchController.Confirm)
 	}
 
 	orderController := &api.OrderController{}
