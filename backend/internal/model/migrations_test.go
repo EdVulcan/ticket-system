@@ -35,6 +35,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&XiaohongshuBookingOperation{}, &XiaohongshuOrderOperation{},
 		&CatalogBatchChangePlan{}, &CatalogBatchChangeLine{},
 		&PlatformAIConfig{}, &AIUsageMonth{},
+		&AgentTask{},
 	} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("table for %T is missing", table)
@@ -107,6 +108,49 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		VALUES (?, 'scenic', 'pending', NOW(), NOW())
 	`, defaultStatusTenant.ID).Error; err == nil {
 		t.Fatal("database accepted unsupported supplier business status")
+	}
+}
+
+func TestPostgresSchema89AgentTaskOwnershipGuard(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if CurrentPostgresSchemaVersion < 89 {
+		t.Fatalf("current schema version=%d, want at least 89", CurrentPostgresSchemaVersion)
+	}
+	first := Tenant{Name: "Agent Task Guard A", SystemCode: "AGENT-TASK-GUARD-A", SecretKey: "a", Status: "active"}
+	second := Tenant{Name: "Agent Task Guard B", SystemCode: "AGENT-TASK-GUARD-B", SecretKey: "b", Status: "active"}
+	if err := db.Create(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	valid := AgentTask{TenantID: first.ID, ActorUserID: 1, ActorRole: "admin", OperationType: "ticket_product_create", State: "collecting", InputText: "创建成人票", ContextJSON: `{}`, MissingJSON: `[]`, IdempotencyKey: "agent-task-guard-key", Version: 1, ExpiresAt: time.Now().Add(time.Hour)}
+	if err := db.Create(&valid).Error; err != nil {
+		t.Fatal(err)
+	}
+	unknownTenant := valid
+	unknownTenant.ID = 0
+	unknownTenant.TenantID = second.ID + 999
+	unknownTenant.IdempotencyKey = "agent-task-guard-unknown"
+	if err := db.Create(&unknownTenant).Error; err == nil {
+		t.Fatal("agent task for unknown tenant was accepted")
+	}
+	invalidState := valid
+	invalidState.ID = 0
+	invalidState.State = "running"
+	invalidState.IdempotencyKey = "agent-task-guard-state"
+	if err := db.Create(&invalidState).Error; err == nil {
+		t.Fatal("agent task with invalid state was accepted")
+	}
+	invalidOperation := valid
+	invalidOperation.ID = 0
+	invalidOperation.OperationType = "delete_everything"
+	invalidOperation.IdempotencyKey = "agent-task-guard-operation"
+	if err := db.Create(&invalidOperation).Error; err == nil {
+		t.Fatal("agent task with invalid operation was accepted")
 	}
 }
 

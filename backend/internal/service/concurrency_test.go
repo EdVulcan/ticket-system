@@ -70,7 +70,7 @@ func resetBusinessData(t *testing.T) {
 	t.Helper()
 	err := model.Write(func(tx *gorm.DB) error {
 		for _, table := range []interface{}{
-			&model.CatalogBatchChangeLine{}, &model.CatalogBatchChangePlan{},
+			&model.AgentTask{}, &model.CatalogBatchChangeLine{}, &model.CatalogBatchChangePlan{},
 			&model.AIUsageMonth{}, &model.PlatformAIConfig{},
 			&model.XiaohongshuOrderOperation{}, &model.XiaohongshuBookingOperation{}, &model.ScenicHotelPackageEntitlement{}, &model.HotelReservation{}, &model.ScenicHotelPackage{}, &model.HotelRoomInventory{}, &model.HotelRatePlan{}, &model.HotelRoomType{}, &model.HotelProperty{},
 			&model.StaffResourceScope{}, &model.User{}, &model.Staff{},

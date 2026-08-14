@@ -21,52 +21,78 @@
         </el-alert>
         <el-alert v-if="errorMessage" type="error" :closable="false" show-icon>{{ errorMessage }}</el-alert>
 
-        <template v-if="!preview">
+        <template v-if="!task?.preview">
           <el-input
             v-model="inputText"
             type="textarea"
             :rows="5"
             maxlength="2000"
             show-word-limit
-            placeholder="例如：给成人票和儿童票增加北门检票点，每个点最多核销 2 次"
+            :placeholder="task ? '继续补充缺失信息，例如：售价 120 元，结算价 80 元' : '例如：创建一个成人票，售价 120 元，结算价 80 元，使用北门检票点'"
             :disabled="loading || (availability && !availability.enabled)"
-            @keyup.ctrl.enter="generatePreview"
+            @keyup.ctrl.enter="submitInput"
           />
-          <div class="assistant-hint">AI 只生成批量票规预览，确认前不会修改数据。</div>
+          <div v-if="task?.missing_fields?.length" class="missing-list">
+            <div v-for="field in task.missing_fields" :key="field.field" class="missing-item">
+              <strong>{{ field.label }}</strong><span>{{ field.question }}</span>
+              <small v-if="field.options?.length">可选：{{ field.options.join('、') }}</small>
+            </div>
+          </div>
+          <div class="assistant-hint">确认前不会修改票种、规则或分销数据。</div>
           <div class="assistant-actions">
             <span v-if="availability" class="quota-copy">本月剩余 {{ availability.requests_remaining }} 次请求</span>
-            <el-button type="primary" :icon="Promotion" :loading="loading" :disabled="!inputText.trim() || (availability && !availability.enabled)" @click="generatePreview">生成预览</el-button>
+            <el-button type="primary" :icon="Promotion" :loading="loading" :disabled="!inputText.trim() || (availability && !availability.enabled)" @click="submitInput">{{ task ? '继续处理' : '生成计划' }}</el-button>
           </div>
         </template>
 
         <template v-else>
           <div class="preview-meta">
-            <span>{{ providerLabel }} · 计划 #{{ preview.plan_id }}</span>
-            <el-tag size="small" :type="preview.can_confirm ? 'warning' : 'info'" effect="plain">{{ statusText(preview.status) }}</el-tag>
+            <span>{{ providerLabel }} · 任务 #{{ task.task_id }}</span>
+            <el-tag size="small" :type="task.can_confirm ? 'warning' : 'info'" effect="plain">{{ statusText(task.state) }}</el-tag>
           </div>
-          <p class="original-request">“{{ preview.input_text }}”</p>
-          <div class="operation-summary">
-            <div><span>规范化操作</span><strong>{{ preview.operations?.length || 0 }} 项</strong></div>
-            <div><span>影响票种</span><strong>{{ preview.lines?.length || 0 }} 个</strong></div>
-          </div>
-          <div class="diff-list">
-            <article v-for="line in preview.lines" :key="line.line_id" class="diff-row">
-              <div class="diff-heading">
-                <strong>{{ line.product_name }}</strong>
-                <span>版本 {{ line.before_revision_id }}<template v-if="line.after_revision_id"> → {{ line.after_revision_id }}</template></span>
+          <p class="original-request">“{{ task.input_text }}”</p>
+          <template v-if="isProductPreview">
+            <div class="product-summary">
+              <div><span>票种名称</span><strong>{{ productPreview.product?.name }}</strong></div>
+              <div><span>所属景区</span><strong>{{ productPreview.scenic_area_name || '-' }}</strong></div>
+              <div><span>售价 / 结算价</span><strong>{{ money(productPreview.product?.price) }} / {{ money(productPreview.product?.settlement_price) }}</strong></div>
+              <div><span>上线与分销</span><strong>离线 · 不分销</strong></div>
+            </div>
+            <div class="rule-preview">
+              <div class="diff-heading"><strong>检票规则</strong><span>{{ productPreview.rule?.validity_type || 'date' }}</span></div>
+              <div v-for="group in productPreview.rule_groups || []" :key="group.group_name" class="rule-group">
+                <span>{{ group.group_name || '默认分组' }}</span>
+                <code>{{ ruleItems(group) }}</code>
               </div>
-              <div class="diff-values">
-                <div><small>变更前</small><code>{{ compactRule(line.before_json) }}</code></div>
-                <el-icon><Right /></el-icon>
-                <div><small>变更后</small><code>{{ compactRule(line.after_json) }}</code></div>
-              </div>
-              <p v-if="line.error_message" class="line-error">{{ line.error_message }}</p>
-            </article>
-          </div>
-          <div class="assistant-hint">确认后由服务端重新加锁并校验计划哈希；过期或有变化会拒绝执行。</div>
+            </div>
+            <ul v-if="productPreview.assumptions?.length" class="assumption-list">
+              <li v-for="assumption in productPreview.assumptions" :key="assumption">{{ assumption }}</li>
+            </ul>
+          </template>
+          <template v-else>
+            <div class="operation-summary">
+              <div><span>规范化操作</span><strong>{{ preview.operations?.length || 0 }} 项</strong></div>
+              <div><span>影响票种</span><strong>{{ preview.lines?.length || 0 }} 个</strong></div>
+            </div>
+            <div class="diff-list">
+              <article v-for="line in preview.lines" :key="line.line_id" class="diff-row">
+                <div class="diff-heading">
+                  <strong>{{ line.product_name }}</strong>
+                  <span>版本 {{ line.before_revision_id }}<template v-if="line.after_revision_id"> → {{ line.after_revision_id }}</template></span>
+                </div>
+                <div class="diff-values">
+                  <div><small>变更前</small><code>{{ compactRule(line.before_json) }}</code></div>
+                  <el-icon><Right /></el-icon>
+                  <div><small>变更后</small><code>{{ compactRule(line.after_json) }}</code></div>
+                </div>
+                <p v-if="line.error_message" class="line-error">{{ line.error_message }}</p>
+              </article>
+            </div>
+          </template>
+          <div class="assistant-hint">确认后服务端会重新校验租户归属和当前数据；过期或有变化会拒绝执行。</div>
           <div class="assistant-actions preview-actions">
-            <el-button :icon="Refresh" @click="resetPlan">重新描述</el-button>
-            <el-button type="primary" :icon="CircleCheck" :loading="confirming" :disabled="!preview.can_confirm || preview.status === 'completed'" @click="confirmPlan">确认执行</el-button>
+            <el-button :icon="Refresh" @click="resetTask">重新开始</el-button>
+            <el-button type="primary" :icon="CircleCheck" :loading="confirming" :disabled="!task.can_confirm" @click="confirmTask">确认执行</el-button>
           </div>
         </template>
       </div>
@@ -85,19 +111,26 @@ const inputText = ref('')
 const loading = ref(false)
 const confirming = ref(false)
 const availability = ref<any | null>(null)
-const preview = ref<any | null>(null)
+const task = ref<any | null>(null)
 const errorMessage = ref('')
 const idempotencyKey = ref(newKey())
 
 const statusLine = computed(() => {
   if (!availability.value) return '正在读取平台额度'
   if (!availability.value.enabled) return '当前不可用'
+  if (task.value?.state === 'awaiting_confirmation') return '等待确认执行'
+  if (task.value?.state === 'collecting') return '等待补充信息'
   return `${availability.value.provider || '平台模型'} · 剩余 ${availability.value.requests_remaining} 次`
 })
-const providerLabel = computed(() => `${preview.value?.provider || availability.value?.provider || '平台模型'}${preview.value?.model ? ` / ${preview.value.model}` : ''}`)
+const providerLabel = computed(() => `${task.value?.provider || availability.value?.provider || '平台模型'}${task.value?.model ? ` / ${task.value.model}` : ''}`)
+const preview = computed(() => task.value?.preview || {})
+const productPreview = computed(() => preview.value?.operation_type === 'ticket_product_create' ? preview.value : {})
+const isProductPreview = computed(() => preview.value?.operation_type === 'ticket_product_create')
 
 function newKey() { return `catalog-ai-${Date.now()}-${Math.random().toString(36).slice(2, 9)}` }
-const statusText = (status: string) => ({ previewed: '待确认', completed: '已完成', expired: '已过期', failed: '执行失败' } as Record<string, string>)[status] || status
+const statusText = (status: string) => ({ awaiting_confirmation: '待确认', completed: '已完成', collecting: '补充信息', expired: '已过期', failed: '执行失败' } as Record<string, string>)[status] || status
+const money = (value: any) => value === undefined || value === null ? '-' : `¥${Number(value).toFixed(2)}`
+const ruleItems = (group: any) => (group.items || []).map((item: any) => `${item.checkpoint_name || `#${item.checkpoint_id}`} ×${item.max_per_check_in}`).join('、') || '-'
 const compactRule = (value: string) => {
   try {
     const rule = JSON.parse(value)
@@ -114,41 +147,58 @@ const loadStatus = async () => {
 const openAssistant = async () => {
   open.value = true
   await loadStatus()
+  const savedTaskID = localStorage.getItem('ticket-agent-task-id')
+  if (savedTaskID && !task.value) {
+    try {
+      task.value = (await request.get(`/agent/tasks/${savedTaskID}`, { skipErrorToast: true } as any)).data
+    } catch {
+      localStorage.removeItem('ticket-agent-task-id')
+    }
+  }
 }
 
-const generatePreview = async () => {
+const submitInput = async () => {
   if (!inputText.value.trim()) return
   loading.value = true
   errorMessage.value = ''
   try {
-    const response = await request.post('/catalog/batch-changes/ai-preview', { input_text: inputText.value.trim(), idempotency_key: idempotencyKey.value })
-    preview.value = response.data.preview
+    const response = await request.post('/agent/tasks', {
+      task_id: task.value?.task_id || undefined,
+      input_text: inputText.value.trim(),
+      idempotency_key: task.value ? undefined : idempotencyKey.value,
+      turn_key: newKey(),
+    })
+    task.value = response.data
+    localStorage.setItem('ticket-agent-task-id', String(response.data.task_id))
     availability.value = response.data.availability || availability.value
-    ElMessage.success('AI 预览已生成，请核对变更范围')
+    inputText.value = ''
+    if (response.data.can_confirm) ElMessage.success('计划已生成，请核对后确认执行')
+    else ElMessage.info('还需要补充信息')
   } catch (error: any) {
-    errorMessage.value = error.response?.data?.error || error.message || 'AI 预览生成失败'
+    errorMessage.value = error.response?.data?.error || error.message || 'AI 任务处理失败'
   } finally { loading.value = false }
 }
 
-const confirmPlan = async () => {
-  if (!preview.value?.can_confirm) return
+const confirmTask = async () => {
+  if (!task.value?.can_confirm) return
   try {
-    await ElMessageBox.confirm('确认后会一次性更新预览中的票种规则，并记录审计。是否继续？', '确认执行', { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '返回检查' })
+    await ElMessageBox.confirm('确认后会按预览内容执行，并记录审计。是否继续？', '确认执行', { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '返回检查' })
   } catch { return }
   confirming.value = true
   errorMessage.value = ''
   try {
-    const response = await request.post(`/catalog/batch-changes/${preview.value.plan_id}/confirm`, { plan_hash: preview.value.plan_hash })
-    preview.value = response.data
+    const response = await request.post(`/agent/tasks/${task.value.task_id}/confirm`)
+    task.value = response.data
     await loadStatus()
-    ElMessage.success('批量规则操作已完成')
+    ElMessage.success('操作已完成')
   } catch (error: any) {
     errorMessage.value = error.response?.data?.error || error.message || '确认执行失败'
   } finally { confirming.value = false }
 }
 
-const resetPlan = () => {
-  preview.value = null
+const resetTask = () => {
+  task.value = null
+  localStorage.removeItem('ticket-agent-task-id')
   inputText.value = ''
   errorMessage.value = ''
   idempotencyKey.value = newKey()
@@ -170,6 +220,11 @@ const resetPlan = () => {
 .assistant-body { max-height: calc(min(720px, 100vh - 40px) - 61px); overflow: auto; padding: 14px 16px 16px; }
 .assistant-body > .el-alert + .el-alert { margin-top: 8px; }
 .assistant-hint { margin-top: 8px; color: #929baa; font-size: 11px; line-height: 17px; }
+.missing-list { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
+.missing-item { padding: 8px 10px; border-left: 3px solid #f0a64b; background: #fffaf1; color: #684d1a; font-size: 11px; line-height: 16px; }
+.missing-item strong, .missing-item span, .missing-item small { display: block; }
+.missing-item span { margin-top: 2px; }
+.missing-item small { margin-top: 2px; color: #8b6b2e; }
 .assistant-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
 .quota-copy { color: #667085; font-size: 11px; }
 .preview-meta, .diff-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -180,6 +235,15 @@ const resetPlan = () => {
 .operation-summary span, .operation-summary strong { display: block; }
 .operation-summary span { color: #929baa; font-size: 10px; }
 .operation-summary strong { margin-top: 3px; color: #18202b; font-size: 14px; }
+.product-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.product-summary div { padding: 9px 10px; border: 1px solid #edf0f4; border-radius: 5px; background: #fbfcfe; }
+.product-summary span, .product-summary strong { display: block; }
+.product-summary span { color: #929baa; font-size: 10px; }
+.product-summary strong { margin-top: 3px; color: #18202b; font-size: 13px; }
+.rule-preview { padding: 10px; border: 1px solid #e2e7ee; border-radius: 5px; }
+.rule-group { display: flex; justify-content: space-between; gap: 10px; padding-top: 8px; color: #344054; font-size: 11px; }
+.rule-group code { color: #667085; font-family: inherit; text-align: right; }
+.assumption-list { margin: 10px 0 0; padding-left: 18px; color: #667085; font-size: 11px; line-height: 17px; }
 .diff-list { display: flex; flex-direction: column; gap: 9px; }
 .diff-row { padding: 10px; border: 1px solid #e2e7ee; border-radius: 5px; }
 .diff-heading strong { color: #18202b; font-size: 12px; }

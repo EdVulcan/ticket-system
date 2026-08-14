@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 88
+const CurrentPostgresSchemaVersion = 89
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -41,6 +41,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&Product{}, &ProductRevision{}, &ProductOffer{}, &SellerListing{}, &ProductInventory{},
 		&CatalogBatchChangePlan{}, &CatalogBatchChangeLine{},
 		&PlatformAIConfig{}, &AIUsageMonth{},
+		&AgentTask{},
 		&BundleProduct{}, &BundleVersion{}, &BundleComponent{},
 		&Order{}, &OrderItem{}, &Ticket{}, &OrderVisitor{}, &FulfillmentOrder{}, &TicketEntitlement{}, &CheckInRecord{},
 		&DistributorRelationship{}, &CapitalAccount{}, &TransactionRecord{}, &LedgerEntry{},
@@ -290,7 +291,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "platform AI provider configuration and tenant usage",
+		Name:      "durable multi-turn agent tasks",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -491,6 +492,24 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 			   OR NEW.request_count < 0 OR NEW.token_count < 0
 			   OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = NEW.tenant_id AND t.deleted_at IS NULL) THEN
 				RAISE EXCEPTION 'AI usage tenant or accounting facts are invalid';
+			END IF;
+		WHEN 'agent_tasks' THEN
+			IF NEW.tenant_id = 0
+			   OR NEW.actor_role = ''
+			   OR NEW.operation_type NOT IN ('pending','catalog_batch_change','ticket_product_create')
+			   OR NEW.state NOT IN ('collecting','ready_for_preview','awaiting_confirmation','executing','completed','failed','expired','cancelled')
+			   OR COALESCE(NEW.input_text, '') = ''
+			   OR COALESCE(NEW.context_json, '') = ''
+			   OR COALESCE(NEW.missing_json, '') = ''
+			   OR COALESCE(NEW.idempotency_key, '') = ''
+			   OR NEW.version < 1
+			   OR NEW.expires_at IS NULL
+			   OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = NEW.tenant_id AND t.deleted_at IS NULL)
+			   OR (NEW.linked_plan_id != 0 AND NOT EXISTS (
+					SELECT 1 FROM catalog_batch_change_plans p
+					WHERE p.id = NEW.linked_plan_id AND p.tenant_id = NEW.tenant_id
+				)) THEN
+				RAISE EXCEPTION 'agent task tenant, state, or linked plan ownership mismatch';
 			END IF;
 		WHEN 'product_inventories' THEN
 			IF NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM products p WHERE p.id = NEW.product_id AND p.tenant_id = NEW.tenant_id AND p.scenic_area_id = NEW.scenic_area_id) THEN
@@ -696,7 +715,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_room_inventories", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
+	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "agent_tasks", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_room_inventories", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

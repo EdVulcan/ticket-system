@@ -166,6 +166,18 @@ func InitRouter(r *gin.Engine) {
 		catalogBatchGroup.POST("/:planID/confirm", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), catalogBatchController.Confirm)
 	}
 
+	// The floating assistant uses one durable task boundary for all supported
+	// catalog capabilities. It remains supplier-owned and never exposes
+	// distributor or channel mutation authority.
+	agentTaskController := &api.AgentTaskController{Service: service.AgentTaskService{}}
+	agentTaskGroup := protected.Group("/agent/tasks")
+	agentTaskGroup.Use(middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
+	{
+		agentTaskGroup.POST("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), agentTaskController.Submit)
+		agentTaskGroup.GET("/:taskID", middleware.RequireTenantPermission(authz.PermissionCatalogRead), agentTaskController.Get)
+		agentTaskGroup.POST("/:taskID/confirm", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), agentTaskController.Confirm)
+	}
+
 	orderController := &api.OrderController{}
 	orderGroup := protected.Group("/orders")
 	orderGroup.Use(middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"))

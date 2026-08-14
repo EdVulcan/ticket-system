@@ -17,45 +17,52 @@ type ProductService struct{}
 // CreateRuleAndProduct 创建规则和产品 (事务处理)
 func (s *ProductService) Create(product *model.Product, rule *model.TicketRule) error {
 	return model.Write(func(tx *gorm.DB) error {
-		if err := requireActiveScenicSupplier(tx, product.TenantID); err != nil {
-			return err
-		}
-		if product.SourceProductID != 0 || product.SourceTenantID != 0 ||
-			product.FulfillmentProductID != 0 || product.FulfillmentTenantID != 0 || product.ProductOfferID != 0 {
-			return fmt.Errorf("distributed products must be created through an active product offer")
-		}
-		if err := validateProduct(tx, product.TenantID, product, rule); err != nil {
-			return err
-		}
-		if err := assignProductScenicArea(tx, product.TenantID, product, rule); err != nil {
-			return err
-		}
-		// Force clear IDs to ensure creation
-		rule.ID = 0
-		for i := range rule.Groups {
-			rule.Groups[i].ID = 0
-			rule.Groups[i].RuleID = 0
-			for j := range rule.Groups[i].Items {
-				rule.Groups[i].Items[j].ID = 0
-				rule.Groups[i].Items[j].GroupID = 0
-			}
-		}
-
-		// 1. Create Rule
-		if err := tx.Create(rule).Error; err != nil {
-			return err
-		}
-
-		// 2. Link Rule to Product
-		product.ID = 0
-		product.RuleID = rule.ID
-		if err := tx.Create(product).Error; err != nil {
-			return err
-		}
-		product.Rule = *rule
-		_, err := createProductRevisionTx(tx, product)
-		return err
+		return s.createTx(tx, product, rule)
 	})
+}
+
+// createTx is the same authoritative product-creation path used by the HTTP
+// controller. Agent approvals use it inside their task transaction so the
+// durable task state and the newly-created product commit together.
+func (s *ProductService) createTx(tx *gorm.DB, product *model.Product, rule *model.TicketRule) error {
+	if err := requireActiveScenicSupplier(tx, product.TenantID); err != nil {
+		return err
+	}
+	if product.SourceProductID != 0 || product.SourceTenantID != 0 ||
+		product.FulfillmentProductID != 0 || product.FulfillmentTenantID != 0 || product.ProductOfferID != 0 {
+		return fmt.Errorf("distributed products must be created through an active product offer")
+	}
+	if err := validateProduct(tx, product.TenantID, product, rule); err != nil {
+		return err
+	}
+	if err := assignProductScenicArea(tx, product.TenantID, product, rule); err != nil {
+		return err
+	}
+	// Force clear IDs to ensure creation
+	rule.ID = 0
+	for i := range rule.Groups {
+		rule.Groups[i].ID = 0
+		rule.Groups[i].RuleID = 0
+		for j := range rule.Groups[i].Items {
+			rule.Groups[i].Items[j].ID = 0
+			rule.Groups[i].Items[j].GroupID = 0
+		}
+	}
+
+	// 1. Create Rule
+	if err := tx.Create(rule).Error; err != nil {
+		return err
+	}
+
+	// 2. Link Rule to Product
+	product.ID = 0
+	product.RuleID = rule.ID
+	if err := tx.Create(product).Error; err != nil {
+		return err
+	}
+	product.Rule = *rule
+	_, err := createProductRevisionTx(tx, product)
+	return err
 }
 
 // Update 更新产品及规则 (事务处理)
