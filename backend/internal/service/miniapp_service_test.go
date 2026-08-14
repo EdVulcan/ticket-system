@@ -178,6 +178,49 @@ func TestXiaohongshuMiniappOrderConvergesFromOfficialPaymentQuery(t *testing.T) 
 	if created.OrderNo == "" || created.PlatformOrderID != "XHS-PLATFORM-1" || created.PayToken != "PAY-TOKEN-1" || created.AmountCents != 2 || created.Status != "unpaid" {
 		t.Fatalf("created=%+v", created)
 	}
+	var recoveredOrder model.Order
+	if err := model.DB.Where("order_no = ? AND tenant_id = ?", created.OrderNo, tenantID).First(&recoveredOrder).Error; err != nil {
+		t.Fatal(err)
+	}
+	var recoveredLink model.XiaohongshuOrderLink
+	if err := model.DB.Where("order_id = ? AND tenant_id = ?", recoveredOrder.ID, tenantID).First(&recoveredLink).Error; err != nil {
+		t.Fatal(err)
+	}
+	var recoveredOperation model.XiaohongshuOrderOperation
+	if err := model.DB.Where("xiaohongshu_order_link_id = ? AND tenant_id = ?", recoveredLink.ID, tenantID).First(&recoveredOperation).Error; err != nil {
+		t.Fatal(err)
+	}
+	payTokenCiphertext, err := utils.EncryptAES("PAY-TOKEN-RECOVERED")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredExpiry := time.Date(2026, 8, 10, 13, 0, 0, 0, time.Local)
+	if err := model.DB.Model(&recoveredLink).Updates(map[string]interface{}{
+		"state": "creating", "platform_order_id": "", "pay_token_ciphertext": "", "pay_token_expires_at": nil, "last_queried_at": time.Now(),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&recoveredOperation).Updates(map[string]interface{}{
+		"status": "remote_succeeded", "platform_order_id": "XHS-PLATFORM-1", "pay_token_ciphertext": payTokenCiphertext,
+		"pay_token_expires_at": recoveredExpiry, "next_attempt_at": time.Now().Add(-time.Second), "completed_at": nil, "last_error": "",
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if processed, err := miniapp.ProcessPendingXiaohongshuOrders(context.Background(), time.Now(), 20); err != nil || processed != 1 {
+		t.Fatalf("recovered operation processed=%d err=%v", processed, err)
+	}
+	if err := model.DB.First(&recoveredLink, recoveredLink.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if recoveredLink.State != "unpaid" || recoveredLink.PlatformOrderID != "XHS-PLATFORM-1" {
+		t.Fatalf("recovered link=%+v", recoveredLink)
+	}
+	if err := model.DB.First(&recoveredOperation, recoveredOperation.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if recoveredOperation.Status != "completed" || recoveredOperation.CompletedAt == nil {
+		t.Fatalf("recovered operation=%+v", recoveredOperation)
+	}
 	replayed, err := miniapp.CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 2, ClientRequestID: "request-1"})
 	if err != nil || replayed.OrderNo != created.OrderNo {
 		t.Fatalf("replayed=%+v err=%v", replayed, err)
@@ -191,6 +234,9 @@ func TestXiaohongshuMiniappOrderConvergesFromOfficialPaymentQuery(t *testing.T) 
 	}
 	if paid.CoreOrderStatus != "paid" || paid.PlatformPaymentState != "paid" {
 		t.Fatalf("paid order state contract=%+v", paid)
+	}
+	if _, err := (&RefundService{}).CreateDigitalRefund(tenantID, created.OrderNo, "xhs-money-refund-must-fail", 0.02, paid.TicketCodes, "customer request"); err == nil || !strings.Contains(err.Error(), "paid digital payment not found") {
+		t.Fatalf("xiaohongshu money refund was not fail-closed: %v", err)
 	}
 	orders, err := miniapp.ListXiaohongshuOrders(&customer, 0, 99)
 	if err != nil {
@@ -734,7 +780,7 @@ func TestXiaohongshuMiniappDeferredPackageBooksIdempotentlyAndCancels(t *testing
 		t.Fatalf("failed refund notification processed=%d calls=%d err=%v", processed, refundCalls, err)
 	}
 	var refundOperation model.XiaohongshuBookingOperation
-	if err := model.DB.Where("entitlement_id = ? AND type = ?", frozen.ID, "refund").First(&refundOperation).Error; err != nil {
+	if err := model.DB.Where("entitlement_id = ? AND type = ?", frozen.ID, "refund_status_sync").First(&refundOperation).Error; err != nil {
 		t.Fatal(err)
 	}
 	if refundOperation.Status != "pending" || refundOperation.Attempts != 1 {
@@ -949,7 +995,7 @@ func TestFailedXiaohongshuBookingOperationsAreTenantScopedAndRecoverCorrectPhase
 	if err := miniapp.RetryFailedXiaohongshuBookingOperation(fixture.tenantID, bookOperation.ID, 78, "admin", "reconcile remote booking result"); err != nil {
 		t.Fatal(err)
 	}
-	if completed, err := miniapp.processXiaohongshuBookingOperation(context.Background(), bookOperation.ID); err != nil || completed {
+	if completed, err := miniapp.bookingService().processXiaohongshuBookingOperation(context.Background(), bookOperation.ID); err != nil || completed {
 		t.Fatalf("remote-only booking reconciliation completed=%v err=%v", completed, err)
 	}
 	var reconciledEntitlement model.ScenicHotelPackageEntitlement
@@ -1020,7 +1066,7 @@ func TestFailedXiaohongshuBookingOperationsAreTenantScopedAndRecoverCorrectPhase
 	}
 	refundOperation := model.XiaohongshuBookingOperation{
 		TenantID: fixture.tenantID, ChannelAccountID: account.ID, OrderLinkID: link.ID, EntitlementID: entitlement.ID,
-		OperationKey: "xhs:refund:manual-recovery", Type: "refund", Status: "failed", ExternalBookOrderID: externalBookID,
+		OperationKey: "xhs:refund_status_sync:manual-recovery", Type: "refund_status_sync", Status: "failed", ExternalBookOrderID: externalBookID,
 		PlatformBookID: platformBookID, FailedFromStage: "pending", RequestPayloadCiphertext: payload, Attempts: 20, MaxAttempts: 20, LastError: "refund sync failed", CompletedAt: &completedAt,
 	}
 	if err := model.DB.Create(&refundOperation).Error; err != nil {
@@ -1045,14 +1091,14 @@ func TestFailedXiaohongshuBookingOperationsAreTenantScopedAndRecoverCorrectPhase
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	completed, err := miniapp.processXiaohongshuBookingOperation(context.Background(), refundOperation.ID)
+	completed, err := miniapp.bookingService().processXiaohongshuBookingOperation(context.Background(), refundOperation.ID)
 	if err != nil || completed {
 		t.Fatalf("local refund finalize first attempt completed=%v err=%v", completed, err)
 	}
 	if err := model.DB.Model(&refundOperation).Update("next_attempt_at", past).Error; err != nil {
 		t.Fatal(err)
 	}
-	completed, err = miniapp.processXiaohongshuBookingOperation(context.Background(), refundOperation.ID)
+	completed, err = miniapp.bookingService().processXiaohongshuBookingOperation(context.Background(), refundOperation.ID)
 	if err != nil || !completed {
 		t.Fatalf("local refund finalize exhaustion completed=%v err=%v", completed, err)
 	}
@@ -1069,7 +1115,7 @@ func TestFailedXiaohongshuBookingOperationsAreTenantScopedAndRecoverCorrectPhase
 	if err := miniapp.RetryFailedXiaohongshuBookingOperation(fixture.tenantID, refundOperation.ID, 77, "admin", "finish local refund finalization"); err != nil {
 		t.Fatal(err)
 	}
-	completed, err = miniapp.processXiaohongshuBookingOperation(context.Background(), refundOperation.ID)
+	completed, err = miniapp.bookingService().processXiaohongshuBookingOperation(context.Background(), refundOperation.ID)
 	if err != nil || !completed {
 		t.Fatalf("local refund finalize recovery completed=%v err=%v", completed, err)
 	}

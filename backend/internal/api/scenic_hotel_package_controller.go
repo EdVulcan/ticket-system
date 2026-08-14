@@ -13,7 +13,7 @@ import (
 
 type ScenicHotelPackageController struct {
 	Service     service.ScenicHotelPackageService
-	BookingSync service.MiniappService
+	BookingSync service.XiaohongshuBookingService
 }
 
 func (c *ScenicHotelPackageController) ListFailedBookingSyncOperations(ctx *gin.Context) {

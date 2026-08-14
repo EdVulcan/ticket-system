@@ -75,6 +75,13 @@
 - 已在官方开发者工具中使用测试小程序完成真实 `xhs.login -> code2session` 和票种目录验证；商城五个页面已完整编译，并以长票名、多价格、待支付/已支付订单验证搜索、排序、状态筛选和窄屏布局。服务端按渠道环境自动选择正式或沙箱 API 基地址，不维护两套业务代码。
 - 先售券后预约页面、服务端库存事务、小红书预约/状态同步客户端及 PostgreSQL 持久重试已经完成代码和自动化。普通撤销预约使用平台状态 `3`，只有本地真实退款事实完成后才使用状态 `4` 通知预约链；这里的状态 `4` 是预约状态同步，不是资金退款接口。外部预约成功后先持久化平台预约号，再收尾本地权益，进程重启或本地写失败可以从对应阶段恢复。由于服务商组件授权尚未配置，当前预约调用会 fail-closed；小红书担保支付主动退款和平台售后/退款消息的业务消费也尚未实现，通用退款服务会明确拒绝 `xiaohongshu` 支付方式。真实沙箱仍需依次验证预售券商品同步、`0.01` 元担保支付、服务商授权、预约、取消预约、改约、平台售后退款、过期和结算；生产环境仍需重新验收。凭证核销、资金退款、结算请求和消息事件业务分发不得在未联调时显示为可用或模拟成功。
 
+### Booking status and webhook boundary (schema 86)
+
+- `refund_status_sync` is a durable presale-booking operation only. It sends booking status `4` after an independently completed local user after-sale and must never be interpreted as, invoke, or confirm a Xiaohongshu funds refund.
+- Schema 86 migrates legacy `refund` booking operations and their conventional `xhs:refund:` operation keys to `refund_status_sync`. The migration protects the globally unique key before renaming, so durable legacy tasks are preserved.
+- Webhooks remain signature-verified, decrypted, encrypted at rest, and idempotently stored in the inbox. Only explicitly recognized non-financial events remain pending. After-sale/refund and unknown business events are stored as `manual_review`; they cannot change local payment, ticket, entitlement, inventory, or settlement facts.
+- Deferred booking commands and the admin/reconciliation worker use `XiaohongshuBookingService`; `MiniappService` remains only the HTTP compatibility facade for existing storefront routes. Payment/order reconciliation is kept separate from the booking Saga.
+
 ## 5. 真实联调前需要的资料
 
 - 小程序 `AppID` 和 `AppSecret`，只能通过管理端加密配置，不进入代码、文档或日志。

@@ -20,6 +20,18 @@ import (
 // request while the first worker is still waiting on the platform.
 const xiaohongshuBookingOperationLease = 90 * time.Second
 
+const xiaohongshuBookingOperationTypeRefundStatusSync = "refund_status_sync"
+
+func normalizeXiaohongshuBookingOperationType(operationType string) string {
+	operationType = strings.TrimSpace(operationType)
+	// Schema 86 migrates persisted legacy values. Keep this input alias so
+	// existing admin filters do not silently lose historical failed tasks.
+	if operationType == "refund" {
+		return xiaohongshuBookingOperationTypeRefundStatusSync
+	}
+	return operationType
+}
+
 type xiaohongshuBookingOperationPayload struct {
 	OpenID            string `json:"open_id"`
 	ExternalOrderID   string `json:"external_order_id"`
@@ -57,9 +69,9 @@ type XiaohongshuFailedBookingOperationPage struct {
 	PageSize int                                     `json:"page_size"`
 }
 
-func (s MiniappService) ListFailedXiaohongshuBookingOperations(tenantID uint, operationType string, page, pageSize int) (*XiaohongshuFailedBookingOperationPage, error) {
-	operationType = strings.TrimSpace(operationType)
-	if operationType != "" && operationType != "book" && operationType != "revoke" && operationType != "refund" {
+func (s XiaohongshuBookingService) ListFailedXiaohongshuBookingOperations(tenantID uint, operationType string, page, pageSize int) (*XiaohongshuFailedBookingOperationPage, error) {
+	operationType = normalizeXiaohongshuBookingOperationType(operationType)
+	if operationType != "" && operationType != "book" && operationType != "revoke" && operationType != xiaohongshuBookingOperationTypeRefundStatusSync {
 		return nil, errors.New("invalid xiaohongshu booking operation type")
 	}
 	if page < 1 {
@@ -94,7 +106,7 @@ func (s MiniappService) ListFailedXiaohongshuBookingOperations(tenantID uint, op
 	return &XiaohongshuFailedBookingOperationPage{Data: rows, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
-func (s MiniappService) RetryFailedXiaohongshuBookingOperation(tenantID, operationID, operatorID uint, operatorRole, reason string) error {
+func (s XiaohongshuBookingService) RetryFailedXiaohongshuBookingOperation(tenantID, operationID, operatorID uint, operatorRole, reason string) error {
 	reason = strings.TrimSpace(reason)
 	if tenantID == 0 || operationID == 0 || operatorID == 0 {
 		return errors.New("tenant, operation, and operator are required")
@@ -154,16 +166,16 @@ func (s MiniappService) RetryFailedXiaohongshuBookingOperation(tenantID, operati
 			if entitlement.Status != "cancel_pending" || entitlement.ReservationID == 0 || entitlement.PlatformBookID != operation.PlatformBookID {
 				return errors.New("failed cancellation operation is not recoverable from the entitlement state")
 			}
-		case "refund":
+		case xiaohongshuBookingOperationTypeRefundStatusSync, "refund": // Legacy rows are migrated by schema 86.
 			if nextStatus != "pending" && nextStatus != "remote_succeeded" {
-				return errors.New("failed refund operation has an unsupported recovery stage")
+				return errors.New("failed refund status synchronization has an unsupported recovery stage")
 			}
 			if entitlement.Status != "refunded" || entitlement.PlatformBookID != operation.PlatformBookID {
-				return errors.New("failed refund operation is not recoverable from the entitlement state")
+				return errors.New("failed refund status synchronization is not recoverable from the entitlement state")
 			}
 			var ticket model.Ticket
 			if err := tx.Where("id = ? AND tenant_id = ? AND status = ?", entitlement.TicketID, tenantID, "refunded").First(&ticket).Error; err != nil {
-				return errors.New("failed refund operation does not have a refunded ticket fact")
+				return errors.New("failed refund status synchronization does not have a refunded ticket fact")
 			}
 		default:
 			return errors.New("unsupported xiaohongshu booking operation type")
@@ -175,7 +187,7 @@ func (s MiniappService) RetryFailedXiaohongshuBookingOperation(tenantID, operati
 		}).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&entitlement).Updates(map[string]interface{}{"platform_sync_status": "pending", "platform_sync_error": ""}).Error; err != nil {
+		if err := (PackageFulfillmentLifecycle{}).MarkExternalBookingRetryPendingTx(tx, tenantID, operation.EntitlementID); err != nil {
 			return err
 		}
 		if strings.TrimSpace(operatorRole) == "" {
@@ -225,7 +237,7 @@ func xiaohongshuBookingOperationKey(operationType string, entitlementID uint, st
 	return fmt.Sprintf("xhs:%s:%d:%s", operationType, entitlementID, digest[:24])
 }
 
-func (s MiniappService) processXiaohongshuBookingOperation(ctx context.Context, operationID uint) (bool, error) {
+func (s XiaohongshuBookingService) processXiaohongshuBookingOperation(ctx context.Context, operationID uint) (bool, error) {
 	for step := 0; step < 5; step++ {
 		operation, claimed, err := s.claimXiaohongshuBookingOperation(operationID)
 		if err != nil || !claimed {
@@ -245,7 +257,7 @@ func (s MiniappService) processXiaohongshuBookingOperation(ctx context.Context, 
 	return false, nil
 }
 
-func (s MiniappService) claimXiaohongshuBookingOperation(operationID uint) (*model.XiaohongshuBookingOperation, bool, error) {
+func (s XiaohongshuBookingService) claimXiaohongshuBookingOperation(operationID uint) (*model.XiaohongshuBookingOperation, bool, error) {
 	var operation model.XiaohongshuBookingOperation
 	claimed := false
 	now := s.now()
@@ -270,7 +282,7 @@ func (s MiniappService) claimXiaohongshuBookingOperation(operationID uint) (*mod
 	return &operation, claimed, err
 }
 
-func (s MiniappService) executeXiaohongshuBookingOperationStep(ctx context.Context, operation *model.XiaohongshuBookingOperation) (bool, error) {
+func (s XiaohongshuBookingService) executeXiaohongshuBookingOperationStep(ctx context.Context, operation *model.XiaohongshuBookingOperation) (bool, error) {
 	if operation == nil {
 		return false, errors.New("xiaohongshu booking operation is required")
 	}
@@ -279,14 +291,14 @@ func (s MiniappService) executeXiaohongshuBookingOperationStep(ctx context.Conte
 		return s.executeXiaohongshuBookStep(ctx, operation)
 	case "revoke":
 		return s.executeXiaohongshuRevokeStep(ctx, operation)
-	case "refund":
-		return s.executeXiaohongshuRefundStep(ctx, operation)
+	case xiaohongshuBookingOperationTypeRefundStatusSync, "refund": // Legacy rows are migrated by schema 86.
+		return s.executeXiaohongshuRefundStatusSyncStep(ctx, operation)
 	default:
 		return false, fmt.Errorf("unsupported xiaohongshu booking operation type %q", operation.Type)
 	}
 }
 
-func (s MiniappService) executeXiaohongshuRefundStep(ctx context.Context, operation *model.XiaohongshuBookingOperation) (bool, error) {
+func (s XiaohongshuBookingService) executeXiaohongshuRefundStatusSyncStep(ctx context.Context, operation *model.XiaohongshuBookingOperation) (bool, error) {
 	switch operation.Status {
 	case "pending":
 		allowed, err := s.beginXiaohongshuExternalAttempt(operation)
@@ -297,15 +309,16 @@ func (s MiniappService) executeXiaohongshuRefundStep(ctx context.Context, operat
 		if err != nil {
 			return false, err
 		}
-		// Status 4 is reserved for a real user refund. Appointment cancellation
-		// and rescheduling use status 3 in executeXiaohongshuRevokeStep.
+		// Status 4 reports an already-completed, real user after-sale to the
+		// presale booking component. It never calls or confirms a funds-refund
+		// endpoint. Appointment cancellation and rescheduling use status 3.
 		if err := client.SyncPresaleBookStatus(ctx, xiaohongshu.PresaleBookStatusRequest{
 			ExternalBookOrderID: operation.ExternalBookOrderID, BookIDs: []string{operation.PlatformBookID}, Status: 4,
 		}); err != nil {
 			return false, err
 		}
 		if err := model.Write(func(tx *gorm.DB) error {
-			return tx.Model(&model.XiaohongshuBookingOperation{}).Where("id = ? AND type = ? AND status = ?", operation.ID, "refund", "pending").Updates(map[string]interface{}{
+			return tx.Model(&model.XiaohongshuBookingOperation{}).Where("id = ? AND type IN ? AND status = ?", operation.ID, []string{xiaohongshuBookingOperationTypeRefundStatusSync, "refund"}, "pending").Updates(map[string]interface{}{
 				"status": "remote_succeeded", "attempts": 0, "last_error": "", "next_attempt_at": s.now(),
 			}).Error
 		}); err != nil {
@@ -320,19 +333,14 @@ func (s MiniappService) executeXiaohongshuRefundStep(ctx context.Context, operat
 		}
 		err = model.Write(func(tx *gorm.DB) error {
 			var locked model.XiaohongshuBookingOperation
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND type = ? AND status = ?", operation.ID, "refund", "remote_succeeded").First(&locked).Error; err != nil {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND type IN ? AND status = ?", operation.ID, []string{xiaohongshuBookingOperationTypeRefundStatusSync, "refund"}, "remote_succeeded").First(&locked).Error; err != nil {
 				return err
 			}
 			var entitlement model.ScenicHotelPackageEntitlement
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("id = ? AND sales_tenant_id = ? AND status = ? AND platform_sync_status = ?", locked.EntitlementID, locked.TenantID, "refunded", "pending").
-				First(&entitlement).Error; err != nil {
+			if err := tx.Where("id = ? AND sales_tenant_id = ?", locked.EntitlementID, locked.TenantID).First(&entitlement).Error; err != nil {
 				return err
 			}
-			if entitlement.ExternalBookOrderID != locked.ExternalBookOrderID || entitlement.PlatformBookID != locked.PlatformBookID {
-				return errors.New("xiaohongshu refunded booking identifiers changed during synchronization")
-			}
-			if err := tx.Model(&entitlement).Updates(map[string]interface{}{"platform_sync_status": "synced", "platform_sync_error": ""}).Error; err != nil {
+			if _, err := (PackageFulfillmentLifecycle{}).MarkRefundStatusSyncedTx(tx, locked.TenantID, entitlement.EntitlementNo, locked.ExternalBookOrderID, locked.PlatformBookID); err != nil {
 				return err
 			}
 			now := s.now()
@@ -345,11 +353,11 @@ func (s MiniappService) executeXiaohongshuRefundStep(ctx context.Context, operat
 	return operation.Status == "completed" || operation.Status == "failed", nil
 }
 
-func (s MiniappService) ensurePendingXiaohongshuRefundOperations(limit int) error {
+func (s XiaohongshuBookingService) ensurePendingXiaohongshuRefundOperations(limit int) error {
 	var entitlementIDs []uint
 	if err := model.DB.Table("scenic_hotel_package_entitlements AS entitlement").
 		Joins("JOIN xiaohongshu_order_links AS link ON link.order_id = entitlement.order_id AND link.tenant_id = entitlement.sales_tenant_id").
-		Joins("LEFT JOIN xiaohongshu_booking_operations AS operation ON operation.entitlement_id = entitlement.id AND operation.tenant_id = entitlement.sales_tenant_id AND operation.type = ? AND operation.deleted_at IS NULL", "refund").
+		Joins("LEFT JOIN xiaohongshu_booking_operations AS operation ON operation.entitlement_id = entitlement.id AND operation.tenant_id = entitlement.sales_tenant_id AND operation.type IN ? AND operation.deleted_at IS NULL", []string{xiaohongshuBookingOperationTypeRefundStatusSync, "refund"}).
 		Where("entitlement.status = ? AND entitlement.platform_sync_status = ?", "refunded", "pending").
 		Where("entitlement.external_book_order_id <> '' AND entitlement.platform_book_id <> '' AND operation.id IS NULL").
 		Order("entitlement.updated_at ASC, entitlement.id ASC").Limit(limit).Pluck("entitlement.id", &entitlementIDs).Error; err != nil {
@@ -377,8 +385,8 @@ func (s MiniappService) ensurePendingXiaohongshuRefundOperations(limit int) erro
 			nextAttempt := s.now()
 			operation := model.XiaohongshuBookingOperation{
 				TenantID: entitlement.SalesTenantID, ChannelAccountID: link.ChannelAccountID, OrderLinkID: link.ID,
-				EntitlementID: entitlement.ID, OperationKey: xiaohongshuBookingOperationKey("refund", entitlement.ID, entitlement.ExternalBookOrderID),
-				Type: "refund", Status: "pending", ExternalBookOrderID: entitlement.ExternalBookOrderID, PlatformBookID: entitlement.PlatformBookID,
+				EntitlementID: entitlement.ID, OperationKey: xiaohongshuBookingOperationKey(xiaohongshuBookingOperationTypeRefundStatusSync, entitlement.ID, entitlement.ExternalBookOrderID),
+				Type: xiaohongshuBookingOperationTypeRefundStatusSync, Status: "pending", ExternalBookOrderID: entitlement.ExternalBookOrderID, PlatformBookID: entitlement.PlatformBookID,
 				RequestPayloadCiphertext: payloadCiphertext, MaxAttempts: 20, NextAttemptAt: &nextAttempt,
 			}
 			return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "operation_key"}}, DoNothing: true}).Create(&operation).Error
@@ -389,7 +397,7 @@ func (s MiniappService) ensurePendingXiaohongshuRefundOperations(limit int) erro
 	return nil
 }
 
-func (s MiniappService) executeXiaohongshuBookStep(ctx context.Context, operation *model.XiaohongshuBookingOperation) (bool, error) {
+func (s XiaohongshuBookingService) executeXiaohongshuBookStep(ctx context.Context, operation *model.XiaohongshuBookingOperation) (bool, error) {
 	switch operation.Status {
 	case "pending":
 		allowed, err := s.beginXiaohongshuExternalAttempt(operation)
@@ -449,15 +457,10 @@ func (s MiniappService) executeXiaohongshuBookStep(ctx context.Context, operatio
 				return err
 			}
 			var entitlement model.ScenicHotelPackageEntitlement
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("id = ? AND sales_tenant_id = ? AND status = ? AND external_book_order_id = ?", locked.EntitlementID, locked.TenantID, "booking_pending", locked.ExternalBookOrderID).
-				First(&entitlement).Error; err != nil {
+			if err := tx.Where("id = ? AND sales_tenant_id = ?", locked.EntitlementID, locked.TenantID).First(&entitlement).Error; err != nil {
 				return err
 			}
-			if entitlement.PlatformBookID != "" && entitlement.PlatformBookID != locked.PlatformBookID {
-				return errors.New("xiaohongshu remote booking id does not match the entitlement")
-			}
-			if err := tx.Model(&entitlement).Updates(map[string]interface{}{"platform_book_id": locked.PlatformBookID, "platform_sync_status": "pending", "platform_sync_error": ""}).Error; err != nil {
+			if _, err := (PackageFulfillmentLifecycle{}).RecordExternalBookingTx(tx, locked.TenantID, entitlement.EntitlementNo, locked.ExternalBookOrderID, locked.PlatformBookID); err != nil {
 				return err
 			}
 			return tx.Model(&locked).Updates(map[string]interface{}{"status": "confirm_pending", "attempts": 0, "last_error": "", "next_attempt_at": s.now()}).Error
@@ -487,10 +490,7 @@ func (s MiniappService) executeXiaohongshuBookStep(ctx context.Context, operatio
 			if err := tx.Where("id = ? AND sales_tenant_id = ?", locked.EntitlementID, locked.TenantID).First(&entitlement).Error; err != nil {
 				return err
 			}
-			if _, err := (PackageFulfillmentLifecycle{}).FinalizeBookingTx(tx, entitlement.EntitlementNo, locked.PlatformBookID); err != nil {
-				return err
-			}
-			if err := tx.Model(&entitlement).Updates(map[string]interface{}{"platform_sync_status": "synced", "platform_sync_error": ""}).Error; err != nil {
+			if _, err := (PackageFulfillmentLifecycle{}).FinalizeExternalBookingTx(tx, locked.TenantID, entitlement.EntitlementNo, locked.ExternalBookOrderID, locked.PlatformBookID); err != nil {
 				return err
 			}
 			now := s.now()
@@ -521,7 +521,7 @@ func (s MiniappService) executeXiaohongshuBookStep(ctx context.Context, operatio
 			if err := tx.Where("id = ? AND sales_tenant_id = ?", locked.EntitlementID, locked.TenantID).First(&entitlement).Error; err != nil {
 				return err
 			}
-			if _, err := (PackageFulfillmentLifecycle{}).RollbackPreparedBookingTx(tx, entitlement.EntitlementNo); err != nil {
+			if _, err := (PackageFulfillmentLifecycle{}).RollbackExternalBookingTx(tx, locked.TenantID, entitlement.EntitlementNo, locked.ExternalBookOrderID, locked.PlatformBookID); err != nil {
 				return err
 			}
 			now := s.now()
@@ -532,7 +532,7 @@ func (s MiniappService) executeXiaohongshuBookStep(ctx context.Context, operatio
 	return operation.Status == "completed" || operation.Status == "failed", nil
 }
 
-func (s MiniappService) executeXiaohongshuRevokeStep(ctx context.Context, operation *model.XiaohongshuBookingOperation) (bool, error) {
+func (s XiaohongshuBookingService) executeXiaohongshuRevokeStep(ctx context.Context, operation *model.XiaohongshuBookingOperation) (bool, error) {
 	switch operation.Status {
 	case "pending":
 		allowed, err := s.beginXiaohongshuExternalAttempt(operation)
@@ -571,7 +571,7 @@ func (s MiniappService) executeXiaohongshuRevokeStep(ctx context.Context, operat
 			if err := tx.Where("id = ? AND sales_tenant_id = ?", locked.EntitlementID, locked.TenantID).First(&entitlement).Error; err != nil {
 				return err
 			}
-			if _, err := (PackageFulfillmentLifecycle{}).FinalizeCancelTx(tx, entitlement.EntitlementNo); err != nil {
+			if _, err := (PackageFulfillmentLifecycle{}).FinalizeExternalCancellationTx(tx, locked.TenantID, entitlement.EntitlementNo, locked.ExternalBookOrderID, locked.PlatformBookID); err != nil {
 				return err
 			}
 			now := s.now()
@@ -584,15 +584,15 @@ func (s MiniappService) executeXiaohongshuRevokeStep(ctx context.Context, operat
 	return operation.Status == "completed" || operation.Status == "failed", nil
 }
 
-func (s MiniappService) beginXiaohongshuExternalAttempt(operation *model.XiaohongshuBookingOperation) (bool, error) {
+func (s XiaohongshuBookingService) beginXiaohongshuExternalAttempt(operation *model.XiaohongshuBookingOperation) (bool, error) {
 	return s.beginXiaohongshuOperationAttempt(operation)
 }
 
-func (s MiniappService) beginXiaohongshuLocalFinalizeAttempt(operation *model.XiaohongshuBookingOperation) (bool, error) {
+func (s XiaohongshuBookingService) beginXiaohongshuLocalFinalizeAttempt(operation *model.XiaohongshuBookingOperation) (bool, error) {
 	return s.beginXiaohongshuOperationAttempt(operation)
 }
 
-func (s MiniappService) beginXiaohongshuOperationAttempt(operation *model.XiaohongshuBookingOperation) (bool, error) {
+func (s XiaohongshuBookingService) beginXiaohongshuOperationAttempt(operation *model.XiaohongshuBookingOperation) (bool, error) {
 	if operation == nil {
 		return false, errors.New("xiaohongshu booking operation is required")
 	}
@@ -612,9 +612,7 @@ func (s MiniappService) beginXiaohongshuOperationAttempt(operation *model.Xiaoho
 		if locked.Attempts >= maxAttempts {
 			message := fmt.Sprintf("小红书预约同步重试已达上限（%d 次），需要人工处理", maxAttempts)
 			now := s.now()
-			if err := tx.Model(&model.ScenicHotelPackageEntitlement{}).
-				Where("id = ? AND sales_tenant_id = ?", locked.EntitlementID, locked.TenantID).
-				Updates(map[string]interface{}{"platform_sync_status": "failed", "platform_sync_error": message}).Error; err != nil {
+			if err := (PackageFulfillmentLifecycle{}).MarkExternalBookingSyncFailedTx(tx, locked.TenantID, locked.EntitlementID, message); err != nil {
 				return err
 			}
 			return tx.Model(&locked).Updates(map[string]interface{}{
@@ -631,7 +629,7 @@ func (s MiniappService) beginXiaohongshuOperationAttempt(operation *model.Xiaoho
 	return allowed, err
 }
 
-func (s MiniappService) xiaohongshuBookingClient(operation *model.XiaohongshuBookingOperation) (*xiaohongshu.Client, error) {
+func (s XiaohongshuBookingService) xiaohongshuBookingClient(operation *model.XiaohongshuBookingOperation) (*xiaohongshu.Client, error) {
 	var account model.ChannelAccount
 	if err := model.DB.Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", operation.ChannelAccountID, operation.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
 		return nil, ErrMiniappUnavailable
@@ -647,7 +645,7 @@ func (s MiniappService) xiaohongshuBookingClient(operation *model.XiaohongshuBoo
 	return newClient(account.AppID, secret, account.Environment), nil
 }
 
-func (s MiniappService) deferXiaohongshuBookingOperation(operation *model.XiaohongshuBookingOperation, operationErr error) error {
+func (s XiaohongshuBookingService) deferXiaohongshuBookingOperation(operation *model.XiaohongshuBookingOperation, operationErr error) error {
 	attempts := operation.Attempts
 	delay := time.Duration(1<<min(attempts, 6)) * 5 * time.Second
 	if delay > 5*time.Minute {

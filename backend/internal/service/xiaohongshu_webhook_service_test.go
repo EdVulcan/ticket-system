@@ -48,7 +48,7 @@ func TestXiaohongshuWebhookVerifiesDecryptsAndPersistsIdempotently(t *testing.T)
 	if err := model.DB.Find(&events).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || events[0].TenantID != tenantID || events[0].ChannelAccountID != account.ID || events[0].EventType != "PRODUCT_AUDIT" {
+	if len(events) != 1 || events[0].TenantID != tenantID || events[0].ChannelAccountID != account.ID || events[0].EventType != "PRODUCT_AUDIT" || events[0].Status != "pending" || events[0].LastError != "" {
 		t.Fatalf("events=%+v", events)
 	}
 	storedPayload, err := utils.DecryptAES(events[0].PayloadCiphertext)
@@ -59,6 +59,40 @@ func TestXiaohongshuWebhookVerifiesDecryptsAndPersistsIdempotently(t *testing.T)
 	message.MsgSignature = "invalid"
 	if err := webhook.Receive(context.Background(), appID, message); err != ErrXiaohongshuWebhookSignature {
 		t.Fatalf("invalid signature error=%v", err)
+	}
+
+	afterSalePayload := []byte(`{"Event":"AFTER_SALE_REFUND","OrderId":"external-order","Status":"SUCCESS"}`)
+	afterSaleEncrypted := encryptXiaohongshuWebhookFixture(t, encodingAESKey, afterSalePayload, appID)
+	afterSaleMessage := XiaohongshuWebhookMessage{
+		Nonce: "after-sale-nonce", Timestamp: 1700000002, Encrypt: afterSaleEncrypted,
+		MsgSignature: xiaohongshu.MessageSignature(token, strconv.FormatInt(1700000002, 10), "after-sale-nonce", afterSaleEncrypted),
+	}
+	if err := webhook.Receive(context.Background(), appID, afterSaleMessage); err != nil {
+		t.Fatal(err)
+	}
+	var afterSaleEvent model.XiaohongshuWebhookEvent
+	if err := model.DB.Where("event_type = ?", "AFTER_SALE_REFUND").First(&afterSaleEvent).Error; err != nil {
+		t.Fatal(err)
+	}
+	if afterSaleEvent.Status != "manual_review" || afterSaleEvent.LastError != xiaohongshuWebhookManualReviewReason || afterSaleEvent.ProcessedAt != nil {
+		t.Fatalf("after-sale webhook was not fail-closed: %+v", afterSaleEvent)
+	}
+
+	unknownPayload := []byte(`{"Event":"UNDOCUMENTED_BUSINESS_EVENT","OrderId":"external-order"}`)
+	unknownEncrypted := encryptXiaohongshuWebhookFixture(t, encodingAESKey, unknownPayload, appID)
+	unknownMessage := XiaohongshuWebhookMessage{
+		Nonce: "unknown-event-nonce", Timestamp: 1700000003, Encrypt: unknownEncrypted,
+		MsgSignature: xiaohongshu.MessageSignature(token, strconv.FormatInt(1700000003, 10), "unknown-event-nonce", unknownEncrypted),
+	}
+	if err := webhook.Receive(context.Background(), appID, unknownMessage); err != nil {
+		t.Fatal(err)
+	}
+	var unknownEvent model.XiaohongshuWebhookEvent
+	if err := model.DB.Where("event_type = ?", "UNDOCUMENTED_BUSINESS_EVENT").First(&unknownEvent).Error; err != nil {
+		t.Fatal(err)
+	}
+	if unknownEvent.Status != "manual_review" || unknownEvent.LastError != xiaohongshuWebhookManualReviewReason {
+		t.Fatalf("unknown webhook was not fail-closed: %+v", unknownEvent)
 	}
 }
 

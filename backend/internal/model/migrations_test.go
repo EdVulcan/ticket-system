@@ -6,6 +6,8 @@ import (
 	"testing"
 	"ticket-backend/internal/testdb"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
@@ -30,7 +32,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&CtripOrderLink{}, &CtripOrderItem{}, &XiaohongshuWebhookEvent{}, &SupplierBusinessType{},
 		&HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRoomInventory{},
 		&ScenicHotelPackage{}, &ScenicHotelPackageEntitlement{}, &HotelReservation{},
-		&XiaohongshuBookingOperation{},
+		&XiaohongshuBookingOperation{}, &XiaohongshuOrderOperation{},
 	} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("table for %T is missing", table)
@@ -160,7 +162,7 @@ func TestPostgresSchema84UpgradesRealSchema83BookingFacts(t *testing.T) {
 	}
 }
 
-func TestPostgresSchema84BookingOwnershipGuardsRejectInvalidFacts(t *testing.T) {
+func TestPostgresSchema86BookingAndOrderOwnershipGuardsRejectInvalidFacts(t *testing.T) {
 	db := testdb.Open(t)
 	if err := runMigrations(db); err != nil {
 		t.Fatal(err)
@@ -316,6 +318,23 @@ func TestPostgresSchema84BookingOwnershipGuardsRejectInvalidFacts(t *testing.T) 
 		t.Fatal(err)
 	}
 	nextAttempt := now.Add(time.Minute)
+	orderOperation := XiaohongshuOrderOperation{
+		TenantID: first.ID, ChannelAccountID: account.ID, XiaohongshuOrderLinkID: link.ID,
+		RequestPayloadCiphertext: "encrypted-order-request", Status: "pending", NextAttemptAt: &nextAttempt,
+	}
+	badOrderOperation := orderOperation
+	badOrderOperation.Base = Base{}
+	badOrderOperation.TenantID = second.ID
+	badOrderOperation.XiaohongshuOrderLinkID = link.ID
+	if err := db.Create(&badOrderOperation).Error; err == nil {
+		t.Fatal("cross-tenant Xiaohongshu order operation was accepted")
+	}
+	if err := db.Create(&orderOperation).Error; err != nil {
+		t.Fatalf("valid Xiaohongshu order operation was rejected: %v", err)
+	}
+	if err := db.Model(&orderOperation).Updates(map[string]interface{}{"status": "remote_succeeded", "next_attempt_at": nextAttempt}).Error; err == nil {
+		t.Fatal("remote-success order operation without persisted platform facts was accepted")
+	}
 	validOperation := XiaohongshuBookingOperation{
 		TenantID: first.ID, ChannelAccountID: account.ID, OrderLinkID: link.ID, EntitlementID: entitlement.ID,
 		OperationKey: "BOOKING-GUARD-VALID", Type: "book", Status: "pending", ExternalBookOrderID: "BOOKING-GUARD-BOOK",
@@ -351,10 +370,10 @@ func TestPostgresSchema84BookingOwnershipGuardsRejectInvalidFacts(t *testing.T) 
 	badRefund := validOperation
 	badRefund.Base = Base{}
 	badRefund.OperationKey = "BOOKING-GUARD-BAD-REFUND"
-	badRefund.Type = "refund"
+	badRefund.Type = "refund_status_sync"
 	badRefund.PlatformBookID = "BOOKING-GUARD-PLATFORM"
 	if err := db.Create(&badRefund).Error; err == nil {
-		t.Fatal("refund operation for a non-refunded local entitlement was accepted")
+		t.Fatal("refund status synchronization for a non-refunded local entitlement was accepted")
 	}
 	if err := db.Model(&ticket).Update("status", "refunded").Error; err != nil {
 		t.Fatal(err)
@@ -365,10 +384,10 @@ func TestPostgresSchema84BookingOwnershipGuardsRejectInvalidFacts(t *testing.T) 
 	validRefund := badRefund
 	validRefund.OperationKey = "BOOKING-GUARD-VALID-REFUND"
 	if err := db.Create(&validRefund).Error; err != nil {
-		t.Fatalf("valid refund operation was rejected: %v", err)
+		t.Fatalf("valid refund status synchronization was rejected: %v", err)
 	}
 	if err := db.Model(&validRefund).Updates(map[string]interface{}{"status": "confirm_pending", "next_attempt_at": nextAttempt}).Error; err == nil {
-		t.Fatal("refund operation accepted a book-only confirm_pending state")
+		t.Fatal("refund status synchronization accepted a book-only confirm_pending state")
 	}
 	failedAt := now.Add(2 * time.Minute)
 	if err := db.Model(&validOperation).Updates(map[string]interface{}{
@@ -386,6 +405,42 @@ func TestPostgresSchema84BookingOwnershipGuardsRejectInvalidFacts(t *testing.T) 
 		"failed_from_stage": "remote_succeeded", "completed_at": &failedAt,
 	}).Error; err != nil {
 		t.Fatalf("failed local finalization source stage was rejected: %v", err)
+	}
+	if CurrentPostgresSchemaVersion < 86 {
+		t.Fatalf("current schema version=%d, want at least 86", CurrentPostgresSchemaVersion)
+	}
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(`ALTER TABLE xiaohongshu_booking_operations DROP CONSTRAINT IF EXISTS chk_xiaohongshu_booking_operations_type`).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec(`ALTER TABLE xiaohongshu_booking_operations DROP CONSTRAINT IF EXISTS chk_xiaohongshu_booking_operations_semantics`).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec(`UPDATE xiaohongshu_booking_operations SET type = 'refund', operation_key = 'xhs:refund:legacy-migration' WHERE id = ?`, validRefund.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec(`ALTER TABLE xiaohongshu_booking_operations ADD CONSTRAINT chk_xiaohongshu_booking_operations_type CHECK (type IN ('book','revoke','refund'))`).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec(`ALTER TABLE xiaohongshu_booking_operations ADD CONSTRAINT chk_xiaohongshu_booking_operations_semantics CHECK (((type = 'book' AND external_book_order_id <> '') OR (type IN ('revoke','refund') AND external_book_order_id <> '' AND platform_book_id <> '')) AND (type = 'book' OR status IN ('pending','remote_succeeded','completed','failed')) AND (status NOT IN ('remote_succeeded','confirm_pending','compensation_pending','completed') OR platform_book_id <> '') AND (failed_from_stage = '' OR failed_from_stage IN ('pending','remote_succeeded','confirm_pending','compensation_pending')) AND (failed_from_stage = '' OR status = 'failed') AND ((status IN ('completed','failed')) = (completed_at IS NOT NULL)) AND ((status IN ('pending','remote_succeeded','confirm_pending','compensation_pending')) = (next_attempt_at IS NOT NULL)))`).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec(`DELETE FROM schema_migrations WHERE version >= 86`).Error; err != nil {
+			return err
+		}
+		return tx.Exec(`INSERT INTO schema_migrations (version, name, applied_at) VALUES (85, 'xiaohongshu order operation saga', NOW()) ON CONFLICT (version) DO NOTHING`).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("schema 86 refund status sync migration: %v", err)
+	}
+	var migratedRefund XiaohongshuBookingOperation
+	if err := db.First(&migratedRefund, validRefund.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if migratedRefund.Type != "refund_status_sync" || migratedRefund.OperationKey != "xhs:refund_status_sync:legacy-migration" {
+		t.Fatalf("legacy refund operation was not migrated: %+v", migratedRefund)
 	}
 }
 

@@ -23,6 +23,8 @@ var (
 	ErrXiaohongshuWebhookPayload       = errors.New("xiaohongshu webhook payload is invalid")
 )
 
+const xiaohongshuWebhookManualReviewReason = "event has no authorized local consumer; manual review required"
+
 type XiaohongshuWebhookMessage struct {
 	Nonce        string `json:"Nonce"`
 	Timestamp    int64  `json:"Timestamp"`
@@ -68,14 +70,29 @@ func (XiaohongshuWebhookService) Receive(ctx context.Context, appID string, mess
 	if err != nil {
 		return err
 	}
+	eventType := strings.TrimSpace(envelope.Event)
+	status, lastError := xiaohongshuWebhookDisposition(eventType)
 	event := model.XiaohongshuWebhookEvent{
 		TenantID: account.TenantID, ChannelAccountID: account.ID,
-		PayloadHash: hex.EncodeToString(digest[:]), EventType: strings.TrimSpace(envelope.Event),
-		PayloadCiphertext: payloadCiphertext, Status: "pending", ReceivedAt: time.Now(),
+		PayloadHash: hex.EncodeToString(digest[:]), EventType: eventType,
+		PayloadCiphertext: payloadCiphertext, Status: status, LastError: lastError, ReceivedAt: time.Now(),
 	}
 	return model.Write(func(tx *gorm.DB) error {
 		return tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&event).Error
 	})
+}
+
+// Keep only explicitly recognized non-financial events pending for a future
+// consumer. After-sale/refund and every unknown business event are safely
+// retained but must be manually reconciled; they cannot mutate local money,
+// tickets, or fulfillment merely because an authenticated callback arrived.
+func xiaohongshuWebhookDisposition(eventType string) (status, lastError string) {
+	switch strings.ToUpper(strings.TrimSpace(eventType)) {
+	case "PRODUCT_AUDIT":
+		return "pending", ""
+	default:
+		return "manual_review", xiaohongshuWebhookManualReviewReason
+	}
 }
 
 func loadXiaohongshuWebhookConfig(appID string) (*model.ChannelAccount, string, string, error) {

@@ -70,7 +70,7 @@ func resetBusinessData(t *testing.T) {
 	t.Helper()
 	err := model.Write(func(tx *gorm.DB) error {
 		for _, table := range []interface{}{
-			&model.XiaohongshuBookingOperation{}, &model.ScenicHotelPackageEntitlement{}, &model.HotelReservation{}, &model.ScenicHotelPackage{}, &model.HotelRoomInventory{}, &model.HotelRatePlan{}, &model.HotelRoomType{}, &model.HotelProperty{},
+			&model.XiaohongshuOrderOperation{}, &model.XiaohongshuBookingOperation{}, &model.ScenicHotelPackageEntitlement{}, &model.HotelReservation{}, &model.ScenicHotelPackage{}, &model.HotelRoomInventory{}, &model.HotelRatePlan{}, &model.HotelRoomType{}, &model.HotelProperty{},
 			&model.StaffResourceScope{}, &model.User{}, &model.Staff{},
 			&model.Policy{}, &model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{}, &model.LedgerEntry{}, &model.DigitalRefundTask{},
 			&model.XiaohongshuVoucherLink{}, &model.XiaohongshuOrderLink{}, &model.XiaohongshuProductConfig{}, &model.CtripOutboundTask{}, &model.CtripOrderItem{}, &model.CtripOrderLink{}, &model.XiaohongshuWebhookEvent{}, &model.MiniappCustomer{}, &model.ChannelProductMapping{}, &model.ChannelAccount{}, &model.ChannelRequest{}, &model.ChannelReservation{}, &model.TourGroupConfirmation{}, &model.TourGroupMemberChange{}, &model.TourGroupMember{}, &model.TourEntryBatch{}, &model.TourGroup{}, &model.TravelContract{}, &model.TravelAgent{}, &model.TourGuide{}, &model.TravelVehicle{}, &model.POSShiftCorrection{}, &model.POSShift{}, &model.PrintJob{}, &model.DeviceAlert{}, &model.POSHold{},

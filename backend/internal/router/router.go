@@ -208,7 +208,7 @@ func InitRouter(r *gin.Engine) {
 		hotelGroup.PUT("/:hotelID/room-types/:roomTypeID/inventory", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.SetInventory)
 	}
 
-	packageController := &api.ScenicHotelPackageController{Service: service.ScenicHotelPackageService{}, BookingSync: service.NewMiniappService()}
+	packageController := &api.ScenicHotelPackageController{Service: service.ScenicHotelPackageService{}, BookingSync: service.NewXiaohongshuBookingService()}
 	packageGroup := protected.Group("/scenic-hotel-packages")
 	{
 		packageGroup.GET("", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogRead), packageController.List)

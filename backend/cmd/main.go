@@ -207,11 +207,12 @@ func runPaymentReconciliationWorker(ctx context.Context) {
 
 func runXiaohongshuPaymentWorker(ctx context.Context) {
 	miniapp := service.NewMiniappService()
+	bookingSync := service.NewXiaohongshuBookingService()
 	process := func(now time.Time) {
 		if _, err := miniapp.ProcessPendingXiaohongshuOrders(ctx, now, 20); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Log.Error(fmt.Sprintf("xiaohongshu payment reconciliation failed: %v", err))
 		}
-		if _, err := miniapp.ProcessPendingXiaohongshuBookingSyncs(ctx, 20); err != nil && !errors.Is(err, context.Canceled) {
+		if _, err := bookingSync.ProcessPendingXiaohongshuBookingSyncs(ctx, 20); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Log.Error(fmt.Sprintf("xiaohongshu booking status reconciliation failed: %v", err))
 		}
 		if _, err := (service.PackageFulfillmentLifecycle{}).ExpirePendingEntitlements(now, 100); err != nil {

@@ -122,15 +122,18 @@ type CtripOutboundTask struct {
 // is acknowledged. The decrypted payload remains encrypted at rest.
 type XiaohongshuWebhookEvent struct {
 	Base
-	TenantID          uint       `gorm:"index;not null" json:"tenant_id"`
-	ChannelAccountID  uint       `gorm:"not null;uniqueIndex:idx_xhs_webhook_payload,priority:1" json:"channel_account_id"`
-	PayloadHash       string     `gorm:"size:64;not null;uniqueIndex:idx_xhs_webhook_payload,priority:2" json:"payload_hash"`
-	EventType         string     `gorm:"size:80;not null;index" json:"event_type"`
-	PayloadCiphertext string     `gorm:"type:text;not null" json:"-"`
-	Status            string     `gorm:"size:20;not null;default:'pending';index" json:"status"`
-	ReceivedAt        time.Time  `gorm:"not null;index" json:"received_at"`
-	ProcessedAt       *time.Time `json:"processed_at,omitempty"`
-	LastError         string     `gorm:"size:500" json:"last_error,omitempty"`
+	TenantID          uint   `gorm:"index;not null" json:"tenant_id"`
+	ChannelAccountID  uint   `gorm:"not null;uniqueIndex:idx_xhs_webhook_payload,priority:1" json:"channel_account_id"`
+	PayloadHash       string `gorm:"size:64;not null;uniqueIndex:idx_xhs_webhook_payload,priority:2" json:"payload_hash"`
+	EventType         string `gorm:"size:80;not null;index" json:"event_type"`
+	PayloadCiphertext string `gorm:"type:text;not null" json:"-"`
+	// pending is retained for supported events. manual_review is fail-closed:
+	// the callback was authenticated and persisted, but has no authorized local
+	// business consumer.
+	Status      string     `gorm:"size:20;not null;default:'pending';index" json:"status"`
+	ReceivedAt  time.Time  `gorm:"not null;index" json:"received_at"`
+	ProcessedAt *time.Time `json:"processed_at,omitempty"`
+	LastError   string     `gorm:"size:500" json:"last_error,omitempty"`
 }
 
 // ChannelRequest records the first body hash for an external endpoint and
