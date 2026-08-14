@@ -36,7 +36,7 @@ func startCatalogAIProvider(t *testing.T, response string) (*httptest.Server, *a
 		for _, message := range body.Messages {
 			prompt += message.Content
 		}
-		if !strings.Contains(prompt, "Adult Ticket") || strings.Contains(prompt, "Foreign Ticket") {
+		if !strings.Contains(prompt, "Adult Ticket") || strings.Contains(prompt, "Foreign Ticket") || strings.Contains(prompt, `"scenic_area_id"`) || strings.Contains(prompt, `"checkpoint_id"`) {
 			http.Error(writer, "tenant context leaked", http.StatusBadRequest)
 			return
 		}
@@ -122,6 +122,18 @@ func TestCatalogBatchAIPreviewEnforcesTenantRequestBudget(t *testing.T) {
 	}
 	if err := request("catalog-ai-budget-2"); err == nil || !strings.Contains(err.Error(), ErrAIBudgetExceeded.Error()) {
 		t.Fatalf("second preview error=%v, want budget rejection", err)
+	}
+}
+
+func TestCatalogBatchAIPreviewRejectsModelInventedAllProductsScope(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	server, _ := startCatalogAIProvider(t, `{"operations":[{"kind":"add_checkpoints","all_products":true,"checkpoint_names":["North Gate"]}]}`)
+	saveCatalogAIConfig(t, server.URL, 5)
+	_, err := (&CatalogBatchChangeService{}).PreviewWithAI(t.Context(), fixture.tenant.ID, 11, "admin", CatalogAIPreviewRequest{
+		InputText: "给 Adult Ticket 增加 North Gate 检票点", IdempotencyKey: "catalog-ai-policy-all-products",
+	})
+	if err == nil || !strings.Contains(err.Error(), "全部票种") {
+		t.Fatalf("model-invented broad scope was accepted: %v", err)
 	}
 }
 

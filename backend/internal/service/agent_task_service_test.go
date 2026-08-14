@@ -16,7 +16,9 @@ func TestAgentTaskCollectsMissingProductPriceBeforePreviewAndConfirmation(t *tes
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		calls.Add(1)
-		var body struct{ Messages []AIMessage `json:"messages"` }
+		var body struct {
+			Messages []AIMessage `json:"messages"`
+		}
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			http.Error(writer, "invalid request", http.StatusBadRequest)
 			return
@@ -64,6 +66,9 @@ func TestAgentTaskCollectsMissingProductPriceBeforePreviewAndConfirmation(t *tes
 	}
 	if preview["operation_type"] != AgentOperationTicketProductCreate || preview["scenic_area_name"] != "Batch Scenic" {
 		t.Fatalf("unexpected product preview: %+v", preview)
+	}
+	if strings.Contains(string(second.Preview), "tenant_id") || strings.Contains(string(second.Preview), "scenic_area_id") || strings.Contains(string(second.Preview), "checkpoint_id") || strings.Contains(string(second.Preview), "rule_id") {
+		t.Fatalf("product preview leaked internal ownership identifiers: %s", string(second.Preview))
 	}
 	completed, err := service.Confirm(fixture.tenant.ID, 11, "admin", first.TaskID)
 	if err != nil {
@@ -116,5 +121,63 @@ func TestAgentTaskReusesCatalogBatchPreviewAndConfirm(t *testing.T) {
 	}
 	if product.CurrentRevisionID == before {
 		t.Fatal("batch agent confirmation did not create a new product revision")
+	}
+}
+
+func TestAgentPlannerPolicyRejectsInventedBroadOrOppositeOperations(t *testing.T) {
+	add := []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"Adult Ticket"}, CheckpointNames: []string{"North Gate"}}}
+	if err := validateAgentPlannerEnvelope("给 Adult Ticket 增加 North Gate", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, AllProducts: true, CheckpointNames: []string{"North Gate"}}}}); err == nil {
+		t.Fatal("agent policy accepted a model-invented all-products scope")
+	}
+	if err := validateAgentPlannerEnvelope("给 Adult Ticket 增加 North Gate", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpRemoveCheckpoint, ProductNames: []string{"Adult Ticket"}, CheckpointNames: []string{"North Gate"}}}}); err == nil {
+		t.Fatal("agent policy accepted a remove operation for an add request")
+	}
+	if err := validateAgentPlannerEnvelope("给 Adult Ticket 移除 North Gate", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"Adult Ticket"}, CheckpointNames: []string{"North Gate"}}}}); err == nil {
+		t.Fatal("agent policy accepted an add operation for a remove request")
+	}
+	if err := validateAgentPlannerEnvelope("给 Adult Ticket 设置检票次数", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpSetLimit, ProductNames: []string{"Adult Ticket"}, CheckpointNames: []string{"North Gate"}, MaxPerCheckIn: intPtr(2)}}}); err == nil {
+		t.Fatal("agent policy accepted a model-invented checkpoint limit")
+	}
+	if err := validateAgentPlannerEnvelope("给 Adult Ticket 设置每点最多 2 次", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpSetLimit, ProductNames: []string{"Adult Ticket"}, CheckpointNames: []string{"North Gate"}, MaxPerCheckIn: intPtr(2)}}}); err != nil {
+		t.Fatalf("explicit checkpoint limit was rejected: %v", err)
+	}
+	if err := validateAgentPlannerEnvelope("全部票种增加 North Gate", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, AllProducts: true, CheckpointNames: []string{"North Gate"}}}}); err != nil {
+		t.Fatalf("explicit all-products request was rejected: %v", err)
+	}
+	if err := validateAgentPlannerEnvelope("给 Adult Ticket 增加 North Gate", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: add, Product: &agentProductCandidate{Name: "Other Ticket"}}); err == nil {
+		t.Fatal("agent policy accepted a mixed product and batch envelope")
+	}
+	if err := validateAgentPlannerEnvelope("创建一个成人票", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: add}); err == nil {
+		t.Fatal("agent policy accepted a batch plan for a product-create request")
+	}
+	if err := validateAgentPlannerEnvelope("给 Adult Ticket 增加 North Gate", &agentAIEnvelope{OperationType: AgentOperationTicketProductCreate, Product: &agentProductCandidate{Name: "Other Ticket"}}); err == nil {
+		t.Fatal("agent policy accepted a product plan for a batch request")
+	}
+	if err := validateAgentPlannerEnvelope("帮我介绍一下系统", &agentAIEnvelope{OperationType: AgentOperationPending}); err == nil {
+		t.Fatal("agent policy accepted an unrelated request")
+	}
+}
+
+func TestAgentInputIntentRejectsUnrelatedNewTasks(t *testing.T) {
+	if err := validateAgentInputIntent("帮我介绍一下系统", AgentOperationPending); err == nil {
+		t.Fatal("unrelated input was accepted for a new agent task")
+	}
+	if err := validateAgentInputIntent("有哪些检票点", AgentOperationPending); err == nil {
+		t.Fatal("read-only catalog question was accepted as a mutation task")
+	}
+	if err := validateAgentInputIntent("给 Adult Ticket 增加 North Gate", AgentOperationPending); err != nil {
+		t.Fatalf("catalog intent was rejected: %v", err)
+	}
+	if err := validateAgentInputIntent("创建成人票，售价 120 元", AgentOperationPending); err != nil {
+		t.Fatalf("product intent was rejected: %v", err)
+	}
+	if err := validateAgentInputIntent("北门", AgentOperationTicketProductCreate); err != nil {
+		t.Fatalf("short product continuation was rejected: %v", err)
+	}
+}
+
+func TestDecodeAgentAIEnvelopeRejectsUnknownFields(t *testing.T) {
+	if _, err := decodeAgentAIEnvelope(`{"operation_type":"catalog_batch_change","operations":[],"execute_sql":"drop table products"}`); err == nil {
+		t.Fatal("agent decoder accepted an unknown execution field")
 	}
 }

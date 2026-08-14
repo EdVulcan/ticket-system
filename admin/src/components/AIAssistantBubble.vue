@@ -57,9 +57,20 @@
               <div><span>所属景区</span><strong>{{ productPreview.scenic_area_name || '-' }}</strong></div>
               <div><span>售价 / 结算价</span><strong>{{ money(productPreview.product?.price) }} / {{ money(productPreview.product?.settlement_price) }}</strong></div>
               <div><span>上线与分销</span><strong>离线 · 不分销</strong></div>
+              <div><span>商品类型</span><strong>{{ productPreview.product?.type || '-' }}</strong></div>
+            </div>
+            <div class="product-detail-grid">
+              <div><span>有效期</span><strong>{{ validityText(productPreview.product) }}</strong></div>
+              <div><span>库存</span><strong>{{ stockText(productPreview.product) }}</strong></div>
+              <div><span>实名与限购</span><strong>{{ identityLimitText(productPreview.product) }}</strong></div>
+              <div><span>退款规则</span><strong>{{ refundText(productPreview.product) }}</strong></div>
+              <div><span>出票方式</span><strong>{{ productPreview.product?.code_mode || '-' }}</strong></div>
+              <div><span>闸机语音</span><strong>{{ productPreview.product?.gate_voice_code || '-' }}</strong></div>
+              <div class="wide"><span>标签</span><strong>{{ productPreview.product?.tags || '-' }}</strong></div>
+              <div class="wide"><span>其他退款说明</span><strong>{{ productPreview.product?.refund_rule || '-' }}</strong></div>
             </div>
             <div class="rule-preview">
-              <div class="diff-heading"><strong>检票规则</strong><span>{{ productPreview.rule?.validity_type || 'date' }}</span></div>
+              <div class="diff-heading"><strong>{{ productPreview.rule?.name || '检票规则' }}</strong><span>{{ productPreview.rule?.validity_type || 'date' }}</span></div>
               <div v-for="group in productPreview.rule_groups || []" :key="group.group_name" class="rule-group">
                 <span>{{ group.group_name || '默认分组' }}</span>
                 <code>{{ ruleItems(group) }}</code>
@@ -130,7 +141,30 @@ const isProductPreview = computed(() => preview.value?.operation_type === 'ticke
 function newKey() { return `catalog-ai-${Date.now()}-${Math.random().toString(36).slice(2, 9)}` }
 const statusText = (status: string) => ({ awaiting_confirmation: '待确认', completed: '已完成', collecting: '补充信息', expired: '已过期', failed: '执行失败' } as Record<string, string>)[status] || status
 const money = (value: any) => value === undefined || value === null ? '-' : `¥${Number(value).toFixed(2)}`
-const ruleItems = (group: any) => (group.items || []).map((item: any) => `${item.checkpoint_name || `#${item.checkpoint_id}`} ×${item.max_per_check_in}`).join('、') || '-'
+const validityText = (product: any) => {
+  if (!product) return '-'
+  if (product.validity_type === 'days') return `购买后 ${product.validity_days || 0} 天`
+  if (product.validity_start_date || product.validity_end_date) return `${product.validity_start_date || '不限'} 至 ${product.validity_end_date || '不限'}`
+  return '按日期（未设置固定日期）'
+}
+const stockText = (product: any) => {
+  if (!product) return '-'
+  if (product.stock_type === 'unlimited') return '不限库存'
+  return `${product.stock_type || '-'} · ${product.daily_stock || 0}`
+}
+const identityLimitText = (product: any) => {
+  if (!product) return '-'
+  const identity = product.real_name_required ? '实名' : '非实名'
+  const phone = product.limit_per_phone > 0 ? `手机号 ${product.limit_per_phone}` : '手机号不限'
+  const id = product.limit_per_id > 0 ? `证件 ${product.limit_per_id}` : '证件不限'
+  return `${identity} · ${phone} · ${id}`
+}
+const refundText = (product: any) => product?.refund_type || '未设置'
+const ruleItems = (group: any) => {
+  const total = group?.max_total_check_in > 0 ? `总计最多 ${group.max_total_check_in} 次` : '总次数不限'
+  const items = (group?.items || []).map((item: any) => `${item.checkpoint_name || `#${item.checkpoint_id}`} ×${item.max_per_check_in}`).join('、') || '-'
+  return `${total}；${items}`
+}
 const compactRule = (value: string) => {
   try {
     const rule = JSON.parse(value)
@@ -240,6 +274,12 @@ const resetTask = () => {
 .product-summary span, .product-summary strong { display: block; }
 .product-summary span { color: #929baa; font-size: 10px; }
 .product-summary strong { margin-top: 3px; color: #18202b; font-size: 13px; }
+.product-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.product-detail-grid div { min-width: 0; padding: 8px 10px; border: 1px solid #edf0f4; border-radius: 5px; background: #fbfcfe; }
+.product-detail-grid .wide { grid-column: 1 / -1; }
+.product-detail-grid span, .product-detail-grid strong { display: block; }
+.product-detail-grid span { color: #929baa; font-size: 10px; }
+.product-detail-grid strong { margin-top: 3px; overflow-wrap: anywhere; color: #344054; font-size: 11px; line-height: 16px; }
 .rule-preview { padding: 10px; border: 1px solid #e2e7ee; border-radius: 5px; }
 .rule-group { display: flex; justify-content: space-between; gap: 10px; padding-top: 8px; color: #344054; font-size: 11px; }
 .rule-group code { color: #667085; font-family: inherit; text-align: right; }
