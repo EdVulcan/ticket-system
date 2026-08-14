@@ -122,13 +122,15 @@ func (s *ReportService) GetBusinessSummary(tenantID uint, filter FormalReportFil
 			  AND COALESCE(p.paid_at, p.created_at) BETWEEN ? AND ?
 			  AND (? = '' OR o.channel = ?) AND (? = '' OR p.method = ?)
 			UNION ALL
-			SELECT DATE(COALESCE(r.updated_at, r.created_at)) AS date, o.channel AS channel, r.method AS method,
+			SELECT DATE(COALESCE(refund_payment.paid_at, refund_payment.created_at)) AS date, o.channel AS channel, r.method AS method,
 			       0 AS payment_count, 1 AS refund_count, 0 AS gross_cents,
 			       CASE WHEN r.amount_cents != 0 THEN r.amount_cents ELSE CAST(ROUND(r.amount * 100.0) AS INTEGER) END AS refund_cents
-			FROM refunds r JOIN orders o ON o.tenant_id = r.tenant_id AND o.order_no = r.order_no
+			FROM refunds r
+			JOIN payments refund_payment ON refund_payment.id = r.payment_id AND refund_payment.tenant_id = r.tenant_id
+			JOIN orders o ON o.tenant_id = r.tenant_id AND o.order_no = r.order_no
 			WHERE r.tenant_id = ? AND o.environment = 'production' AND r.status = 'succeeded'
 			  AND (r.parent_refund_id != 0 OR NOT EXISTS (SELECT 1 FROM refunds child WHERE child.parent_refund_id = r.id))
-			  AND COALESCE(r.updated_at, r.created_at) BETWEEN ? AND ?
+			  AND COALESCE(refund_payment.paid_at, refund_payment.created_at) BETWEEN ? AND ?
 			  AND (? = '' OR o.channel = ?) AND (? = '' OR r.method = ?)
 		)
 		SELECT date, channel, method, SUM(payment_count) AS payment_count, SUM(refund_count) AS refund_count,

@@ -16,6 +16,7 @@ Page({
       product.priceText = this.formatPrice(product.price_cents);
       product.validityText = this.formatValidity(product);
       product.isPackage = product.product_kind === 'scenic_hotel_package';
+	  product.isDeferredPackage = product.isPackage && product.booking_mode === 'after_purchase';
       product.kindLabel = product.isPackage ? '酒景套餐' : '景区门票';
       product.stayText = product.isPackage ? `${product.nights}晚 · 每份${product.rooms_per_package}间房` : '';
       this.setData({ product, storeName: catalog.store_name || '官方商城', loading: false });

@@ -105,7 +105,7 @@ test('hotel product operator can read reservations and synchronize fulfillment s
   await page.getByText('住宿预订', { exact: true }).click()
   await expect(page.getByText('净销售额', { exact: true })).toBeVisible()
   await expect(page.getByText('双人酒景套餐')).toBeVisible()
-  await expect(page.getByText('经营汇总按预订创建日期统计')).toBeVisible()
+  await expect(page.getByText('销售按付款期归属，后续退款会回写原付款期的最终净额')).toBeVisible()
   await page.getByRole('button', { name: '登记已入住' }).click()
   await expect.poll(() => checkedIn).toBe(true)
 })
@@ -115,6 +115,7 @@ test('viewer can inspect hotel catalog without receiving guest reservation data'
     role: 'viewer', permissions: ['catalog.read', 'reports.read'],
   })
   let reservationRequested = false
+  let syncFailureRequested = false
   await page.route('**/api/v1/hotels', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
@@ -124,6 +125,10 @@ test('viewer can inspect hotel catalog without receiving guest reservation data'
     reservationRequested = true
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
   })
+  await page.route('**/api/v1/scenic-hotel-packages/booking-sync-operations/failed**', route => {
+    syncFailureRequested = true
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [], total: 0, page: 1, page_size: 20 }) })
+  })
   await page.reload()
 
   await expect(page.getByRole('heading', { name: '酒店经营' })).toBeVisible()
@@ -131,10 +136,12 @@ test('viewer can inspect hotel catalog without receiving guest reservation data'
   await page.getByRole('tab', { name: '酒景套餐' }).click()
   await expect(page.getByText('套餐配置')).toBeVisible()
   await expect(page.getByText('住宿预订', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('预约同步异常', { exact: true })).toHaveCount(0)
   await expect.poll(() => reservationRequested).toBe(false)
+  await expect.poll(() => syncFailureRequested).toBe(false)
 })
 
-test('suspended supplier keeps hotel history but cannot synchronize fulfillment', async ({ page }) => {
+test('suspended supplier can still fulfill confirmed hotel reservations', async ({ page }) => {
   await openAs(page, 'supplier', '/hotel', undefined, ['scenic', 'hotel'], {
     role: 'product_operator',
     permissions: ['catalog.read', 'catalog.write', 'reports.read', 'hotel_reservations.read', 'hotel_reservations.write', 'hotel_reservations.export'],
@@ -146,13 +153,110 @@ test('suspended supplier keeps hotel history but cannot synchronize fulfillment'
     contentType: 'application/json',
     body: JSON.stringify({ data: [{ id: 31, reservation_no: 'HR1', order_no: 'ORD1', product_name: '历史套餐', guest_name: '测试游客', contact_phone: '13800138000', check_in_date: '2026-08-20', check_out_date: '2026-08-21', rooms: 1, status: 'confirmed' }], total: 1 }),
   }))
+  let checkedIn = false
+  await page.route('**/api/v1/scenic-hotel-packages/reservations/31/status', async route => {
+    checkedIn = (await route.request().postDataJSON()).status === 'checked_in'
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ message: 'ok' }) })
+  })
   await page.reload()
 
   await expect(page).toHaveURL('http://127.0.0.1:4173/hotel')
   await page.getByRole('tab', { name: '酒景套餐' }).click()
   await page.getByText('住宿预订', { exact: true }).click()
   await expect(page.getByText('历史套餐')).toBeVisible()
-  await expect(page.getByRole('button', { name: '登记已入住' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '登记已入住' })).toBeVisible()
+  await page.getByRole('button', { name: '登记已入住' }).click()
+  await expect.poll(() => checkedIn).toBe(true)
+})
+
+test('hotel reservation operator can inspect and retry failed Xiaohongshu booking synchronization', async ({ page }) => {
+  await openAs(page, 'supplier', '/hotel', undefined, ['scenic', 'hotel'], {
+    role: 'hotel_operator',
+    permissions: ['catalog.read', 'hotel_reservations.read', 'hotel_reservations.write'],
+  })
+
+  await page.route('**/api/v1/hotels', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: [{ id: 21, code: 'HOTEL01', name: '测试酒店', status: 'active' }] }),
+  }))
+  let listRequests = 0
+  await page.route('**/api/v1/scenic-hotel-packages/booking-sync-operations/failed**', route => {
+    listRequests += 1
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        data: [{
+          id: 81,
+          type: 'book',
+          status: 'failed',
+          failed_from_stage: 'confirm_pending',
+          external_book_order_id: 'SECRET-EXTERNAL-ID',
+          platform_book_id: 'SECRET-PLATFORM-ID',
+          attempts: 3,
+          max_attempts: 20,
+          last_error: '小红书预约确认超时，请检查渠道连接',
+          updated_at: '2026-08-13T09:30:00+08:00',
+          completed_at: '2026-08-13T09:30:00+08:00',
+          entitlement_no: 'ENT202608130001',
+          order_no: 'ORD202608130001',
+        }],
+        total: 1,
+        page: 1,
+        page_size: 20,
+      }),
+    })
+  })
+  let retryReason = ''
+  await page.route('**/api/v1/scenic-hotel-packages/booking-sync-operations/81/retry', async route => {
+    retryReason = String((await route.request().postDataJSON()).reason || '')
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ message: 'booking synchronization retry queued' }) })
+  })
+  await page.reload()
+
+  await page.getByRole('tab', { name: '酒景套餐' }).click()
+  await page.getByText('预约同步异常', { exact: true }).click()
+  await expect(page.getByText('ORD202608130001')).toBeVisible()
+  await expect(page.getByText('ENT202608130001')).toBeVisible()
+  await expect(page.getByText('小红书预约确认超时，请检查渠道连接')).toBeVisible()
+  await expect(page.getByText('SECRET-EXTERNAL-ID')).toHaveCount(0)
+  await expect(page.getByText('SECRET-PLATFORM-ID')).toHaveCount(0)
+
+  await page.getByRole('button', { name: '继续重试' }).click()
+  const retryDialog = page.getByRole('dialog', { name: '继续重试小红书同步' })
+  await expect(retryDialog.getByText('预约确认', { exact: true })).toBeVisible()
+  await expect(retryDialog.getByText('平台确认后本地落地', { exact: true })).toBeVisible()
+  await expect(retryDialog.getByText('小红书预约确认超时，请检查渠道连接')).toBeVisible()
+  await expect(retryDialog.getByRole('button', { name: '继续重试' })).toBeDisabled()
+  await retryDialog.getByRole('textbox').fill('渠道连接已恢复，继续处理该预约')
+  await retryDialog.getByRole('button', { name: '继续重试' }).click()
+
+  await expect.poll(() => retryReason).toBe('渠道连接已恢复，继续处理该预约')
+  await expect.poll(() => listRequests).toBeGreaterThan(1)
+})
+
+test('hotel reservation reader sees synchronization failures without retry action', async ({ page }) => {
+  await openAs(page, 'supplier', '/hotel', undefined, ['scenic', 'hotel'], {
+    role: 'hotel_viewer',
+    permissions: ['catalog.read', 'hotel_reservations.read'],
+  })
+  await page.route('**/api/v1/hotels', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: [{ id: 21, code: 'HOTEL01', name: '测试酒店', status: 'active' }] }),
+  }))
+  await page.route('**/api/v1/scenic-hotel-packages/booking-sync-operations/failed**', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ data: [{ id: 82, type: 'refund', status: 'failed', failed_from_stage: 'pending', attempts: 20, max_attempts: 20, last_error: '退款通知失败', updated_at: '2026-08-13T10:00:00+08:00', entitlement_no: 'ENT82', order_no: 'ORD82' }], total: 1, page: 1, page_size: 20 }),
+  }))
+  await page.reload()
+
+  await page.getByRole('tab', { name: '酒景套餐' }).click()
+  await page.getByText('预约同步异常', { exact: true }).click()
+  await expect(page.locator('.el-table__body-wrapper').getByText('退款同步', { exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '继续重试' })).toHaveCount(0)
 })
 
 test('suspended hotel business keeps catalog read access but hides write actions', async ({ page }) => {

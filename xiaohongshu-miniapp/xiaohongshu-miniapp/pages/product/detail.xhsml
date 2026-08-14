@@ -20,8 +20,8 @@
     </view>
     <view class="section">
       <text class="section-title">{{product.isPackage ? '使用说明' : '门票说明'}}</text>
-      <view class="info-row"><text class="info-label">{{product.isPackage ? '游玩与入住' : '有效期'}}</text><text class="info-value">{{product.isPackage ? '下单时选择入住日期' : product.validityText}}</text></view>
-      <view class="info-row"><text class="info-label">入园方式</text><text class="info-value">支付成功后查看电子票码</text></view>
+      <view class="info-row"><text class="info-label">{{product.isPackage ? '游玩与入住' : '有效期'}}</text><text class="info-value">{{product.isDeferredPackage ? '购买后预约入住日期' : (product.isPackage ? '下单时选择入住日期' : product.validityText)}}</text></view>
+      <view class="info-row"><text class="info-label">入园方式</text><text class="info-value">{{product.isDeferredPackage ? '预约成功后查看电子票码' : '支付成功后查看电子票码'}}</text></view>
       <view class="info-row"><text class="info-label">退改说明</text><text class="info-value">{{product.isPackage ? '门票与住宿按整份套餐处理' : '以票种实际规则和订单状态为准'}}</text></view>
     </view>
     <view class="section" xhs:if="{{product.description}}">

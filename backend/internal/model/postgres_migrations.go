@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 83
+const CurrentPostgresSchemaVersion = 84
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -44,7 +44,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&DistributorRelationship{}, &CapitalAccount{}, &TransactionRecord{}, &LedgerEntry{},
 		&Policy{}, &PaymentConfig{}, &Payment{}, &Refund{}, &PaymentReconciliationTask{}, &DigitalRefundTask{},
 		&AuditLog{}, &OTANonce{}, &FinancialDocument{},
-		&ChannelAccount{}, &MiniappCustomer{}, &ChannelProductMapping{}, &XiaohongshuProductConfig{}, &ChannelRequest{}, &ChannelNonce{}, &ChannelReservation{},
+		&ChannelAccount{}, &MiniappCustomer{}, &ChannelProductMapping{}, &XiaohongshuProductConfig{}, &XiaohongshuBookingOperation{}, &ChannelRequest{}, &ChannelNonce{}, &ChannelReservation{},
 		&CtripOrderLink{}, &CtripOrderItem{}, &CtripOutboundTask{}, &XiaohongshuOrderLink{}, &XiaohongshuVoucherLink{}, &XiaohongshuWebhookEvent{},
 		&ChannelBillRecord{}, &ChannelReconciliation{}, &ChannelReconciliationLine{},
 		&TravelContract{}, &TravelAgent{}, &TourGuide{}, &TravelVehicle{}, &TourGroup{}, &TourGroupMember{},
@@ -74,6 +74,32 @@ func runPostgresMigrations(db *gorm.DB) error {
 			WHERE booking_mode = 'at_purchase';
 		`).Error; err != nil {
 			return fmt.Errorf("allow package booking history per ticket: %w", err)
+		}
+	}
+	if previousSchemaVersion > 0 && previousSchemaVersion < 84 {
+		if err := db.Exec(`
+			ALTER TABLE xiaohongshu_booking_operations ADD COLUMN IF NOT EXISTS failed_from_stage varchar(30) NOT NULL DEFAULT '';
+			ALTER TABLE scenic_hotel_package_entitlements DROP CONSTRAINT IF EXISTS chk_scenic_hotel_package_entitlements_status;
+			ALTER TABLE scenic_hotel_package_entitlements ADD CONSTRAINT chk_scenic_hotel_package_entitlements_status
+				CHECK (status IN ('pending_booking','booking_pending','booked','cancel_pending','cancelled','refunded','expired'));
+			ALTER TABLE xiaohongshu_booking_operations DROP CONSTRAINT IF EXISTS chk_xiaohongshu_booking_operations_type;
+			ALTER TABLE xiaohongshu_booking_operations ADD CONSTRAINT chk_xiaohongshu_booking_operations_type
+				CHECK (type IN ('book','revoke','refund'));
+			ALTER TABLE xiaohongshu_booking_operations DROP CONSTRAINT IF EXISTS chk_xiaohongshu_booking_operations_status;
+			ALTER TABLE xiaohongshu_booking_operations ADD CONSTRAINT chk_xiaohongshu_booking_operations_status
+				CHECK (status IN ('pending','remote_succeeded','confirm_pending','completed','compensation_pending','failed'));
+			ALTER TABLE xiaohongshu_booking_operations DROP CONSTRAINT IF EXISTS chk_xiaohongshu_booking_operations_semantics;
+			ALTER TABLE xiaohongshu_booking_operations ADD CONSTRAINT chk_xiaohongshu_booking_operations_semantics CHECK (
+				((type = 'book' AND external_book_order_id <> '') OR (type IN ('revoke','refund') AND external_book_order_id <> '' AND platform_book_id <> ''))
+				AND (type = 'book' OR status IN ('pending','remote_succeeded','completed','failed'))
+				AND (status NOT IN ('remote_succeeded','confirm_pending','compensation_pending','completed') OR platform_book_id <> '')
+				AND (failed_from_stage = '' OR failed_from_stage IN ('pending','remote_succeeded','confirm_pending','compensation_pending'))
+				AND (failed_from_stage = '' OR status = 'failed')
+				AND ((status IN ('completed','failed')) = (completed_at IS NOT NULL))
+				AND ((status IN ('pending','remote_succeeded','confirm_pending','compensation_pending')) = (next_attempt_at IS NOT NULL))
+			);
+		`).Error; err != nil {
+			return fmt.Errorf("expand package booking operation states: %w", err)
 		}
 	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
@@ -419,11 +445,51 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 			      WHERE rp.id = NEW.rate_plan_id AND rp.tenant_id = NEW.tenant_id AND rt.id = NEW.room_type_id AND rt.hotel_id = NEW.hotel_id AND h.id = NEW.hotel_id AND h.tenant_id = NEW.tenant_id) THEN
 				RAISE EXCEPTION 'scenic hotel package ownership mismatch';
 			END IF;
+		WHEN 'scenic_hotel_package_entitlements' THEN
+			IF NEW.sales_tenant_id = 0 OR NEW.supplier_tenant_id = 0
+			   OR NEW.valid_until < NEW.valid_from OR NEW.reschedule_count < 0
+			   OR NOT EXISTS (
+				SELECT 1
+				FROM orders o
+				JOIN order_items i ON i.id = NEW.order_item_id AND i.order_id = o.id
+				JOIN tickets t ON t.id = NEW.ticket_id AND t.order_id = o.id AND t.order_item_id = i.id
+				JOIN scenic_hotel_packages p ON p.id = NEW.package_id
+				WHERE o.id = NEW.order_id AND o.tenant_id = NEW.sales_tenant_id
+				  AND i.fulfillment_tenant_id = NEW.supplier_tenant_id
+				  AND i.fulfillment_product_id = p.product_id
+				  AND t.tenant_id = NEW.sales_tenant_id
+				  AND t.fulfillment_tenant_id = NEW.supplier_tenant_id
+				  AND t.fulfillment_product_id = p.product_id
+				  AND p.tenant_id = NEW.supplier_tenant_id AND p.booking_mode = 'after_purchase'
+			   )
+			   OR (NEW.reservation_id != 0 AND NOT EXISTS (
+				SELECT 1 FROM hotel_reservations r
+				WHERE r.id = NEW.reservation_id AND r.sales_tenant_id = NEW.sales_tenant_id
+				  AND r.supplier_tenant_id = NEW.supplier_tenant_id AND r.order_id = NEW.order_id
+				  AND r.order_item_id = NEW.order_item_id AND r.ticket_id = NEW.ticket_id
+				  AND r.package_id = NEW.package_id
+			   ))
+			   OR (NEW.status = 'pending_booking' AND NEW.reservation_id != 0)
+			   OR (NEW.status IN ('booking_pending','booked','cancel_pending') AND NEW.reservation_id = 0) THEN
+				RAISE EXCEPTION 'scenic hotel package entitlement ownership mismatch';
+			END IF;
 		WHEN 'hotel_reservations' THEN
 			IF NEW.sales_tenant_id = 0 OR NEW.supplier_tenant_id = 0 OR NEW.sales_tenant_id != NEW.supplier_tenant_id
-			   OR NOT EXISTS (SELECT 1 FROM orders o JOIN order_items i ON i.order_id = o.id JOIN tickets t ON t.order_item_id = i.id
-			      WHERE o.id = NEW.order_id AND o.tenant_id = NEW.sales_tenant_id AND i.id = NEW.order_item_id AND t.id = NEW.ticket_id)
-			   OR NOT EXISTS (SELECT 1 FROM scenic_hotel_packages p WHERE p.id = NEW.package_id AND p.tenant_id = NEW.supplier_tenant_id AND p.hotel_id = NEW.hotel_id AND p.room_type_id = NEW.room_type_id AND p.rate_plan_id = NEW.rate_plan_id)
+			   OR NOT EXISTS (
+				SELECT 1
+				FROM orders o
+				JOIN order_items i ON i.id = NEW.order_item_id AND i.order_id = o.id
+				JOIN tickets t ON t.id = NEW.ticket_id AND t.order_id = o.id AND t.order_item_id = i.id
+				JOIN scenic_hotel_packages p ON p.id = NEW.package_id
+				WHERE o.id = NEW.order_id AND o.tenant_id = NEW.sales_tenant_id
+				  AND i.fulfillment_tenant_id = NEW.supplier_tenant_id
+				  AND i.fulfillment_product_id = p.product_id
+				  AND t.tenant_id = NEW.sales_tenant_id
+				  AND t.fulfillment_tenant_id = NEW.supplier_tenant_id
+				  AND t.fulfillment_product_id = p.product_id
+				  AND p.tenant_id = NEW.supplier_tenant_id
+				  AND p.hotel_id = NEW.hotel_id AND p.room_type_id = NEW.room_type_id AND p.rate_plan_id = NEW.rate_plan_id
+			   )
 			   OR NEW.check_out_date <= NEW.check_in_date OR NEW.rooms <= 0 THEN
 				RAISE EXCEPTION 'hotel reservation ownership mismatch';
 			END IF;
@@ -504,6 +570,28 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 				  AND c.id = NEW.miniapp_customer_id AND c.tenant_id = NEW.tenant_id
 				  AND o.tenant_id = NEW.tenant_id AND o.channel_account_id = NEW.channel_account_id
 			) THEN RAISE EXCEPTION 'xiaohongshu order ownership mismatch'; END IF;
+		WHEN 'xiaohongshu_booking_operations' THEN
+			IF NEW.tenant_id = 0 OR COALESCE(NEW.request_payload_ciphertext, '') = ''
+			   OR NEW.attempts < 0 OR NEW.max_attempts <= 0 OR NEW.attempts > NEW.max_attempts
+			   OR COALESCE(NEW.failed_from_stage, '') NOT IN ('','pending','remote_succeeded','confirm_pending','compensation_pending')
+			   OR (COALESCE(NEW.failed_from_stage, '') <> '' AND NEW.status <> 'failed')
+			   OR (NEW.type = 'book' AND COALESCE(NEW.external_book_order_id, '') = '')
+			   OR (NEW.type IN ('revoke','refund') AND (COALESCE(NEW.external_book_order_id, '') = '' OR COALESCE(NEW.platform_book_id, '') = ''))
+			   OR (NEW.type IN ('revoke','refund') AND NEW.status NOT IN ('pending','remote_succeeded','completed','failed'))
+			   OR (NEW.status IN ('remote_succeeded','confirm_pending','compensation_pending','completed') AND COALESCE(NEW.platform_book_id, '') = '')
+			   OR ((NEW.status IN ('completed','failed')) != (NEW.completed_at IS NOT NULL))
+			   OR ((NEW.status IN ('pending','remote_succeeded','confirm_pending','compensation_pending')) != (NEW.next_attempt_at IS NOT NULL))
+			   OR NOT EXISTS (
+				SELECT 1
+				FROM channel_accounts a
+				JOIN xiaohongshu_order_links l ON l.channel_account_id = a.id
+				JOIN scenic_hotel_package_entitlements e ON e.id = NEW.entitlement_id
+				JOIN tickets t ON t.id = e.ticket_id
+				WHERE a.id = NEW.channel_account_id AND a.tenant_id = NEW.tenant_id AND a.type = 'xiaohongshu'
+				  AND l.id = NEW.order_link_id AND l.tenant_id = NEW.tenant_id
+				  AND e.sales_tenant_id = NEW.tenant_id AND e.order_id = l.order_id
+				  AND (NEW.type <> 'refund' OR (e.status = 'refunded' AND t.status = 'refunded'))
+			   ) THEN RAISE EXCEPTION 'xiaohongshu booking operation ownership mismatch'; END IF;
 		WHEN 'xiaohongshu_voucher_links' THEN
 			IF NEW.tenant_id = 0 OR NOT EXISTS (
 				SELECT 1 FROM xiaohongshu_order_links l JOIN tickets t ON t.id = NEW.ticket_id
@@ -517,7 +605,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_room_inventories", "scenic_hotel_packages", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
+	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_room_inventories", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

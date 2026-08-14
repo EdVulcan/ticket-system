@@ -113,31 +113,35 @@ type MiniappPackageBookingInput struct {
 }
 
 type MiniappOrderResult struct {
-	OrderNo             string                      `json:"order_no"`
-	PlatformOrderID     string                      `json:"order_id,omitempty"`
-	ProductName         string                      `json:"product_name,omitempty"`
-	ImageURL            string                      `json:"image_url,omitempty"`
-	Quantity            int                         `json:"quantity"`
-	PayToken            string                      `json:"pay_token,omitempty"`
-	AmountCents         int64                       `json:"amount_cents"`
-	Status              string                      `json:"status"`
-	ExpiresAt           *time.Time                  `json:"expires_at,omitempty"`
-	TicketCodes         []string                    `json:"ticket_codes,omitempty"`
-	ProductKind         string                      `json:"product_kind"`
-	HotelStay           *MiniappHotelStay           `json:"hotel_stay,omitempty"`
-	PackageEntitlements []MiniappPackageEntitlement `json:"package_entitlements,omitempty"`
+	OrderNo              string                      `json:"order_no"`
+	PlatformOrderID      string                      `json:"order_id,omitempty"`
+	ProductName          string                      `json:"product_name,omitempty"`
+	ImageURL             string                      `json:"image_url,omitempty"`
+	Quantity             int                         `json:"quantity"`
+	PayToken             string                      `json:"pay_token,omitempty"`
+	AmountCents          int64                       `json:"amount_cents"`
+	Status               string                      `json:"status"`
+	CoreOrderStatus      string                      `json:"core_order_status"`
+	PlatformPaymentState string                      `json:"platform_payment_state"`
+	ExpiresAt            *time.Time                  `json:"expires_at,omitempty"`
+	TicketCodes          []string                    `json:"ticket_codes,omitempty"`
+	ProductKind          string                      `json:"product_kind"`
+	HotelStay            *MiniappHotelStay           `json:"hotel_stay,omitempty"`
+	PackageEntitlements  []MiniappPackageEntitlement `json:"package_entitlements,omitempty"`
 }
 
 type MiniappOrderSummary struct {
-	OrderNo     string     `json:"order_no"`
-	ProductName string     `json:"product_name"`
-	ProductKind string     `json:"product_kind"`
-	ImageURL    string     `json:"image_url,omitempty"`
-	Quantity    int        `json:"quantity"`
-	AmountCents int64      `json:"amount_cents"`
-	Status      string     `json:"status"`
-	CreatedAt   time.Time  `json:"created_at"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	OrderNo              string     `json:"order_no"`
+	ProductName          string     `json:"product_name"`
+	ProductKind          string     `json:"product_kind"`
+	ImageURL             string     `json:"image_url,omitempty"`
+	Quantity             int        `json:"quantity"`
+	AmountCents          int64      `json:"amount_cents"`
+	Status               string     `json:"status"`
+	CoreOrderStatus      string     `json:"core_order_status"`
+	PlatformPaymentState string     `json:"platform_payment_state"`
+	CreatedAt            time.Time  `json:"created_at"`
+	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
 }
 
 type MiniappOrderPage struct {
@@ -372,20 +376,22 @@ func (s MiniappService) ListXiaohongshuOrders(customer *model.MiniappCustomer, p
 	}
 
 	type orderRow struct {
-		OrderNo     string
-		ProductName string
-		ImageURL    string
-		Quantity    int
-		TotalAmount float64
-		Status      string
-		CreatedAt   time.Time
-		ExpiresAt   *time.Time
-		PackageID   uint
+		OrderNo              string
+		ProductName          string
+		ImageURL             string
+		Quantity             int
+		TotalAmount          float64
+		Status               string
+		PlatformPaymentState string
+		CreatedAt            time.Time
+		ExpiresAt            *time.Time
+		PackageID            uint
 	}
 	var rows []orderRow
 	err := base.
 		Select(`orders.order_no, item.product_name, COALESCE(xhs_config.image_url, '') AS image_url,
-			item.quantity, orders.total_amount, link.state AS status, orders.created_at, link.pay_token_expires_at AS expires_at,
+			item.quantity, orders.total_amount, orders.status AS status, link.state AS platform_payment_state,
+			orders.created_at, link.pay_token_expires_at AS expires_at,
 			COALESCE(hotel_package.id, 0) AS package_id`).
 		Joins("JOIN orders ON orders.id = link.order_id AND orders.tenant_id = link.tenant_id AND orders.deleted_at IS NULL").
 		Joins("JOIN order_items AS item ON item.order_id = orders.id AND item.deleted_at IS NULL").
@@ -406,6 +412,7 @@ func (s MiniappService) ListXiaohongshuOrders(customer *model.MiniappCustomer, p
 		items = append(items, MiniappOrderSummary{
 			OrderNo: row.OrderNo, ProductName: row.ProductName, ProductKind: kind, ImageURL: row.ImageURL,
 			Quantity: row.Quantity, AmountCents: moneyCents(row.TotalAmount), Status: row.Status,
+			CoreOrderStatus: row.Status, PlatformPaymentState: row.PlatformPaymentState,
 			CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
 		})
 	}
@@ -594,12 +601,10 @@ func (s MiniappService) BookXiaohongshuPackage(ctx context.Context, customer *mo
 
 	var order model.Order
 	var link model.XiaohongshuOrderLink
-	var bookedEntitlementID uint
-	var confirmedBookOrderID, confirmedPlatformBookID string
-	var bookingClient *xiaohongshu.Client
+	var operationID uint
 	err = model.Write(func(tx *gorm.DB) error {
 		var entitlement model.ScenicHotelPackageEntitlement
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("entitlement_no = ? AND sales_tenant_id = ?", input.EntitlementNo, customer.TenantID).First(&entitlement).Error; err != nil {
+		if err := tx.Where("entitlement_no = ? AND sales_tenant_id = ?", input.EntitlementNo, customer.TenantID).First(&entitlement).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("order_id = ? AND miniapp_customer_id = ? AND channel_account_id = ?", entitlement.OrderID, customer.ID, customer.ChannelAccountID).First(&link).Error; err != nil {
@@ -620,29 +625,26 @@ func (s MiniappService) BookXiaohongshuPackage(ctx context.Context, customer *mo
 		if err := tx.Where("channel_product_mapping_id = ? AND product_type = ? AND sync_status = ?", mapping.ID, xiaohongshu.ProductTypePresaleVoucher, "synced").First(&config).Error; err != nil {
 			return errors.New("该套餐尚未配置为小红书预售券")
 		}
-		var account model.ChannelAccount
-		if err := tx.Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", link.ChannelAccountID, customer.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
-			return ErrMiniappUnavailable
-		}
 		openID, decryptErr := utils.DecryptAES(customer.OpenIDCiphertext)
 		if decryptErr != nil || strings.TrimSpace(openID) == "" {
 			return ErrMiniappUnauthenticated
 		}
-		secret, decryptErr := utils.DecryptAES(account.SecretCiphertext)
-		if decryptErr != nil || strings.TrimSpace(secret) == "" {
-			return ErrMiniappUnavailable
+		operationKey := xiaohongshuBookingOperationKey("book", entitlement.ID, input.ClientRequestID)
+		if entitlement.Status == "cancel_pending" {
+			return errors.New("预约正在取消，请稍后再试")
 		}
-		newClient := s.NewXiaohongshuClient
-		if newClient == nil {
-			newClient = xiaohongshu.NewClient
-		}
-		client := newClient(account.AppID, secret, account.Environment)
-		bookingClient = client
-		if entitlement.Status == "booked" && entitlement.ClientRequestID == input.ClientRequestID && entitlement.PlatformBookID != "" {
-			if entitlement.PlatformSyncStatus != "synced" {
-				bookedEntitlementID, confirmedBookOrderID, confirmedPlatformBookID = entitlement.ID, entitlement.ExternalBookOrderID, entitlement.PlatformBookID
+		var existing model.XiaohongshuBookingOperation
+		existingErr := tx.Where("operation_key = ? AND tenant_id = ? AND entitlement_id = ? AND type = ?", operationKey, customer.TenantID, entitlement.ID, "book").First(&existing).Error
+		if existingErr == nil {
+			if (entitlement.Status == "booking_pending" || entitlement.Status == "booked") &&
+				entitlement.ClientRequestID == input.ClientRequestID && entitlement.ExternalBookOrderID == existing.ExternalBookOrderID {
+				operationID = existing.ID
+				return nil
 			}
-			return nil
+			return errors.New("该预约请求编号已用于历史预约，请重新提交")
+		}
+		if !errors.Is(existingErr, gorm.ErrRecordNotFound) {
+			return existingErr
 		}
 		var voucher model.XiaohongshuVoucherLink
 		if err := tx.Where("xiaohongshu_order_link_id = ? AND ticket_id = ?", link.ID, entitlement.TicketID).First(&voucher).Error; err != nil {
@@ -657,7 +659,7 @@ func (s MiniappService) BookXiaohongshuPackage(ctx context.Context, customer *mo
 			return errors.New("套餐预约配置不可用")
 		}
 		externalBookID := miniappBookingExternalID(entitlement.ID, input.ClientRequestID)
-		booked, err := (PackageFulfillmentLifecycle{}).BookEntitlementTx(tx, PackageEntitlementBookingInput{
+		prepared, err := (PackageFulfillmentLifecycle{}).PrepareBookingTx(tx, PackageEntitlementBookingInput{
 			EntitlementNo: input.EntitlementNo, CheckInDate: checkIn, GuestName: input.GuestName,
 			ContactPhone: input.ContactPhone, ClientRequestID: input.ClientRequestID,
 			ExternalBookOrderID: externalBookID,
@@ -665,44 +667,42 @@ func (s MiniappService) BookXiaohongshuPackage(ctx context.Context, customer *mo
 		if err != nil {
 			return err
 		}
-		response, err := client.BookPresaleVoucher(ctx, xiaohongshu.PresaleBookRequest{
-			ProductType: xiaohongshu.ProductTypePresaleVoucher, OpenID: openID,
-			ExternalOrderID: link.ExternalOrderID, ExternalProductID: mapping.ExternalCode,
+		if err := tx.Where("operation_key = ? AND tenant_id = ? AND entitlement_id = ? AND type = ?", operationKey, customer.TenantID, prepared.ID, "book").First(&existing).Error; err == nil {
+			operationID = existing.ID
+			return nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		if prepared.Status == "booked" && prepared.PlatformSyncStatus == "synced" {
+			return nil
+		}
+		payloadCiphertext, err := encryptXiaohongshuBookingPayload(xiaohongshuBookingOperationPayload{
+			OpenID: openID, ExternalOrderID: link.ExternalOrderID, ExternalProductID: mapping.ExternalCode,
 			ExternalSKUID: config.ExternalSKUID, POIID: firstXiaohongshuPOIID(config.POIIDsJSON),
-			BookInfo: xiaohongshu.PresaleBookInfo{ExternalBookOrderID: externalBookID, TotalPrice: 0,
-				Details: []xiaohongshu.PresaleBookDetail{{VoucherCode: voucherCode, Price: 0, CheckInDate: checkIn.Format("2006-01-02"), CheckOutDate: checkIn.AddDate(0, 0, packageRow.Nights).Format("2006-01-02")}}},
+			VoucherCode: voucherCode, VoucherCodeHash: voucher.VoucherCodeHash,
+			CheckInDate: checkIn.Format("2006-01-02"), CheckOutDate: checkIn.AddDate(0, 0, packageRow.Nights).Format("2006-01-02"),
 		})
 		if err != nil {
 			return err
 		}
-		result := response.Results[0]
-		confirmedBookOrderID, confirmedPlatformBookID = externalBookID, result.BookID
-		if result.VoucherCode != "" && hashMiniappValue(result.VoucherCode) != voucher.VoucherCodeHash {
-			return errors.New("小红书预约返回的券码不匹配")
+		nextAttempt := s.now()
+		operation := model.XiaohongshuBookingOperation{
+			TenantID: customer.TenantID, ChannelAccountID: link.ChannelAccountID, OrderLinkID: link.ID,
+			EntitlementID: prepared.ID, OperationKey: operationKey, Type: "book", Status: "pending",
+			ExternalBookOrderID: externalBookID, RequestPayloadCiphertext: payloadCiphertext,
+			MaxAttempts: 20, NextAttemptAt: &nextAttempt,
 		}
-		if err := tx.Model(booked).Updates(map[string]interface{}{"platform_book_id": result.BookID, "external_book_order_id": externalBookID, "platform_sync_status": "pending", "platform_sync_error": ""}).Error; err != nil {
+		if err := tx.Create(&operation).Error; err != nil {
 			return err
 		}
-		bookedEntitlementID = booked.ID
+		operationID = operation.ID
 		return nil
 	})
 	if err != nil {
-		if confirmedPlatformBookID != "" && bookingClient != nil {
-			_ = bookingClient.SyncPresaleBookStatus(ctx, xiaohongshu.PresaleBookStatusRequest{ExternalBookOrderID: confirmedBookOrderID, BookIDs: []string{confirmedPlatformBookID}, Status: 2})
-		}
 		return nil, err
 	}
-	if bookedEntitlementID != 0 && confirmedPlatformBookID != "" && bookingClient != nil {
-		syncErr := bookingClient.SyncPresaleBookStatus(ctx, xiaohongshu.PresaleBookStatusRequest{ExternalBookOrderID: confirmedBookOrderID, BookIDs: []string{confirmedPlatformBookID}, Status: 1})
-		status, message := "synced", ""
-		if syncErr != nil {
-			status, message = "failed", truncateChannelError(syncErr.Error())
-		}
-		if updateErr := model.Write(func(tx *gorm.DB) error {
-			return tx.Model(&model.ScenicHotelPackageEntitlement{}).Where("id = ? AND status = ?", bookedEntitlementID, "booked").Updates(map[string]interface{}{"platform_sync_status": status, "platform_sync_error": message}).Error
-		}); updateErr != nil {
-			return nil, updateErr
-		}
+	if operationID != 0 {
+		_, _ = s.processXiaohongshuBookingOperation(ctx, operationID)
 	}
 	return s.orderResult(&link, &order, false)
 }
@@ -713,12 +713,10 @@ func (s MiniappService) CancelXiaohongshuPackageBooking(ctx context.Context, cus
 	}
 	var order model.Order
 	var link model.XiaohongshuOrderLink
-	var cancelledEntitlementID uint
-	var externalBookID, platformBookID string
-	var cancelClient *xiaohongshu.Client
+	var operationID uint
 	err := model.Write(func(tx *gorm.DB) error {
 		var entitlement model.ScenicHotelPackageEntitlement
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("entitlement_no = ? AND sales_tenant_id = ?", strings.TrimSpace(entitlementNo), customer.TenantID).First(&entitlement).Error; err != nil {
+		if err := tx.Where("entitlement_no = ? AND sales_tenant_id = ?", strings.TrimSpace(entitlementNo), customer.TenantID).First(&entitlement).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("order_id = ? AND miniapp_customer_id = ? AND channel_account_id = ?", entitlement.OrderID, customer.ID, customer.ChannelAccountID).First(&link).Error; err != nil {
@@ -730,49 +728,46 @@ func (s MiniappService) CancelXiaohongshuPackageBooking(ctx context.Context, cus
 		if entitlement.Status == "pending_booking" && entitlement.PlatformBookID == "" {
 			return nil
 		}
-		externalBookID, platformBookID = entitlement.ExternalBookOrderID, entitlement.PlatformBookID
-		cancelledEntitlementID = entitlement.ID
-		if entitlement.Status == "booked" {
-			if _, err := (PackageFulfillmentLifecycle{}).CancelEntitlementBookingTx(tx, entitlement.EntitlementNo); err != nil {
-				return err
-			}
+		if entitlement.PlatformBookID == "" || entitlement.ExternalBookOrderID == "" {
+			return errors.New("小红书预约编号不完整，无法撤销")
 		}
-		if platformBookID == "" {
+		prepared, err := (PackageFulfillmentLifecycle{}).PrepareCancelTx(tx, entitlement.EntitlementNo)
+		if err != nil {
+			return err
+		}
+		if prepared.Status == "pending_booking" && prepared.PlatformBookID == "" {
 			return nil
 		}
-		var account model.ChannelAccount
-		if err := tx.Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", link.ChannelAccountID, customer.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
-			return ErrMiniappUnavailable
+		operationKey := xiaohongshuBookingOperationKey("revoke", prepared.ID, prepared.ExternalBookOrderID)
+		var existing model.XiaohongshuBookingOperation
+		if err := tx.Where("operation_key = ? AND tenant_id = ? AND entitlement_id = ? AND type = ?", operationKey, customer.TenantID, prepared.ID, "revoke").First(&existing).Error; err == nil {
+			operationID = existing.ID
+			return nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
 		}
-		secret, decryptErr := utils.DecryptAES(account.SecretCiphertext)
-		if decryptErr != nil || strings.TrimSpace(secret) == "" {
-			return ErrMiniappUnavailable
+		payloadCiphertext, err := encryptXiaohongshuBookingPayload(xiaohongshuBookingOperationPayload{})
+		if err != nil {
+			return err
 		}
-		newClient := s.NewXiaohongshuClient
-		if newClient == nil {
-			newClient = xiaohongshu.NewClient
+		nextAttempt := s.now()
+		operation := model.XiaohongshuBookingOperation{
+			TenantID: customer.TenantID, ChannelAccountID: link.ChannelAccountID, OrderLinkID: link.ID,
+			EntitlementID: prepared.ID, OperationKey: operationKey, Type: "revoke", Status: "pending",
+			ExternalBookOrderID: prepared.ExternalBookOrderID, PlatformBookID: prepared.PlatformBookID,
+			RequestPayloadCiphertext: payloadCiphertext, MaxAttempts: 20, NextAttemptAt: &nextAttempt,
 		}
-		cancelClient = newClient(account.AppID, secret, account.Environment)
+		if err := tx.Create(&operation).Error; err != nil {
+			return err
+		}
+		operationID = operation.ID
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	if cancelledEntitlementID != 0 && platformBookID != "" && cancelClient != nil {
-		syncErr := cancelClient.SyncPresaleBookStatus(ctx, xiaohongshu.PresaleBookStatusRequest{ExternalBookOrderID: externalBookID, BookIDs: []string{platformBookID}, Status: 4})
-		status, message := "synced", ""
-		updates := map[string]interface{}{}
-		if syncErr != nil {
-			status, message = "failed", truncateChannelError(syncErr.Error())
-		} else {
-			updates["external_book_order_id"], updates["platform_book_id"] = "", ""
-		}
-		updates["platform_sync_status"], updates["platform_sync_error"] = status, message
-		if updateErr := model.Write(func(tx *gorm.DB) error {
-			return tx.Model(&model.ScenicHotelPackageEntitlement{}).Where("id = ? AND status = ?", cancelledEntitlementID, "pending_booking").Updates(updates).Error
-		}); updateErr != nil {
-			return nil, updateErr
-		}
+	if operationID != 0 {
+		_, _ = s.processXiaohongshuBookingOperation(ctx, operationID)
 	}
 	return s.orderResult(&link, &order, false)
 }
@@ -940,58 +935,31 @@ func (s MiniappService) ProcessPendingXiaohongshuBookingSyncs(ctx context.Contex
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	type syncRow struct {
-		EntitlementID, TenantID, ChannelAccountID              uint
-		EntitlementStatus, ExternalBookOrderID, PlatformBookID string
+	if err := s.ensurePendingXiaohongshuRefundOperations(limit); err != nil {
+		return 0, err
 	}
-	var rows []syncRow
-	if err := model.DB.Table("scenic_hotel_package_entitlements AS entitlement").
-		Select(`entitlement.id AS entitlement_id, entitlement.sales_tenant_id AS tenant_id,
-			link.channel_account_id, entitlement.status AS entitlement_status,
-			entitlement.external_book_order_id, entitlement.platform_book_id`).
-		Joins("JOIN xiaohongshu_order_links AS link ON link.order_id = entitlement.order_id AND link.tenant_id = entitlement.sales_tenant_id").
-		Where("entitlement.platform_sync_status IN ? AND entitlement.platform_book_id <> ''", []string{"pending", "failed"}).
-		Where("entitlement.status IN ?", []string{"booked", "pending_booking", "refunded", "cancelled"}).
-		Order("entitlement.updated_at ASC").Limit(limit).Scan(&rows).Error; err != nil {
+	var operationIDs []uint
+	if err := model.DB.Model(&model.XiaohongshuBookingOperation{}).
+		Where("status IN ?", []string{"pending", "remote_succeeded", "confirm_pending", "compensation_pending"}).
+		Where("next_attempt_at IS NULL OR next_attempt_at <= ?", s.now()).
+		Order("updated_at ASC, id ASC").Limit(limit).Pluck("id", &operationIDs).Error; err != nil {
 		return 0, err
 	}
 	processed := 0
-	for _, row := range rows {
-		var account model.ChannelAccount
-		if err := model.DB.Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", row.ChannelAccountID, row.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
-			continue
-		}
-		secret, err := utils.DecryptAES(account.SecretCiphertext)
-		if err != nil || strings.TrimSpace(secret) == "" {
-			continue
-		}
-		newClient := s.NewXiaohongshuClient
-		if newClient == nil {
-			newClient = xiaohongshu.NewClient
-		}
-		statusCode := 1
-		if row.EntitlementStatus != "booked" {
-			statusCode = 4
-		}
-		err = newClient(account.AppID, secret, account.Environment).SyncPresaleBookStatus(ctx, xiaohongshu.PresaleBookStatusRequest{ExternalBookOrderID: row.ExternalBookOrderID, BookIDs: []string{row.PlatformBookID}, Status: statusCode})
-		status, message := "synced", ""
-		updates := map[string]interface{}{}
+	var firstErr error
+	for _, operationID := range operationIDs {
+		completed, err := s.processXiaohongshuBookingOperation(ctx, operationID)
 		if err != nil {
-			status, message = "failed", truncateChannelError(err.Error())
-		} else if statusCode == 4 {
-			updates["external_book_order_id"], updates["platform_book_id"] = "", ""
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
-		updates["platform_sync_status"], updates["platform_sync_error"] = status, message
-		if updateErr := model.Write(func(tx *gorm.DB) error {
-			return tx.Model(&model.ScenicHotelPackageEntitlement{}).Where("id = ? AND status = ?", row.EntitlementID, row.EntitlementStatus).Updates(updates).Error
-		}); updateErr != nil {
-			return processed, updateErr
-		}
-		if err == nil {
+		if completed {
 			processed++
 		}
 	}
-	return processed, nil
+	return processed, firstErr
 }
 
 func (s MiniappService) loadOrderResult(customer *model.MiniappCustomer, requestID string) (*MiniappOrderResult, error) {
@@ -1007,7 +975,10 @@ func (s MiniappService) loadOrderResult(customer *model.MiniappCustomer, request
 }
 
 func (s MiniappService) orderResult(link *model.XiaohongshuOrderLink, order *model.Order, includePayToken bool) (*MiniappOrderResult, error) {
-	result := &MiniappOrderResult{OrderNo: order.OrderNo, PlatformOrderID: link.PlatformOrderID, AmountCents: moneyCents(order.TotalAmount), Status: link.State, ExpiresAt: link.PayTokenExpiresAt}
+	result := &MiniappOrderResult{
+		OrderNo: order.OrderNo, PlatformOrderID: link.PlatformOrderID, AmountCents: moneyCents(order.TotalAmount),
+		Status: order.Status, CoreOrderStatus: order.Status, PlatformPaymentState: link.State, ExpiresAt: link.PayTokenExpiresAt,
+	}
 	type presentationRow struct {
 		ProductName string
 		ImageURL    string
@@ -1086,8 +1057,12 @@ func (s MiniappService) orderResult(link *model.XiaohongshuOrderLink, order *mod
 		}
 		result.PayToken = payToken
 	}
-	if link.State == "paid" {
-		if err := model.DB.Model(&model.Ticket{}).Where("order_id = ? AND tenant_id = ? AND status IN ?", order.ID, order.TenantID, []string{"unused", "active", "issued", "used"}).Order("id ASC").Pluck("ticket_code", &result.TicketCodes).Error; err != nil {
+	if link.State == "paid" && order.Status != "refunded" && order.Status != "cancelled" {
+		if err := model.DB.Model(&model.Ticket{}).
+			Where("order_id = ? AND tenant_id = ? AND status IN ?", order.ID, order.TenantID, []string{"unused", "active", "issued", "used"}).
+			Where(`NOT EXISTS (SELECT 1 FROM scenic_hotel_package_entitlements e WHERE e.order_id = ? AND e.deleted_at IS NULL)
+				OR EXISTS (SELECT 1 FROM scenic_hotel_package_entitlements e WHERE e.order_id = ? AND e.ticket_id = tickets.id AND e.status = 'booked' AND e.deleted_at IS NULL)`, order.ID, order.ID).
+			Order("id ASC").Pluck("ticket_code", &result.TicketCodes).Error; err != nil {
 			return nil, err
 		}
 	}

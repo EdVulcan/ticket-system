@@ -545,7 +545,16 @@ func settleOrderIfFullyPaidTx(tx *gorm.DB, order *model.Order) error {
 		return err
 	}
 	order.Status = "paid"
-	if err := (PackageFulfillmentLifecycle{}).ConfirmOrder(tx, order.ID); err != nil {
+	paidAt := time.Now()
+	var confirmedAt *time.Time
+	if err := tx.Model(&model.Payment{}).Where("tenant_id = ? AND order_no = ? AND status IN ?", order.TenantID, order.OrderNo, []string{"paid", "partial_refunded"}).
+		Select("MAX(COALESCE(paid_at, created_at))").Scan(&confirmedAt).Error; err != nil {
+		return err
+	}
+	if confirmedAt != nil && !confirmedAt.IsZero() {
+		paidAt = *confirmedAt
+	}
+	if err := (PackageFulfillmentLifecycle{}).ConfirmOrderAt(tx, order.ID, paidAt); err != nil {
 		return err
 	}
 	return updateFulfillmentOrdersTx(tx, order.ID, "paid")

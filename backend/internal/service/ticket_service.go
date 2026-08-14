@@ -7,6 +7,7 @@ import (
 	"ticket-backend/internal/model"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -53,10 +54,13 @@ func (s *TicketService) VerifyDeviceRequest(code string, checkPointID, deviceID,
 		}
 
 		var ticket model.Ticket
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "NOWAIT"}).
 			Preload("OrderItem.Product").
 			Where("ticket_code = ? AND (fulfillment_tenant_id = ? OR (fulfillment_tenant_id = 0 AND tenant_id = ?))", code, tenantID, tenantID).
 			First(&ticket).Error; err != nil {
+			if isTicketLockUnavailable(err) {
+				return fmt.Errorf("%w: concurrent verification", ErrTicketUnavailable)
+			}
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrInvalidTicket
 			}
@@ -186,7 +190,7 @@ func (s *TicketService) VerifyDeviceRequest(code string, checkPointID, deviceID,
 			var remaining int64
 			if err := tx.Model(&model.Ticket{}).
 				Joins("JOIN order_items ON order_items.id = tickets.order_item_id").
-				Where("order_items.order_id = ? AND tickets.status IN ?", order.ID, []string{"unused", "active"}).
+				Where("order_items.order_id = ? AND tickets.status IN ?", order.ID, []string{"pending_booking", "unused", "active"}).
 				Count(&remaining).Error; err != nil {
 				return err
 			}
@@ -215,6 +219,11 @@ func (s *TicketService) VerifyDeviceRequest(code string, checkPointID, deviceID,
 		})
 	}
 	return err
+}
+
+func isTicketLockUnavailable(err error) bool {
+	var postgresError *pgconn.PgError
+	return errors.As(err, &postgresError) && postgresError.Code == "55P03"
 }
 
 func matchRule(rule model.TicketRule, checkpointID uint) (*model.RuleGroup, *model.RuleItem) {

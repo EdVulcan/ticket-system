@@ -62,6 +62,13 @@
       </template>
     </section>
 
+    <p v-if="activeTab === 'business-summary'" class="report-basis">
+      汇总表按原收款日期归属最终净额；后续退款会回写原收款期。退款的实际发生时间仍在营业明细和审计中保留。
+    </p>
+    <p v-else-if="activeTab === 'verification-summary'" class="report-basis">
+      核销汇总按原核销日期归属最终有效人次；核销后退款会回写原核销期，不计入退款发生期的核销收入。
+    </p>
+
     <section class="table-section" v-loading="loading">
       <el-table v-if="activeTab === 'business-summary'" :data="rows" stripe height="100%">
         <el-table-column prop="date" label="营业日期" width="120" />

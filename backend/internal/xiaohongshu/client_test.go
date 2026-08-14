@@ -98,7 +98,7 @@ func TestPresaleBookingUsesComponentDealEndpoints(t *testing.T) {
 			_, _ = w.Write([]byte(`{"data":{"access_token":"token-1","expire_in":7200},"success":true,"msg":"success","code":0}`))
 		case "/api/rmp/component/deal/pre_sale/book":
 			bookCalls++
-			assertAuthQuery(t, r)
+			assertComponentAuthQuery(t, r)
 			var request PresaleBookRequest
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 				t.Fatal(err)
@@ -109,7 +109,7 @@ func TestPresaleBookingUsesComponentDealEndpoints(t *testing.T) {
 			_, _ = w.Write([]byte(`{"data":{"out_order_id":"ORD-1","book_result":[{"book_id":"PLATFORM-BOOK-1","voucher_code":"V-1"}]},"success":true,"msg":"success","code":0}`))
 		case "/api/rmp/component/deal/pre_sale/sync_status":
 			syncCalls++
-			assertAuthQuery(t, r)
+			assertComponentAuthQuery(t, r)
 			var request PresaleBookStatusRequest
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 				t.Fatal(err)
@@ -124,7 +124,7 @@ func TestPresaleBookingUsesComponentDealEndpoints(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := Client{AppID: "miniapp", Secret: "secret", BaseURL: server.URL, HTTP: server.Client()}
+	client := Client{AppID: "miniapp", Secret: "secret", ComponentAppID: "provider-app", ComponentAccessToken: "authorized-miniapp-token", BaseURL: server.URL, HTTP: server.Client()}
 	response, err := client.BookPresaleVoucher(context.Background(), PresaleBookRequest{
 		ProductType: ProductTypePresaleVoucher, OpenID: "OPEN-1", ExternalOrderID: "ORD-1",
 		ExternalProductID: "PRODUCT-1", ExternalSKUID: "SKU-1",
@@ -138,6 +138,43 @@ func TestPresaleBookingUsesComponentDealEndpoints(t *testing.T) {
 	}
 	if bookCalls != 1 || syncCalls != 1 {
 		t.Fatalf("bookCalls=%d syncCalls=%d", bookCalls, syncCalls)
+	}
+}
+
+func TestPresaleBookingRejectsMismatchedExternalOrder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/rmp/token":
+			_, _ = w.Write([]byte(`{"data":{"access_token":"token-1","expire_in":7200},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/component/deal/pre_sale/book":
+			_, _ = w.Write([]byte(`{"data":{"out_order_id":"OTHER-ORDER","book_result":[{"book_id":"PLATFORM-BOOK-1","voucher_code":"V-1"}]},"success":true,"msg":"success","code":0}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := Client{AppID: "miniapp", Secret: "secret", ComponentAppID: "provider-app", ComponentAccessToken: "authorized-miniapp-token", BaseURL: server.URL, HTTP: server.Client()}
+	_, err := client.BookPresaleVoucher(context.Background(), PresaleBookRequest{
+		ProductType: ProductTypePresaleVoucher, OpenID: "OPEN-1", ExternalOrderID: "ORD-1",
+		ExternalProductID: "PRODUCT-1", ExternalSKUID: "SKU-1",
+		BookInfo: PresaleBookInfo{ExternalBookOrderID: "BOOK-1", Details: []PresaleBookDetail{{VoucherCode: "V-1", CheckInDate: "2026-09-01", CheckOutDate: "2026-09-03"}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("mismatched response error=%v", err)
+	}
+}
+
+func TestPresaleBookingRequiresComponentAuthorization(t *testing.T) {
+	client := Client{AppID: "merchant-app", Secret: "merchant-secret", BaseURL: "http://127.0.0.1:1"}
+	_, err := client.BookPresaleVoucher(context.Background(), PresaleBookRequest{
+		ProductType: ProductTypePresaleVoucher, OpenID: "OPEN-1", ExternalOrderID: "ORD-1",
+		ExternalProductID: "PRODUCT-1", ExternalSKUID: "SKU-1",
+		BookInfo: PresaleBookInfo{ExternalBookOrderID: "BOOK-1", Details: []PresaleBookDetail{{VoucherCode: "V-1", CheckInDate: "2026-09-01", CheckOutDate: "2026-09-03"}}},
+	})
+	if !errors.Is(err, ErrComponentAuthorizationRequired) {
+		t.Fatalf("booking without component authorization error=%v", err)
 	}
 }
 
@@ -255,6 +292,16 @@ func assertAuthQuery(t *testing.T, r *http.Request) {
 	t.Helper()
 	if r.URL.Query().Get("app_id") != "miniapp" || r.URL.Query().Get("access_token") != "token-1" {
 		t.Fatalf("query=%s", r.URL.RawQuery)
+	}
+}
+
+func assertComponentAuthQuery(t *testing.T, r *http.Request) {
+	t.Helper()
+	if r.URL.Query().Get("appid") != "provider-app" || r.URL.Query().Get("access_token") != "authorized-miniapp-token" {
+		t.Fatalf("component query=%s", r.URL.RawQuery)
+	}
+	if r.URL.Query().Get("app_id") != "" {
+		t.Fatalf("component endpoint received merchant app_id query=%s", r.URL.RawQuery)
 	}
 }
 

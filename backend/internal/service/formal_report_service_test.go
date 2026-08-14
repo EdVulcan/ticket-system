@@ -237,3 +237,199 @@ func TestUsedTicketRefundRequiresInitialSupplierAdminAndRemovesVerificationFact(
 		t.Fatalf("business facts total=%d refund facts=%d rows=%+v", businessTotal, refundFacts, business)
 	}
 }
+
+func TestLaterUsedTicketRefundRestatesOriginalVerificationPeriod(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	initialAdmin := model.User{
+		TenantID: tenantID, Username: "period-restatement-admin", Password: "test",
+		Role: "admin", IsInitialAdmin: true,
+	}
+	if err := model.DB.Create(&initialAdmin).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	order := model.Order{
+		TenantID: tenantID, Channel: "online", ContactName: "Visitor", ContactPhone: "13800138000",
+		Items: []model.OrderItem{{ProductID: productID, Quantity: 10}},
+	}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&PaymentService{}).CreatePayment(tenantID, &model.Payment{
+		OrderNo: order.OrderNo, Method: "cash", OperatorID: initialAdmin.ID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var checkpoint model.CheckPoint
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&checkpoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	deviceID := verificationDeviceID(t, tenantID, checkpoint.ID)
+	var tickets []model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).Order("id ASC").Find(&tickets).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(tickets) != 10 {
+		t.Fatalf("tickets=%d, want 10", len(tickets))
+	}
+	for i := range tickets {
+		if err := (&TicketService{}).Verify(tickets[i].TicketCode, checkpoint.ID, deviceID, tenantID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Put the successful admissions in the prior accounting period. The refund
+	// remains in the current period, so this exercises a true cross-period
+	// restatement instead of a same-day query refresh.
+	now := time.Now()
+	originalPeriod := now.AddDate(0, -1, 0)
+	originalCheckInAt := time.Date(originalPeriod.Year(), originalPeriod.Month(), 10, 12, 0, 0, 0, now.Location())
+	if err := model.DB.Model(&model.CheckInRecord{}).
+		Where("tenant_id = ? AND ticket_id IN ?", tenantID, []uint{
+			tickets[0].ID, tickets[1].ID, tickets[2].ID, tickets[3].ID, tickets[4].ID,
+			tickets[5].ID, tickets[6].ID, tickets[7].ID, tickets[8].ID, tickets[9].ID,
+		}).Update("check_in_time", originalCheckInAt).Error; err != nil {
+		t.Fatal(err)
+	}
+	originalStart := time.Date(originalPeriod.Year(), originalPeriod.Month(), 1, 0, 0, 0, 0, now.Location())
+	originalEnd := originalStart.AddDate(0, 1, -1)
+	originalFilter := FormalReportFilter{
+		StartDate: originalStart.Format("2006-01-02"),
+		EndDate:   originalEnd.Format("2006-01-02"),
+	}
+	assertVerifiedCount := func(want int64) {
+		t.Helper()
+		rows, err := (&ReportService{}).GetVerificationSummary(tenantID, originalFilter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got, incomeCents int64
+		for _, row := range rows {
+			got += row.VerifiedCount
+			incomeCents += row.IncomeCents
+		}
+		if got != want {
+			t.Fatalf("original-period verified count=%d, want %d; rows=%+v", got, want, rows)
+		}
+		wantIncomeCents := want * 9950
+		if incomeCents != wantIncomeCents {
+			t.Fatalf("original-period verification income=%d, want %d; rows=%+v", incomeCents, wantIncomeCents, rows)
+		}
+	}
+	assertVerifiedCount(10)
+
+	refund, err := (&RefundService{}).CreateCashRefundAs(
+		RefundActor{TenantID: tenantID, UserID: initialAdmin.ID},
+		order.OrderNo,
+		"cross-period-used-refund",
+		order.Items[0].Price*2,
+		[]string{tickets[0].TicketCode, tickets[1].TicketCode},
+		"cross-period correction",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refund.Status != "succeeded" {
+		t.Fatalf("refund status=%s, want succeeded", refund.Status)
+	}
+
+	// The later refund rewrites the original verification-income fact: the
+	// prior period becomes 8 admissions. It must not create verification income
+	// (positive or negative) in the refund-action period.
+	assertVerifiedCount(8)
+	currentStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	currentEnd := currentStart.AddDate(0, 1, -1)
+	currentRows, err := (&ReportService{}).GetVerificationSummary(tenantID, FormalReportFilter{
+		StartDate: currentStart.Format("2006-01-02"),
+		EndDate:   currentEnd.Format("2006-01-02"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(currentRows) != 0 {
+		t.Fatalf("refund-action period contains verification income: %+v", currentRows)
+	}
+}
+
+func TestSalesReportsUseOriginalPaymentPeriodAfterLaterRefund(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	order := model.Order{
+		TenantID: tenantID, Channel: "online", ContactName: "Visitor", ContactPhone: "13800138000",
+		Items: []model.OrderItem{{ProductID: productID, Quantity: 1}},
+	}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&PaymentService{}).CreatePayment(tenantID, &model.Payment{OrderNo: order.OrderNo, Method: "cash"}); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	originalPeriod := now.AddDate(0, -1, 0)
+	originalPaidAt := time.Date(originalPeriod.Year(), originalPeriod.Month(), 10, 12, 0, 0, 0, now.Location())
+	var payment model.Payment
+	if err := model.DB.Where("order_no = ?", order.OrderNo).First(&payment).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&payment).Updates(map[string]interface{}{"paid_at": originalPaidAt, "created_at": originalPaidAt}).Error; err != nil {
+		t.Fatal(err)
+	}
+	refund, err := (&RefundService{}).CreateCashRefund(tenantID, order.OrderNo, "sales-report-cross-period", order.TotalAmount, []string{ticket.TicketCode}, "cross-period sales report")
+	if err != nil || refund.Status != "succeeded" {
+		t.Fatalf("refund=%+v err=%v", refund, err)
+	}
+	originalStart := time.Date(originalPeriod.Year(), originalPeriod.Month(), 1, 0, 0, 0, 0, now.Location())
+	originalEnd := originalStart.AddDate(0, 1, -1)
+	currentStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	currentEnd := currentStart.AddDate(0, 1, -1)
+	date := func(value time.Time) (string, string) {
+		return value.Format("2006-01-02"), value.Format("2006-01-02")
+	}
+	originalFrom, _ := date(originalStart)
+	_, originalTo := date(originalEnd)
+	currentFrom, _ := date(currentStart)
+	_, currentTo := date(currentEnd)
+
+	sales, err := (&ReportService{}).GetSalesStats(tenantID, originalFrom, originalTo)
+	if err != nil || len(sales) != 1 || sales[0].OrderCount != 1 || sales[0].TotalAmount != order.TotalAmount || sales[0].RefundedAmount != order.TotalAmount || sales[0].NetAmount != 0 {
+		t.Fatalf("original sales report=%+v err=%v", sales, err)
+	}
+	currentSales, err := (&ReportService{}).GetSalesStats(tenantID, currentFrom, currentTo)
+	if err != nil || len(currentSales) != 0 {
+		t.Fatalf("refund-action sales report=%+v err=%v", currentSales, err)
+	}
+
+	channels, err := (&ReportService{}).GetChannelStats(tenantID, originalFrom, originalTo)
+	if err != nil || len(channels) != 1 || channels[0].OrderCount != 1 || channels[0].NetAmount != 0 {
+		t.Fatalf("original channel report=%+v err=%v", channels, err)
+	}
+	currentChannels, err := (&ReportService{}).GetChannelStats(tenantID, currentFrom, currentTo)
+	if err != nil || len(currentChannels) != 0 {
+		t.Fatalf("refund-action channel report=%+v err=%v", currentChannels, err)
+	}
+
+	products, err := (&ReportService{}).GetProductStats(tenantID, originalFrom, originalTo)
+	if err != nil || len(products) != 1 || products[0].TotalSold != 0 || products[0].TotalAmount != 0 {
+		t.Fatalf("original product report=%+v err=%v", products, err)
+	}
+	currentProducts, err := (&ReportService{}).GetProductStats(tenantID, currentFrom, currentTo)
+	if err != nil || len(currentProducts) != 0 {
+		t.Fatalf("refund-action product report=%+v err=%v", currentProducts, err)
+	}
+
+	daily, err := (&ReportService{}).GetDailyReport(tenantID, originalFrom, originalTo)
+	if err != nil || len(daily.Sales) != 1 || daily.Sales[0].OrderCount != 1 || daily.Sales[0].NetCents != 0 {
+		t.Fatalf("original daily sales report=%+v err=%v", daily, err)
+	}
+	currentDaily, err := (&ReportService{}).GetDailyReport(tenantID, currentFrom, currentTo)
+	if err != nil || len(currentDaily.Sales) != 0 {
+		t.Fatalf("refund-action daily sales report=%+v err=%v", currentDaily, err)
+	}
+}

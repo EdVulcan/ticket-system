@@ -30,6 +30,8 @@ Page({
       return;
     }
     app.request(`/orders/${encodeURIComponent(this.orderNo)}`).then(order => {
+	  const coreStatus = order.core_order_status || order.status;
+	  const canUsePaidEntitlements = ['paid', 'partial_refunded'].indexOf(coreStatus) >= 0;
       order.isPackage = order.product_kind === 'scenic_hotel_package';
       if (order.hotel_stay) {
         order.hotel_stay.checkInText = this.formatDay(order.hotel_stay.check_in_date);
@@ -43,15 +45,15 @@ Page({
         checkInText: this.formatDay(item.check_in_date),
         checkOutText: this.formatDay(item.check_out_date),
         phoneText: this.maskPhone(item.contact_phone),
-        statusLabel: item.status === 'booked' ? '已预约' : (item.status === 'pending_booking' ? '待预约' : (item.status === 'refunded' ? '已退款' : '已关闭')),
-        canBook: order.status === 'paid' && item.status === 'pending_booking',
+		statusLabel: this.entitlementStatusLabel(item.status),
+		canBook: canUsePaidEntitlements && item.status === 'pending_booking',
         canCancel: item.status === 'booked' && Number(item.reschedule_count || 0) < Number(item.max_reschedules || 0)
       }));
-      const view = this.statusView(order.status, order.product_kind);
+	  const view = this.statusView(coreStatus, order.product_kind);
       order.amountText = (Number(order.amount_cents || 0) / 100).toFixed(2);
       this.setData({
         order,
-        status: order.status,
+		status: coreStatus,
         statusLabel: view.label,
         statusTitle: view.title,
         statusDetail: view.detail,
@@ -60,7 +62,7 @@ Page({
         paying: false,
         error: ''
       });
-      if (order.status === 'unpaid' && this.pollCount < 15) {
+	  if (coreStatus === 'unpaid' && this.pollCount < 15) {
         this.pollCount += 1;
         this.timer = setTimeout(() => this.loadOrder(), 2000);
       }
@@ -111,6 +113,13 @@ Page({
     if (status === 'refunded') return { label: '已退款', title: '退款完成', detail: '款项将按小红书规则原路退回' };
     return { label: '确认中', title: '正在确认支付结果', detail: '系统正在向小红书核实，请不要重复支付' };
   },
+
+	entitlementStatusLabel(status) {
+	  return {
+		pending_booking: '待预约', booking_pending: '预约处理中', booked: '已预约',
+		cancel_pending: '取消处理中', refunded: '已退款', expired: '已过期', cancelled: '已关闭'
+	  }[status] || '处理中';
+	},
 
   formatDay(value) {
     if (!value) return '';

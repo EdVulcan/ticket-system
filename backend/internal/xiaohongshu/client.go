@@ -19,6 +19,11 @@ const (
 	SandboxBaseURL = "https://miniapp-sandbox.xiaohongshu.com"
 )
 
+// ErrComponentAuthorizationRequired is returned before any network request
+// when a presale-booking component credential is not configured. Merchant
+// self-developed miniapp credentials must not be reused for /component APIs.
+var ErrComponentAuthorizationRequired = errors.New("xiaohongshu component authorization is not configured")
+
 const (
 	ProductTypeGroupVoucher   = 1
 	ProductTypePresaleVoucher = 2
@@ -35,6 +40,12 @@ type Client struct {
 	BaseURL string
 	HTTP    *http.Client
 	Now     func() time.Time
+
+	// These are the service-provider app id and authorized miniapp credential
+	// required by the /component transaction APIs. They are separate from the
+	// merchant self-developed AppID/Secret used by /mp APIs.
+	ComponentAppID       string
+	ComponentAccessToken string
 
 	mu             sync.Mutex
 	accessToken    string
@@ -407,8 +418,11 @@ func (c *Client) BookPresaleVoucher(ctx context.Context, request PresaleBookRequ
 		}
 	}
 	var response PresaleBookResponse
-	if err := c.authenticatedPost(ctx, "/api/rmp/component/deal/pre_sale/book", request, &response); err != nil {
+	if err := c.componentAuthenticatedPost(ctx, "/api/rmp/component/deal/pre_sale/book", request, &response); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(response.ExternalOrderID) != "" && strings.TrimSpace(response.ExternalOrderID) != strings.TrimSpace(request.ExternalOrderID) {
+		return nil, errors.New("xiaohongshu presale booking response order does not match request")
 	}
 	if len(response.Results) != len(request.BookInfo.Details) {
 		return nil, errors.New("xiaohongshu presale booking response is incomplete")
@@ -431,7 +445,7 @@ func (c *Client) SyncPresaleBookStatus(ctx context.Context, request PresaleBookS
 		}
 	}
 	var response struct{}
-	return c.authenticatedPost(ctx, "/api/rmp/component/deal/pre_sale/sync_status", request, &response)
+	return c.componentAuthenticatedPost(ctx, "/api/rmp/component/deal/pre_sale/sync_status", request, &response)
 }
 
 func validateProduct(request LocalLifeProductRequest) error {
@@ -492,6 +506,23 @@ func (c *Client) authenticatedPost(ctx context.Context, path string, payload, re
 	query := endpoint.Query()
 	query.Set("app_id", strings.TrimSpace(c.AppID))
 	query.Set("access_token", token)
+	endpoint.RawQuery = query.Encode()
+	return c.post(ctx, endpoint.String(), payload, response)
+}
+
+func (c *Client) componentAuthenticatedPost(ctx context.Context, path string, payload, response any) error {
+	componentAppID := strings.TrimSpace(c.ComponentAppID)
+	componentAccessToken := strings.TrimSpace(c.ComponentAccessToken)
+	if componentAppID == "" || componentAccessToken == "" {
+		return ErrComponentAuthorizationRequired
+	}
+	endpoint, err := url.Parse(c.baseURL() + path)
+	if err != nil {
+		return fmt.Errorf("create xiaohongshu component endpoint: %w", err)
+	}
+	query := endpoint.Query()
+	query.Set("appid", componentAppID)
+	query.Set("access_token", componentAccessToken)
 	endpoint.RawQuery = query.Encode()
 	return c.post(ctx, endpoint.String(), payload, response)
 }

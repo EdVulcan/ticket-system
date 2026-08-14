@@ -208,15 +208,17 @@ func InitRouter(r *gin.Engine) {
 		hotelGroup.PUT("/:hotelID/room-types/:roomTypeID/inventory", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.SetInventory)
 	}
 
-	packageController := &api.ScenicHotelPackageController{Service: service.ScenicHotelPackageService{}}
+	packageController := &api.ScenicHotelPackageController{Service: service.ScenicHotelPackageService{}, BookingSync: service.NewMiniappService()}
 	packageGroup := protected.Group("/scenic-hotel-packages")
 	{
 		packageGroup.GET("", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogRead), packageController.List)
 		packageGroup.GET("/reservations", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionHotelReservationsRead), packageController.ListReservations)
 		packageGroup.GET("/entitlements", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionHotelReservationsRead), packageController.ListEntitlements)
+		packageGroup.GET("/booking-sync-operations/failed", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionHotelReservationsRead), packageController.ListFailedBookingSyncOperations)
 		packageGroup.GET("/reservations/export", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionHotelReservationsExport), packageController.ExportReservations)
 		packageGroup.GET("/business-summary", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionReportsRead), packageController.BusinessSummary)
-		packageGroup.PATCH("/reservations/:reservationID/status", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionHotelReservationsWrite), packageController.SetReservationStatus)
+		packageGroup.PATCH("/reservations/:reservationID/status", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionHotelReservationsWrite), packageController.SetReservationStatus)
+		packageGroup.POST("/booking-sync-operations/:operationID/retry", middleware.RequireConfiguredSupplierBusinessType("scenic"), middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionHotelReservationsWrite), packageController.RetryFailedBookingSyncOperation)
 		packageGroup.POST("", middleware.RequireAnySupplierBusinessType("scenic"), middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), packageController.Create)
 		packageGroup.PUT("/:packageID", middleware.RequireAnySupplierBusinessType("scenic"), middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), packageController.Update)
 		packageGroup.DELETE("/:packageID", middleware.RequireAnySupplierBusinessType("scenic"), middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), packageController.Delete)

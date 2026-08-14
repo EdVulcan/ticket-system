@@ -119,10 +119,11 @@
             <el-icon><Plus /></el-icon>新增套餐
           </el-button>
         </div>
-        <el-radio-group v-model="packageSection" class="package-section">
+        <el-radio-group v-model="packageSection" class="package-section" @change="changePackageSection">
           <el-radio-button label="catalog">套餐配置</el-radio-button>
           <el-radio-button v-if="canViewReservations" label="entitlements">预约权益</el-radio-button>
           <el-radio-button v-if="canViewReservations" label="reservations">住宿预订</el-radio-button>
+          <el-radio-button v-if="canViewReservations" label="sync-failures">预约同步异常</el-radio-button>
         </el-radio-group>
         <div v-if="packageSection === 'catalog'" class="data-panel">
           <el-table :data="currentHotelPackages" empty-text="当前酒店暂无酒景套餐">
@@ -141,7 +142,7 @@
           <div class="reservation-toolbar">
             <el-input v-model="reservationOrderNo" clearable placeholder="订单号" @keyup.enter="searchReservations" />
             <el-select v-model="entitlementStatus" clearable placeholder="全部状态" @change="searchReservations">
-              <el-option label="待预约" value="pending_booking" /><el-option label="已预约" value="booked" /><el-option label="已退款" value="refunded" /><el-option label="已关闭" value="cancelled" />
+              <el-option label="待预约" value="pending_booking" /><el-option label="预约处理中" value="booking_pending" /><el-option label="已预约" value="booked" /><el-option label="取消处理中" value="cancel_pending" /><el-option label="已退款" value="refunded" /><el-option label="已关闭" value="cancelled" />
             </el-select>
             <el-button @click="searchReservations">查询</el-button>
           </div>
@@ -158,25 +159,26 @@
             <div class="reservation-pagination"><el-pagination v-model:current-page="entitlementPage" v-model:page-size="reservationPageSize" :page-sizes="[10,20,40]" layout="total, sizes, prev, pager, next" :total="entitlementTotal" @current-change="loadEntitlements" @size-change="changeReservationPageSize" /></div>
           </div>
         </div>
-        <div v-else class="reservation-workspace">
+        <div v-else-if="packageSection === 'reservations'" class="reservation-workspace">
           <el-alert type="info" :closable="false" show-icon title="这里只登记或同步酒店、PMS、人工确认后的票务侧住宿结果，不提供排房、房卡或酒店前台入住功能。" />
           <div v-if="canViewReports" class="package-metrics">
-            <div><span>待预约套餐</span><strong>{{ packageSummary.awaiting_booking_units || 0 }} 份</strong><small>已支付但尚未选择入住日期</small></div>
+            <div><span>本期售出套餐</span><strong>{{ packageSummary.sales_units || packageSummary.package_units || 0 }} 份</strong><small>按订单付款时间统计</small></div>
             <div><span>净销售额</span><strong>¥{{ money(packageSummary.net_sales_cents) }}</strong><small>销售 ¥{{ money(packageSummary.gross_sales_cents) }} / 退款 ¥{{ money(packageSummary.refunded_sales_cents) }}</small></div>
-            <div><span>门票履约金额</span><strong>¥{{ money(packageSummary.ticket_component_net_cents) }}</strong><small>按套餐中门票结算快照</small></div>
-            <div><span>住宿履约金额</span><strong>¥{{ money(packageSummary.hotel_component_net_cents) }}</strong><small>按住宿预订结算快照</small></div>
-            <div><span>套餐经营余量</span><strong>¥{{ money(packageSummary.unallocated_margin_cents) }}</strong><small>净销售额减门票和住宿履约金额</small></div>
+            <div><span>本期新增预约</span><strong>{{ packageSummary.booking_units || 0 }} 份</strong><small>按住宿预约创建时间统计</small></div>
+            <div><span>本期计划入住</span><strong>{{ packageSummary.stay_units || 0 }} 份</strong><small>按预订入住日期统计，包含待入住</small></div>
+            <div><span>本期售出待预约</span><strong>{{ packageSummary.awaiting_booking_units || 0 }} 份</strong><small>已付款但尚未选择入住日期</small></div>
+            <div><span>预计履约与余量</span><strong>¥{{ money(Number(packageSummary.ticket_component_net_cents || 0) + Number(packageSummary.hotel_component_net_cents || 0)) }}</strong><small>经营余量 ¥{{ money(packageSummary.unallocated_margin_cents) }}</small></div>
           </div>
           <div class="reservation-toolbar">
             <el-input v-model="reservationOrderNo" clearable placeholder="订单号" @keyup.enter="searchReservations" />
             <el-select v-model="reservationStatus" clearable placeholder="全部状态" @change="searchReservations">
               <el-option label="待支付" value="reserved" /><el-option label="待入住" value="confirmed" /><el-option label="已入住" value="checked_in" /><el-option label="已离店" value="checked_out" /><el-option label="未到店" value="no_show" /><el-option label="已退款" value="refunded" /><el-option label="已取消" value="cancelled" />
             </el-select>
-            <el-date-picker v-if="canViewReports" v-model="reportRange" type="daterange" range-separator="至" start-placeholder="预订创建开始" end-placeholder="预订创建结束" :clearable="false" @change="loadPackageSummary" />
+            <el-date-picker v-if="canViewReports" v-model="reportRange" type="daterange" range-separator="至" start-placeholder="统计开始" end-placeholder="统计结束" :clearable="false" @change="loadPackageSummary" />
             <el-button @click="searchReservations">查询</el-button>
             <el-button v-if="canExportReservations" @click="exportReservations">导出住宿名单</el-button>
           </div>
-          <p v-if="canViewReports" class="report-basis">经营汇总按预订创建日期统计，不代表酒店夜审或入住收入周期。</p>
+          <p v-if="canViewReports" class="report-basis">销售按付款期归属，后续退款会回写原付款期的最终净额；预约按创建时间、计划入住按入住日期统计，后续预约不会改变原销售期间。</p>
           <div class="data-panel">
           <el-table :data="currentHotelReservations" empty-text="当前酒店暂无套餐住宿预订">
             <el-table-column prop="reservation_no" label="预订号" min-width="190" />
@@ -197,6 +199,30 @@
             </el-table-column>
           </el-table>
           <div class="reservation-pagination"><el-pagination v-model:current-page="reservationPage" v-model:page-size="reservationPageSize" :page-sizes="[10,20,40]" layout="total, sizes, prev, pager, next" :total="reservationTotal" @current-change="loadReservations" @size-change="changeReservationPageSize" /></div>
+          </div>
+        </div>
+        <div v-else-if="packageSection === 'sync-failures'" class="reservation-workspace">
+          <el-alert type="warning" :closable="false" show-icon title="这里只展示已停止自动重试的小红书预约同步异常。确认渠道故障已经排除后，可填写原因继续重试。" />
+          <div class="sync-failure-toolbar">
+            <el-select v-model="syncFailureType" clearable placeholder="全部业务阶段" @change="searchSyncFailures">
+              <el-option label="预约确认" value="book" />
+              <el-option label="取消预约" value="revoke" />
+              <el-option label="退款同步" value="refund" />
+            </el-select>
+            <el-button @click="loadSyncFailures">刷新</el-button>
+          </div>
+          <div class="data-panel">
+            <el-table v-loading="syncFailureLoading" :data="syncFailures" empty-text="当前没有需要处理的预约同步异常">
+              <el-table-column prop="order_no" label="订单号" min-width="190" show-overflow-tooltip />
+              <el-table-column prop="entitlement_no" label="权益编号" min-width="200" show-overflow-tooltip />
+              <el-table-column label="业务阶段" width="110"><template #default="{ row }">{{ syncOperationTypeText(row.type) }}</template></el-table-column>
+              <el-table-column label="失败阶段" min-width="190"><template #default="{ row }"><el-tag type="danger">{{ syncFailureStageText(row.failed_from_stage) }}</el-tag></template></el-table-column>
+              <el-table-column label="已尝试" width="100"><template #default="{ row }">{{ Number(row.attempts || 0) }} / {{ Number(row.max_attempts || 0) }}</template></el-table-column>
+              <el-table-column label="上次错误" min-width="280" show-overflow-tooltip><template #default="{ row }">{{ localizeDisplayText(row.last_error, '渠道同步失败') }}</template></el-table-column>
+              <el-table-column label="最后更新" width="170"><template #default="{ row }">{{ dateTime(row.updated_at) }}</template></el-table-column>
+              <el-table-column v-if="canOperateReservations" label="操作" width="110" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openSyncRetry(row)">继续重试</el-button></template></el-table-column>
+            </el-table>
+            <div class="reservation-pagination"><el-pagination v-model:current-page="syncFailurePage" v-model:page-size="syncFailurePageSize" :page-sizes="[10,20,40]" layout="total, sizes, prev, pager, next" :total="syncFailureTotal" @current-change="loadSyncFailures" @size-change="changeSyncFailurePageSize" /></div>
           </div>
         </div>
       </el-tab-pane>
@@ -293,6 +319,27 @@
       </el-form>
       <template #footer><el-button @click="packageDialogVisible = false">取消</el-button><el-button type="primary" @click="savePackage">保存</el-button></template>
     </el-dialog>
+
+    <el-dialog v-model="syncRetryVisible" title="继续重试小红书同步" width="560px" @closed="resetSyncRetry">
+      <div v-if="selectedSyncFailure" class="sync-retry-detail">
+        <el-descriptions :column="1" border>
+          <el-descriptions-item label="业务阶段">{{ syncOperationTypeText(selectedSyncFailure.type) }}</el-descriptions-item>
+          <el-descriptions-item label="失败阶段">{{ syncFailureStageText(selectedSyncFailure.failed_from_stage) }}</el-descriptions-item>
+          <el-descriptions-item label="订单号">{{ selectedSyncFailure.order_no || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="权益编号">{{ selectedSyncFailure.entitlement_no || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="上次错误">{{ localizeDisplayText(selectedSyncFailure.last_error, '渠道同步失败') }}</el-descriptions-item>
+        </el-descriptions>
+        <el-form label-position="top">
+          <el-form-item label="重试原因" required>
+            <el-input v-model="syncRetryReason" type="textarea" :rows="3" maxlength="255" show-word-limit placeholder="说明已排除的问题或本次继续处理的依据" />
+          </el-form-item>
+        </el-form>
+      </div>
+      <template #footer>
+        <el-button @click="syncRetryVisible = false">取消</el-button>
+        <el-button type="primary" :loading="syncRetrySubmitting" :disabled="!syncRetryReason.trim()" @click="retrySyncFailure">继续重试</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -301,8 +348,9 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
-import { activeCapabilitySet, activeSupplierBusinessTypeSet, configuredSupplierBusinessTypeSet, readStoredUser } from '@/utils/tenantAccess'
+import { activeCapabilitySet, activeSupplierBusinessTypeSet, configuredCapabilitySet, configuredSupplierBusinessTypeSet, readStoredUser } from '@/utils/tenantAccess'
 import { hasPermission } from '@/utils/permissions'
+import { localizeDisplayText } from '@/utils/localize'
 
 const loading = ref(false)
 const hotels = ref<any[]>([])
@@ -320,6 +368,10 @@ const hotelFormRef = ref()
 const roomFormRef = ref()
 const rateFormRef = ref()
 const packageFormRef = ref()
+const syncRetryVisible = ref(false)
+const syncRetrySubmitting = ref(false)
+const selectedSyncFailure = ref<any>(null)
+const syncRetryReason = ref('')
 
 const activeBusinessTypes = computed(() => activeSupplierBusinessTypeSet(readStoredUser()))
 const configuredBusinessTypes = computed(() => configuredSupplierBusinessTypeSet(readStoredUser()))
@@ -330,7 +382,7 @@ const canWrite = computed(() => supplierActive.value && hotelBusinessActive.valu
 const showPackages = computed(() => configuredBusinessTypes.value.has('scenic') && configuredBusinessTypes.value.has('hotel'))
 const canPackageWrite = computed(() => supplierActive.value && activeBusinessTypes.value.has('scenic') && hotelBusinessActive.value && hasPermission(readStoredUser(), 'catalog.write'))
 const canViewReservations = computed(() => hasPermission(readStoredUser(), 'hotel_reservations.read'))
-const canOperateReservations = computed(() => supplierActive.value && hotelBusinessActive.value && hasPermission(readStoredUser(), 'hotel_reservations.write'))
+const canOperateReservations = computed(() => configuredCapabilitySet(readStoredUser()).has('supplier') && configuredBusinessTypes.value.has('scenic') && configuredBusinessTypes.value.has('hotel') && hasPermission(readStoredUser(), 'hotel_reservations.write'))
 const canExportReservations = computed(() => canViewReservations.value && hasPermission(readStoredUser(), 'hotel_reservations.export'))
 const canViewReports = computed(() => hasPermission(readStoredUser(), 'reports.read'))
 const selectedHotel = computed(() => hotels.value.find(item => item.id === selectedHotelId.value))
@@ -359,6 +411,12 @@ const reservationPageSize = ref(20)
 const reservationTotal = ref(0)
 const entitlementPage = ref(1)
 const entitlementTotal = ref(0)
+const syncFailures = ref<any[]>([])
+const syncFailureLoading = ref(false)
+const syncFailureType = ref('')
+const syncFailurePage = ref(1)
+const syncFailurePageSize = ref(20)
+const syncFailureTotal = ref(0)
 const packageSummary = ref<any>({})
 const reportStart = new Date(); reportStart.setHours(0, 0, 0, 0); reportStart.setDate(1)
 const reportEnd = new Date(); reportEnd.setHours(0, 0, 0, 0)
@@ -409,6 +467,52 @@ const loadEntitlements = async () => {
   const response = await request.get('/scenic-hotel-packages/entitlements', { params: { hotel_id: selectedHotelId.value, status: entitlementStatus.value || undefined, order_no: reservationOrderNo.value.trim() || undefined, page: entitlementPage.value, page_size: reservationPageSize.value } })
   packageEntitlements.value = response.data.data || []
   entitlementTotal.value = Number(response.data.total || 0)
+}
+
+const loadSyncFailures = async () => {
+  if (!canViewReservations.value) { syncFailures.value = []; syncFailureTotal.value = 0; return }
+  syncFailureLoading.value = true
+  try {
+    const response = await request.get('/scenic-hotel-packages/booking-sync-operations/failed', {
+      params: { page: syncFailurePage.value, page_size: syncFailurePageSize.value, type: syncFailureType.value || undefined },
+    })
+    syncFailures.value = response.data.data || []
+    syncFailureTotal.value = Number(response.data.total || 0)
+  } catch (error) {
+    syncFailures.value = []
+    syncFailureTotal.value = 0
+    throw error
+  } finally {
+    syncFailureLoading.value = false
+  }
+}
+
+const searchSyncFailures = async () => { syncFailurePage.value = 1; await loadSyncFailures() }
+const changeSyncFailurePageSize = async () => { syncFailurePage.value = 1; await loadSyncFailures() }
+const changePackageSection = async (section: string | number | boolean | undefined) => {
+  if (section === 'sync-failures' && canViewReservations.value) await loadSyncFailures()
+}
+const openSyncRetry = (row: any) => {
+  selectedSyncFailure.value = row
+  syncRetryReason.value = ''
+  syncRetryVisible.value = true
+}
+const resetSyncRetry = () => {
+  selectedSyncFailure.value = null
+  syncRetryReason.value = ''
+}
+const retrySyncFailure = async () => {
+  const reason = syncRetryReason.value.trim()
+  if (!selectedSyncFailure.value || !reason || !canOperateReservations.value) return
+  syncRetrySubmitting.value = true
+  try {
+    await request.post(`/scenic-hotel-packages/booking-sync-operations/${selectedSyncFailure.value.id}/retry`, { reason })
+    syncRetryVisible.value = false
+    ElMessage.success('已重新加入同步队列')
+    await loadSyncFailures()
+  } finally {
+    syncRetrySubmitting.value = false
+  }
 }
 
 const loadPackageSummary = async () => {
@@ -552,8 +656,14 @@ const money = (cents: number) => (Number(cents || 0) / 100).toFixed(2)
 const shortDate = (value: string) => String(value || '').slice(0, 10)
 const reservationStatusText = (status: string) => ({ reserved: '待支付', confirmed: '待入住', checked_in: '已入住', checked_out: '已离店', no_show: '未到店', cancelled: '已取消', refunded: '已退款' } as Record<string, string>)[status] || status
 const reservationStatusType = (status: string) => ({ reserved: 'warning', confirmed: 'primary', checked_in: 'success', checked_out: 'info', no_show: 'warning', cancelled: 'info', refunded: 'danger' } as Record<string, string>)[status] || 'info'
-const entitlementStatusText = (status: string) => ({ pending_booking: '待预约', booked: '已预约', cancelled: '已关闭', refunded: '已退款', expired: '已过期' } as Record<string, string>)[status] || status
-const entitlementStatusType = (status: string) => ({ pending_booking: 'warning', booked: 'success', cancelled: 'info', refunded: 'danger', expired: 'info' } as Record<string, string>)[status] || 'info'
+const entitlementStatusText = (status: string) => ({ pending_booking: '待预约', booking_pending: '预约处理中', booked: '已预约', cancel_pending: '取消处理中', cancelled: '已关闭', refunded: '已退款', expired: '已过期' } as Record<string, string>)[status] || status
+const entitlementStatusType = (status: string) => ({ pending_booking: 'warning', booking_pending: 'primary', booked: 'success', cancel_pending: 'warning', cancelled: 'info', refunded: 'danger', expired: 'info' } as Record<string, string>)[status] || 'info'
+const syncOperationTypeText = (type: string) => ({ book: '预约确认', revoke: '取消预约', refund: '退款同步' } as Record<string, string>)[type] || '同步处理'
+const syncFailureStageText = (stage: string) => ({ pending: '等待发送平台', remote_succeeded: '平台已成功，等待本地收尾', confirm_pending: '平台确认后本地落地', compensation_pending: '撤销平台预约并回退本地占用' } as Record<string, string>)[stage] || '同步处理'
+const dateTime = (value: string) => {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN', { hour12: false })
+}
 
 onMounted(loadHotels)
 </script>
@@ -580,6 +690,9 @@ onMounted(loadHotels)
 .package-metrics span, .package-metrics small { color: var(--ui-text-secondary); }
 .package-metrics strong { font-size: 22px; }
 .reservation-toolbar { display: grid; grid-template-columns: minmax(160px, 240px) 140px minmax(260px, 360px) auto auto; gap: 8px; }
+.sync-failure-toolbar { display: flex; align-items: center; gap: 8px; }
+.sync-failure-toolbar .el-select { width: 180px; }
+.sync-retry-detail { display: flex; flex-direction: column; gap: 18px; }
 .reservation-pagination { display: flex; justify-content: flex-end; padding: 14px 0 2px; }
 .package-form { margin-top: 18px; }
 .full-width { width: 100%; }
@@ -597,5 +710,9 @@ onMounted(loadHotels)
   .reservation-toolbar { grid-template-columns: 1fr 1fr; }
   .reservation-toolbar :deep(.el-date-editor) { width: 100%; }
 }
-@media (max-width: 640px) { .form-grid, .package-metrics, .reservation-toolbar { grid-template-columns: 1fr; } }
+@media (max-width: 640px) {
+  .form-grid, .package-metrics, .reservation-toolbar { grid-template-columns: 1fr; }
+  .sync-failure-toolbar { align-items: stretch; flex-direction: column; }
+  .sync-failure-toolbar .el-select { width: 100%; }
+}
 </style>

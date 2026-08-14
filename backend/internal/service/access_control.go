@@ -96,3 +96,36 @@ func requireActiveScenicSupplier(tx *gorm.DB, tenantID uint) error {
 func requireActiveHotelSupplier(tx *gorm.DB, tenantID uint) error {
 	return requireActiveSupplierBusinessType(tx, tenantID, "hotel")
 }
+
+// requireConfiguredSupplierBusinessType keeps already-sold fulfillment
+// obligations available after a supplier role or vertical is suspended. New
+// sales and configuration changes must continue to use the active variant.
+func requireConfiguredSupplierBusinessType(tx *gorm.DB, tenantID uint, businessType string) error {
+	if tenantID == 0 {
+		return ErrTenantUnavailable
+	}
+	var count int64
+	err := tx.Table("tenant_capabilities AS capability").
+		Joins("JOIN tenants AS tenant ON tenant.id = capability.tenant_id AND tenant.deleted_at IS NULL").
+		Joins("JOIN supplier_business_types AS business ON business.tenant_id = capability.tenant_id AND business.deleted_at IS NULL").
+		Where("capability.tenant_id = ? AND capability.capability = ? AND capability.status IN ?", tenantID, "supplier", []string{"active", "suspended"}).
+		Where("capability.deleted_at IS NULL").
+		Where("tenant.status = ?", "active").
+		Where("business.business_type = ? AND business.status IN ?", strings.TrimSpace(businessType), []string{"active", "suspended"}).
+		Count(&count).Error
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return fmt.Errorf("%w: %s", ErrSupplierBusinessTypeInactive, strings.TrimSpace(businessType))
+	}
+	return nil
+}
+
+func requireConfiguredScenicSupplier(tx *gorm.DB, tenantID uint) error {
+	return requireConfiguredSupplierBusinessType(tx, tenantID, "scenic")
+}
+
+func requireConfiguredHotelSupplier(tx *gorm.DB, tenantID uint) error {
+	return requireConfiguredSupplierBusinessType(tx, tenantID, "hotel")
+}

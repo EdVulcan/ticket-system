@@ -29,7 +29,8 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&TeamSettlementStatement{}, &ChannelReconciliation{}, &OrderVisitor{}, &BundleProduct{},
 		&CtripOrderLink{}, &CtripOrderItem{}, &XiaohongshuWebhookEvent{}, &SupplierBusinessType{},
 		&HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRoomInventory{},
-		&ScenicHotelPackage{}, &HotelReservation{},
+		&ScenicHotelPackage{}, &ScenicHotelPackageEntitlement{}, &HotelReservation{},
+		&XiaohongshuBookingOperation{},
 	} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("table for %T is missing", table)
@@ -102,6 +103,289 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		VALUES (?, 'scenic', 'pending', NOW(), NOW())
 	`, defaultStatusTenant.ID).Error; err == nil {
 		t.Fatal("database accepted unsupported supplier business status")
+	}
+}
+
+func TestPostgresSchema84UpgradesRealSchema83BookingFacts(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if CurrentPostgresSchemaVersion < 84 {
+		t.Fatalf("current schema version=%d, want at least 84", CurrentPostgresSchemaVersion)
+	}
+	if err := db.Migrator().DropTable(&XiaohongshuBookingOperation{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`
+		DROP TRIGGER IF EXISTS ownership_guard ON scenic_hotel_package_entitlements;
+		DROP TRIGGER IF EXISTS ownership_guard ON xiaohongshu_booking_operations;
+		ALTER TABLE scenic_hotel_package_entitlements DROP CONSTRAINT IF EXISTS chk_scenic_hotel_package_entitlements_status;
+		ALTER TABLE scenic_hotel_package_entitlements ADD CONSTRAINT chk_scenic_hotel_package_entitlements_status
+			CHECK (status IN ('pending_booking','booked','cancelled','refunded','expired'));
+		DELETE FROM schema_migrations WHERE version >= 84;
+		INSERT INTO schema_migrations (version, name, applied_at)
+		VALUES (83, 'deferred scenic hotel bookings', NOW())
+		ON CONFLICT (version) DO NOTHING;
+	`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if db.Migrator().HasTable(&XiaohongshuBookingOperation{}) {
+		t.Fatal("schema 83 fixture unexpectedly contains xiaohongshu booking operations")
+	}
+
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if !db.Migrator().HasTable(&XiaohongshuBookingOperation{}) {
+		t.Fatal("schema 84 did not create xiaohongshu booking operations")
+	}
+	if !db.Migrator().HasColumn(&XiaohongshuBookingOperation{}, "FailedFromStage") {
+		t.Fatal("schema 84 did not add Xiaohongshu booking failed source stage")
+	}
+	var triggerCount int64
+	if err := db.Raw(`
+		SELECT COUNT(*) FROM pg_trigger
+		WHERE tgname = 'ownership_guard'
+		  AND tgrelid IN ('scenic_hotel_package_entitlements'::regclass, 'xiaohongshu_booking_operations'::regclass)
+		  AND NOT tgisinternal
+	`).Scan(&triggerCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if triggerCount != 2 {
+		t.Fatalf("schema 84 booking ownership triggers=%d, want 2", triggerCount)
+	}
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("repeat schema 84 migration: %v", err)
+	}
+}
+
+func TestPostgresSchema84BookingOwnershipGuardsRejectInvalidFacts(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	first := Tenant{Name: "Booking Guard A", SystemCode: "BOOKING-GUARD-A", SecretKey: "a", Status: "active"}
+	second := Tenant{Name: "Booking Guard B", SystemCode: "BOOKING-GUARD-B", SecretKey: "b", Status: "active"}
+	if err := db.Create(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	orphan := ScenicHotelPackageEntitlement{
+		EntitlementNo: "ENT-GUARD-ORPHAN", SalesTenantID: first.ID, SupplierTenantID: second.ID,
+		OrderID: 999, OrderItemID: 999, TicketID: 999, PackageID: 999,
+		Status: "pending_booking", ValidFrom: now, ValidUntil: now.Add(24 * time.Hour),
+	}
+	if err := db.Create(&orphan).Error; err == nil {
+		t.Fatal("orphan cross-tenant package entitlement was accepted")
+	}
+	invalidWindow := orphan
+	invalidWindow.EntitlementNo = "ENT-GUARD-WINDOW"
+	invalidWindow.ValidFrom, invalidWindow.ValidUntil = now.Add(24*time.Hour), now
+	if err := db.Create(&invalidWindow).Error; err == nil {
+		t.Fatal("package entitlement with inverted validity was accepted")
+	}
+	account := ChannelAccount{TenantID: first.ID, Code: "BOOKING-GUARD-XHS", Type: "xiaohongshu", Status: "active"}
+	if err := db.Create(&account).Error; err != nil {
+		t.Fatal(err)
+	}
+	operation := XiaohongshuBookingOperation{
+		TenantID: first.ID, ChannelAccountID: account.ID, OrderLinkID: 999, EntitlementID: 999,
+		OperationKey: "BOOKING-GUARD-OP", Type: "book", Status: "pending",
+		RequestPayloadCiphertext: "encrypted", MaxAttempts: 20,
+	}
+	if err := db.Create(&operation).Error; err == nil {
+		t.Fatal("orphan Xiaohongshu booking operation was accepted")
+	}
+	operation.OperationKey = "BOOKING-GUARD-EMPTY-CIPHER"
+	operation.RequestPayloadCiphertext = ""
+	if err := db.Create(&operation).Error; err == nil {
+		t.Fatal("Xiaohongshu booking operation with empty ciphertext was accepted")
+	}
+	operation.OperationKey = "BOOKING-GUARD-UNSUPPORTED-TYPE"
+	operation.RequestPayloadCiphertext = "encrypted"
+	operation.Type = "reject"
+	if err := db.Create(&operation).Error; err == nil {
+		t.Fatal("unsupported Xiaohongshu booking operation type was accepted")
+	}
+
+	area := ScenicArea{TenantID: first.ID, Code: "BOOKING-GUARD-SCENIC", Name: "Booking Guard Scenic", Status: "active"}
+	if err := db.Create(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	product := Product{TenantID: first.ID, ScenicAreaID: area.ID, Name: "Booking Guard Product", Type: "online", Status: "online"}
+	if err := db.Create(&product).Error; err != nil {
+		t.Fatal(err)
+	}
+	hotel := HotelProperty{TenantID: first.ID, Code: "BOOKING-GUARD-HOTEL", Name: "Booking Guard Hotel", Status: "active"}
+	if err := db.Create(&hotel).Error; err != nil {
+		t.Fatal(err)
+	}
+	room := HotelRoomType{TenantID: first.ID, HotelID: hotel.ID, Code: "BOOKING-GUARD-ROOM", Name: "Booking Guard Room", Status: "active"}
+	if err := db.Create(&room).Error; err != nil {
+		t.Fatal(err)
+	}
+	rate := HotelRatePlan{TenantID: first.ID, HotelID: hotel.ID, RoomTypeID: room.ID, Code: "BOOKING-GUARD-RATE", Name: "Booking Guard Rate", Status: "active"}
+	if err := db.Create(&rate).Error; err != nil {
+		t.Fatal(err)
+	}
+	packageRow := ScenicHotelPackage{
+		TenantID: first.ID, ProductID: product.ID, HotelID: hotel.ID, RoomTypeID: room.ID, RatePlanID: rate.ID,
+		Nights: 1, RoomsPerPackage: 1, BookingMode: "after_purchase", VoucherValidityDays: 30, Status: "online",
+	}
+	if err := db.Create(&packageRow).Error; err != nil {
+		t.Fatal(err)
+	}
+	order := Order{OrderNo: "BOOKING-GUARD-ORDER", TenantID: first.ID, Status: "paid", Channel: "xiaohongshu", ChannelAccountID: account.ID}
+	if err := db.Create(&order).Error; err != nil {
+		t.Fatal(err)
+	}
+	item := OrderItem{
+		OrderID: order.ID, ProductID: product.ID, ProductName: product.Name, Quantity: 1,
+		FulfillmentProductID: product.ID, FulfillmentTenantID: first.ID, FulfillmentScenicAreaID: area.ID,
+	}
+	if err := db.Create(&item).Error; err != nil {
+		t.Fatal(err)
+	}
+	ticket := Ticket{
+		OrderID: order.ID, OrderItemID: item.ID, TenantID: first.ID, ScenicAreaID: area.ID,
+		FulfillmentProductID: product.ID, FulfillmentTenantID: first.ID, FulfillmentScenicAreaID: area.ID,
+		TicketCode: "BOOKING-GUARD-TICKET", Status: "pending_booking",
+	}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	entitlement := ScenicHotelPackageEntitlement{
+		EntitlementNo: "BOOKING-GUARD-ENTITLEMENT", SalesTenantID: first.ID, SupplierTenantID: first.ID,
+		OrderID: order.ID, OrderItemID: item.ID, TicketID: ticket.ID, PackageID: packageRow.ID,
+		Status: "pending_booking", ValidFrom: now, ValidUntil: now.Add(30 * 24 * time.Hour),
+	}
+	if err := db.Create(&entitlement).Error; err != nil {
+		t.Fatal(err)
+	}
+	secondArea := ScenicArea{TenantID: second.ID, Code: "BOOKING-GUARD-SCENIC-B", Name: "Booking Guard Scenic B", Status: "active"}
+	if err := db.Create(&secondArea).Error; err != nil {
+		t.Fatal(err)
+	}
+	secondProduct := Product{TenantID: second.ID, ScenicAreaID: secondArea.ID, Name: "Booking Guard Product B", Type: "online", Status: "online"}
+	if err := db.Create(&secondProduct).Error; err != nil {
+		t.Fatal(err)
+	}
+	crossSupplierItem := OrderItem{
+		OrderID: order.ID, ProductID: product.ID, ProductName: secondProduct.Name, Quantity: 1,
+		FulfillmentProductID: secondProduct.ID, FulfillmentTenantID: second.ID, FulfillmentScenicAreaID: secondArea.ID,
+	}
+	if err := db.Create(&crossSupplierItem).Error; err != nil {
+		t.Fatal(err)
+	}
+	crossSupplierTicket := Ticket{
+		OrderID: order.ID, OrderItemID: crossSupplierItem.ID, TenantID: first.ID, ScenicAreaID: secondArea.ID,
+		FulfillmentProductID: secondProduct.ID, FulfillmentTenantID: second.ID, FulfillmentScenicAreaID: secondArea.ID,
+		TicketCode: "BOOKING-GUARD-CROSS-SUPPLIER-TICKET", Status: "unused",
+	}
+	if err := db.Create(&crossSupplierTicket).Error; err != nil {
+		t.Fatal(err)
+	}
+	invalidReservation := HotelReservation{
+		ReservationNo: "BOOKING-GUARD-CROSS-SUPPLIER-RESERVATION",
+		SalesTenantID: first.ID, SupplierTenantID: first.ID,
+		OrderID: order.ID, OrderItemID: crossSupplierItem.ID, TicketID: crossSupplierTicket.ID,
+		PackageID: packageRow.ID, HotelID: hotel.ID, RoomTypeID: room.ID, RatePlanID: rate.ID,
+		HotelName: hotel.Name, RoomTypeName: room.Name, RatePlanName: rate.Name,
+		CheckInDate: now.Add(48 * time.Hour), CheckOutDate: now.Add(72 * time.Hour), Rooms: 1,
+		Status: "reserved",
+	}
+	if err := db.Create(&invalidReservation).Error; err == nil {
+		t.Fatal("hotel reservation linked to another supplier's order item and ticket was accepted")
+	}
+	customer := MiniappCustomer{
+		TenantID: first.ID, ChannelAccountID: account.ID, OpenIDHash: "booking-guard-openid", OpenIDCiphertext: "encrypted-openid",
+		SessionKeyCiphertext: "encrypted-session", SessionTokenHash: "booking-guard-session", SessionExpiresAt: now.Add(time.Hour), Status: "active", LastLoginAt: now,
+	}
+	if err := db.Create(&customer).Error; err != nil {
+		t.Fatal(err)
+	}
+	link := XiaohongshuOrderLink{
+		TenantID: first.ID, ChannelAccountID: account.ID, MiniappCustomerID: customer.ID, OrderID: order.ID,
+		ClientRequestID: "booking-guard-order", ExternalOrderID: "BOOKING-GUARD-EXTERNAL", State: "paid",
+	}
+	if err := db.Create(&link).Error; err != nil {
+		t.Fatal(err)
+	}
+	nextAttempt := now.Add(time.Minute)
+	validOperation := XiaohongshuBookingOperation{
+		TenantID: first.ID, ChannelAccountID: account.ID, OrderLinkID: link.ID, EntitlementID: entitlement.ID,
+		OperationKey: "BOOKING-GUARD-VALID", Type: "book", Status: "pending", ExternalBookOrderID: "BOOKING-GUARD-BOOK",
+		RequestPayloadCiphertext: "encrypted", MaxAttempts: 20, NextAttemptAt: &nextAttempt,
+	}
+	if err := db.Create(&validOperation).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, mutation := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "book without external id", sql: `UPDATE xiaohongshu_booking_operations SET external_book_order_id = '' WHERE id = ?`},
+		{name: "remote success without platform id", sql: `UPDATE xiaohongshu_booking_operations SET status = 'remote_succeeded' WHERE id = ?`},
+		{name: "active task without next attempt", sql: `UPDATE xiaohongshu_booking_operations SET next_attempt_at = NULL WHERE id = ?`},
+		{name: "unsupported failed source stage", sql: `UPDATE xiaohongshu_booking_operations SET failed_from_stage = 'completed' WHERE id = ?`},
+		{name: "non-failed task with failed source stage", sql: `UPDATE xiaohongshu_booking_operations SET failed_from_stage = 'pending' WHERE id = ?`},
+		{name: "terminal task without completion", sql: `UPDATE xiaohongshu_booking_operations SET status = 'completed', platform_book_id = 'BOOKING-GUARD-PLATFORM', next_attempt_at = NULL WHERE id = ?`},
+		{name: "non-terminal task with completion", sql: `UPDATE xiaohongshu_booking_operations SET completed_at = NOW() WHERE id = ?`},
+	} {
+		if err := db.Exec(mutation.sql, validOperation.ID).Error; err == nil {
+			t.Fatalf("%s was accepted", mutation.name)
+		}
+	}
+	badRevoke := validOperation
+	badRevoke.Base = Base{}
+	badRevoke.OperationKey = "BOOKING-GUARD-BAD-REVOKE"
+	badRevoke.Type = "revoke"
+	badRevoke.PlatformBookID = ""
+	if err := db.Create(&badRevoke).Error; err == nil {
+		t.Fatal("revoke operation without platform booking id was accepted")
+	}
+	badRefund := validOperation
+	badRefund.Base = Base{}
+	badRefund.OperationKey = "BOOKING-GUARD-BAD-REFUND"
+	badRefund.Type = "refund"
+	badRefund.PlatformBookID = "BOOKING-GUARD-PLATFORM"
+	if err := db.Create(&badRefund).Error; err == nil {
+		t.Fatal("refund operation for a non-refunded local entitlement was accepted")
+	}
+	if err := db.Model(&ticket).Update("status", "refunded").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&entitlement).Update("status", "refunded").Error; err != nil {
+		t.Fatal(err)
+	}
+	validRefund := badRefund
+	validRefund.OperationKey = "BOOKING-GUARD-VALID-REFUND"
+	if err := db.Create(&validRefund).Error; err != nil {
+		t.Fatalf("valid refund operation was rejected: %v", err)
+	}
+	if err := db.Model(&validRefund).Updates(map[string]interface{}{"status": "confirm_pending", "next_attempt_at": nextAttempt}).Error; err == nil {
+		t.Fatal("refund operation accepted a book-only confirm_pending state")
+	}
+	failedAt := now.Add(2 * time.Minute)
+	if err := db.Model(&validOperation).Updates(map[string]interface{}{
+		"status": "failed", "failed_from_stage": "confirm_pending", "platform_book_id": "BOOKING-GUARD-PLATFORM",
+		"next_attempt_at": nil, "completed_at": &failedAt,
+	}).Error; err != nil {
+		t.Fatalf("recoverable failed operation with source stage was rejected: %v", err)
+	}
+	if err := db.Model(&validOperation).Updates(map[string]interface{}{
+		"failed_from_stage": "", "completed_at": &failedAt,
+	}).Error; err != nil {
+		t.Fatalf("successfully compensated terminal failure was rejected: %v", err)
+	}
+	if err := db.Model(&validOperation).Updates(map[string]interface{}{
+		"failed_from_stage": "remote_succeeded", "completed_at": &failedAt,
+	}).Error; err != nil {
+		t.Fatalf("failed local finalization source stage was rejected: %v", err)
 	}
 }
 

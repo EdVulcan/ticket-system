@@ -35,7 +35,7 @@ type ScenicHotelPackageEntitlement struct {
 	TicketID            uint       `gorm:"not null;uniqueIndex;index" json:"ticket_id"`
 	PackageID           uint       `gorm:"not null;index" json:"package_id"`
 	ReservationID       uint       `gorm:"not null;default:0;index" json:"reservation_id,omitempty"`
-	Status              string     `gorm:"size:30;not null;default:'pending_booking';index;check:chk_scenic_hotel_package_entitlements_status,status IN ('pending_booking','booked','cancelled','refunded','expired')" json:"status"`
+	Status              string     `gorm:"size:30;not null;default:'pending_booking';index;check:chk_scenic_hotel_package_entitlements_status,status IN ('pending_booking','booking_pending','booked','cancel_pending','cancelled','refunded','expired')" json:"status"`
 	ValidFrom           time.Time  `gorm:"not null;index" json:"valid_from"`
 	ValidUntil          time.Time  `gorm:"not null;index" json:"valid_until"`
 	RescheduleCount     int        `gorm:"not null;default:0" json:"reschedule_count"`

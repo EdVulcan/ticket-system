@@ -12,7 +12,40 @@ import (
 )
 
 type ScenicHotelPackageController struct {
-	Service service.ScenicHotelPackageService
+	Service     service.ScenicHotelPackageService
+	BookingSync service.MiniappService
+}
+
+func (c *ScenicHotelPackageController) ListFailedBookingSyncOperations(ctx *gin.Context) {
+	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
+	result, err := c.BookingSync.ListFailedXiaohongshuBookingOperations(ctx.GetUint("tenant_id"), ctx.Query("type"), page, pageSize)
+	if err != nil {
+		hotelError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, result)
+}
+
+func (c *ScenicHotelPackageController) RetryFailedBookingSyncOperation(ctx *gin.Context) {
+	id, ok := pathID(ctx, "operationID")
+	if !ok {
+		return
+	}
+	var input struct {
+		Reason string `json:"reason" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		hotelError(ctx, err)
+		return
+	}
+	if err := c.BookingSync.RetryFailedXiaohongshuBookingOperation(
+		ctx.GetUint("tenant_id"), id, ctx.GetUint("user_id"), ctx.GetString("role"), input.Reason,
+	); err != nil {
+		hotelError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"message": "booking synchronization retry queued"})
 }
 
 func (c *ScenicHotelPackageController) List(ctx *gin.Context) {

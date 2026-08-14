@@ -158,6 +158,10 @@ func (s *OrderService) Create(req *model.Order) error {
 			if err != nil {
 				return fmt.Errorf("product %s: %w", listing.Name, err)
 			}
+			if packageFacts != nil && packageFacts.Package.BookingMode == "after_purchase" &&
+				(req.Channel != "xiaohongshu" || channelAccount == nil || channelAccount.Type != "xiaohongshu" || (channelAccount.Status != "active" && channelAccount.Status != "sandbox")) {
+				return fmt.Errorf("product %s: after-purchase packages are currently available only through an active xiaohongshu channel", listing.Name)
+			}
 			if packageFacts != nil && packageFacts.Package.BookingMode != "after_purchase" && (strings.TrimSpace(req.ContactName) == "" || strings.TrimSpace(req.ContactPhone) == "") {
 				return fmt.Errorf("product %s: hotel guest name and contact phone are required", listing.Name)
 			}
@@ -266,9 +270,10 @@ func (s *OrderService) Create(req *model.Order) error {
 							return err
 						}
 						hotelPackageFacts[i] = packageFacts
-					} else if deferredPackage {
-						deferredHotelPackageFacts[i] = packageFacts
 					}
+				}
+				if deferredPackage {
+					deferredHotelPackageFacts[i] = packageFacts
 				}
 			} else {
 				if len(req.Items) != 1 || channelReservation.ProductID != item.ProductID || channelReservation.Quantity != item.Quantity || !sameOptionalDate(channelReservation.UseDate, item.UseDate) || channelReservation.StockSlot != item.StockSlot {
@@ -302,6 +307,12 @@ func (s *OrderService) Create(req *model.Order) error {
 		if err := tx.Create(req).Error; err != nil {
 			return err
 		}
+		// Entitlement ownership guards require the denormalized ticket order ID.
+		// GORM fills OrderItemID for nested ticket associations but leaves OrderID
+		// empty, so establish that ownership before creating package projections.
+		if err := tx.Exec("UPDATE tickets SET order_id = ? WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = ?)", req.ID, req.ID).Error; err != nil {
+			return err
+		}
 		for itemIndex, facts := range hotelPackageFacts {
 			if err := (PackageFulfillmentLifecycle{}).CreateReservations(tx, req, &req.Items[itemIndex], facts); err != nil {
 				return err
@@ -316,12 +327,6 @@ func (s *OrderService) Create(req *model.Order) error {
 			if err := tx.Model(channelReservation).Updates(map[string]interface{}{"status": "converted", "order_no": req.OrderNo}).Error; err != nil {
 				return err
 			}
-		}
-		// GORM fills OrderItemID for nested ticket associations, but Ticket also
-		// carries a denormalized OrderID used by operational queries. Backfill it
-		// inside the same transaction so the two ownership paths cannot diverge.
-		if err := tx.Exec("UPDATE tickets SET order_id = ? WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = ?)", req.ID, req.ID).Error; err != nil {
-			return err
 		}
 		if err := persistOrderVisitorsTx(tx, req); err != nil {
 			return err
