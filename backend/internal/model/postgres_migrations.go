@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 89
+const CurrentPostgresSchemaVersion = 90
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -141,6 +141,17 @@ func runPostgresMigrations(db *gorm.DB) error {
 			);
 		`).Error; err != nil {
 			return fmt.Errorf("rename Xiaohongshu refund status sync operations: %w", err)
+		}
+	}
+	if previousSchemaVersion > 0 && previousSchemaVersion < 90 {
+		if err := db.Exec(`
+			ALTER TABLE platform_ai_configs
+				ALTER COLUMN max_output_tokens SET DEFAULT 0;
+			UPDATE platform_ai_configs
+			SET max_output_tokens = 0
+			WHERE max_output_tokens = 1200;
+		`).Error; err != nil {
+			return fmt.Errorf("migrate AI output budget to provider default: %w", err)
 		}
 	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
@@ -291,7 +302,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "durable multi-turn agent tasks",
+		Name:      "provider-default AI output budget",
 		AppliedAt: time.Now(),
 	}).Error
 }

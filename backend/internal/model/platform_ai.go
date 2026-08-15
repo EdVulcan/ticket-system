@@ -15,7 +15,7 @@ type PlatformAIConfig struct {
 	DefaultMonthlyRequestLimit int        `gorm:"not null;default:100" json:"default_monthly_request_limit"`
 	DefaultMonthlyTokenLimit   int64      `gorm:"not null;default:200000" json:"default_monthly_token_limit"`
 	RequestTimeoutSeconds      int        `gorm:"not null;default:30" json:"request_timeout_seconds"`
-	MaxOutputTokens            int        `gorm:"not null;default:1200" json:"max_output_tokens"`
+	MaxOutputTokens            int        `gorm:"not null;default:0" json:"max_output_tokens"`
 	Temperature                float64    `gorm:"not null;default:0.1" json:"temperature"`
 	ConfigVersion              int        `gorm:"not null;default:1" json:"config_version"`
 	LastTestedAt               *time.Time `json:"last_tested_at,omitempty"`

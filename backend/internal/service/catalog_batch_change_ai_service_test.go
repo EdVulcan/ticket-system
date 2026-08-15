@@ -140,16 +140,14 @@ func TestCatalogBatchAIPreviewRejectsModelInventedAllProductsScope(t *testing.T)
 
 func TestPlatformAITestConfigAcceptsSuccessfulEmptyProbeContent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		var body struct {
-			MaxTokens int `json:"max_tokens"`
-		}
+		var body map[string]json.RawMessage
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			http.Error(writer, "invalid request", http.StatusBadRequest)
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		if body.MaxTokens < 128 || body.MaxTokens > 256 {
-			http.Error(writer, "probe token budget out of bounds", http.StatusBadRequest)
+		if _, present := body["max_tokens"]; present {
+			http.Error(writer, "probe must use provider-default output budget", http.StatusBadRequest)
 			return
 		}
 		_, _ = fmt.Fprint(writer, `{"choices":[{"message":{"role":"assistant","content":""}}]}`)
@@ -159,10 +157,58 @@ func TestPlatformAITestConfigAcceptsSuccessfulEmptyProbeContent(t *testing.T) {
 	input := PlatformAIConfigInput{
 		Provider: defaultAIProvider, BaseURL: server.URL, Model: defaultAIModel, APIKey: "test-provider-key", Enabled: true,
 		DefaultMonthlyRequestLimit: 5, DefaultMonthlyTokenLimit: 100000,
-		RequestTimeoutSeconds: 5, MaxOutputTokens: 256, Temperature: 0,
+		RequestTimeoutSeconds: 5, MaxOutputTokens: 0, Temperature: 0,
 	}
 	if err := (&PlatformAIService{HTTPClient: server.Client()}).TestConfig(t.Context(), input); err != nil {
-		t.Fatalf("connection test should allow a provider response that needs a reasoning budget: %v", err)
+		t.Fatalf("connection test should use the provider-default output budget: %v", err)
+	}
+}
+
+func TestPlatformAIChatUsesProviderDefaultOutputBudget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			http.Error(writer, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if _, present := body["max_tokens"]; present {
+			http.Error(writer, "max_tokens must be omitted in automatic mode", http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(writer, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"{}"}}],"usage":{"total_tokens":32}}`)
+	}))
+	defer server.Close()
+
+	content, actualTokens, err := (&PlatformAIService{HTTPClient: server.Client()}).chat(t.Context(), model.PlatformAIConfig{
+		BaseURL: server.URL, Model: defaultAIModel, RequestTimeoutSeconds: 5, MaxOutputTokens: 0,
+	}, "test-provider-key", []AIMessage{{Role: "user", Content: "生成计划"}}, 0)
+	if err != nil || content != "{}" || actualTokens != 32 {
+		t.Fatalf("provider-default chat content=%q tokens=%d err=%v", content, actualTokens, err)
+	}
+}
+
+func TestValidatePlatformAIConfigAllowsProviderDefaultOutputTokens(t *testing.T) {
+	valid := PlatformAIConfigInput{
+		Provider: defaultAIProvider, BaseURL: "https://api.deepseek.com", Model: defaultAIModel,
+		DefaultMonthlyRequestLimit: 5, DefaultMonthlyTokenLimit: 100000,
+		RequestTimeoutSeconds: 5, MaxOutputTokens: 0, Temperature: 0,
+	}
+	if err := validatePlatformAIConfigInput(valid); err != nil {
+		t.Fatalf("provider-default output budget should be valid: %v", err)
+	}
+	valid.MaxOutputTokens = -1
+	if err := validatePlatformAIConfigInput(valid); err == nil || !strings.Contains(err.Error(), "zero or greater") {
+		t.Fatalf("negative output budget error=%v, want non-negative validation", err)
+	}
+}
+
+func TestAIOutputReservationTokensKeepsMonthlyGuardInAutomaticMode(t *testing.T) {
+	if got := aiOutputReservationTokens(model.PlatformAIConfig{MaxOutputTokens: 0}); got != defaultAIOutputReservationTokens {
+		t.Fatalf("automatic output reservation=%d, want %d", got, defaultAIOutputReservationTokens)
+	}
+	if got := aiOutputReservationTokens(model.PlatformAIConfig{MaxOutputTokens: 256}); got != 256 {
+		t.Fatalf("explicit output reservation=%d, want 256", got)
 	}
 }
 

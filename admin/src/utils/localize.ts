@@ -36,7 +36,7 @@ const englishErrorRules: Array<[RegExp, string]> = [
   [/insufficient.*stock|out of stock/i, '库存不足'],
   [/insufficient.*balance/i, '账户余额不足'],
   [/insufficient.*quota|quota.*exceeded/i, '可用额度不足'],
-  [/AI provider did not return a final answer|increase max_output_tokens/i, '模型在输出最终计划前耗尽了输出额度，请在平台 AI 配置中提高“最大输出 Token”后重试'],
+  [/AI provider did not return a final answer|increase max_output_tokens/i, '模型没有返回最终计划；请将“最大输出 Token”设为自动（0），或确认当前模型支持返回最终 JSON'],
   [/AI provider returned an empty plan/i, 'AI 服务返回了空的最终计划，请检查模型名称、接口地址和最大输出 Token'],
   [/AI provider returned no choices/i, 'AI 服务返回格式不兼容，请检查接口地址或模型配置'],
   [/authentication fails|invalid api key|invalid api-key|AI provider returned HTTP 401/i, 'AI API Key 无效或已过期，请检查密钥'],

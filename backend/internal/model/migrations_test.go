@@ -111,6 +111,49 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	}
 }
 
+func TestPostgresSchema90MigratesLegacyAIOutputDefault(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	legacy := PlatformAIConfig{
+		ConfigKey: "legacy-output-budget", Provider: "deepseek", BaseURL: "https://api.deepseek.com",
+		Model: "deepseek-chat", MaxOutputTokens: 1200,
+	}
+	if err := db.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("version = ?", CurrentPostgresSchemaVersion).Delete(&SchemaMigration{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&SchemaMigration{Version: 89, Name: "pre-provider-default-output-budget", AppliedAt: time.Now()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	var migrated PlatformAIConfig
+	if err := db.First(&migrated, legacy.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if migrated.MaxOutputTokens != 0 {
+		t.Fatalf("legacy max output tokens=%d, want provider-default sentinel 0", migrated.MaxOutputTokens)
+	}
+	var columnDefault string
+	if err := db.Raw(`
+		SELECT column_default
+		FROM information_schema.columns
+		WHERE table_schema = CURRENT_SCHEMA()
+		  AND table_name = 'platform_ai_configs'
+		  AND column_name = 'max_output_tokens'
+	`).Scan(&columnDefault).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(columnDefault, "0") {
+		t.Fatalf("max_output_tokens column default=%q, want zero", columnDefault)
+	}
+}
+
 func TestPostgresSchema89AgentTaskOwnershipGuard(t *testing.T) {
 	db := testdb.Open(t)
 	if err := runMigrations(db); err != nil {

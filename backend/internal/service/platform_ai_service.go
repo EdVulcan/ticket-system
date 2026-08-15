@@ -22,6 +22,10 @@ const (
 	defaultAIProvider   = "deepseek"
 	defaultAIBaseURL    = "https://api.deepseek.com"
 	defaultAIModel      = "deepseek-chat"
+	// Provider-default mode deliberately leaves max_tokens out of the request.
+	// Reservations still need a bounded estimate so concurrent calls cannot all
+	// consume the complete monthly allowance before usage is reconciled.
+	defaultAIOutputReservationTokens int64 = 8192
 )
 
 var (
@@ -116,7 +120,7 @@ func defaultPlatformAIConfig() model.PlatformAIConfig {
 	return model.PlatformAIConfig{
 		ConfigKey: platformAIConfigKey, Provider: defaultAIProvider, BaseURL: defaultAIBaseURL,
 		Model: defaultAIModel, DefaultMonthlyRequestLimit: 100, DefaultMonthlyTokenLimit: 200000,
-		RequestTimeoutSeconds: 30, MaxOutputTokens: 1200, Temperature: 0.1, ConfigVersion: 1,
+		RequestTimeoutSeconds: 30, MaxOutputTokens: 0, Temperature: 0.1, ConfigVersion: 1,
 	}
 }
 
@@ -237,9 +241,7 @@ func (s *PlatformAIService) TestConfig(ctx context.Context, input PlatformAIConf
 	if input.RequestTimeoutSeconds > 0 {
 		config.RequestTimeoutSeconds = input.RequestTimeoutSeconds
 	}
-	if input.MaxOutputTokens > 0 {
-		config.MaxOutputTokens = input.MaxOutputTokens
-	}
+	config.MaxOutputTokens = input.MaxOutputTokens
 	if input.Temperature >= 0 {
 		config.Temperature = input.Temperature
 	}
@@ -254,16 +256,10 @@ func (s *PlatformAIService) TestConfig(ctx context.Context, input PlatformAIConf
 			return fmt.Errorf("decrypt AI provider key: %w", err)
 		}
 	}
-	// Keep the probe bounded: connection testing must not consume a full agent
-	// response budget, while reasoning models still need room for internal work.
-	testMaxTokens := config.MaxOutputTokens
-	if testMaxTokens < 128 {
-		testMaxTokens = 128
-	}
-	if testMaxTokens > 256 {
-		testMaxTokens = 256
-	}
-	return s.probe(ctx, config, key, []AIMessage{{Role: "system", Content: "只回复 OK。"}, {Role: "user", Content: "连接测试"}}, testMaxTokens)
+	// The probe uses provider-default mode as well. A small hard-coded probe
+	// budget can exhaust a reasoning model before it reaches even "OK" and
+	// would report a false configuration failure.
+	return s.probe(ctx, config, key, []AIMessage{{Role: "system", Content: "只回复 OK。"}, {Role: "user", Content: "连接测试"}}, 0)
 }
 
 func (s *PlatformAIService) loadActiveConfig() (model.PlatformAIConfig, string, error) {
@@ -353,8 +349,14 @@ func (s *PlatformAIService) chatWithContentRequirement(ctx context.Context, conf
 	if err != nil {
 		return "", 0, err
 	}
-	if maxTokens <= 0 || maxTokens > config.MaxOutputTokens {
-		maxTokens = config.MaxOutputTokens
+	if config.MaxOutputTokens > 0 {
+		if maxTokens <= 0 || maxTokens > config.MaxOutputTokens {
+			maxTokens = config.MaxOutputTokens
+		}
+	} else {
+		// Zero is an explicit provider-default sentinel. aiChatRequest uses
+		// omitempty so no platform-imposed max_tokens is sent in this mode.
+		maxTokens = 0
 	}
 	body, err := json.Marshal(aiChatRequest{Model: config.Model, Messages: messages, Temperature: config.Temperature, MaxTokens: maxTokens, Stream: false})
 	if err != nil {
@@ -397,7 +399,7 @@ func (s *PlatformAIService) chatWithContentRequirement(ctx context.Context, conf
 	}
 	if requireContent && strings.TrimSpace(decoded.Choices[0].Message.Content) == "" {
 		if strings.TrimSpace(decoded.Choices[0].Message.ReasoningContent) != "" || strings.EqualFold(strings.TrimSpace(decoded.Choices[0].FinishReason), "length") {
-			return "", decoded.Usage.TotalTokens, &AIProviderError{Err: errors.New("AI provider did not return a final answer; increase max_output_tokens")}
+			return "", decoded.Usage.TotalTokens, &AIProviderError{Err: errors.New("AI provider did not return a final answer; verify the output budget and final JSON response")}
 		}
 		return "", decoded.Usage.TotalTokens, &AIProviderError{Err: errors.New("AI provider returned an empty plan")}
 	}
@@ -446,8 +448,8 @@ func validatePlatformAIConfigInput(input PlatformAIConfigInput) error {
 	if input.RequestTimeoutSeconds < 5 || input.RequestTimeoutSeconds > 120 {
 		return errors.New("AI request timeout must be between 5 and 120 seconds")
 	}
-	if input.MaxOutputTokens < 128 || input.MaxOutputTokens > 8192 {
-		return errors.New("AI max output tokens must be between 128 and 8192")
+	if input.MaxOutputTokens < 0 {
+		return errors.New("AI max output tokens must be zero or greater")
 	}
 	if input.Temperature < 0 || input.Temperature > 2 {
 		return errors.New("AI temperature must be between 0 and 2")
@@ -463,6 +465,13 @@ func validatePlatformAIConfigInput(input PlatformAIConfigInput) error {
 		}
 	}
 	return nil
+}
+
+func aiOutputReservationTokens(config model.PlatformAIConfig) int64 {
+	if config.MaxOutputTokens > 0 {
+		return int64(config.MaxOutputTokens)
+	}
+	return defaultAIOutputReservationTokens
 }
 
 func normalizeAIProvider(provider string) string {

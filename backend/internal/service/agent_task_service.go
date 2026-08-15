@@ -524,7 +524,7 @@ ticket_product_create 的 product 必须使用 product_type 字段表达票种�
 		ctx = context.Background()
 	}
 	reservedTokens := int64((len([]byte(systemPrompt)) + len([]byte(input))) / 4)
-	reservedTokens += int64(config.MaxOutputTokens)
+	reservedTokens += aiOutputReservationTokens(config)
 	if err := ai.ReserveUsage(tenantID, config, reservedTokens); err != nil {
 		return nil, err
 	}

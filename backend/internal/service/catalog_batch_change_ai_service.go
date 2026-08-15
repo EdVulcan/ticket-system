@@ -113,7 +113,7 @@ func (s *CatalogBatchChangeService) PreviewWithAI(ctx context.Context, tenantID,
 		ctx = context.Background()
 	}
 	reservedTokens := int64((len([]byte(systemPrompt)) + len([]byte(inputText))) / 4)
-	reservedTokens += int64(config.MaxOutputTokens)
+	reservedTokens += aiOutputReservationTokens(config)
 	if err := ai.ReserveUsage(tenantID, config, reservedTokens); err != nil {
 		return nil, err
 	}

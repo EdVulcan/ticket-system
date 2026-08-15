@@ -53,8 +53,8 @@
         </div>
         <div class="form-grid three-columns">
           <el-form-item label="最大输出 Token">
-            <el-input-number v-model="form.max_output_tokens" :min="128" :max="8192" class="w-full" />
-            <div v-if="/reasoner|thinking/i.test(String(form.model || ''))" class="field-note">推理模型需要同时容纳思考过程和最终计划，建议至少 4096；过小会没有最终 JSON。</div>
+            <el-input-number v-model="form.max_output_tokens" :min="0" class="w-full" />
+            <div class="field-note">设为 0 表示不主动发送 max_tokens，由模型或接口使用默认输出额度；填写正数才会设置单次上限。</div>
           </el-form-item>
           <el-form-item label="温度">
             <el-input-number v-model="form.temperature" :min="0" :max="2" :step="0.1" :precision="1" class="w-full" />
@@ -91,7 +91,7 @@ const testSuccess = ref(false)
 const form = reactive<any>({
   provider: 'deepseek', base_url: 'https://api.deepseek.com', model: 'deepseek-chat', api_key: '', api_key_configured: false,
   enabled: false, default_monthly_request_limit: 100, default_monthly_token_limit: 200000,
-  request_timeout_seconds: 30, max_output_tokens: 1200, temperature: 0.1, config_version: 1,
+  request_timeout_seconds: 30, max_output_tokens: 0, temperature: 0.1, config_version: 1,
 })
 
 const load = async () => {
