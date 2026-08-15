@@ -1159,7 +1159,7 @@ func (s *TeamService) ListGroupsWithOptions(tenantID uint, options TeamGroupList
 	if options.PageSize > 100 {
 		options.PageSize = 100
 	}
-	query := model.DB.Model(&model.TourGroup{}).Where("tenant_id = ? OR supplier_tenant_id = ?", tenantID, tenantID)
+	query := model.DB.Model(&model.TourGroup{}).Where("(tenant_id = ? OR supplier_tenant_id = ?)", tenantID, tenantID)
 	if keyword := strings.TrimSpace(options.Keyword); keyword != "" {
 		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(keyword)
 		pattern := "%" + escaped + "%"
