@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"ticket-backend/internal/model"
+	"time"
 )
 
 func TestAgentTaskCollectsMissingProductPriceBeforePreviewAndConfirmation(t *testing.T) {
@@ -229,6 +230,63 @@ func TestAgentRuntimeSkillIsVersionedAndSeparatesTypeFromStatus(t *testing.T) {
 		if !strings.Contains(skill, term) {
 			t.Fatalf("runtime skill omitted %q: %s", term, skill)
 		}
+	}
+}
+
+func TestAgentTaskCanBeCancelledWithoutAllowingConfirmation(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	task := model.AgentTask{
+		TenantID: fixture.tenant.ID, ActorUserID: 11, ActorRole: "admin",
+		OperationType: AgentOperationTicketProductCreate, State: AgentTaskAwaitingConfirmation,
+		InputText: "创建成人票", ContextJSON: `{}`, MissingJSON: `[]`, PreviewJSON: `{}`,
+		IdempotencyKey: fmt.Sprintf("agent-cancel-%d", time.Now().UnixNano()), Version: 1,
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	if err := model.DB.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	service := &AgentTaskService{}
+	cancelled, err := service.Cancel(fixture.tenant.ID, 11, "admin", task.ID)
+	if err != nil {
+		t.Fatalf("cancel agent task: %v", err)
+	}
+	if cancelled.State != AgentTaskCancelled || cancelled.CanConfirm || cancelled.ErrorMessage == "" {
+		t.Fatalf("unexpected cancelled task: %+v", cancelled)
+	}
+	if _, err := service.Confirm(fixture.tenant.ID, 11, "admin", task.ID); err == nil {
+		t.Fatal("cancelled task was still confirmable")
+	}
+	var audit model.AuditLog
+	if err := model.DB.Where("tenant_id = ? AND action = ? AND target_type = ? AND target_id = ?", fixture.tenant.ID, "agent.task.cancel", "agent_task", task.ID).First(&audit).Error; err != nil {
+		t.Fatalf("missing cancellation audit: %v", err)
+	}
+	if _, err := service.Cancel(fixture.tenant.ID+999, 11, "admin", task.ID); err == nil {
+		t.Fatal("cross-tenant cancellation was accepted")
+	}
+}
+
+func TestAgentTaskCancelDoesNotInterruptExecutingTask(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	task := model.AgentTask{
+		TenantID: fixture.tenant.ID, ActorUserID: 11, ActorRole: "admin",
+		OperationType: AgentOperationCatalogBatchChange, State: AgentTaskExecuting,
+		InputText: "增加北门", ContextJSON: `{}`, MissingJSON: `[]`,
+		IdempotencyKey: fmt.Sprintf("agent-cancel-executing-%d", time.Now().UnixNano()), Version: 1,
+		ExpiresAt: time.Now().Add(time.Hour),
+	}
+	if err := model.DB.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&AgentTaskService{}).Cancel(fixture.tenant.ID, 11, "admin", task.ID); err == nil {
+		t.Fatal("executing task was cancelled")
+	}
+	var stored model.AgentTask
+	if err := model.DB.First(&stored, task.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != AgentTaskExecuting {
+		t.Fatalf("executing task state changed: %s", stored.State)
 	}
 }
 

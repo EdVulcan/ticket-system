@@ -41,6 +41,20 @@ func (c *AgentTaskController) Get(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, view)
 }
 
+func (c *AgentTaskController) Cancel(ctx *gin.Context) {
+	taskID, err := strconv.ParseUint(ctx.Param("taskID"), 10, 64)
+	if err != nil || taskID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid task id"})
+		return
+	}
+	view, err := c.Service.Cancel(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), ctx.GetString("role"), uint(taskID))
+	if err != nil {
+		writeAgentTaskError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, view)
+}
+
 func (c *AgentTaskController) Confirm(ctx *gin.Context) {
 	taskID, err := strconv.ParseUint(ctx.Param("taskID"), 10, 64)
 	if err != nil || taskID == 0 {

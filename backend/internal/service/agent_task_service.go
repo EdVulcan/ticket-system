@@ -303,6 +303,55 @@ func (s *AgentTaskService) Get(tenantID, actorUserID, taskID uint) (*AgentTaskVi
 	return agentTaskViewFromModel(task), nil
 }
 
+// Cancel abandons the planning conversation without touching any domain
+// record. The task remains as an auditable row, but can no longer be planned
+// or confirmed. An executing task is left alone because its domain operation
+// may already be in progress.
+func (s *AgentTaskService) Cancel(tenantID, actorUserID uint, actorRole string, taskID uint) (*AgentTaskView, error) {
+	if tenantID == 0 || taskID == 0 {
+		return nil, agentInvalid("tenant and task are required")
+	}
+	if actorRole == "" {
+		actorRole = "admin"
+	}
+	var response *AgentTaskView
+	err := model.Write(func(tx *gorm.DB) error {
+		var task model.AgentTask
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND actor_user_id = ?", taskID, tenantID, actorUserID).First(&task).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return agentNotFound("agent task not found")
+			}
+			return err
+		}
+		if task.State == AgentTaskExecuting {
+			return agentConflict("agent task is executing and cannot be abandoned")
+		}
+		if task.State == AgentTaskCompleted || task.State == AgentTaskCancelled {
+			response = agentTaskViewFromModel(task)
+			return nil
+		}
+		beforeJSON, _ := json.Marshal(map[string]string{"state": task.State})
+		task.State = AgentTaskCancelled
+		task.ErrorMessage = "agent task cancelled by user"
+		task.Version++
+		if err := tx.Save(&task).Error; err != nil {
+			return err
+		}
+		afterJSON, _ := json.Marshal(map[string]string{"state": task.State})
+		if err := recordAuditTx(tx, actorUserID, tenantID, actorRole, "tenant", "agent.task.cancel", "agent_task", task.ID,
+			"user abandoned AI task", string(beforeJSON), string(afterJSON)); err != nil {
+			return err
+		}
+		response = agentTaskViewFromModel(task)
+		stored, _ := json.Marshal(response)
+		return tx.Model(&task).Update("last_response_json", string(stored)).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
 func (s *AgentTaskService) Confirm(tenantID, actorUserID uint, actorRole string, taskID uint) (*AgentTaskView, error) {
 	if tenantID == 0 || taskID == 0 {
 		return nil, agentInvalid("tenant and task are required")

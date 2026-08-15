@@ -60,6 +60,7 @@
           <div class="assistant-actions">
             <div class="action-meta">
               <span v-if="availability" class="quota-copy">本月剩余 {{ availability.requests_remaining }} 次请求</span>
+              <el-button v-if="task" text size="small" :disabled="loading || confirming || taskLoading" @click="startNewTask">新建任务</el-button>
               <el-button v-if="inputText.trim()" text size="small" @click="clearInput">清空</el-button>
             </div>
             <el-button type="primary" :icon="Promotion" :loading="loading" :disabled="!inputText.trim() || taskLoading || (availability && !availability.enabled)" @click="submitInput">{{ task ? '继续处理' : '生成计划' }}</el-button>
@@ -123,7 +124,7 @@
           </template>
           <div class="assistant-hint">确认后服务端会重新校验租户归属和当前数据；过期或有变化会拒绝执行。</div>
           <div class="assistant-actions preview-actions">
-            <el-button :icon="Refresh" @click="resetTask">重新开始</el-button>
+            <el-button :icon="Refresh" @click="startNewTask">新建任务</el-button>
             <el-button type="primary" :icon="CircleCheck" :loading="confirming" :disabled="!task.can_confirm" @click="confirmTask">确认执行</el-button>
           </div>
         </template>
@@ -141,7 +142,7 @@ import request from '@/utils/request'
 import { localizeErrorMessage } from '@/utils/localize'
 
 type ErrorKind = 'auth' | 'timeout' | 'provider' | 'conflict' | 'generic' | ''
-type AgentAction = 'submit' | 'confirm' | ''
+type AgentAction = 'submit' | 'confirm' | 'cancel' | ''
 
 const AI_STATUS_TIMEOUT_MS = 15_000
 const AI_TASK_TIMEOUT_MS = 90_000
@@ -168,6 +169,9 @@ const statusLine = computed(() => {
   if (!availability.value.enabled) return '当前不可用'
   if (task.value?.state === 'awaiting_confirmation') return '等待确认执行'
   if (task.value?.state === 'collecting') return '等待补充信息'
+  if (task.value?.state === 'expired') return '任务已过期，可新建任务'
+  if (task.value?.state === 'cancelled') return '任务已放弃'
+  if (task.value?.state === 'failed') return '任务失败，可重试或新建任务'
   return `${availability.value.provider || '平台模型'} · 剩余 ${availability.value.requests_remaining} 次`
 })
 const errorTitle = computed(() => {
@@ -184,7 +188,7 @@ const productPreview = computed(() => preview.value?.operation_type === 'ticket_
 const isProductPreview = computed(() => preview.value?.operation_type === 'ticket_product_create')
 
 function newKey() { return `catalog-ai-${Date.now()}-${Math.random().toString(36).slice(2, 9)}` }
-const statusText = (status: string) => ({ awaiting_confirmation: '待确认', completed: '已完成', collecting: '补充信息', expired: '已过期', failed: '执行失败' } as Record<string, string>)[status] || status
+const statusText = (status: string) => ({ awaiting_confirmation: '待确认', completed: '已完成', collecting: '补充信息', expired: '已过期', failed: '执行失败', cancelled: '已放弃' } as Record<string, string>)[status] || status
 const money = (value: any) => value === undefined || value === null ? '-' : `¥${Number(value).toFixed(2)}`
 const validityText = (product: any) => {
   if (!product) return '-'
@@ -269,6 +273,7 @@ const retryLastAction = () => {
   }
   if (lastAction.value === 'confirm') confirmTask()
   else if (lastAction.value === 'submit') submitInput()
+  else if (lastAction.value === 'cancel') startNewTask()
 }
 
 const submitInput = async () => {
@@ -324,6 +329,40 @@ const resetTask = () => {
   errorKind.value = ''
   lastAction.value = ''
   idempotencyKey.value = newKey()
+}
+
+const startNewTask = async () => {
+  if (loading.value || confirming.value || taskLoading.value) return
+  if (!task.value) {
+    resetTask()
+    return
+  }
+  const currentTask = task.value
+  const terminal = currentTask.state === 'completed' || currentTask.state === 'cancelled'
+  try {
+    await ElMessageBox.confirm(
+      terminal
+        ? '当前任务已经结束，是否清理当前会话并新建一个任务？历史记录会保留。'
+        : '放弃当前 AI 任务并新建一个任务？当前任务不会执行，已保存内容仍保留在任务记录中。',
+      '新建任务',
+      { type: 'warning', confirmButtonText: '放弃并新建', cancelButtonText: '继续当前任务' },
+    )
+  } catch {
+    return
+  }
+  errorMessage.value = ''
+  errorKind.value = ''
+  lastAction.value = 'cancel'
+  if (terminal) {
+    resetTask()
+    return
+  }
+  try {
+    await request.post(`/agent/tasks/${currentTask.task_id}/cancel`, undefined, { timeout: AI_STATUS_TIMEOUT_MS, skipErrorToast: true } as any)
+    resetTask()
+  } catch (error: any) {
+    setError(error, '无法放弃当前任务，请稍后重试', 'cancel')
+  }
 }
 
 </script>

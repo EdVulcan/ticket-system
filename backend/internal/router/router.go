@@ -175,6 +175,7 @@ func InitRouter(r *gin.Engine) {
 	{
 		agentTaskGroup.POST("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), agentTaskController.Submit)
 		agentTaskGroup.GET("/:taskID", middleware.RequireTenantPermission(authz.PermissionCatalogRead), agentTaskController.Get)
+		agentTaskGroup.POST("/:taskID/cancel", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), agentTaskController.Cancel)
 		agentTaskGroup.POST("/:taskID/confirm", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), agentTaskController.Confirm)
 	}
 
