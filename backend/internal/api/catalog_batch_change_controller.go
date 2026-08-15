@@ -86,6 +86,11 @@ func (c *CatalogBatchChangeController) Confirm(ctx *gin.Context) {
 }
 
 func writeCatalogBatchError(ctx *gin.Context, err error) {
+	var providerErr *service.AIProviderError
+	if errors.As(err, &providerErr) {
+		ctx.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "code": "ai_provider_error"})
+		return
+	}
 	var batchErr *service.CatalogBatchError
 	if errors.As(err, &batchErr) {
 		ctx.JSON(batchErr.HTTPStatus, gin.H{"error": batchErr.Message, "code": batchErr.Code})

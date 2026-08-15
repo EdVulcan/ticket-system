@@ -70,6 +70,11 @@ func (c *AgentTaskController) Confirm(ctx *gin.Context) {
 }
 
 func writeAgentTaskError(ctx *gin.Context, err error) {
+	var providerErr *service.AIProviderError
+	if errors.As(err, &providerErr) {
+		ctx.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "code": "ai_provider_error"})
+		return
+	}
 	var taskErr *service.AgentTaskError
 	if errors.As(err, &taskErr) {
 		ctx.JSON(taskErr.HTTPStatus, gin.H{"error": taskErr.Message, "code": taskErr.Code})

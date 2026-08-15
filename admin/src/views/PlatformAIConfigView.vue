@@ -54,6 +54,7 @@
         <div class="form-grid three-columns">
           <el-form-item label="最大输出 Token">
             <el-input-number v-model="form.max_output_tokens" :min="128" :max="8192" class="w-full" />
+            <div v-if="/reasoner|thinking/i.test(String(form.model || ''))" class="field-note">推理模型需要同时容纳思考过程和最终计划，建议至少 4096；过小会没有最终 JSON。</div>
           </el-form-item>
           <el-form-item label="温度">
             <el-input-number v-model="form.temperature" :min="0" :max="2" :step="0.1" :precision="1" class="w-full" />

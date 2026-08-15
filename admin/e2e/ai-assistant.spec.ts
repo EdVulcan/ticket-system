@@ -228,3 +228,41 @@ test('AI 助手可放弃过期任务并从新任务开始', async ({ page }) => 
   expect(newTaskBody?.task_id).toBeUndefined()
   expect(newTaskBody?.idempotency_key).toBeTruthy()
 })
+
+test('AI provider 未返回最终答案时提示提高输出 Token', async ({ page }) => {
+  await page.addInitScript(user => {
+    localStorage.setItem('token', 'tenant-token')
+    localStorage.setItem('user', JSON.stringify(user))
+  }, tenantUser)
+  await page.route('**/api/v1/**', async route => {
+    const url = route.request().url()
+    if (url.endsWith('/tenants/me')) {
+      await json(route, {
+        id: tenantUser.tenant_id,
+        name: tenantUser.tenant_name,
+        system_code: tenantUser.system_code,
+        status: 'active',
+        permissions: tenantUser.permissions,
+        capabilities: tenantUser.capabilities,
+        supplier_business_types: tenantUser.supplier_business_types,
+      })
+      return
+    }
+    if (url.endsWith('/catalog/batch-changes/ai-status')) {
+      await json(route, { enabled: true, provider: 'deepseek', requests_remaining: 97 })
+      return
+    }
+    if (url.endsWith('/agent/tasks') && route.request().method() === 'POST') {
+      await json(route, { error: 'AI provider did not return a final answer; increase max_output_tokens', code: 'ai_provider_error' }, 502)
+      return
+    }
+    await json(route, {})
+  })
+
+  await page.goto('/')
+  const assistant = page.getByTestId('ai-assistant')
+  await assistant.getByRole('button', { name: '打开 AI 助手' }).click()
+  await assistant.getByLabel('操作描述').fill('创建一个线上成人票')
+  await assistant.getByRole('button', { name: '生成计划' }).click()
+  await expect(assistant.getByRole('alert')).toContainText('提高“最大输出 Token”')
+})

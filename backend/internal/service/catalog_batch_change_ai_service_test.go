@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -177,6 +178,25 @@ func TestPlatformAIChatStillRejectsEmptyPlannerContent(t *testing.T) {
 	}, "test-provider-key", []AIMessage{{Role: "user", Content: "生成计划"}}, 128)
 	if err == nil || !strings.Contains(err.Error(), "AI provider returned an empty plan") {
 		t.Fatalf("planner accepted empty provider content: %v", err)
+	}
+}
+
+func TestPlatformAIChatExplainsReasoningBudgetExhaustion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(writer, `{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":"","reasoning_content":"模型仍在推理"}}]}`)
+	}))
+	defer server.Close()
+
+	_, _, err := (&PlatformAIService{HTTPClient: server.Client()}).chat(t.Context(), model.PlatformAIConfig{
+		BaseURL: server.URL, Model: "deepseek-reasoner", RequestTimeoutSeconds: 5, MaxOutputTokens: 256,
+	}, "test-provider-key", []AIMessage{{Role: "user", Content: "生成计划"}}, 256)
+	if err == nil || !strings.Contains(err.Error(), "final answer") {
+		t.Fatalf("reasoning budget exhaustion was not explained: %v", err)
+	}
+	var providerErr *AIProviderError
+	if !errors.As(err, &providerErr) {
+		t.Fatalf("reasoning budget exhaustion was not classified as a provider error: %T", err)
 	}
 }
 

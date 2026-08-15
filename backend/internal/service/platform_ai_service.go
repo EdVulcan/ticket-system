@@ -29,6 +29,27 @@ var (
 	ErrAIBudgetExceeded = errors.New("本租户本月 AI 用量已达到平台额度")
 )
 
+// AIProviderError marks a response or transport failure after the request
+// reached the configured provider. Controllers expose it as a 502 so the
+// tenant can distinguish provider/configuration problems from server bugs.
+type AIProviderError struct {
+	Err error
+}
+
+func (e *AIProviderError) Error() string {
+	if e == nil || e.Err == nil {
+		return "AI provider request failed"
+	}
+	return e.Err.Error()
+}
+
+func (e *AIProviderError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 // PlatformAIConfigInput is accepted only by platform administrators. The API
 // key is write-only; an empty key keeps the encrypted value already stored.
 type PlatformAIConfigInput struct {
@@ -289,8 +310,9 @@ func (s *PlatformAIService) Availability(tenantID uint) (*AIAvailabilityView, er
 }
 
 type AIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role             string `json:"role"`
+	Content          string `json:"content"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 type aiChatRequest struct {
@@ -303,7 +325,8 @@ type aiChatRequest struct {
 
 type aiChatResponse struct {
 	Choices []struct {
-		Message AIMessage `json:"message"`
+		Message      AIMessage `json:"message"`
+		FinishReason string    `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		TotalTokens int64 `json:"total_tokens"`
@@ -351,29 +374,32 @@ func (s *PlatformAIService) chatWithContentRequirement(ctx context.Context, conf
 	req.Header.Set("Content-Type", "application/json")
 	response, err := s.client().Do(req)
 	if err != nil {
-		return "", 0, fmt.Errorf("AI provider request failed: %w", err)
+		return "", 0, &AIProviderError{Err: fmt.Errorf("AI provider request failed: %w", err)}
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
 	if err != nil {
-		return "", 0, err
+		return "", 0, &AIProviderError{Err: fmt.Errorf("AI provider response could not be read: %w", err)}
 	}
 	var decoded aiChatResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return "", 0, fmt.Errorf("AI provider returned invalid JSON: %w", err)
+		return "", 0, &AIProviderError{Err: fmt.Errorf("AI provider returned invalid JSON: %w", err)}
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		message := fmt.Sprintf("AI provider returned HTTP %d", response.StatusCode)
 		if decoded.Error != nil && strings.TrimSpace(decoded.Error.Message) != "" {
 			message = decoded.Error.Message
 		}
-		return "", decoded.Usage.TotalTokens, errors.New(message)
+		return "", decoded.Usage.TotalTokens, &AIProviderError{Err: errors.New(message)}
 	}
 	if len(decoded.Choices) == 0 {
-		return "", decoded.Usage.TotalTokens, errors.New("AI provider returned no choices")
+		return "", decoded.Usage.TotalTokens, &AIProviderError{Err: errors.New("AI provider returned no choices")}
 	}
 	if requireContent && strings.TrimSpace(decoded.Choices[0].Message.Content) == "" {
-		return "", decoded.Usage.TotalTokens, errors.New("AI provider returned an empty plan")
+		if strings.TrimSpace(decoded.Choices[0].Message.ReasoningContent) != "" || strings.EqualFold(strings.TrimSpace(decoded.Choices[0].FinishReason), "length") {
+			return "", decoded.Usage.TotalTokens, &AIProviderError{Err: errors.New("AI provider did not return a final answer; increase max_output_tokens")}
+		}
+		return "", decoded.Usage.TotalTokens, &AIProviderError{Err: errors.New("AI provider returned an empty plan")}
 	}
 	return decoded.Choices[0].Message.Content, decoded.Usage.TotalTokens, nil
 }
