@@ -229,7 +229,7 @@ test('AI 助手可放弃过期任务并从新任务开始', async ({ page }) => 
   expect(newTaskBody?.idempotency_key).toBeTruthy()
 })
 
-test('AI provider 未返回最终答案时提示提高输出 Token', async ({ page }) => {
+test('AI provider 未返回最终答案时提示使用自动输出额度', async ({ page }) => {
   await page.addInitScript(user => {
     localStorage.setItem('token', 'tenant-token')
     localStorage.setItem('user', JSON.stringify(user))
@@ -253,7 +253,7 @@ test('AI provider 未返回最终答案时提示提高输出 Token', async ({ pa
       return
     }
     if (url.endsWith('/agent/tasks') && route.request().method() === 'POST') {
-      await json(route, { error: 'AI provider did not return a final answer; increase max_output_tokens', code: 'ai_provider_error' }, 502)
+      await json(route, { error: 'AI provider did not return a final answer; verify the output budget and final JSON response', code: 'ai_provider_error' }, 502)
       return
     }
     await json(route, {})
@@ -264,5 +264,5 @@ test('AI provider 未返回最终答案时提示提高输出 Token', async ({ pa
   await assistant.getByRole('button', { name: '打开 AI 助手' }).click()
   await assistant.getByLabel('操作描述').fill('创建一个线上成人票')
   await assistant.getByRole('button', { name: '生成计划' }).click()
-  await expect(assistant.getByRole('alert')).toContainText('提高“最大输出 Token”')
+  await expect(assistant.getByRole('alert')).toContainText('设为自动（0）')
 })
