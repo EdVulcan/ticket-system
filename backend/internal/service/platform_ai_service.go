@@ -233,8 +233,16 @@ func (s *PlatformAIService) TestConfig(ctx context.Context, input PlatformAIConf
 			return fmt.Errorf("decrypt AI provider key: %w", err)
 		}
 	}
-	_, _, err := s.chat(ctx, config, key, []AIMessage{{Role: "system", Content: "只回复 OK。"}, {Role: "user", Content: "连接测试"}}, 4)
-	return err
+	// Keep the probe bounded: connection testing must not consume a full agent
+	// response budget, while reasoning models still need room for internal work.
+	testMaxTokens := config.MaxOutputTokens
+	if testMaxTokens < 128 {
+		testMaxTokens = 128
+	}
+	if testMaxTokens > 256 {
+		testMaxTokens = 256
+	}
+	return s.probe(ctx, config, key, []AIMessage{{Role: "system", Content: "只回复 OK。"}, {Role: "user", Content: "连接测试"}}, testMaxTokens)
 }
 
 func (s *PlatformAIService) loadActiveConfig() (model.PlatformAIConfig, string, error) {
@@ -306,6 +314,15 @@ type aiChatResponse struct {
 }
 
 func (s *PlatformAIService) chat(ctx context.Context, config model.PlatformAIConfig, apiKey string, messages []AIMessage, maxTokens int) (string, int64, error) {
+	return s.chatWithContentRequirement(ctx, config, apiKey, messages, maxTokens, true)
+}
+
+func (s *PlatformAIService) probe(ctx context.Context, config model.PlatformAIConfig, apiKey string, messages []AIMessage, maxTokens int) error {
+	_, _, err := s.chatWithContentRequirement(ctx, config, apiKey, messages, maxTokens, false)
+	return err
+}
+
+func (s *PlatformAIService) chatWithContentRequirement(ctx context.Context, config model.PlatformAIConfig, apiKey string, messages []AIMessage, maxTokens int, requireContent bool) (string, int64, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -352,7 +369,10 @@ func (s *PlatformAIService) chat(ctx context.Context, config model.PlatformAICon
 		}
 		return "", decoded.Usage.TotalTokens, errors.New(message)
 	}
-	if len(decoded.Choices) == 0 || strings.TrimSpace(decoded.Choices[0].Message.Content) == "" {
+	if len(decoded.Choices) == 0 {
+		return "", decoded.Usage.TotalTokens, errors.New("AI provider returned no choices")
+	}
+	if requireContent && strings.TrimSpace(decoded.Choices[0].Message.Content) == "" {
 		return "", decoded.Usage.TotalTokens, errors.New("AI provider returned an empty plan")
 	}
 	return decoded.Choices[0].Message.Content, decoded.Usage.TotalTokens, nil

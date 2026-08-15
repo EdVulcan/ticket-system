@@ -137,6 +137,67 @@ func TestCatalogBatchAIPreviewRejectsModelInventedAllProductsScope(t *testing.T)
 	}
 }
 
+func TestPlatformAITestConfigAcceptsSuccessfulEmptyProbeContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			MaxTokens int `json:"max_tokens"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			http.Error(writer, "invalid request", http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		if body.MaxTokens < 128 || body.MaxTokens > 256 {
+			http.Error(writer, "probe token budget out of bounds", http.StatusBadRequest)
+			return
+		}
+		_, _ = fmt.Fprint(writer, `{"choices":[{"message":{"role":"assistant","content":""}}]}`)
+	}))
+	defer server.Close()
+
+	input := PlatformAIConfigInput{
+		Provider: defaultAIProvider, BaseURL: server.URL, Model: defaultAIModel, APIKey: "test-provider-key", Enabled: true,
+		DefaultMonthlyRequestLimit: 5, DefaultMonthlyTokenLimit: 100000,
+		RequestTimeoutSeconds: 5, MaxOutputTokens: 256, Temperature: 0,
+	}
+	if err := (&PlatformAIService{HTTPClient: server.Client()}).TestConfig(t.Context(), input); err != nil {
+		t.Fatalf("connection test should allow a provider response that needs a reasoning budget: %v", err)
+	}
+}
+
+func TestPlatformAIChatStillRejectsEmptyPlannerContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(writer, `{"choices":[{"message":{"role":"assistant","content":""}}]}`)
+	}))
+	defer server.Close()
+
+	_, _, err := (&PlatformAIService{HTTPClient: server.Client()}).chat(t.Context(), model.PlatformAIConfig{
+		BaseURL: server.URL, Model: defaultAIModel, RequestTimeoutSeconds: 5, MaxOutputTokens: 256,
+	}, "test-provider-key", []AIMessage{{Role: "user", Content: "生成计划"}}, 128)
+	if err == nil || !strings.Contains(err.Error(), "AI provider returned an empty plan") {
+		t.Fatalf("planner accepted empty provider content: %v", err)
+	}
+}
+
+func TestPlatformAITestConfigFailsClosedOnProviderUnauthorized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(http.StatusUnauthorized)
+		_, _ = fmt.Fprint(writer, `{"error":{"message":"Authentication Fails"}}`)
+	}))
+	defer server.Close()
+
+	err := (&PlatformAIService{HTTPClient: server.Client()}).TestConfig(t.Context(), PlatformAIConfigInput{
+		Provider: defaultAIProvider, BaseURL: server.URL, Model: defaultAIModel, APIKey: "bad-key", Enabled: true,
+		DefaultMonthlyRequestLimit: 5, DefaultMonthlyTokenLimit: 100000,
+		RequestTimeoutSeconds: 5, MaxOutputTokens: 256, Temperature: 0,
+	})
+	if err == nil || !strings.Contains(err.Error(), "Authentication Fails") {
+		t.Fatalf("provider unauthorized response was not surfaced: %v", err)
+	}
+}
+
 func TestPlatformAIUsageConcurrentReservationsHonorBudget(t *testing.T) {
 	fixture := seedCatalogBatchFixture(t)
 	config := model.PlatformAIConfig{DefaultMonthlyRequestLimit: 1, DefaultMonthlyTokenLimit: 1000}
