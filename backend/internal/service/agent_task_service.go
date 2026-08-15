@@ -94,6 +94,7 @@ type agentTaskContext struct {
 	Operations    []CatalogRuleOperation `json:"operations,omitempty"`
 	Product       *agentProductDraft     `json:"product,omitempty"`
 	Assumptions   []string               `json:"assumptions,omitempty"`
+	UserFacts     agentProductUserFacts  `json:"user_facts,omitempty"`
 }
 
 type agentProductDraft struct {
@@ -200,6 +201,9 @@ func (s *AgentTaskService) Submit(ctx context.Context, tenantID, actorUserID uin
 	}
 	if actorRole == "" {
 		actorRole = "admin"
+	}
+	if !authz.HasTenantPermission(actorRole, authz.PermissionAgentUse) {
+		return nil, agentInvalid("当前账号没有使用 AI 助手的权限")
 	}
 	if req.TaskID == 0 {
 		if err := validateAgentInputIntent(input, AgentOperationPending); err != nil {
@@ -383,6 +387,9 @@ func (s *AgentTaskService) Confirm(tenantID, actorUserID uint, actorRole string,
 	if task.State == AgentTaskCompleted {
 		return agentTaskViewFromModel(task), nil
 	}
+	if task.State == AgentTaskExecuting && task.OperationType == AgentOperationCatalogBatchChange {
+		return s.recoverExecutingCatalogBatchTask(tenantID, actorUserID, actorRole, task)
+	}
 	if task.State != AgentTaskAwaitingConfirmation {
 		return nil, agentConflict("agent task is not ready for confirmation")
 	}
@@ -425,15 +432,107 @@ func (s *AgentTaskService) Confirm(tenantID, actorUserID uint, actorRole string,
 	}
 	preview, err := (&CatalogBatchChangeService{}).Confirm(tenantID, actorUserID, actorRole, executing.LinkedPlanID, executing.PlanHash)
 	if err != nil {
-		_ = model.DB.Model(&model.AgentTask{}).Where("id = ? AND tenant_id = ?", task.ID, tenantID).Updates(map[string]interface{}{"state": AgentTaskFailed, "error_message": err.Error()}).Error
+		if recovered, recoverErr := s.recoverCatalogBatchAfterConfirmError(tenantID, actorUserID, actorRole, executing, err); recovered {
+			if recoverErr != nil {
+				return nil, recoverErr
+			}
+			return s.Get(tenantID, actorUserID, task.ID)
+		}
 		return nil, err
 	}
-	previewJSON, _ := json.Marshal(preview)
+	return s.completeCatalogBatchTask(tenantID, actorUserID, executing, preview)
+}
+
+// recoverExecutingCatalogBatchTask closes the gap between the durable domain
+// plan and the assistant task. The plan is the source of truth after the
+// domain transaction has started; retrying an executing task must never run a
+// second mutation when that plan already completed.
+func (s *AgentTaskService) recoverExecutingCatalogBatchTask(tenantID, actorUserID uint, actorRole string, task model.AgentTask) (*AgentTaskView, error) {
+	plan, err := (&CatalogBatchChangeService{}).Get(tenantID, task.LinkedPlanID)
+	if err != nil {
+		return nil, err
+	}
+	switch plan.Status {
+	case CatalogBatchPlanCompleted:
+		return s.completeCatalogBatchTask(tenantID, actorUserID, task, plan)
+	case CatalogBatchPlanPreviewed:
+		preview, confirmErr := (&CatalogBatchChangeService{}).Confirm(tenantID, actorUserID, actorRole, task.LinkedPlanID, task.PlanHash)
+		if confirmErr != nil {
+			if recovered, recoverErr := s.recoverCatalogBatchAfterConfirmError(tenantID, actorUserID, actorRole, task, confirmErr); recovered {
+				if recoverErr != nil {
+					return nil, recoverErr
+				}
+				return s.Get(tenantID, actorUserID, task.ID)
+			}
+			return nil, confirmErr
+		}
+		return s.completeCatalogBatchTask(tenantID, actorUserID, task, preview)
+	case CatalogBatchPlanExpired, CatalogBatchPlanFailed:
+		message := catalogBatchPlanTerminalMessage(plan.Status, plan.ErrorMessage, "catalog batch change plan is no longer executable")
+		if err := s.failExecutingCatalogBatchTask(tenantID, actorUserID, task.ID, message); err != nil {
+			return nil, err
+		}
+		return nil, agentConflict(message)
+	default:
+		return nil, agentConflict("catalog batch change plan is in an unknown state; start a new task")
+	}
+}
+
+func (s *AgentTaskService) recoverCatalogBatchAfterConfirmError(tenantID, actorUserID uint, actorRole string, task model.AgentTask, confirmErr error) (bool, error) {
+	plan, getErr := (&CatalogBatchChangeService{}).Get(tenantID, task.LinkedPlanID)
+	if getErr != nil {
+		// A generic persistence error is deliberately left in executing state
+		// so a later retry can inspect the plan again.
+		return false, nil
+	}
+	if plan.Status == CatalogBatchPlanCompleted {
+		_, err := s.completeCatalogBatchTask(tenantID, actorUserID, task, plan)
+		return true, err
+	}
+	if plan.Status == CatalogBatchPlanExpired || plan.Status == CatalogBatchPlanFailed {
+		message := catalogBatchPlanTerminalMessage(plan.Status, plan.ErrorMessage, confirmErr.Error())
+		if err := s.failExecutingCatalogBatchTask(tenantID, actorUserID, task.ID, message); err != nil {
+			return true, err
+		}
+		return true, agentConflict(message)
+	}
+	var batchErr *CatalogBatchError
+	if errors.As(confirmErr, &batchErr) {
+		if err := s.failExecutingCatalogBatchTask(tenantID, actorUserID, task.ID, batchErr.Error()); err != nil {
+			return true, err
+		}
+		return true, confirmErr
+	}
+	return false, nil
+}
+
+func catalogBatchPlanTerminalMessage(status, errorMessage, fallback string) string {
+	if message := strings.TrimSpace(errorMessage); message != "" {
+		return strings.TrimSpace(status + ": " + message)
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func (s *AgentTaskService) completeCatalogBatchTask(tenantID, actorUserID uint, task model.AgentTask, preview *CatalogBatchChangePreview) (*AgentTaskView, error) {
+	if preview == nil {
+		return nil, agentConflict("catalog batch change result is missing")
+	}
+	previewJSON, err := json.Marshal(preview)
+	if err != nil {
+		return nil, err
+	}
 	var response *AgentTaskView
 	err = model.Write(func(tx *gorm.DB) error {
 		var completed model.AgentTask
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND actor_user_id = ?", task.ID, tenantID, actorUserID).First(&completed).Error; err != nil {
 			return err
+		}
+		if completed.State == AgentTaskCompleted {
+			response = agentTaskViewFromModel(completed)
+			return nil
+		}
+		if completed.State != AgentTaskExecuting || completed.OperationType != AgentOperationCatalogBatchChange {
+			return agentConflict("agent task is no longer executable")
 		}
 		now := time.Now()
 		completed.State = AgentTaskCompleted
@@ -453,6 +552,25 @@ func (s *AgentTaskService) Confirm(tenantID, actorUserID uint, actorRole string,
 		return nil, err
 	}
 	return response, nil
+}
+
+func (s *AgentTaskService) failExecutingCatalogBatchTask(tenantID, actorUserID, taskID uint, message string) error {
+	return model.Write(func(tx *gorm.DB) error {
+		var task model.AgentTask
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND actor_user_id = ?", taskID, tenantID, actorUserID).First(&task).Error; err != nil {
+			return err
+		}
+		if task.State == AgentTaskCompleted || task.State == AgentTaskFailed {
+			return nil
+		}
+		if task.State != AgentTaskExecuting {
+			return agentConflict("agent task is no longer executing")
+		}
+		task.State = AgentTaskFailed
+		task.ErrorMessage = strings.TrimSpace(message)
+		task.Version++
+		return tx.Save(&task).Error
+	})
 }
 
 func (s *AgentTaskService) loadOrCreateTask(tenantID, actorUserID uint, actorRole string, req AgentTaskRequest, input string) (model.AgentTask, error) {
@@ -503,6 +621,9 @@ func (s *AgentTaskService) loadOrCreateTask(tenantID, actorUserID uint, actorRol
 func (s *AgentTaskService) plan(ctx context.Context, tenantID, actorUserID uint, actorRole string, task model.AgentTask, input string) (*agentPlanningResult, error) {
 	if normalizeAgentProtocolMode(task.ProtocolMode) == agentProtocolToolV1 {
 		return s.planToolTask(ctx, tenantID, actorUserID, actorRole, task, input)
+	}
+	if !authz.HasTenantPermission(actorRole, authz.PermissionCatalogWrite) {
+		return nil, agentInvalid("当前账号没有目录变更权限")
 	}
 	if err := requireActiveScenicSupplier(model.DB, tenantID); err != nil {
 		return nil, err
@@ -619,7 +740,15 @@ func (s *AgentTaskService) planFromEnvelope(tenantID, actorUserID uint, actorRol
 		result.OperationType = operationType
 		candidate := envelope.Product
 		if candidate == nil {
-			result.Context = agentTaskContext{OperationType: operationType, SkillVersion: agentDomainSkillVersion, SkillHash: skillHash, Product: &agentProductDraft{}}
+			var previous agentTaskContext
+			if err := json.Unmarshal([]byte(contextJSON), &previous); err != nil && !errors.Is(err, io.EOF) {
+				return nil, agentInvalid("agent task context is invalid")
+			}
+			facts, factsErr := mergeAgentProductUserFacts(previous.UserFacts, input)
+			if factsErr != nil {
+				return nil, factsErr
+			}
+			result.Context = agentTaskContext{OperationType: operationType, SkillVersion: agentDomainSkillVersion, SkillHash: skillHash, Product: &agentProductDraft{}, UserFacts: facts}
 			result.Missing = []AgentMissingField{{Field: "product", Label: "票种信息", Question: "请提供票种名称、所属景区、售价、结算价和至少一个检票点。"}}
 			return result, nil
 		}
@@ -627,12 +756,21 @@ func (s *AgentTaskService) planFromEnvelope(tenantID, actorUserID uint, actorRol
 		if err := json.Unmarshal([]byte(contextJSON), &previous); err != nil && !errors.Is(err, io.EOF) {
 			return nil, agentInvalid("agent task context is invalid")
 		}
-		merged := mergeProductDraft(previous.Product, candidate)
+		facts, factsErr := mergeAgentProductUserFacts(previous.UserFacts, input)
+		if factsErr != nil {
+			return nil, factsErr
+		}
+		sanitizedCandidate, sanitizeErr := sanitizeAgentProductCandidate(input, previous, candidate, &facts)
+		if sanitizeErr != nil {
+			return nil, sanitizeErr
+		}
+		merged := mergeProductDraft(previous.Product, sanitizedCandidate)
 		resolved, missing, err := resolveProductDraft(model.DB, tenantID, merged)
 		if err != nil {
 			return nil, err
 		}
-		result.Context = agentTaskContext{OperationType: operationType, SkillVersion: agentDomainSkillVersion, SkillHash: skillHash, Product: resolved, Assumptions: productAssumptions(resolved)}
+		facts = enrichAgentProductUserFacts(facts, resolved)
+		result.Context = agentTaskContext{OperationType: operationType, SkillVersion: agentDomainSkillVersion, SkillHash: skillHash, Product: resolved, Assumptions: productAssumptions(resolved), UserFacts: facts}
 		result.Missing = missing
 		if len(missing) == 0 {
 			preview, err := productPreviewJSON(model.DB, tenantID, resolved, result.Context.Assumptions)
@@ -896,7 +1034,7 @@ func mergeProductDraft(previous *agentProductDraft, candidate *agentProductCandi
 		result.RuleName = strings.TrimSpace(candidate.RuleName)
 	}
 	if candidate.Groups != nil && len(candidate.Groups) > 0 {
-		result.Groups = candidate.Groups
+		result.Groups = mergeAgentRuleDraftGroups(result.Groups, candidate.Groups)
 	}
 	if strings.TrimSpace(candidate.CodeMode) != "" {
 		result.CodeMode = strings.TrimSpace(candidate.CodeMode)
@@ -1237,7 +1375,7 @@ func previewRuleGroups(groups []agentRuleDraftGroup) []agentRulePreviewGroup {
 }
 
 func productAssumptions(draft *agentProductDraft) []string {
-	assumptions := []string{"系统将以 offline 创建，且不会创建任何分销授权、渠道商品或上架映射。", "未特别说明时使用订单码、库存不限、不可退款、默认闸机语音 welcome。"}
+	assumptions := []string{"产品将保持未上架状态（status=offline），且不会创建任何分销授权、渠道商品或上架映射。", "未特别说明时使用订单码、库存不限、不可退款、默认闸机语音 welcome。"}
 	if draft != nil && draft.RuleName == draft.Name {
 		assumptions = append(assumptions, "规则名称未单独提供，使用票种名称。")
 	}

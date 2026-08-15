@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -43,7 +46,7 @@ var agentToolSpecs = []agentToolSpec{
 	{Name: "search_ticket_products", Description: "查询当前租户的票种目录，不返回数据库编号", Permission: authz.PermissionCatalogRead, Capability: "supplier", BusinessType: "scenic", ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
 	{Name: "get_ticket_product_rules", Description: "查看当前租户某个票种的检票规则，不返回数据库编号", Permission: authz.PermissionCatalogRead, Capability: "supplier", BusinessType: "scenic", ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","required":["product_name"],"properties":{"product_name":{"type":"string","minLength":1,"maxLength":100}},"additionalProperties":false}`)},
 	{Name: "prepare_ticket_product_create", Description: "准备创建一个尚未上线的票种预览，不执行创建和分发", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"product_type":{"type":"string","enum":["online","offline"]},"scenic_area_name":{"type":"string"},"price":{"type":["number","null"]},"settlement_price":{"type":["number","null"]},"validity_type":{"type":"string"},"validity_days":{"type":["integer","null"]},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"rule_name":{"type":"string"},"groups":{"type":"array"},"code_mode":{"type":"string"},"stock_type":{"type":"string"},"daily_stock":{"type":["integer","null"]},"real_name_required":{"type":["boolean","null"]},"refund_type":{"type":"string"},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":["integer","null"]},"limit_per_id":{"type":["integer","null"]}},"additionalProperties":false}`)},
-	{Name: "prepare_catalog_rule_change", Description: "准备票种检票规则变更预览，不执行修改", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, Parameters: json.RawMessage(`{"type":"object","required":["operations"],"properties":{"operations":{"type":"array","minItems":1,"maxItems":50,"items":{"type":"object"}}},"additionalProperties":false}`)},
+	{Name: "prepare_catalog_rule_change", Description: "准备票种检票规则变更预览，不执行修改", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, Parameters: json.RawMessage(`{"type":"object","required":["operations"],"properties":{"operations":{"type":"array","minItems":1,"maxItems":50,"items":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["add_checkpoints","remove_checkpoints","set_checkpoint_limit"]},"product_names":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"all_products":{"type":"boolean"},"checkpoint_names":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"group_name":{"type":"string","maxLength":100},"max_per_check_in":{"type":["integer","null"],"minimum":1,"maximum":1000}},"additionalProperties":false}}},"additionalProperties":false}`)},
 }
 
 func resolveAgentTaskProtocol(config model.PlatformAIConfig) string {
@@ -107,6 +110,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 	messages := []AIMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: input}}
 	definitions := agentToolDefinitions(visible)
 	toolCalls := 0
+	successfulToolCalls := 0
 	for providerCalls := 0; providerCalls < maxAgentProviderCalls; providerCalls++ {
 		reservedTokens := int64((len([]byte(systemPrompt)) + len([]byte(input))) / 4)
 		reservedTokens += aiOutputReservationTokens(config)
@@ -115,14 +119,23 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 		}
 		completion, callErr := ai.chatWithTools(ctx, config, apiKey, messages, definitions, config.MaxOutputTokens)
 		if callErr != nil {
+			if auditErr := recordAgentProviderEvent(task, actorUserID, actorRole, config, providerCalls+1, "failed", callErr.Error(), 0, ""); auditErr != nil {
+				return nil, auditErr
+			}
 			return nil, callErr
 		}
 		if completion.UsageTokens > 0 {
 			_ = ai.ReconcileUsage(tenantID, reservedTokens, completion.UsageTokens)
 		}
+		if err := recordAgentProviderEvent(task, actorUserID, actorRole, config, providerCalls+1, "succeeded", "", completion.UsageTokens, completion.ProviderRequestID); err != nil {
+			return nil, err
+		}
 		if len(completion.Message.ToolCalls) == 0 {
 			if strings.TrimSpace(completion.Message.Content) == "" {
 				return nil, agentInvalid("AI 未返回可展示的说明或工具调用")
+			}
+			if successfulToolCalls == 0 {
+				return nil, agentInvalid("AI 未调用受支持的查询或预览工具，无法生成可信结果")
 			}
 			var prior agentTaskContext
 			_ = json.Unmarshal([]byte(contextJSON), &prior)
@@ -144,10 +157,11 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 			if toolCalls > maxAgentToolCalls {
 				return nil, agentInvalid("本次 AI 任务调用工具次数过多，请缩小目标范围")
 			}
-			execution, invokeErr := s.invokeAgentTool(tenantID, actorUserID, actorRole, task, input, config, completion.ProviderRequestID, call)
+			execution, invokeErr := s.invokeAgentTool(tenantID, actorUserID, actorRole, task, input, config, completion.ProviderRequestID, completion.UsageTokens, call)
 			if invokeErr != nil {
 				return nil, invokeErr
 			}
+			successfulToolCalls++
 			if execution.Planning != nil {
 				return execution.Planning, nil
 			}
@@ -155,6 +169,24 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 		}
 	}
 	return nil, agentInvalid("AI 任务需要的工具调用次数过多，请拆分请求")
+}
+
+func recordAgentProviderEvent(task model.AgentTask, actorUserID uint, actorRole string, config model.PlatformAIConfig, attempt int, status, message string, tokenCount int64, providerRequestID string) error {
+	result := map[string]interface{}{"provider_call": true}
+	if strings.TrimSpace(message) != "" {
+		result["error"] = message
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	return recordAgentToolEvent(model.AgentTaskEvent{
+		TenantID: task.TenantID, TaskID: task.ID, ActorUserID: actorUserID, ActorRole: actorRole,
+		EventType: "provider_call", ToolVersion: agentToolVersion, Status: status,
+		IdempotencyKey: fmt.Sprintf("agent-provider-v%d-%d", task.Version, attempt),
+		ResultJSON:     scrubAgentToolJSON(string(encoded)), Provider: config.Provider, Model: config.Model,
+		ConfigVersion: config.ConfigVersion, ProviderRequestID: providerRequestID, TokenCount: tokenCount,
+	})
 }
 
 func validateAgentToolIntent(input, existingOperationType string) error {
@@ -233,10 +265,26 @@ type agentProductRuleArgs struct {
 }
 
 type agentPrepareCatalogArgs struct {
-	Operations []CatalogRuleOperation `json:"operations"`
+	Operations []agentCatalogRuleOperation `json:"operations"`
 }
 
-func (s *AgentTaskService) invokeAgentTool(tenantID, actorUserID uint, actorRole string, task model.AgentTask, input string, config model.PlatformAIConfig, providerRequestID string, call AIToolCall) (agentToolExecution, error) {
+type agentCatalogRuleOperation struct {
+	Kind            string   `json:"kind"`
+	ProductNames    []string `json:"product_names,omitempty"`
+	AllProducts     bool     `json:"all_products,omitempty"`
+	CheckpointNames []string `json:"checkpoint_names,omitempty"`
+	GroupName       string   `json:"group_name,omitempty"`
+	MaxPerCheckIn   *int     `json:"max_per_check_in,omitempty"`
+}
+
+func (operation agentCatalogRuleOperation) domainOperation() CatalogRuleOperation {
+	return CatalogRuleOperation{
+		Kind: operation.Kind, ProductNames: operation.ProductNames, AllProducts: operation.AllProducts,
+		CheckpointNames: operation.CheckpointNames, GroupName: operation.GroupName, MaxPerCheckIn: operation.MaxPerCheckIn,
+	}
+}
+
+func (s *AgentTaskService) invokeAgentTool(tenantID, actorUserID uint, actorRole string, task model.AgentTask, input string, config model.PlatformAIConfig, providerRequestID string, tokenCount int64, call AIToolCall) (agentToolExecution, error) {
 	spec, ok := findAgentTool(call.Function.Name)
 	if !ok {
 		return agentToolExecution{}, agentInvalid("AI 请求了未注册的工具")
@@ -248,9 +296,16 @@ func (s *AgentTaskService) invokeAgentTool(tenantID, actorUserID uint, actorRole
 	if callID == "" {
 		return agentToolExecution{}, agentInvalid("AI 工具调用缺少调用编号")
 	}
-	if existing, found, err := loadAgentToolEvent(task.ID, tenantID, callID); err != nil {
+	if len(callID) > 120 {
+		return agentToolExecution{}, agentInvalid("AI 工具调用编号过长")
+	}
+	attemptKey := agentToolAttemptKey(task, spec, call)
+	if existing, found, err := loadAgentToolEvent(task.ID, tenantID, attemptKey); err != nil {
 		return agentToolExecution{}, err
 	} else if found {
+		if existing.Status != "succeeded" {
+			return agentToolExecution{}, agentConflict("上一次 AI 工具调用失败，请重新生成任务")
+		}
 		var stored agentToolExecution
 		if err := json.Unmarshal([]byte(existing.ResultJSON), &stored); err != nil {
 			return agentToolExecution{}, agentConflict("AI 工具调用审计记录无法恢复，请重新开始任务")
@@ -270,12 +325,18 @@ func (s *AgentTaskService) invokeAgentTool(tenantID, actorUserID uint, actorRole
 		}
 	}
 	resultPayload, _ := json.Marshal(execution)
+	if execErr == nil && len(resultPayload) > maxAgentToolResultBytes {
+		execution = agentToolExecution{}
+		execErr = agentInvalid("AI 工具结果过大，请缩小查询范围")
+		status = "failed"
+		resultPayload, _ = json.Marshal(execution)
+	}
 	if err := recordAgentToolEvent(model.AgentTaskEvent{
 		TenantID: tenantID, TaskID: task.ID, ActorUserID: actorUserID, ActorRole: actorRole,
 		EventType: "tool_call", ToolName: spec.Name, ToolVersion: agentToolVersion, ToolCallID: callID,
-		IdempotencyKey: fmt.Sprintf("agent-task-%d-v%d", task.ID, task.Version), Status: status, ErrorCode: errorCode,
+		IdempotencyKey: attemptKey, Status: status, ErrorCode: errorCode,
 		ArgumentsJSON: scrubAgentToolJSON(call.Function.Arguments), ResultJSON: scrubAgentToolJSON(string(resultPayload)),
-		Provider: config.Provider, Model: config.Model, ConfigVersion: config.ConfigVersion, ProviderRequestID: providerRequestID, DurationMS: time.Since(started).Milliseconds(),
+		Provider: config.Provider, Model: config.Model, ConfigVersion: config.ConfigVersion, ProviderRequestID: providerRequestID, TokenCount: tokenCount, DurationMS: time.Since(started).Milliseconds(),
 	}); err != nil {
 		return agentToolExecution{}, err
 	}
@@ -390,7 +451,11 @@ func (s *AgentTaskService) executeAgentTool(tenantID, actorUserID uint, actorRol
 		if err := decodeAgentToolArguments(rawArgs, &args); err != nil {
 			return agentToolExecution{}, err
 		}
-		envelope := &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: args.Operations}
+		operations := make([]CatalogRuleOperation, 0, len(args.Operations))
+		for _, operation := range args.Operations {
+			operations = append(operations, operation.domainOperation())
+		}
+		envelope := &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: operations}
 		if err := validateAgentPlannerEnvelope(input, envelope); err != nil {
 			return agentToolExecution{}, err
 		}
@@ -427,12 +492,18 @@ func scrubAgentToolJSON(value string) string {
 	if len([]byte(value)) <= maxAgentToolResultBytes {
 		return value
 	}
-	return string([]byte(value)[:maxAgentToolResultBytes])
+	digest := sha256.Sum256([]byte(value))
+	summary, _ := json.Marshal(map[string]interface{}{
+		"truncated": true,
+		"bytes":     len([]byte(value)),
+		"sha256":    hex.EncodeToString(digest[:]),
+	})
+	return string(summary)
 }
 
 func loadAgentToolEvent(taskID, tenantID uint, callID string) (model.AgentTaskEvent, bool, error) {
 	var event model.AgentTaskEvent
-	err := model.DB.Where("task_id = ? AND tenant_id = ? AND tool_call_id = ?", taskID, tenantID, callID).First(&event).Error
+	err := model.DB.Where("task_id = ? AND tenant_id = ? AND idempotency_key = ?", taskID, tenantID, callID).First(&event).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return event, false, nil
 	}
@@ -440,12 +511,16 @@ func loadAgentToolEvent(taskID, tenantID uint, callID string) (model.AgentTaskEv
 }
 
 func recordAgentToolEvent(event model.AgentTaskEvent) error {
-	if event.TenantID == 0 || event.TaskID == 0 {
+	if event.TenantID == 0 || event.TaskID == 0 || strings.TrimSpace(event.IdempotencyKey) == "" {
 		return errors.New("agent task event ownership is required")
 	}
 	return model.Write(func(tx *gorm.DB) error {
+		var task model.AgentTask
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", event.TaskID, event.TenantID).First(&task).Error; err != nil {
+			return err
+		}
 		var duplicate model.AgentTaskEvent
-		if err := tx.Where("task_id = ? AND tool_call_id = ? AND tool_call_id <> ''", event.TaskID, event.ToolCallID).First(&duplicate).Error; err == nil {
+		if err := tx.Where("task_id = ? AND idempotency_key = ?", event.TaskID, event.IdempotencyKey).First(&duplicate).Error; err == nil {
 			return nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
@@ -457,4 +532,10 @@ func recordAgentToolEvent(event model.AgentTaskEvent) error {
 		event.Sequence = sequence + 1
 		return tx.Create(&event).Error
 	})
+}
+
+func agentToolAttemptKey(task model.AgentTask, spec agentToolSpec, call AIToolCall) string {
+	canonical := fmt.Sprintf("%d:%d:%s:%s:%s", task.ID, task.Version, spec.Name, strings.TrimSpace(call.ID), strings.TrimSpace(call.Function.Arguments))
+	digest := sha256.Sum256([]byte(canonical))
+	return fmt.Sprintf("agent-tool-v%d-%s", task.Version, hex.EncodeToString(digest[:24]))
 }

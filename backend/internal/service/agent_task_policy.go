@@ -36,7 +36,10 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 	}
 	switch operationType {
 	case AgentOperationCatalogBatchChange:
-		return validateAgentCatalogOperations(input, envelope.Operations)
+		if err := validateAgentCatalogOperations(input, envelope.Operations); err != nil {
+			return err
+		}
+		return validateAgentCatalogTargets(input, envelope.Operations)
 	case AgentOperationTicketProductCreate:
 		if envelope.Product == nil {
 			return agentInvalid("AI 未返回票种创建内容")
@@ -47,7 +50,10 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 			return validateAgentProductCandidate(input, envelope.Product)
 		}
 		if len(envelope.Operations) > 0 {
-			return validateAgentCatalogOperations(input, envelope.Operations)
+			if err := validateAgentCatalogOperations(input, envelope.Operations); err != nil {
+				return err
+			}
+			return validateAgentCatalogTargets(input, envelope.Operations)
 		}
 		return agentInvalid("这段内容不是受支持的票务操作")
 	default:
@@ -136,6 +142,24 @@ func validateAgentCatalogOperations(input string, operations []CatalogRuleOperat
 			}
 		default:
 			return agentInvalid(fmt.Sprintf("AI 返回了不受支持的票规操作 %q", kind))
+		}
+	}
+	return nil
+}
+
+func validateAgentCatalogTargets(input string, operations []CatalogRuleOperation) error {
+	for _, operation := range operations {
+		if !operation.AllProducts {
+			for _, productName := range operation.ProductNames {
+				if !agentTextContains(input, productName) {
+					return agentInvalid(fmt.Sprintf("票种 %q 未在当前请求中明确指定，请使用当前租户的准确名称", productName))
+				}
+			}
+		}
+		for _, checkpointName := range operation.CheckpointNames {
+			if !agentTextContains(input, checkpointName) {
+				return agentInvalid(fmt.Sprintf("检票点 %q 未在当前请求中明确指定，请使用当前租户的准确名称", checkpointName))
+			}
 		}
 	}
 	return nil

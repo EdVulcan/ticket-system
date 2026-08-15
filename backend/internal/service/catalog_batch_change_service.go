@@ -72,6 +72,7 @@ type CatalogBatchChangePreview struct {
 	PlanHash       string                          `json:"plan_hash"`
 	IdempotencyKey string                          `json:"idempotency_key"`
 	Status         string                          `json:"status"`
+	ErrorMessage   string                          `json:"error_message,omitempty"`
 	ExpiresAt      time.Time                       `json:"expires_at"`
 	ConfirmedAt    *time.Time                      `json:"confirmed_at,omitempty"`
 	CompletedAt    *time.Time                      `json:"completed_at,omitempty"`
@@ -951,6 +952,7 @@ func previewFromPlan(plan model.CatalogBatchChangePlan, lines []model.CatalogBat
 	preview.PlanHash = plan.PlanHash
 	preview.IdempotencyKey = plan.IdempotencyKey
 	preview.Status = plan.Status
+	preview.ErrorMessage = plan.ErrorMessage
 	preview.ExpiresAt = plan.ExpiresAt
 	preview.ConfirmedAt = plan.ConfirmedAt
 	preview.CompletedAt = plan.CompletedAt

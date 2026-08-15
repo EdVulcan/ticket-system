@@ -181,6 +181,34 @@ func TestPlatformAITestConfigAcceptsSuccessfulEmptyProbeContent(t *testing.T) {
 	}
 }
 
+func TestPlatformAITestConfigProbesSelectedToolProtocol(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Tools []AIToolDefinition `json:"tools"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			http.Error(writer, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if len(body.Tools) != 1 || body.Tools[0].Function.Name != "probe_agent_tool" {
+			http.Error(writer, "tool probe missing", http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(writer, `{"id":"probe-1","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"probe-call","type":"function","function":{"name":"probe_agent_tool","arguments":"{}"}}]}}]}`)
+	}))
+	defer server.Close()
+
+	err := (&PlatformAIService{HTTPClient: server.Client()}).TestConfig(t.Context(), PlatformAIConfigInput{
+		Provider: defaultAIProvider, BaseURL: server.URL, Model: defaultAIModel, APIKey: "test-provider-key", Enabled: true,
+		DefaultMonthlyRequestLimit: 5, DefaultMonthlyTokenLimit: 100000, RequestTimeoutSeconds: 5,
+		MaxOutputTokens: 0, Temperature: 0, AgentProtocolMode: agentProtocolToolV1,
+	})
+	if err != nil {
+		t.Fatalf("tool protocol connection test failed: %v", err)
+	}
+}
+
 func TestPlatformAIChatUsesProviderDefaultOutputBudget(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		var body map[string]json.RawMessage

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"ticket-backend/internal/model"
+	"time"
 )
 
 func toolProvider(t *testing.T, response func([]AIMessage) (map[string]interface{}, error)) (*httptest.Server, *atomic.Int32) {
@@ -111,8 +112,24 @@ func TestAgentToolTaskQueriesOnlyCurrentTenantAndPersistsAudit(t *testing.T) {
 	if err := model.DB.Model(&model.AgentTaskEvent{}).Where("task_id = ?", view.TaskID).Count(&eventCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if eventCount != 1 {
-		t.Fatalf("tool audit events=%d, want 1", eventCount)
+	if eventCount != 3 {
+		t.Fatalf("tool audit events=%d, want provider start/final and tool event (3)", eventCount)
+	}
+}
+
+func TestAgentToolTaskRejectsProviderTextWithoutSupportedToolCall(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	server, _ := toolProvider(t, func(messages []AIMessage) (map[string]interface{}, error) {
+		return toolTextPayload("我已经完成查询。", 12), nil
+	})
+	if _, err := (&PlatformAIService{}).SaveConfig(toolConfig(server.URL), 77, "platform_admin"); err != nil {
+		t.Fatalf("save tool protocol config: %v", err)
+	}
+	_, err := (&AgentTaskService{}).Submit(t.Context(), fixture.tenant.ID, 11, "product_operator", AgentTaskRequest{
+		InputText: "查询当前票种 Adult Ticket", IdempotencyKey: "tool-text-only-1", TurnKey: "turn-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "未调用受支持的查询或预览工具") {
+		t.Fatalf("provider text without a tool call was accepted: %v", err)
 	}
 }
 
@@ -151,5 +168,38 @@ func TestAgentToolTaskPreviewDoesNotExecuteBeforeConfirmation(t *testing.T) {
 	}
 	if revisionCount != 1 {
 		t.Fatalf("preview unexpectedly created product revision count=%d", revisionCount)
+	}
+}
+
+func TestAgentToolEventsAllowSameProviderCallIDAcrossTaskAttempts(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	task := model.AgentTask{
+		TenantID: fixture.tenant.ID, ActorUserID: 11, ActorRole: "product_operator",
+		OperationType: AgentOperationPending, State: AgentTaskCollecting, InputText: "查询票种",
+		ContextJSON: `{}`, MissingJSON: `[]`, IdempotencyKey: "tool-event-attempt-task", Version: 1,
+		ExpiresAt: time.Now().Add(time.Hour), ProtocolMode: agentProtocolToolV1,
+	}
+	if err := model.DB.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	base := model.AgentTaskEvent{TenantID: fixture.tenant.ID, TaskID: task.ID, ActorUserID: 11, ActorRole: task.ActorRole,
+		EventType: "tool_call", ToolName: "search_ticket_products", ToolVersion: agentToolVersion, ToolCallID: "provider-call-reused",
+		Status: "succeeded", ResultJSON: `{}`}
+	first := base
+	first.IdempotencyKey = "attempt-v1"
+	if err := recordAgentToolEvent(first); err != nil {
+		t.Fatalf("record first attempt: %v", err)
+	}
+	second := base
+	second.IdempotencyKey = "attempt-v2"
+	if err := recordAgentToolEvent(second); err != nil {
+		t.Fatalf("record second attempt with reused provider call id: %v", err)
+	}
+	var count int64
+	if err := model.DB.Model(&model.AgentTaskEvent{}).Where("task_id = ?", task.ID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("event count=%d, want 2", count)
 	}
 }

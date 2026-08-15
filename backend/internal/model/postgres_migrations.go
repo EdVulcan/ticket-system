@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 92
+const CurrentPostgresSchemaVersion = 93
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -115,6 +115,19 @@ func runPostgresMigrations(db *gorm.DB) error {
 			CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_task_event_call ON agent_task_events(task_id, tool_call_id) WHERE tool_call_id <> '';
 		`).Error; err != nil {
 			return fmt.Errorf("add agent tool runtime protocol and audit fields: %w", err)
+		}
+	}
+	if previousSchemaVersion > 0 && previousSchemaVersion < 93 {
+		if err := db.Exec(`
+			DROP INDEX IF EXISTS idx_agent_task_event_call;
+			-- Legacy rows used one task/version key for every tool call. Give each
+			-- existing event a stable unique identity before enforcing the new
+			-- attempt-level idempotency constraint.
+			UPDATE agent_task_events
+			SET idempotency_key = LEFT(COALESCE(idempotency_key, ''), 88) || ':legacy:' || id::text
+			WHERE COALESCE(idempotency_key, '') <> '';
+		`).Error; err != nil {
+			return fmt.Errorf("migrate agent tool event attempt identities: %w", err)
 		}
 	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 86 {
@@ -463,7 +476,9 @@ func applyPostgresIndexes(db *gorm.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_hotel_room_type_active_code ON hotel_room_types(tenant_id, hotel_id, code) WHERE deleted_at IS NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_hotel_rate_plan_active_code ON hotel_rate_plans(tenant_id, hotel_id, room_type_id, code) WHERE deleted_at IS NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_scenic_hotel_package_active_product ON scenic_hotel_packages(product_id) WHERE deleted_at IS NULL`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_task_event_call ON agent_task_events(task_id, tool_call_id) WHERE tool_call_id <> ''`,
+		`DROP INDEX IF EXISTS idx_agent_task_event_call`,
+		`CREATE INDEX IF NOT EXISTS idx_agent_task_event_call ON agent_task_events(task_id, tool_call_id) WHERE tool_call_id <> ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_task_event_idempotency ON agent_task_events(task_id, idempotency_key) WHERE idempotency_key <> ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_task_event_sequence ON agent_task_events(task_id, sequence)`,
 	}
 	for _, statement := range statements {

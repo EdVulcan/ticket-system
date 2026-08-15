@@ -40,7 +40,7 @@ func TestAgentTaskCollectsMissingProductPriceBeforePreviewAndConfirmation(t *tes
 	defer server.Close()
 	saveCatalogAIConfig(t, server.URL, 10)
 	service := &AgentTaskService{}
-	first, err := service.Submit(t.Context(), fixture.tenant.ID, 11, "admin", AgentTaskRequest{InputText: "创建一个儿童票，使用主门", IdempotencyKey: "agent-product-test", TurnKey: "turn-1"})
+	first, err := service.Submit(t.Context(), fixture.tenant.ID, 11, "admin", AgentTaskRequest{InputText: "创建一个儿童票，所属景区 Batch Scenic，使用 Main Gate", IdempotencyKey: "agent-product-test", TurnKey: "turn-1"})
 	if err != nil {
 		t.Fatalf("first agent turn: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestAgentTaskCollectsMissingProductPriceBeforePreviewAndConfirmation(t *tes
 	if existing != 0 {
 		t.Fatal("agent wrote a product before confirmation")
 	}
-	second, err := service.Submit(t.Context(), fixture.tenant.ID, 11, "admin", AgentTaskRequest{TaskID: first.TaskID, InputText: "售价 55 元，结算价 30 元", TurnKey: "turn-2"})
+	second, err := service.Submit(t.Context(), fixture.tenant.ID, 11, "admin", AgentTaskRequest{TaskID: first.TaskID, InputText: "线上票，售价 55 元，结算价 30 元", TurnKey: "turn-2"})
 	if err != nil {
 		t.Fatalf("second agent turn: %v", err)
 	}
@@ -107,6 +107,41 @@ func TestAgentTaskCollectsMissingProductPriceBeforePreviewAndConfirmation(t *tes
 	}
 }
 
+func TestAgentProductCandidateCannotInventCriticalFacts(t *testing.T) {
+	price := 99.0
+	settlement := 50.0
+	candidate := &agentProductCandidate{
+		Name: "Adult Ticket", ProductType: "online", ScenicAreaName: "Batch Scenic",
+		Price: &price, SettlementPrice: &settlement,
+		Groups: []agentRuleDraftGroup{{GroupName: "Admission", Items: []agentRuleDraftItem{{CheckpointName: "Main Gate"}}}},
+	}
+	previous := agentTaskContext{}
+	facts, err := mergeAgentProductUserFacts(previous.UserFacts, "创建一个 Adult Ticket，所属景区 Batch Scenic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sanitized, err := sanitizeAgentProductCandidate("创建一个 Adult Ticket，所属景区 Batch Scenic", previous, candidate, &facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sanitized.ProductType != "" || sanitized.Price != nil || sanitized.SettlementPrice != nil {
+		t.Fatalf("model-invented critical facts survived sanitization: %+v", sanitized)
+	}
+	if len(sanitized.Groups) != 0 {
+		t.Fatalf("model-invented checkpoint survived sanitization: %+v", sanitized.Groups)
+	}
+}
+
+func TestAgentLegacyPlanningRequiresCatalogWritePermission(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	_, err := (&AgentTaskService{}).Submit(t.Context(), fixture.tenant.ID, 11, "team_operator", AgentTaskRequest{
+		InputText: "给 Adult Ticket 增加 North Gate", IdempotencyKey: "agent-permission-test", TurnKey: "turn-1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "目录变更权限") {
+		t.Fatalf("legacy planning should fail closed without catalog.write: %v", err)
+	}
+}
+
 func TestAgentTaskReusesCatalogBatchPreviewAndConfirm(t *testing.T) {
 	fixture := seedCatalogBatchFixture(t)
 	server, calls := startCatalogAIProvider(t, `{"operation_type":"catalog_batch_change","operations":[{"kind":"add_checkpoints","product_names":["Adult Ticket"],"checkpoint_names":["North Gate"]}]}`)
@@ -139,6 +174,39 @@ func TestAgentTaskReusesCatalogBatchPreviewAndConfirm(t *testing.T) {
 	}
 	if product.CurrentRevisionID == before {
 		t.Fatal("batch agent confirmation did not create a new product revision")
+	}
+}
+
+func TestAgentTaskRecoversAfterCatalogPlanCompletedBeforeTaskFinalization(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	server, _ := startCatalogAIProvider(t, `{"operation_type":"catalog_batch_change","operations":[{"kind":"add_checkpoints","product_names":["Adult Ticket"],"checkpoint_names":["North Gate"]}]}`)
+	saveCatalogAIConfig(t, server.URL, 10)
+	service := &AgentTaskService{}
+	planned, err := service.Submit(t.Context(), fixture.tenant.ID, 11, "admin", AgentTaskRequest{
+		InputText: "给 Adult Ticket 增加 North Gate", IdempotencyKey: "agent-recovery-test", TurnKey: "turn-1",
+	})
+	if err != nil {
+		t.Fatalf("create batch task: %v", err)
+	}
+	if _, err := (&CatalogBatchChangeService{}).Confirm(fixture.tenant.ID, 11, "admin", planned.PlanID, planned.PlanHash); err != nil {
+		t.Fatalf("complete linked plan: %v", err)
+	}
+	if err := model.DB.Model(&model.AgentTask{}).Where("id = ? AND tenant_id = ?", planned.TaskID, fixture.tenant.ID).Update("state", AgentTaskExecuting).Error; err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := service.Confirm(fixture.tenant.ID, 11, "admin", planned.TaskID)
+	if err != nil {
+		t.Fatalf("recover executing task: %v", err)
+	}
+	if recovered.State != AgentTaskCompleted || recovered.Result == nil {
+		t.Fatalf("recovered task was not finalized: %+v", recovered)
+	}
+	var task model.AgentTask
+	if err := model.DB.First(&task, planned.TaskID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if task.State != AgentTaskCompleted {
+		t.Fatalf("persisted task state=%s, want completed", task.State)
 	}
 }
 
@@ -183,7 +251,7 @@ func TestAgentPlannerPolicyRejectsInventedBroadOrOppositeOperations(t *testing.T
 	if err := validateAgentPlannerEnvelope("给 Adult Ticket 设置检票次数", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpSetLimit, ProductNames: []string{"Adult Ticket"}, CheckpointNames: []string{"North Gate"}, MaxPerCheckIn: intPtr(2)}}}); err == nil {
 		t.Fatal("agent policy accepted a model-invented checkpoint limit")
 	}
-	if err := validateAgentPlannerEnvelope("给 Adult Ticket 设置每点最多 2 次", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpSetLimit, ProductNames: []string{"Adult Ticket"}, CheckpointNames: []string{"North Gate"}, MaxPerCheckIn: intPtr(2)}}}); err != nil {
+	if err := validateAgentPlannerEnvelope("给 Adult Ticket 的 North Gate 设置每点最多 2 次", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpSetLimit, ProductNames: []string{"Adult Ticket"}, CheckpointNames: []string{"North Gate"}, MaxPerCheckIn: intPtr(2)}}}); err != nil {
 		t.Fatalf("explicit checkpoint limit was rejected: %v", err)
 	}
 	if err := validateAgentPlannerEnvelope("全部票种增加 North Gate", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, AllProducts: true, CheckpointNames: []string{"North Gate"}}}}); err != nil {

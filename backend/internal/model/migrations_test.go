@@ -240,13 +240,13 @@ func TestPostgresSchema89AgentTaskOwnershipGuard(t *testing.T) {
 	}
 }
 
-func TestPostgresSchema92AgentTaskEventOwnershipGuard(t *testing.T) {
+func TestPostgresSchema93AgentTaskEventOwnershipGuard(t *testing.T) {
 	db := testdb.Open(t)
 	if err := runMigrations(db); err != nil {
 		t.Fatal(err)
 	}
-	if CurrentPostgresSchemaVersion < 92 {
-		t.Fatalf("current schema version=%d, want at least 92", CurrentPostgresSchemaVersion)
+	if CurrentPostgresSchemaVersion < 93 {
+		t.Fatalf("current schema version=%d, want at least 93", CurrentPostgresSchemaVersion)
 	}
 	tenant := Tenant{Name: "Agent Event Guard", SystemCode: "AGENT-EVENT-GUARD", SecretKey: "event", Status: "active"}
 	if err := db.Create(&tenant).Error; err != nil {
@@ -256,7 +256,7 @@ func TestPostgresSchema92AgentTaskEventOwnershipGuard(t *testing.T) {
 	if err := db.Create(&task).Error; err != nil {
 		t.Fatal(err)
 	}
-	valid := AgentTaskEvent{TenantID: tenant.ID, TaskID: task.ID, ActorUserID: task.ActorUserID, ActorRole: task.ActorRole, Sequence: 1, EventType: "tool_call", ToolName: "search_ticket_products", ToolVersion: "1", ToolCallID: "event-call-1", Status: "succeeded"}
+	valid := AgentTaskEvent{TenantID: tenant.ID, TaskID: task.ID, ActorUserID: task.ActorUserID, ActorRole: task.ActorRole, Sequence: 1, EventType: "tool_call", ToolName: "search_ticket_products", ToolVersion: "1", ToolCallID: "event-call-1", IdempotencyKey: "event-attempt-1", Status: "succeeded"}
 	if err := db.Create(&valid).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -273,6 +273,13 @@ func TestPostgresSchema92AgentTaskEventOwnershipGuard(t *testing.T) {
 	invalidActor.ToolCallID = "event-call-3"
 	if err := db.Create(&invalidActor).Error; err == nil {
 		t.Fatal("agent task event from another actor was accepted")
+	}
+	duplicateAttempt := valid
+	duplicateAttempt.ID = 0
+	duplicateAttempt.Sequence = 2
+	duplicateAttempt.ToolCallID = "event-call-2"
+	if err := db.Create(&duplicateAttempt).Error; err == nil {
+		t.Fatal("duplicate agent task event idempotency key was accepted")
 	}
 }
 

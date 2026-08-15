@@ -181,7 +181,7 @@ const configuredSupplierBusinessTypes = computed(() => configuredSupplierBusines
 const hasSupplierBusinessType = (value: string) => activeSupplierBusinessTypes.value.has(value)
 const hasConfiguredSupplierBusinessType = (value: string) => configuredSupplierBusinessTypes.value.has(value)
 const can = (permission: string) => hasPermission(user.value, permission)
-const showAIAssistant = computed(() => !isLoginPage.value && !isSuperAdmin.value && hasCapability('supplier') && hasSupplierBusinessType('scenic') && can('catalog.write'))
+const showAIAssistant = computed(() => !isLoginPage.value && !isSuperAdmin.value && hasCapability('supplier') && hasSupplierBusinessType('scenic') && can('agent.use'))
 
 const navGroups = computed<NavGroup[]>(() => {
   const overview: NavGroup = { label: '概览', items: [{ path: '/', label: '控制台', icon: Odometer }] }

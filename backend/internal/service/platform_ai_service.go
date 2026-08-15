@@ -250,6 +250,10 @@ func (s *PlatformAIService) TestConfig(ctx context.Context, input PlatformAIConf
 		config.RequestTimeoutSeconds = input.RequestTimeoutSeconds
 	}
 	config.MaxOutputTokens = input.MaxOutputTokens
+	// Test the protocol the administrator submitted, rather than inheriting a
+	// previously saved mode when the form leaves the field blank (blank means
+	// the legacy JSON protocol).
+	config.AgentProtocolMode = normalizeAgentProtocolMode(input.AgentProtocolMode)
 	if input.Temperature >= 0 {
 		config.Temperature = input.Temperature
 	}
@@ -264,9 +268,28 @@ func (s *PlatformAIService) TestConfig(ctx context.Context, input PlatformAIConf
 			return fmt.Errorf("decrypt AI provider key: %w", err)
 		}
 	}
-	// The probe uses provider-default mode as well. A small hard-coded probe
-	// budget can exhaust a reasoning model before it reaches even "OK" and
-	// would report a false configuration failure.
+	if resolveAgentTaskProtocol(config) == agentProtocolToolV1 {
+		probeTool := []AIToolDefinition{{
+			Type: "function",
+			Function: AIToolFunction{
+				Name:        "probe_agent_tool",
+				Description: "连接测试用的空操作，不读取或修改任何业务数据",
+				Parameters:  json.RawMessage(`{"type":"object","additionalProperties":false}`),
+				Strict:      true,
+			},
+		}}
+		completion, err := s.chatWithTools(ctx, config, key, []AIMessage{{Role: "system", Content: "请调用 probe_agent_tool 完成连接测试。不要输出文字。"}, {Role: "user", Content: "连接测试"}}, probeTool, 0)
+		if err != nil {
+			return err
+		}
+		if completion == nil || len(completion.Message.ToolCalls) == 0 {
+			return &AIProviderError{Err: errors.New("AI provider did not return a tool call for the selected tool protocol")}
+		}
+		return nil
+	}
+	// The legacy probe uses provider-default mode as well. A small hard-coded
+	// probe budget can exhaust a reasoning model before it reaches even "OK"
+	// and would report a false configuration failure.
 	return s.probe(ctx, config, key, []AIMessage{{Role: "system", Content: "只回复 OK。"}, {Role: "user", Content: "连接测试"}}, 0)
 }
 
