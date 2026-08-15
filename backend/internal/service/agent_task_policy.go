@@ -41,10 +41,10 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 		if envelope.Product == nil {
 			return agentInvalid("AI 未返回票种创建内容")
 		}
-		return nil
+		return validateAgentProductCandidate(input, envelope.Product)
 	case AgentOperationPending, "":
 		if envelope.Product != nil {
-			return nil
+			return validateAgentProductCandidate(input, envelope.Product)
 		}
 		if len(envelope.Operations) > 0 {
 			return validateAgentCatalogOperations(input, envelope.Operations)
@@ -53,6 +53,25 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 	default:
 		return agentInvalid("AI 返回了不受支持的操作类型")
 	}
+}
+
+func validateAgentProductCandidate(input string, product *agentProductCandidate) error {
+	productType := strings.TrimSpace(product.ProductType)
+	if productType != "" && productType != "online" && productType != "offline" {
+		return agentInvalid("AI 返回了不受支持的票种类型")
+	}
+	hasWindow := agentHasAny(strings.ToLower(input), []string{"窗口", "线下", "pos", "现场票"})
+	hasOnline := agentHasAny(strings.ToLower(input), []string{"线上", "在线", "网售", "小程序票"})
+	if hasWindow && hasOnline {
+		return agentInvalid("一次只能创建一种票种类型，请明确选择线上票或窗口/POS 票")
+	}
+	if hasWindow && productType == "online" {
+		return agentInvalid("模型把窗口/POS 票解释成了线上票，请重新生成计划")
+	}
+	if hasOnline && productType == "offline" {
+		return agentInvalid("模型把线上票解释成了窗口/POS 票，请重新生成计划")
+	}
+	return nil
 }
 
 // validateAgentInputIntent is deliberately conservative for a new task. A

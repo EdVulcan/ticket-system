@@ -81,3 +81,80 @@ test('AI 助手请求失败时保留输入并支持重试，且不会重复提�
   await expect(assistant.getByText('售价', { exact: true })).toBeVisible()
   expect(submitCount).toBe(2)
 })
+
+test('AI 助手预览明确区分窗口票类型和未上架状态', async ({ page }) => {
+  await page.addInitScript(user => {
+    localStorage.setItem('token', 'tenant-token')
+    localStorage.setItem('user', JSON.stringify(user))
+  }, tenantUser)
+  await page.route('**/api/v1/**', async route => {
+    const url = route.request().url()
+    if (url.endsWith('/tenants/me')) {
+      await json(route, {
+        id: tenantUser.tenant_id,
+        name: tenantUser.tenant_name,
+        system_code: tenantUser.system_code,
+        status: 'active',
+        permissions: tenantUser.permissions,
+        capabilities: tenantUser.capabilities,
+        supplier_business_types: tenantUser.supplier_business_types,
+      })
+      return
+    }
+    if (url.endsWith('/catalog/batch-changes/ai-status')) {
+      await json(route, { enabled: true, provider: 'deepseek', requests_remaining: 100 })
+      return
+    }
+    if (url.endsWith('/agent/tasks') && route.request().method() === 'POST') {
+      await json(route, {
+        task_id: 42,
+        operation_type: 'ticket_product_create',
+        state: 'awaiting_confirmation',
+        input_text: '创建窗口成人票，售价 120 元，结算价 80 元',
+        can_confirm: true,
+        preview: {
+          operation_type: 'ticket_product_create',
+          scenic_area_name: '示例景区',
+          product: {
+            name: '窗口成人票',
+            type: 'offline',
+            type_label: '窗口/POS 票',
+            status: 'offline',
+            status_label: '未上架',
+            is_distributable: false,
+            price: 120,
+            settlement_price: 80,
+            validity_type: 'date',
+            stock_type: 'unlimited',
+            real_name_required: false,
+            limit_per_phone: 0,
+            limit_per_id: 0,
+            refund_type: 'no_refund',
+            code_mode: 'order',
+            gate_voice_code: 'welcome',
+          },
+          rule: { name: '窗口成人票', validity_type: 'date', groups: [] },
+          rule_groups: [],
+          assumptions: [],
+          safety: [],
+        },
+      })
+      return
+    }
+    if (url.endsWith('/agent/tasks/42/confirm')) {
+      await json(route, { task_id: 42, state: 'completed', can_confirm: false, result: { product_id: 99 } })
+      return
+    }
+    await json(route, {})
+  })
+
+  await page.goto('/')
+  const assistant = page.getByTestId('ai-assistant')
+  await assistant.getByRole('button', { name: '打开 AI 助手' }).click()
+  await assistant.getByLabel('操作描述').fill('创建窗口成人票，售价 120 元，结算价 80 元')
+  await assistant.getByRole('button', { name: '生成计划' }).click()
+
+  await expect(assistant.getByText('窗口/POS 票', { exact: true })).toBeVisible()
+  await expect(assistant.getByText('未上架 · 不分销', { exact: true })).toBeVisible()
+  await expect(assistant.getByRole('button', { name: '确认执行' })).toBeEnabled()
+})

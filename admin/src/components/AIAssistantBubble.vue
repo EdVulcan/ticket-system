@@ -44,7 +44,7 @@
             :rows="5"
             maxlength="2000"
             show-word-limit
-            :placeholder="task ? '继续补充缺失信息，例如：售价 120 元，结算价 80 元' : '例如：创建一个成人票，售价 120 元，结算价 80 元，使用北门检票点'"
+            :placeholder="task ? '继续补充缺失信息，例如：窗口票，售价 120 元，结算价 80 元' : '例如：创建一个线上成人票，售价 120 元，结算价 80 元，使用北门检票点'"
             :disabled="loading || taskLoading || (availability && !availability.enabled)"
             @keyup.ctrl.enter="submitInput"
             @keyup.meta.enter="submitInput"
@@ -77,8 +77,8 @@
               <div><span>票种名称</span><strong>{{ productPreview.product?.name }}</strong></div>
               <div><span>所属景区</span><strong>{{ productPreview.scenic_area_name || '-' }}</strong></div>
               <div><span>售价 / 结算价</span><strong>{{ money(productPreview.product?.price) }} / {{ money(productPreview.product?.settlement_price) }}</strong></div>
-              <div><span>上线与分销</span><strong>离线 · 不分销</strong></div>
-              <div><span>商品类型</span><strong>{{ productPreview.product?.type || '-' }}</strong></div>
+              <div><span>上架与分销</span><strong>{{ productPreview.product?.status_label || '未上架' }} · {{ productPreview.product?.is_distributable ? '允许分销' : '不分销' }}</strong></div>
+              <div><span>票种类型</span><strong>{{ productPreview.product?.type_label || productPreview.product?.type || '-' }}</strong></div>
             </div>
             <div class="product-detail-grid">
               <div><span>有效期</span><strong>{{ validityText(productPreview.product) }}</strong></div>

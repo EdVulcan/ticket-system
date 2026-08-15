@@ -34,7 +34,7 @@ func TestAgentTaskCollectsMissingProductPriceBeforePreviewAndConfirmation(t *tes
 			_, _ = fmt.Fprint(writer, `{"choices":[{"message":{"role":"assistant","content":"{\"operation_type\":\"ticket_product_create\",\"product\":{\"name\":\"Child Ticket\",\"scenic_area_name\":\"Batch Scenic\",\"price\":null,\"settlement_price\":null,\"groups\":[{\"group_name\":\"Admission\",\"items\":[{\"checkpoint_name\":\"Main Gate\"}]}]}}"}}],"usage":{"total_tokens":32}}`)
 			return
 		}
-		_, _ = fmt.Fprint(writer, `{"choices":[{"message":{"role":"assistant","content":"{\"operation_type\":\"ticket_product_create\",\"product\":{\"name\":\"Child Ticket\",\"scenic_area_name\":\"Batch Scenic\",\"price\":55,\"settlement_price\":30,\"groups\":[{\"group_name\":\"Admission\",\"items\":[{\"checkpoint_name\":\"Main Gate\",\"max_per_check_in\":1}]}]}}"}}],"usage":{"total_tokens":32}}`)
+		_, _ = fmt.Fprint(writer, `{"choices":[{"message":{"role":"assistant","content":"{\"operation_type\":\"ticket_product_create\",\"product\":{\"name\":\"Child Ticket\",\"product_type\":\"online\",\"scenic_area_name\":\"Batch Scenic\",\"price\":55,\"settlement_price\":30,\"groups\":[{\"group_name\":\"Admission\",\"items\":[{\"checkpoint_name\":\"Main Gate\",\"max_per_check_in\":1}]}]}}"}}],"usage":{"total_tokens":32}}`)
 	}))
 	defer server.Close()
 	saveCatalogAIConfig(t, server.URL, 10)
@@ -45,6 +45,16 @@ func TestAgentTaskCollectsMissingProductPriceBeforePreviewAndConfirmation(t *tes
 	}
 	if first.State != AgentTaskCollecting || first.CanConfirm || len(first.MissingFields) < 2 {
 		t.Fatalf("first turn should collect prices: %+v", first)
+	}
+	hasProductTypeQuestion := false
+	for _, field := range first.MissingFields {
+		if field.Field == "product_type" {
+			hasProductTypeQuestion = true
+			break
+		}
+	}
+	if !hasProductTypeQuestion {
+		t.Fatalf("first turn did not ask for online/window product type: %+v", first.MissingFields)
 	}
 	var existing int64
 	if err := model.DB.Model(&model.Product{}).Where("tenant_id = ? AND name = ?", fixture.tenant.ID, "Child Ticket").Count(&existing).Error; err != nil {
@@ -67,6 +77,10 @@ func TestAgentTaskCollectsMissingProductPriceBeforePreviewAndConfirmation(t *tes
 	if preview["operation_type"] != AgentOperationTicketProductCreate || preview["scenic_area_name"] != "Batch Scenic" {
 		t.Fatalf("unexpected product preview: %+v", preview)
 	}
+	previewProduct, ok := preview["product"].(map[string]interface{})
+	if !ok || previewProduct["type"] != "online" || previewProduct["type_label"] != "线上票" || previewProduct["status_label"] != "未上架" {
+		t.Fatalf("product preview did not separate type from status: %+v", previewProduct)
+	}
 	if strings.Contains(string(second.Preview), "tenant_id") || strings.Contains(string(second.Preview), "scenic_area_id") || strings.Contains(string(second.Preview), "checkpoint_id") || strings.Contains(string(second.Preview), "rule_id") {
 		t.Fatalf("product preview leaked internal ownership identifiers: %s", string(second.Preview))
 	}
@@ -81,8 +95,8 @@ func TestAgentTaskCollectsMissingProductPriceBeforePreviewAndConfirmation(t *tes
 	if err := model.DB.Where("tenant_id = ? AND name = ?", fixture.tenant.ID, "Child Ticket").First(&created).Error; err != nil {
 		t.Fatal(err)
 	}
-	if created.Status != "offline" || created.IsDistributable {
-		t.Fatalf("agent-created product was not forced offline/non-distributable: %+v", created)
+	if created.Type != "online" || created.Status != "offline" || created.IsDistributable {
+		t.Fatalf("agent-created product type/status/distribution boundary is wrong: %+v", created)
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("provider calls=%d, want 2", calls.Load())
@@ -124,6 +138,33 @@ func TestAgentTaskReusesCatalogBatchPreviewAndConfirm(t *testing.T) {
 	}
 }
 
+func TestAgentProductDraftPreservesExplicitWindowType(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	price := 100.0
+	settlement := 60.0
+	draft := &agentProductDraft{
+		Name:            "Window Ticket",
+		ProductType:     "offline",
+		ScenicAreaName:  fixture.area.Name,
+		Price:           &price,
+		SettlementPrice: &settlement,
+		Groups: []agentRuleDraftGroup{{
+			GroupName: "Admission",
+			Items:     []agentRuleDraftItem{{CheckpointName: fixture.checkpoint.Name, MaxPerCheckIn: 1}},
+		}},
+	}
+	product, _, missing, err := productFromDraft(model.DB, fixture.tenant.ID, draft)
+	if err != nil {
+		t.Fatalf("resolve explicit window product: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("explicit window product still has missing fields: %+v", missing)
+	}
+	if product.Type != "offline" || product.Status != "offline" || product.IsDistributable {
+		t.Fatalf("explicit window product lost type/status boundary: %+v", product)
+	}
+}
+
 func TestAgentPlannerPolicyRejectsInventedBroadOrOppositeOperations(t *testing.T) {
 	add := []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"Adult Ticket"}, CheckpointNames: []string{"North Gate"}}}
 	if err := validateAgentPlannerEnvelope("给 Adult Ticket 增加 North Gate", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, AllProducts: true, CheckpointNames: []string{"North Gate"}}}}); err == nil {
@@ -158,6 +199,39 @@ func TestAgentPlannerPolicyRejectsInventedBroadOrOppositeOperations(t *testing.T
 	}
 }
 
+func TestAgentProductTypePolicyRejectsAmbiguousOrOppositeType(t *testing.T) {
+	if err := validateAgentPlannerEnvelope("创建一个窗口票", &agentAIEnvelope{OperationType: AgentOperationTicketProductCreate, Product: &agentProductCandidate{ProductType: "online"}}); err == nil {
+		t.Fatal("agent policy accepted online type for an explicit window request")
+	}
+	if err := validateAgentPlannerEnvelope("创建一个线上票", &agentAIEnvelope{OperationType: AgentOperationTicketProductCreate, Product: &agentProductCandidate{ProductType: "offline"}}); err == nil {
+		t.Fatal("agent policy accepted window type for an explicit online request")
+	}
+	if err := validateAgentPlannerEnvelope("创建线上票和窗口票", &agentAIEnvelope{OperationType: AgentOperationTicketProductCreate, Product: &agentProductCandidate{ProductType: "online"}}); err == nil {
+		t.Fatal("agent policy accepted a mixed product type request")
+	}
+	if err := validateAgentPlannerEnvelope("创建一个成人票", &agentAIEnvelope{OperationType: AgentOperationTicketProductCreate, Product: &agentProductCandidate{}}); err != nil {
+		t.Fatalf("type-ambiguous request should be collected by the resolver: %v", err)
+	}
+	if err := validateAgentPlannerEnvelope("创建一个成人票", &agentAIEnvelope{OperationType: AgentOperationTicketProductCreate, Product: &agentProductCandidate{ProductType: "sideways"}}); err == nil {
+		t.Fatal("agent policy accepted an unknown product type")
+	}
+}
+
+func TestAgentRuntimeSkillIsVersionedAndSeparatesTypeFromStatus(t *testing.T) {
+	skill, hash, err := agentDomainSkill(AgentOperationTicketProductCreate)
+	if err != nil {
+		t.Fatalf("load runtime skill: %v", err)
+	}
+	if agentDomainSkillVersion == "" || len(hash) != 64 {
+		t.Fatalf("runtime skill metadata is incomplete: version=%q hash=%q", agentDomainSkillVersion, hash)
+	}
+	for _, term := range []string{"product_type=online", "product_type=offline", "status=offline", "Never default it"} {
+		if !strings.Contains(skill, term) {
+			t.Fatalf("runtime skill omitted %q: %s", term, skill)
+		}
+	}
+}
+
 func TestAgentInputIntentRejectsUnrelatedNewTasks(t *testing.T) {
 	if err := validateAgentInputIntent("帮我介绍一下系统", AgentOperationPending); err == nil {
 		t.Fatal("unrelated input was accepted for a new agent task")
@@ -179,5 +253,8 @@ func TestAgentInputIntentRejectsUnrelatedNewTasks(t *testing.T) {
 func TestDecodeAgentAIEnvelopeRejectsUnknownFields(t *testing.T) {
 	if _, err := decodeAgentAIEnvelope(`{"operation_type":"catalog_batch_change","operations":[],"execute_sql":"drop table products"}`); err == nil {
 		t.Fatal("agent decoder accepted an unknown execution field")
+	}
+	if _, err := decodeAgentAIEnvelope(`{"operation_type":"ticket_product_create","product":{"name":"Window Ticket","type":"offline"}}`); err == nil {
+		t.Fatal("agent decoder accepted ambiguous product type field")
 	}
 }
