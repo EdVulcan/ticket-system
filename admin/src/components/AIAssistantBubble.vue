@@ -50,6 +50,10 @@
             @keyup.meta.enter="submitInput"
           />
           <div v-if="taskLoading" class="assistant-progress"><el-icon class="is-loading"><Loading /></el-icon>正在恢复未完成任务</div>
+          <div v-if="task?.message" class="assistant-message" role="status">
+            <strong>AI 返回</strong>
+            <p>{{ task.message }}</p>
+          </div>
           <div v-if="task?.missing_fields?.length" class="missing-list">
             <div v-for="field in task.missing_fields" :key="field.field" class="missing-item">
               <strong>{{ field.label }}</strong><span>{{ field.question }}</span>
@@ -169,6 +173,7 @@ const statusLine = computed(() => {
   if (!availability.value) return '正在读取平台额度'
   if (!availability.value.enabled) return '当前不可用'
   if (task.value?.state === 'awaiting_confirmation') return '等待确认执行'
+  if (task.value?.message && !task.value?.missing_fields?.length) return '已返回查询结果'
   if (task.value?.state === 'collecting') return '等待补充信息'
   if (task.value?.state === 'expired') return '任务已过期，可新建任务'
   if (task.value?.state === 'cancelled') return '任务已放弃'
@@ -397,6 +402,10 @@ const startNewTask = async () => {
 .assistant-intro span { color: #667085; font-size: 11px; }
 .field-label { display: block; margin-bottom: 6px; color: #344054; font-size: 11px; font-weight: 600; }
 .assistant-progress { display: flex; align-items: center; gap: 5px; margin-top: 7px; color: #667085; font-size: 11px; }
+.assistant-message { margin-top: 10px; padding: 9px 10px; border-left: 3px solid #3b82f6; background: #f5f8ff; color: #344054; font-size: 12px; line-height: 18px; }
+.assistant-message strong, .assistant-message p { display: block; }
+.assistant-message strong { color: #1d4ed8; font-size: 11px; }
+.assistant-message p { margin: 3px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .assistant-hint { margin-top: 8px; color: #929baa; font-size: 11px; line-height: 17px; }
 .missing-list { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
 .missing-item { padding: 8px 10px; border-left: 3px solid #f0a64b; background: #fffaf1; color: #684d1a; font-size: 11px; line-height: 16px; }

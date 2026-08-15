@@ -35,7 +35,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&XiaohongshuBookingOperation{}, &XiaohongshuOrderOperation{},
 		&CatalogBatchChangePlan{}, &CatalogBatchChangeLine{},
 		&PlatformAIConfig{}, &AIUsageMonth{},
-		&AgentTask{},
+		&AgentTask{}, &AgentTaskEvent{},
 	} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("table for %T is missing", table)
@@ -237,6 +237,42 @@ func TestPostgresSchema89AgentTaskOwnershipGuard(t *testing.T) {
 	invalidOperation.IdempotencyKey = "agent-task-guard-operation"
 	if err := db.Create(&invalidOperation).Error; err == nil {
 		t.Fatal("agent task with invalid operation was accepted")
+	}
+}
+
+func TestPostgresSchema92AgentTaskEventOwnershipGuard(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if CurrentPostgresSchemaVersion < 92 {
+		t.Fatalf("current schema version=%d, want at least 92", CurrentPostgresSchemaVersion)
+	}
+	tenant := Tenant{Name: "Agent Event Guard", SystemCode: "AGENT-EVENT-GUARD", SecretKey: "event", Status: "active"}
+	if err := db.Create(&tenant).Error; err != nil {
+		t.Fatal(err)
+	}
+	task := AgentTask{TenantID: tenant.ID, ActorUserID: 11, ActorRole: "admin", OperationType: "pending", State: "collecting", InputText: "查询票种", ContextJSON: `{}`, MissingJSON: `[]`, IdempotencyKey: "agent-event-task", Version: 1, ExpiresAt: time.Now().Add(time.Hour)}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatal(err)
+	}
+	valid := AgentTaskEvent{TenantID: tenant.ID, TaskID: task.ID, ActorUserID: task.ActorUserID, ActorRole: task.ActorRole, Sequence: 1, EventType: "tool_call", ToolName: "search_ticket_products", ToolVersion: "1", ToolCallID: "event-call-1", Status: "succeeded"}
+	if err := db.Create(&valid).Error; err != nil {
+		t.Fatal(err)
+	}
+	invalidTenant := valid
+	invalidTenant.ID = 0
+	invalidTenant.TenantID++
+	invalidTenant.ToolCallID = "event-call-2"
+	if err := db.Create(&invalidTenant).Error; err == nil {
+		t.Fatal("agent task event from another tenant was accepted")
+	}
+	invalidActor := valid
+	invalidActor.ID = 0
+	invalidActor.ActorUserID++
+	invalidActor.ToolCallID = "event-call-3"
+	if err := db.Create(&invalidActor).Error; err == nil {
+		t.Fatal("agent task event from another actor was accepted")
 	}
 }
 

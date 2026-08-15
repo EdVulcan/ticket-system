@@ -17,6 +17,7 @@ type PlatformAIConfig struct {
 	RequestTimeoutSeconds      int        `gorm:"not null;default:120" json:"request_timeout_seconds"`
 	MaxOutputTokens            int        `gorm:"not null;default:0" json:"max_output_tokens"`
 	Temperature                float64    `gorm:"not null;default:0.1" json:"temperature"`
+	AgentProtocolMode          string     `gorm:"size:20;not null;default:'legacy_json'" json:"agent_protocol_mode"`
 	ConfigVersion              int        `gorm:"not null;default:1" json:"config_version"`
 	LastTestedAt               *time.Time `json:"last_tested_at,omitempty"`
 	LastTestStatus             string     `gorm:"size:20" json:"last_test_status,omitempty"`

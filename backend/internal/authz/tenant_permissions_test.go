@@ -24,6 +24,24 @@ func TestFixedTenantRolePermissions(t *testing.T) {
 	}
 }
 
+func TestAgentUseIsSeparateFromHighRiskPermissions(t *testing.T) {
+	for _, role := range []string{RoleTenantAdmin, RoleProductOperator, RoleTeamOperator, RoleSettlementOperator, RoleViewer} {
+		if !HasTenantPermission(role, PermissionAgentUse) {
+			t.Fatalf("role %s should be allowed to open the low-risk assistant", role)
+		}
+	}
+	for _, role := range []string{"checker", "seller,checker"} {
+		if HasTenantPermission(role, PermissionAgentUse) {
+			t.Fatalf("frontline checker role %s must not open the management assistant", role)
+		}
+	}
+	for _, role := range []string{RoleProductOperator, RoleViewer, "seller"} {
+		if HasTenantPermission(role, PermissionRefundsWrite) || HasTenantPermission(role, PermissionPaymentConfig) {
+			t.Fatalf("agent-enabled role %s must not gain high-risk permissions", role)
+		}
+	}
+}
+
 func TestTeamCommercialConfigurationRequiresContractPermission(t *testing.T) {
 	if HasTenantPermission(RoleTeamOperator, PermissionTeamContractsWrite) {
 		t.Fatal("team operator must not change contract prices or credit limits")

@@ -69,6 +69,7 @@ type PlatformAIConfigInput struct {
 	RequestTimeoutSeconds      int     `json:"request_timeout_seconds"`
 	MaxOutputTokens            int     `json:"max_output_tokens"`
 	Temperature                float64 `json:"temperature"`
+	AgentProtocolMode          string  `json:"agent_protocol_mode"`
 }
 
 type PlatformAIConfigView struct {
@@ -84,6 +85,7 @@ type PlatformAIConfigView struct {
 	RequestTimeoutSeconds      int        `json:"request_timeout_seconds"`
 	MaxOutputTokens            int        `json:"max_output_tokens"`
 	Temperature                float64    `json:"temperature"`
+	AgentProtocolMode          string     `json:"agent_protocol_mode"`
 	ConfigVersion              int        `json:"config_version"`
 	LastTestedAt               *time.Time `json:"last_tested_at,omitempty"`
 	LastTestStatus             string     `json:"last_test_status,omitempty"`
@@ -123,6 +125,7 @@ func defaultPlatformAIConfig() model.PlatformAIConfig {
 		ConfigKey: platformAIConfigKey, Provider: defaultAIProvider, BaseURL: defaultAIBaseURL,
 		Model: defaultAIModel, DefaultMonthlyRequestLimit: 100, DefaultMonthlyTokenLimit: 200000,
 		RequestTimeoutSeconds: defaultAIRequestTimeoutSeconds, MaxOutputTokens: 0, Temperature: 0.1, ConfigVersion: 1,
+		AgentProtocolMode: agentProtocolLegacyJSON,
 	}
 }
 
@@ -133,7 +136,8 @@ func platformAIConfigView(config model.PlatformAIConfig) PlatformAIConfigView {
 		Enabled: config.Enabled, DefaultMonthlyRequestLimit: config.DefaultMonthlyRequestLimit,
 		DefaultMonthlyTokenLimit: config.DefaultMonthlyTokenLimit, RequestTimeoutSeconds: config.RequestTimeoutSeconds,
 		MaxOutputTokens: config.MaxOutputTokens, Temperature: config.Temperature, ConfigVersion: config.ConfigVersion,
-		LastTestedAt: config.LastTestedAt, LastTestStatus: config.LastTestStatus, LastTestError: config.LastTestError,
+		AgentProtocolMode: normalizeAgentProtocolMode(config.AgentProtocolMode),
+		LastTestedAt:      config.LastTestedAt, LastTestStatus: config.LastTestStatus, LastTestError: config.LastTestError,
 		UpdatedAt: config.UpdatedAt,
 	}
 }
@@ -177,6 +181,7 @@ func (s *PlatformAIService) SaveConfig(input PlatformAIConfigInput, actorID uint
 		candidate.RequestTimeoutSeconds = input.RequestTimeoutSeconds
 		candidate.MaxOutputTokens = input.MaxOutputTokens
 		candidate.Temperature = input.Temperature
+		candidate.AgentProtocolMode = normalizeAgentProtocolMode(input.AgentProtocolMode)
 		candidate.ConfigVersion = 1
 		if existing.ID != 0 {
 			candidate.ConfigVersion = existing.ConfigVersion + 1
@@ -201,7 +206,8 @@ func (s *PlatformAIService) SaveConfig(input PlatformAIConfigInput, actorID uint
 			"default_monthly_token_limit":   candidate.DefaultMonthlyTokenLimit,
 			"request_timeout_seconds":       candidate.RequestTimeoutSeconds, "max_output_tokens": candidate.MaxOutputTokens,
 			"temperature": candidate.Temperature, "config_version": candidate.ConfigVersion, "updated_by": actorID,
-			"last_tested_at": nil, "last_test_status": "", "last_test_error": "",
+			"agent_protocol_mode": candidate.AgentProtocolMode,
+			"last_tested_at":      nil, "last_test_status": "", "last_test_error": "",
 		}).Error; err != nil {
 			return err
 		} else {
@@ -308,18 +314,52 @@ func (s *PlatformAIService) Availability(tenantID uint) (*AIAvailabilityView, er
 }
 
 type AIMessage struct {
-	Role             string `json:"role"`
-	Content          string `json:"content"`
-	ReasoningContent string `json:"reasoning_content,omitempty"`
+	Role             string       `json:"role"`
+	Content          string       `json:"content"`
+	ReasoningContent string       `json:"reasoning_content,omitempty"`
+	ToolCallID       string       `json:"tool_call_id,omitempty"`
+	ToolCalls        []AIToolCall `json:"tool_calls,omitempty"`
+}
+
+type AIToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters"`
+	Strict      bool            `json:"strict,omitempty"`
+}
+
+type AIToolDefinition struct {
+	Type     string         `json:"type"`
+	Function AIToolFunction `json:"function"`
+}
+
+type AIToolCallFunction struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type AIToolCall struct {
+	ID       string             `json:"id"`
+	Type     string             `json:"type"`
+	Function AIToolCallFunction `json:"function"`
+}
+
+type AICompletionResult struct {
+	Message           AIMessage
+	UsageTokens       int64
+	FinishReason      string
+	ProviderRequestID string
 }
 
 type aiChatRequest struct {
-	Model          string            `json:"model"`
-	Messages       []AIMessage       `json:"messages"`
-	Temperature    float64           `json:"temperature,omitempty"`
-	MaxTokens      int               `json:"max_tokens,omitempty"`
-	ResponseFormat *aiResponseFormat `json:"response_format,omitempty"`
-	Stream         bool              `json:"stream"`
+	Model          string             `json:"model"`
+	Messages       []AIMessage        `json:"messages"`
+	Temperature    float64            `json:"temperature,omitempty"`
+	MaxTokens      int                `json:"max_tokens,omitempty"`
+	ResponseFormat *aiResponseFormat  `json:"response_format,omitempty"`
+	Tools          []AIToolDefinition `json:"tools,omitempty"`
+	ToolChoice     string             `json:"tool_choice,omitempty"`
+	Stream         bool               `json:"stream"`
 }
 
 type aiResponseFormat struct {
@@ -327,6 +367,7 @@ type aiResponseFormat struct {
 }
 
 type aiChatResponse struct {
+	ID      string `json:"id,omitempty"`
 	Choices []struct {
 		Message      AIMessage `json:"message"`
 		FinishReason string    `json:"finish_reason"`
@@ -341,6 +382,66 @@ type aiChatResponse struct {
 
 func (s *PlatformAIService) chat(ctx context.Context, config model.PlatformAIConfig, apiKey string, messages []AIMessage, maxTokens int) (string, int64, error) {
 	return s.chatWithContentRequirement(ctx, config, apiKey, messages, maxTokens, true)
+}
+
+// chatWithTools is the provider-neutral function-calling boundary. Domain
+// services only receive normalized calls; they never depend on a provider's
+// raw response shape. Tool arguments remain untrusted and are validated by
+// the agent runtime before any handler is invoked.
+func (s *PlatformAIService) chatWithTools(ctx context.Context, config model.PlatformAIConfig, apiKey string, messages []AIMessage, tools []AIToolDefinition, maxTokens int) (*AICompletionResult, error) {
+	if len(tools) == 0 {
+		return nil, errors.New("AI tool registry is empty")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	endpoint, err := aiCompletionEndpoint(config.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	if config.MaxOutputTokens > 0 && (maxTokens <= 0 || maxTokens > config.MaxOutputTokens) {
+		maxTokens = config.MaxOutputTokens
+	}
+	body, err := json.Marshal(aiChatRequest{Model: config.Model, Messages: messages, Temperature: config.Temperature, MaxTokens: maxTokens, Tools: tools, ToolChoice: "auto", Stream: false})
+	if err != nil {
+		return nil, err
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, aiRequestTimeout(config))
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	response, err := s.client().Do(req)
+	if err != nil {
+		return nil, &AIProviderError{Err: fmt.Errorf("AI provider request failed: %w", err)}
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	if err != nil {
+		return nil, &AIProviderError{Err: fmt.Errorf("AI provider response could not be read: %w", err)}
+	}
+	var decoded aiChatResponse
+	if err := json.Unmarshal(responseBody, &decoded); err != nil {
+		return nil, &AIProviderError{Err: fmt.Errorf("AI provider returned invalid JSON: %w", err)}
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		message := fmt.Sprintf("AI provider returned HTTP %d", response.StatusCode)
+		if decoded.Error != nil && strings.TrimSpace(decoded.Error.Message) != "" {
+			message = decoded.Error.Message
+		}
+		return nil, &AIProviderError{Err: errors.New(message)}
+	}
+	if len(decoded.Choices) == 0 {
+		return nil, &AIProviderError{Err: errors.New("AI provider returned no choices")}
+	}
+	choice := decoded.Choices[0]
+	if strings.TrimSpace(choice.Message.Content) == "" && len(choice.Message.ToolCalls) == 0 {
+		return nil, &AIProviderError{Err: errors.New("AI provider returned neither a tool call nor a response")}
+	}
+	return &AICompletionResult{Message: choice.Message, UsageTokens: decoded.Usage.TotalTokens, FinishReason: choice.FinishReason, ProviderRequestID: decoded.ID}, nil
 }
 
 func (s *PlatformAIService) probe(ctx context.Context, config model.PlatformAIConfig, apiKey string, messages []AIMessage, maxTokens int) error {
@@ -465,6 +566,9 @@ func validatePlatformAIConfigInput(input PlatformAIConfigInput) error {
 	if input.Temperature < 0 || input.Temperature > 2 {
 		return errors.New("AI temperature must be between 0 and 2")
 	}
+	if mode := normalizeAgentProtocolMode(input.AgentProtocolMode); mode != agentProtocolLegacyJSON && mode != agentProtocolToolV1 && mode != agentProtocolAuto {
+		return errors.New("unsupported agent protocol mode")
+	}
 	if input.Enabled && strings.TrimSpace(input.APIKey) == "" {
 		var existing model.PlatformAIConfig
 		err := model.DB.Where("config_key = ?", platformAIConfigKey).First(&existing).Error
@@ -499,6 +603,23 @@ func normalizeAIProvider(provider string) string {
 		return defaultAIProvider
 	}
 	return provider
+}
+
+const (
+	agentProtocolLegacyJSON = "legacy_json"
+	agentProtocolToolV1     = "tool_v1"
+	agentProtocolAuto       = "auto"
+)
+
+func normalizeAgentProtocolMode(mode string) string {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode == "tool_calling" {
+		mode = agentProtocolToolV1
+	}
+	if mode == "" {
+		return agentProtocolLegacyJSON
+	}
+	return mode
 }
 
 func (s *PlatformAIService) ReserveUsage(tenantID uint, config model.PlatformAIConfig, estimatedTokens int64) error {

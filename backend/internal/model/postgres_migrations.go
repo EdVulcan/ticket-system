@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 91
+const CurrentPostgresSchemaVersion = 92
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -41,7 +41,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&Product{}, &ProductRevision{}, &ProductOffer{}, &SellerListing{}, &ProductInventory{},
 		&CatalogBatchChangePlan{}, &CatalogBatchChangeLine{},
 		&PlatformAIConfig{}, &AIUsageMonth{},
-		&AgentTask{},
+		&AgentTask{}, &AgentTaskEvent{},
 		&BundleProduct{}, &BundleVersion{}, &BundleComponent{},
 		&Order{}, &OrderItem{}, &Ticket{}, &OrderVisitor{}, &FulfillmentOrder{}, &TicketEntitlement{}, &CheckInRecord{},
 		&DistributorRelationship{}, &CapitalAccount{}, &TransactionRecord{}, &LedgerEntry{},
@@ -103,6 +103,18 @@ func runPostgresMigrations(db *gorm.DB) error {
 			);
 		`).Error; err != nil {
 			return fmt.Errorf("expand package booking operation states: %w", err)
+		}
+	}
+	if previousSchemaVersion > 0 && previousSchemaVersion < 92 {
+		if err := db.Exec(`
+			ALTER TABLE platform_ai_configs ADD COLUMN IF NOT EXISTS agent_protocol_mode varchar(20) NOT NULL DEFAULT 'legacy_json';
+			UPDATE platform_ai_configs SET agent_protocol_mode = 'legacy_json' WHERE agent_protocol_mode IS NULL OR agent_protocol_mode = '';
+			ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS protocol_mode varchar(20) NOT NULL DEFAULT 'legacy_json';
+			ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS response_text text;
+			UPDATE agent_tasks SET protocol_mode = 'legacy_json' WHERE protocol_mode IS NULL OR protocol_mode = '';
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_task_event_call ON agent_task_events(task_id, tool_call_id) WHERE tool_call_id <> '';
+		`).Error; err != nil {
+			return fmt.Errorf("add agent tool runtime protocol and audit fields: %w", err)
 		}
 	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 86 {
@@ -313,7 +325,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "provider-default AI output budget and extended request timeout",
+		Name:      "versioned AI tool protocol and append-only task events",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -451,6 +463,8 @@ func applyPostgresIndexes(db *gorm.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_hotel_room_type_active_code ON hotel_room_types(tenant_id, hotel_id, code) WHERE deleted_at IS NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_hotel_rate_plan_active_code ON hotel_rate_plans(tenant_id, hotel_id, room_type_id, code) WHERE deleted_at IS NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_scenic_hotel_package_active_product ON scenic_hotel_packages(product_id) WHERE deleted_at IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_task_event_call ON agent_task_events(task_id, tool_call_id) WHERE tool_call_id <> ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_task_event_sequence ON agent_task_events(task_id, sequence)`,
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
@@ -518,6 +532,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 		WHEN 'agent_tasks' THEN
 			IF NEW.tenant_id = 0
 			   OR NEW.actor_role = ''
+			   OR COALESCE(NEW.protocol_mode, 'legacy_json') NOT IN ('legacy_json','tool_v1')
 			   OR NEW.operation_type NOT IN ('pending','catalog_batch_change','ticket_product_create')
 			   OR NEW.state NOT IN ('collecting','ready_for_preview','awaiting_confirmation','executing','completed','failed','expired','cancelled')
 			   OR COALESCE(NEW.input_text, '') = ''
@@ -532,6 +547,24 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 					WHERE p.id = NEW.linked_plan_id AND p.tenant_id = NEW.tenant_id
 				)) THEN
 				RAISE EXCEPTION 'agent task tenant, state, or linked plan ownership mismatch';
+			END IF;
+		WHEN 'agent_task_events' THEN
+			IF NEW.tenant_id = 0
+			   OR NEW.task_id = 0
+			   OR NEW.actor_user_id = 0
+			   OR COALESCE(NEW.actor_role, '') = ''
+			   OR COALESCE(NEW.event_type, '') = ''
+			   OR COALESCE(NEW.status, '') = ''
+			   OR NEW.sequence < 1
+			   OR NEW.token_count < 0
+			   OR NEW.duration_ms < 0
+			   OR NOT EXISTS (
+					SELECT 1 FROM agent_tasks task
+					WHERE task.id = NEW.task_id AND task.tenant_id = NEW.tenant_id
+					  AND task.actor_user_id = NEW.actor_user_id
+				)
+			   OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = NEW.tenant_id AND t.deleted_at IS NULL) THEN
+				RAISE EXCEPTION 'agent task event tenant or audit facts are invalid';
 			END IF;
 		WHEN 'product_inventories' THEN
 			IF NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM products p WHERE p.id = NEW.product_id AND p.tenant_id = NEW.tenant_id AND p.scenic_area_id = NEW.scenic_area_id) THEN
@@ -737,7 +770,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "agent_tasks", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_room_inventories", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
+	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "agent_tasks", "agent_task_events", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_room_inventories", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

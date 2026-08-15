@@ -16,7 +16,7 @@
 
     <section class="config-panel">
       <el-alert
-        title="AI 只生成受限的批量票规预览，不直接修改业务数据。租户仍需在预览页确认后才会执行。"
+        title="AI 只能查询或生成受限业务预览，不直接修改业务数据。租户仍需在预览页确认后才会执行。高风险资金、渠道密钥和权限操作不会注册为工具。"
         type="info"
         :closable="false"
         show-icon
@@ -31,6 +31,14 @@
           </el-form-item>
           <el-form-item label="模型名称">
             <el-input v-model="form.model" placeholder="deepseek-chat" />
+          </el-form-item>
+          <el-form-item label="后台助手协议">
+            <el-select v-model="form.agent_protocol_mode" class="w-full">
+              <el-option label="兼容 JSON（旧任务稳定）" value="legacy_json" />
+              <el-option label="原生工具调用（推荐）" value="tool_v1" />
+              <el-option label="自动（当前仅 DeepSeek 启用工具调用）" value="auto" />
+            </el-select>
+            <div class="field-note">每个新任务创建时固定协议；已存在的任务不会中途切换。</div>
           </el-form-item>
         </div>
         <el-form-item label="接口地址">
@@ -91,7 +99,7 @@ const testSuccess = ref(false)
 const form = reactive<any>({
   provider: 'deepseek', base_url: 'https://api.deepseek.com', model: 'deepseek-chat', api_key: '', api_key_configured: false,
   enabled: false, default_monthly_request_limit: 100, default_monthly_token_limit: 200000,
-  request_timeout_seconds: 120, max_output_tokens: 0, temperature: 0.1, config_version: 1,
+  request_timeout_seconds: 120, max_output_tokens: 0, temperature: 0.1, agent_protocol_mode: 'legacy_json', config_version: 1,
 })
 
 const load = async () => {
@@ -107,7 +115,7 @@ const payload = () => ({
   provider: form.provider, base_url: form.base_url.trim(), model: form.model.trim(), api_key: form.api_key,
   enabled: Boolean(form.enabled), default_monthly_request_limit: Number(form.default_monthly_request_limit),
   default_monthly_token_limit: Number(form.default_monthly_token_limit), request_timeout_seconds: Number(form.request_timeout_seconds),
-  max_output_tokens: Number(form.max_output_tokens), temperature: Number(form.temperature),
+  max_output_tokens: Number(form.max_output_tokens), temperature: Number(form.temperature), agent_protocol_mode: form.agent_protocol_mode,
 })
 
 const testConnection = async () => {

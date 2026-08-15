@@ -171,11 +171,13 @@ func InitRouter(r *gin.Engine) {
 	// distributor or channel mutation authority.
 	agentTaskController := &api.AgentTaskController{Service: service.AgentTaskService{}}
 	agentTaskGroup := protected.Group("/agent/tasks")
-	agentTaskGroup.Use(middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
+	// Agent access is a tenant permission. Individual tools apply their own
+	// capability, business-type, and domain-permission filters at runtime.
+	agentTaskGroup.Use(middleware.RequireTenantPermission(authz.PermissionAgentUse))
 	{
-		agentTaskGroup.POST("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), agentTaskController.Submit)
-		agentTaskGroup.GET("/:taskID", middleware.RequireTenantPermission(authz.PermissionCatalogRead), agentTaskController.Get)
-		agentTaskGroup.POST("/:taskID/cancel", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), agentTaskController.Cancel)
+		agentTaskGroup.POST("", agentTaskController.Submit)
+		agentTaskGroup.GET("/:taskID", agentTaskController.Get)
+		agentTaskGroup.POST("/:taskID/cancel", agentTaskController.Cancel)
 		agentTaskGroup.POST("/:taskID/confirm", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), agentTaskController.Confirm)
 	}
 

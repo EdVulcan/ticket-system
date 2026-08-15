@@ -120,6 +120,9 @@ func TestAgentTaskReusesCatalogBatchPreviewAndConfirm(t *testing.T) {
 	if planned.OperationType != AgentOperationCatalogBatchChange || planned.State != AgentTaskAwaitingConfirmation || !planned.CanConfirm || planned.PlanID == 0 {
 		t.Fatalf("unexpected batch task preview: %+v", planned)
 	}
+	if _, err := service.Confirm(fixture.tenant.ID, 11, "viewer", planned.TaskID); err == nil {
+		t.Fatal("viewer without catalog write permission confirmed an AI preview")
+	}
 	if _, err := service.Get(fixture.tenant.ID+999, 11, planned.TaskID); err == nil {
 		t.Fatal("agent task was readable across tenants")
 	}

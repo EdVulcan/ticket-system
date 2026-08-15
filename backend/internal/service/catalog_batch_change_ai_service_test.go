@@ -277,6 +277,37 @@ func TestPlatformAIChatStillRejectsEmptyPlannerContent(t *testing.T) {
 	}
 }
 
+func TestPlatformAIChatWithToolsNormalizesFunctionCall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			http.Error(writer, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if _, present := body["response_format"]; present {
+			http.Error(writer, "tool mode must not send response_format", http.StatusBadRequest)
+			return
+		}
+		var tools []AIToolDefinition
+		if err := json.Unmarshal(body["tools"], &tools); err != nil || len(tools) != 1 || tools[0].Function.Name != "search_ticket_products" {
+			http.Error(writer, "tool definition missing", http.StatusBadRequest)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(writer, `{"id":"req-tool-1","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call-1","type":"function","function":{"name":"search_ticket_products","arguments":"{\"query\":\"成人\"}"}}]}}],"usage":{"total_tokens":21}}`)
+	}))
+	defer server.Close()
+	result, err := (&PlatformAIService{HTTPClient: server.Client()}).chatWithTools(t.Context(), model.PlatformAIConfig{
+		BaseURL: server.URL, Provider: defaultAIProvider, Model: defaultAIModel, RequestTimeoutSeconds: 5,
+	}, "test-provider-key", []AIMessage{{Role: "user", Content: "查询票种"}}, []AIToolDefinition{{Type: "function", Function: AIToolFunction{Name: "search_ticket_products", Parameters: json.RawMessage(`{"type":"object"}`)}}}, 0)
+	if err != nil {
+		t.Fatalf("tool call failed: %v", err)
+	}
+	if result == nil || len(result.Message.ToolCalls) != 1 || result.Message.ToolCalls[0].Function.Name != "search_ticket_products" || result.UsageTokens != 21 {
+		t.Fatalf("unexpected normalized tool result: %+v", result)
+	}
+}
+
 func TestPlatformAIChatExplainsReasoningBudgetExhaustion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("Content-Type", "application/json")

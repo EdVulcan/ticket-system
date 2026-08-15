@@ -44,6 +44,7 @@ const (
 	PermissionHotelReservationsRead   = "hotel_reservations.read"
 	PermissionHotelReservationsWrite  = "hotel_reservations.write"
 	PermissionHotelReservationsExport = "hotel_reservations.export"
+	PermissionAgentUse                = "agent.use"
 )
 
 var rolePermissions = map[string][]string{
@@ -54,12 +55,14 @@ var rolePermissions = map[string][]string{
 		PermissionChannelsRead, PermissionChannelsWrite,
 		PermissionReportsRead, PermissionOperationsRead, PermissionOnsiteRead,
 		PermissionHotelReservationsRead, PermissionHotelReservationsWrite, PermissionHotelReservationsExport,
+		PermissionAgentUse,
 	},
 	RoleTeamOperator: {
 		PermissionOrdersRead, PermissionAfterSalesRead, PermissionAfterSalesWrite,
 		PermissionTeamsRead, PermissionTeamsWrite, PermissionReportsRead,
 		PermissionOperationsRead, PermissionOnsiteRead, PermissionFinanceRead,
 		PermissionSettlementsRead,
+		PermissionAgentUse,
 	},
 	RoleSettlementOperator: {
 		PermissionOrdersRead, PermissionAfterSalesRead, PermissionFinanceRead,
@@ -67,6 +70,7 @@ var rolePermissions = map[string][]string{
 		PermissionRefundsRead, PermissionRefundsWrite, PermissionReportsRead,
 		PermissionOperationsRead, PermissionPaymentsRead, PermissionTeamsRead,
 		PermissionTeamContractsWrite,
+		PermissionAgentUse,
 	},
 	RoleViewer: {
 		PermissionCatalogRead, PermissionOrdersRead, PermissionAfterSalesRead,
@@ -74,6 +78,7 @@ var rolePermissions = map[string][]string{
 		PermissionFinanceRead, PermissionSettlementsRead, PermissionRefundsRead,
 		PermissionReportsRead, PermissionOperationsRead, PermissionOnsiteRead,
 		PermissionPaymentsRead,
+		PermissionAgentUse,
 	},
 	"seller": {
 		PermissionCatalogRead, PermissionOrdersRead, PermissionOrdersWrite,

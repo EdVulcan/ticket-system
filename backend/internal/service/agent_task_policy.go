@@ -105,6 +105,10 @@ var agentProductCreateIntentWords = []string{
 	"创建", "新建", "生成票种", "创建票种", "新票种", "建一个票", "做一个票", "需要一个票", "要一个票", "开一个票种",
 }
 
+var agentReadIntentWords = []string{
+	"查询", "查看", "列出", "有哪些", "统计", "报表", "库存", "订单", "票种", "检票点", "景区", "规则",
+}
+
 func validateAgentCatalogOperations(input string, operations []CatalogRuleOperation) error {
 	if len(operations) == 0 {
 		return agentInvalid("AI 未返回票规操作")

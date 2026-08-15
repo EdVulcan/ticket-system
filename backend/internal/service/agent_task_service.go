@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"ticket-backend/internal/authz"
 	"ticket-backend/internal/model"
 	"time"
 
@@ -82,6 +83,8 @@ type AgentTaskView struct {
 	Provider      string              `json:"provider,omitempty"`
 	Model         string              `json:"model,omitempty"`
 	Availability  *AIAvailabilityView `json:"availability,omitempty"`
+	ProtocolMode  string              `json:"protocol_mode"`
+	Message       string              `json:"message,omitempty"`
 }
 
 type agentTaskContext struct {
@@ -170,6 +173,7 @@ type agentPlanningResult struct {
 	Provider      string
 	Model         string
 	Availability  *AIAvailabilityView
+	ResponseText  string
 }
 
 type AgentTaskService struct {
@@ -199,7 +203,9 @@ func (s *AgentTaskService) Submit(ctx context.Context, tenantID, actorUserID uin
 	}
 	if req.TaskID == 0 {
 		if err := validateAgentInputIntent(input, AgentOperationPending); err != nil {
-			return nil, err
+			if !agentToolProtocolConfigured() || !agentHasAny(strings.ToLower(input), agentReadIntentWords) {
+				return nil, err
+			}
 		}
 	}
 	turnKey := strings.TrimSpace(req.TurnKey)
@@ -266,6 +272,8 @@ func (s *AgentTaskService) Submit(ctx context.Context, tenantID, actorUserID uin
 		locked.PreviewJSON = planning.PreviewJSON
 		locked.PlanHash = planning.PlanHash
 		locked.LinkedPlanID = planning.LinkedPlanID
+		locked.ProtocolMode = normalizeAgentProtocolMode(locked.ProtocolMode)
+		locked.ResponseText = planning.ResponseText
 		locked.ErrorMessage = ""
 		locked.LastTurnKey = turnKey
 		locked.Version++
@@ -358,6 +366,12 @@ func (s *AgentTaskService) Confirm(tenantID, actorUserID uint, actorRole string,
 	}
 	if actorRole == "" {
 		actorRole = "admin"
+	}
+	if !authz.HasTenantPermission(actorRole, authz.PermissionCatalogWrite) {
+		return nil, agentInvalid("当前账号没有确认目录变更的权限")
+	}
+	if err := requireActiveScenicSupplier(model.DB, tenantID); err != nil {
+		return nil, err
 	}
 	var task model.AgentTask
 	if err := model.DB.Where("id = ? AND tenant_id = ? AND actor_user_id = ?", taskID, tenantID, actorUserID).First(&task).Error; err != nil {
@@ -475,6 +489,11 @@ func (s *AgentTaskService) loadOrCreateTask(tenantID, actorUserID uint, actorRol
 			OperationType: AgentOperationPending, State: AgentTaskCollecting,
 			InputText: input, ContextJSON: `{"operation_type":"pending"}`,
 			MissingJSON: `[]`, IdempotencyKey: key, Version: 1, ExpiresAt: expiresAt,
+			ProtocolMode: agentProtocolLegacyJSON,
+		}
+		var configured model.PlatformAIConfig
+		if configErr := tx.Where("config_key = ?", platformAIConfigKey).First(&configured).Error; configErr == nil {
+			task.ProtocolMode = resolveAgentTaskProtocol(configured)
 		}
 		return tx.Create(&task).Error
 	})
@@ -482,6 +501,9 @@ func (s *AgentTaskService) loadOrCreateTask(tenantID, actorUserID uint, actorRol
 }
 
 func (s *AgentTaskService) plan(ctx context.Context, tenantID, actorUserID uint, actorRole string, task model.AgentTask, input string) (*agentPlanningResult, error) {
+	if normalizeAgentProtocolMode(task.ProtocolMode) == agentProtocolToolV1 {
+		return s.planToolTask(ctx, tenantID, actorUserID, actorRole, task, input)
+	}
 	if err := requireActiveScenicSupplier(model.DB, tenantID); err != nil {
 		return nil, err
 	}
@@ -542,6 +564,10 @@ ticket_product_create 的 product 必须使用 product_type 字段表达票种�
 	if err := validateAgentPlannerEnvelope(input, envelope); err != nil {
 		return nil, err
 	}
+	return s.planFromEnvelope(tenantID, actorUserID, actorRole, task, input, contextJSON, config, ai, envelope)
+}
+
+func (s *AgentTaskService) planFromEnvelope(tenantID, actorUserID uint, actorRole string, task model.AgentTask, input, contextJSON string, config model.PlatformAIConfig, ai *PlatformAIService, envelope *agentAIEnvelope) (*agentPlanningResult, error) {
 	result := &agentPlanningResult{Provider: config.Provider, Model: config.Model}
 	availability, availabilityErr := ai.Availability(tenantID)
 	if availabilityErr == nil {
@@ -692,6 +718,7 @@ func agentTaskViewFromModel(task model.AgentTask) *AgentTaskView {
 		InputText: task.InputText, PlanID: task.LinkedPlanID, PlanHash: task.PlanHash,
 		Version: task.Version, ExpiresAt: task.ExpiresAt, ConfirmedAt: task.ConfirmedAt,
 		CompletedAt: task.CompletedAt, ErrorMessage: task.ErrorMessage,
+		ProtocolMode: normalizeAgentProtocolMode(task.ProtocolMode), Message: task.ResponseText,
 		CanConfirm: task.State == AgentTaskAwaitingConfirmation && strings.TrimSpace(task.PreviewJSON) != "",
 	}
 	_ = json.Unmarshal([]byte(task.MissingJSON), &view.MissingFields)

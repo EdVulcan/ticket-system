@@ -27,4 +27,9 @@ type AgentTask struct {
 	ConfirmedAt      *time.Time `json:"confirmed_at,omitempty"`
 	CompletedAt      *time.Time `json:"completed_at,omitempty"`
 	ErrorMessage     string     `gorm:"size:1000" json:"error_message,omitempty"`
+	// ProtocolMode is fixed when a task is created. Existing rows remain on
+	// legacy_json so a provider/config change cannot reinterpret an in-flight
+	// conversation.
+	ProtocolMode string `gorm:"size:20;not null;default:'legacy_json'" json:"protocol_mode"`
+	ResponseText string `gorm:"type:text" json:"response_text,omitempty"`
 }
