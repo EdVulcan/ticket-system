@@ -7,7 +7,10 @@
     <section v-else class="assistant-panel" role="dialog" aria-label="AI 助手">
       <header class="assistant-header">
         <div>
-          <strong>AI 助手</strong>
+          <div class="assistant-title-row">
+            <strong>AI 助手</strong>
+            <span class="status-dot" :class="{ active: availability?.enabled, busy: loading || confirming }" aria-hidden="true"></span>
+          </div>
           <span>{{ statusLine }}</span>
         </div>
         <button class="icon-button" type="button" title="关闭" aria-label="关闭" @click="open = false">
@@ -16,22 +19,37 @@
       </header>
 
       <div class="assistant-body">
-        <el-alert v-if="availability && !availability.enabled" type="warning" :closable="false" show-icon>
+        <el-alert v-if="availability && !availability.enabled" class="availability-alert" type="warning" :closable="false" show-icon>
           {{ availability.reason || '平台 AI 尚未启用' }}
         </el-alert>
-        <el-alert v-if="errorMessage" type="error" :closable="false" show-icon>{{ errorMessage }}</el-alert>
+        <div v-if="errorMessage" class="assistant-error" role="alert">
+          <el-icon class="error-icon"><WarningFilled /></el-icon>
+          <div class="error-copy">
+            <strong>{{ errorTitle }}</strong>
+            <span>{{ errorMessage }}</span>
+          </div>
+          <el-button text size="small" :icon="errorKind === 'auth' ? undefined : Refresh" @click="retryLastAction">{{ errorActionLabel }}</el-button>
+        </div>
 
         <template v-if="!task?.preview">
+          <div v-if="!task && !errorMessage" class="assistant-intro">
+            <strong>描述你要完成的操作</strong>
+            <span>我会先整理成计划，确认后才执行。</span>
+          </div>
+          <label class="field-label" for="ai-assistant-input">操作描述</label>
           <el-input
+            id="ai-assistant-input"
             v-model="inputText"
             type="textarea"
             :rows="5"
             maxlength="2000"
             show-word-limit
             :placeholder="task ? '继续补充缺失信息，例如：售价 120 元，结算价 80 元' : '例如：创建一个成人票，售价 120 元，结算价 80 元，使用北门检票点'"
-            :disabled="loading || (availability && !availability.enabled)"
+            :disabled="loading || taskLoading || (availability && !availability.enabled)"
             @keyup.ctrl.enter="submitInput"
+            @keyup.meta.enter="submitInput"
           />
+          <div v-if="taskLoading" class="assistant-progress"><el-icon class="is-loading"><Loading /></el-icon>正在恢复未完成任务</div>
           <div v-if="task?.missing_fields?.length" class="missing-list">
             <div v-for="field in task.missing_fields" :key="field.field" class="missing-item">
               <strong>{{ field.label }}</strong><span>{{ field.question }}</span>
@@ -40,8 +58,11 @@
           </div>
           <div class="assistant-hint">确认前不会修改票种、规则或分销数据。</div>
           <div class="assistant-actions">
-            <span v-if="availability" class="quota-copy">本月剩余 {{ availability.requests_remaining }} 次请求</span>
-            <el-button type="primary" :icon="Promotion" :loading="loading" :disabled="!inputText.trim() || (availability && !availability.enabled)" @click="submitInput">{{ task ? '继续处理' : '生成计划' }}</el-button>
+            <div class="action-meta">
+              <span v-if="availability" class="quota-copy">本月剩余 {{ availability.requests_remaining }} 次请求</span>
+              <el-button v-if="inputText.trim()" text size="small" @click="clearInput">清空</el-button>
+            </div>
+            <el-button type="primary" :icon="Promotion" :loading="loading" :disabled="!inputText.trim() || taskLoading || (availability && !availability.enabled)" @click="submitInput">{{ task ? '继续处理' : '生成计划' }}</el-button>
           </div>
         </template>
 
@@ -114,25 +135,49 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ChatDotRound, CircleCheck, Close, Promotion, Refresh, Right } from '@element-plus/icons-vue'
+import { ChatDotRound, CircleCheck, Close, Loading, Promotion, Refresh, Right, WarningFilled } from '@element-plus/icons-vue'
+import { useRouter } from 'vue-router'
 import request from '@/utils/request'
+import { localizeErrorMessage } from '@/utils/localize'
+
+type ErrorKind = 'auth' | 'timeout' | 'provider' | 'conflict' | 'generic' | ''
+type AgentAction = 'submit' | 'confirm' | ''
+
+const AI_STATUS_TIMEOUT_MS = 15_000
+const AI_TASK_TIMEOUT_MS = 90_000
 
 const open = ref(false)
 const inputText = ref('')
 const loading = ref(false)
 const confirming = ref(false)
+const statusLoading = ref(false)
+const taskLoading = ref(false)
 const availability = ref<any | null>(null)
 const task = ref<any | null>(null)
 const errorMessage = ref('')
+const errorKind = ref<ErrorKind>('')
+const lastAction = ref<AgentAction>('')
 const idempotencyKey = ref(newKey())
+const router = useRouter()
 
 const statusLine = computed(() => {
+  if (loading.value) return '正在整理操作计划'
+  if (confirming.value) return '正在执行已确认计划'
+  if (statusLoading.value) return '正在读取平台额度'
   if (!availability.value) return '正在读取平台额度'
   if (!availability.value.enabled) return '当前不可用'
   if (task.value?.state === 'awaiting_confirmation') return '等待确认执行'
   if (task.value?.state === 'collecting') return '等待补充信息'
   return `${availability.value.provider || '平台模型'} · 剩余 ${availability.value.requests_remaining} 次`
 })
+const errorTitle = computed(() => {
+  if (errorKind.value === 'auth') return '登录状态已失效'
+  if (errorKind.value === 'timeout') return '模型响应超时'
+  if (errorKind.value === 'provider') return '模型服务暂时不可用'
+  if (errorKind.value === 'conflict') return '任务状态已变化'
+  return '这次请求没有完成'
+})
+const errorActionLabel = computed(() => errorKind.value === 'auth' ? '重新登录' : '重试')
 const providerLabel = computed(() => `${task.value?.provider || availability.value?.provider || '平台模型'}${task.value?.model ? ` / ${task.value.model}` : ''}`)
 const preview = computed(() => task.value?.preview || {})
 const productPreview = computed(() => preview.value?.operation_type === 'ticket_product_create' ? preview.value : {})
@@ -173,35 +218,73 @@ const compactRule = (value: string) => {
 }
 
 const loadStatus = async () => {
+  statusLoading.value = true
   try {
-    availability.value = (await request.get('/catalog/batch-changes/ai-status', { skipErrorToast: true } as any)).data
-  } catch { availability.value = { enabled: false, reason: '无法读取平台 AI 状态' } }
+    availability.value = (await request.get('/catalog/batch-changes/ai-status', { timeout: AI_STATUS_TIMEOUT_MS, skipErrorToast: true } as any)).data
+  } catch {
+    availability.value = { enabled: false, reason: '无法读取平台 AI 状态，请稍后重试' }
+  } finally {
+    statusLoading.value = false
+  }
 }
 
 const openAssistant = async () => {
+  if (open.value) return
   open.value = true
   await loadStatus()
   const savedTaskID = localStorage.getItem('ticket-agent-task-id')
   if (savedTaskID && !task.value) {
+    taskLoading.value = true
     try {
-      task.value = (await request.get(`/agent/tasks/${savedTaskID}`, { skipErrorToast: true } as any)).data
+      task.value = (await request.get(`/agent/tasks/${savedTaskID}`, { timeout: AI_STATUS_TIMEOUT_MS, skipErrorToast: true } as any)).data
     } catch {
       localStorage.removeItem('ticket-agent-task-id')
+    } finally {
+      taskLoading.value = false
     }
   }
 }
 
+const setError = (error: any, fallback: string, action: AgentAction) => {
+  const status = error?.response?.status
+  const code = String(error?.response?.data?.code || '')
+  const message = String(error?.response?.data?.error || error?.message || '')
+  const isTimeout = status === 408 || status === 504 || /timeout|deadline exceeded|超时|ECONNABORTED/i.test(message)
+  if (status === 401 || /unauthorized|invalid token|登录状态已失效/i.test(message)) errorKind.value = 'auth'
+  else if (isTimeout) errorKind.value = 'timeout'
+  else if (status === 409 || code === 'task_conflict') errorKind.value = 'conflict'
+  else if (status === 502 || status === 503 || code === 'ai_unavailable' || /AI provider|AI 服务/i.test(message)) errorKind.value = 'provider'
+  else errorKind.value = 'generic'
+  lastAction.value = action
+  errorMessage.value = localizeErrorMessage(message, fallback)
+}
+
+const retryLastAction = () => {
+  if (errorKind.value === 'auth') {
+    const loginPath = (() => {
+      try { return JSON.parse(localStorage.getItem('user') || '{}').scope === 'platform' ? '/platform/login' : '/login' } catch { return '/login' }
+    })()
+    router.push(loginPath)
+    return
+  }
+  if (lastAction.value === 'confirm') confirmTask()
+  else if (lastAction.value === 'submit') submitInput()
+}
+
 const submitInput = async () => {
-  if (!inputText.value.trim()) return
+  if (loading.value || confirming.value) return
+  const content = inputText.value.trim()
+  if (!content) return
   loading.value = true
   errorMessage.value = ''
+  errorKind.value = ''
   try {
     const response = await request.post('/agent/tasks', {
       task_id: task.value?.task_id || undefined,
-      input_text: inputText.value.trim(),
+      input_text: content,
       idempotency_key: task.value ? undefined : idempotencyKey.value,
       turn_key: newKey(),
-    })
+    }, { timeout: AI_TASK_TIMEOUT_MS, skipErrorToast: true } as any)
     task.value = response.data
     localStorage.setItem('ticket-agent-task-id', String(response.data.task_id))
     availability.value = response.data.availability || availability.value
@@ -209,32 +292,37 @@ const submitInput = async () => {
     if (response.data.can_confirm) ElMessage.success('计划已生成，请核对后确认执行')
     else ElMessage.info('还需要补充信息')
   } catch (error: any) {
-    errorMessage.value = error.response?.data?.error || error.message || 'AI 任务处理失败'
+    setError(error, 'AI 任务处理失败，请检查输入或稍后重试', 'submit')
   } finally { loading.value = false }
 }
 
 const confirmTask = async () => {
-  if (!task.value?.can_confirm) return
+  if (confirming.value || loading.value || !task.value?.can_confirm) return
   try {
     await ElMessageBox.confirm('确认后会按预览内容执行，并记录审计。是否继续？', '确认执行', { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '返回检查' })
   } catch { return }
   confirming.value = true
   errorMessage.value = ''
+  errorKind.value = ''
   try {
-    const response = await request.post(`/agent/tasks/${task.value.task_id}/confirm`)
+    const response = await request.post(`/agent/tasks/${task.value.task_id}/confirm`, undefined, { timeout: AI_TASK_TIMEOUT_MS, skipErrorToast: true } as any)
     task.value = response.data
     await loadStatus()
     ElMessage.success('操作已完成')
   } catch (error: any) {
-    errorMessage.value = error.response?.data?.error || error.message || '确认执行失败'
+    setError(error, '确认执行失败，请稍后重试', 'confirm')
   } finally { confirming.value = false }
 }
+
+const clearInput = () => { inputText.value = '' }
 
 const resetTask = () => {
   task.value = null
   localStorage.removeItem('ticket-agent-task-id')
   inputText.value = ''
   errorMessage.value = ''
+  errorKind.value = ''
+  lastAction.value = ''
   idempotencyKey.value = newKey()
 }
 
@@ -245,14 +333,30 @@ const resetTask = () => {
 .assistant-trigger { display: grid; place-items: center; width: 52px; height: 52px; border: 0; border-radius: 50%; color: #fff; background: #2563eb; box-shadow: 0 8px 24px rgba(37, 99, 235, .3); cursor: pointer; transition: transform .18s ease, background .18s ease; }
 .assistant-trigger:hover { background: #1d4ed8; transform: translateY(-2px); }
 .assistant-trigger .el-icon { font-size: 23px; }
-.assistant-panel { width: min(430px, calc(100vw - 28px)); max-height: min(720px, calc(100vh - 40px)); overflow: hidden; background: #fff; border: 1px solid #dfe5ee; border-radius: 8px; box-shadow: 0 18px 50px rgba(15, 23, 42, .2); }
+.assistant-panel { width: min(460px, calc(100vw - 28px)); max-height: min(720px, calc(100vh - 40px)); overflow: hidden; background: #fff; border: 1px solid #dfe5ee; border-radius: 8px; box-shadow: 0 18px 50px rgba(15, 23, 42, .2); }
 .assistant-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; color: #18202b; border-bottom: 1px solid #edf0f4; }
 .assistant-header strong, .assistant-header span { display: block; }
 .assistant-header strong { font-size: 14px; }
 .assistant-header span { margin-top: 3px; color: #667085; font-size: 11px; }
+.assistant-title-row { display: flex; align-items: center; gap: 7px; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #c5ccd6; }
+.status-dot.active { background: #35a36b; }
+.status-dot.busy { background: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, .13); }
 .icon-button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; color: #667085; background: transparent; cursor: pointer; }
 .assistant-body { max-height: calc(min(720px, 100vh - 40px) - 61px); overflow: auto; padding: 14px 16px 16px; }
-.assistant-body > .el-alert + .el-alert { margin-top: 8px; }
+.assistant-body > .el-alert { margin-bottom: 10px; }
+.availability-alert { --el-alert-padding: 8px 10px; font-size: 12px; }
+.assistant-error { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 12px; padding: 9px 10px; border: 1px solid #f4c6c8; border-radius: 6px; background: #fff6f6; color: #9f2d35; }
+.error-icon { flex: 0 0 auto; margin-top: 2px; font-size: 16px; }
+.error-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; font-size: 11px; line-height: 16px; }
+.error-copy strong { color: #842029; font-size: 12px; }
+.error-copy span { overflow-wrap: anywhere; }
+.assistant-error .el-button { flex: 0 0 auto; margin: -3px -5px 0 0; color: #8d2730; }
+.assistant-intro { display: flex; flex-direction: column; gap: 3px; margin-bottom: 12px; }
+.assistant-intro strong { color: #18202b; font-size: 14px; }
+.assistant-intro span { color: #667085; font-size: 11px; }
+.field-label { display: block; margin-bottom: 6px; color: #344054; font-size: 11px; font-weight: 600; }
+.assistant-progress { display: flex; align-items: center; gap: 5px; margin-top: 7px; color: #667085; font-size: 11px; }
 .assistant-hint { margin-top: 8px; color: #929baa; font-size: 11px; line-height: 17px; }
 .missing-list { display: flex; flex-direction: column; gap: 7px; margin-top: 10px; }
 .missing-item { padding: 8px 10px; border-left: 3px solid #f0a64b; background: #fffaf1; color: #684d1a; font-size: 11px; line-height: 16px; }
@@ -260,6 +364,7 @@ const resetTask = () => {
 .missing-item span { margin-top: 2px; }
 .missing-item small { margin-top: 2px; color: #8b6b2e; }
 .assistant-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+.action-meta { display: flex; min-width: 0; align-items: center; gap: 4px; }
 .quota-copy { color: #667085; font-size: 11px; }
 .preview-meta, .diff-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .preview-meta { color: #667085; font-size: 11px; }
@@ -295,5 +400,5 @@ const resetTask = () => {
 .diff-values .el-icon { color: #929baa; }
 .line-error { margin: 8px 0 0; color: #d94b54; font-size: 11px; }
 .preview-actions { justify-content: flex-end; }
-@media (max-width: 560px) { .ai-assistant { right: 14px; bottom: 14px; } .assistant-panel { width: calc(100vw - 28px); } }
+@media (max-width: 560px) { .ai-assistant { right: 14px; bottom: 14px; } .assistant-panel { width: calc(100vw - 28px); max-height: calc(100vh - 28px); } .assistant-body { max-height: calc(100vh - 89px); padding: 12px; } .assistant-actions { align-items: flex-end; } }
 </style>

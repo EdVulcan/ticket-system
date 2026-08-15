@@ -76,6 +76,7 @@ export const refreshStoredTenantIdentity = async (force = false): Promise<Tenant
       if (response.status === 401) {
         localStorage.removeItem('token')
         localStorage.removeItem('user')
+        window.dispatchEvent(new CustomEvent('auth-session-expired'))
         return {}
       }
       if (!response.ok) return current

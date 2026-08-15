@@ -315,6 +315,12 @@ const handleIdentityRefresh = (event: Event) => {
   applyUser((event as CustomEvent).detail)
 }
 
+const handleSessionExpired = () => {
+  if (isLoginPage.value) return
+  ElMessage.error('登录状态已失效，请重新登录')
+  void router.push({ name: 'login' })
+}
+
 const handleWindowFocus = () => { void loadUser(true) }
 
 watch(() => route.path, async () => {
@@ -323,11 +329,13 @@ watch(() => route.path, async () => {
 })
 onMounted(() => {
   window.addEventListener('tenant-identity-refreshed', handleIdentityRefresh)
+  window.addEventListener('auth-session-expired', handleSessionExpired)
   window.addEventListener('focus', handleWindowFocus)
   void loadUser()
 })
 onBeforeUnmount(() => {
   window.removeEventListener('tenant-identity-refreshed', handleIdentityRefresh)
+  window.removeEventListener('auth-session-expired', handleSessionExpired)
   window.removeEventListener('focus', handleWindowFocus)
 })
 </script>
