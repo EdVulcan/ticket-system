@@ -18,10 +18,12 @@ import (
 )
 
 const (
-	platformAIConfigKey = "default"
-	defaultAIProvider   = "deepseek"
-	defaultAIBaseURL    = "https://api.deepseek.com"
-	defaultAIModel      = "deepseek-chat"
+	platformAIConfigKey            = "default"
+	defaultAIProvider              = "deepseek"
+	defaultAIBaseURL               = "https://api.deepseek.com"
+	defaultAIModel                 = "deepseek-chat"
+	defaultAIRequestTimeoutSeconds = 120
+	maxAIRequestTimeoutSeconds     = 120
 	// Provider-default mode deliberately leaves max_tokens out of the request.
 	// Reservations still need a bounded estimate so concurrent calls cannot all
 	// consume the complete monthly allowance before usage is reconciled.
@@ -120,7 +122,7 @@ func defaultPlatformAIConfig() model.PlatformAIConfig {
 	return model.PlatformAIConfig{
 		ConfigKey: platformAIConfigKey, Provider: defaultAIProvider, BaseURL: defaultAIBaseURL,
 		Model: defaultAIModel, DefaultMonthlyRequestLimit: 100, DefaultMonthlyTokenLimit: 200000,
-		RequestTimeoutSeconds: 30, MaxOutputTokens: 0, Temperature: 0.1, ConfigVersion: 1,
+		RequestTimeoutSeconds: defaultAIRequestTimeoutSeconds, MaxOutputTokens: 0, Temperature: 0.1, ConfigVersion: 1,
 	}
 }
 
@@ -312,11 +314,16 @@ type AIMessage struct {
 }
 
 type aiChatRequest struct {
-	Model       string      `json:"model"`
-	Messages    []AIMessage `json:"messages"`
-	Temperature float64     `json:"temperature,omitempty"`
-	MaxTokens   int         `json:"max_tokens,omitempty"`
-	Stream      bool        `json:"stream"`
+	Model          string            `json:"model"`
+	Messages       []AIMessage       `json:"messages"`
+	Temperature    float64           `json:"temperature,omitempty"`
+	MaxTokens      int               `json:"max_tokens,omitempty"`
+	ResponseFormat *aiResponseFormat `json:"response_format,omitempty"`
+	Stream         bool              `json:"stream"`
+}
+
+type aiResponseFormat struct {
+	Type string `json:"type"`
 }
 
 type aiChatResponse struct {
@@ -358,14 +365,18 @@ func (s *PlatformAIService) chatWithContentRequirement(ctx context.Context, conf
 		// omitempty so no platform-imposed max_tokens is sent in this mode.
 		maxTokens = 0
 	}
-	body, err := json.Marshal(aiChatRequest{Model: config.Model, Messages: messages, Temperature: config.Temperature, MaxTokens: maxTokens, Stream: false})
+	var responseFormat *aiResponseFormat
+	if requireContent && normalizeAIProvider(config.Provider) == defaultAIProvider {
+		// DeepSeek's JSON Output mode prevents the planner from returning
+		// Markdown or explanatory prose. The decoder and domain validation below
+		// remain authoritative even when the provider promises valid JSON.
+		responseFormat = &aiResponseFormat{Type: "json_object"}
+	}
+	body, err := json.Marshal(aiChatRequest{Model: config.Model, Messages: messages, Temperature: config.Temperature, MaxTokens: maxTokens, ResponseFormat: responseFormat, Stream: false})
 	if err != nil {
 		return "", 0, err
 	}
-	timeout := time.Duration(config.RequestTimeoutSeconds) * time.Second
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
+	timeout := aiRequestTimeout(config)
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, strings.NewReader(string(body)))
@@ -445,8 +456,8 @@ func validatePlatformAIConfigInput(input PlatformAIConfigInput) error {
 	if input.DefaultMonthlyTokenLimit < 1000 || input.DefaultMonthlyTokenLimit > 1000000000 {
 		return errors.New("monthly AI token limit is invalid")
 	}
-	if input.RequestTimeoutSeconds < 5 || input.RequestTimeoutSeconds > 120 {
-		return errors.New("AI request timeout must be between 5 and 120 seconds")
+	if input.RequestTimeoutSeconds < 5 || input.RequestTimeoutSeconds > maxAIRequestTimeoutSeconds {
+		return fmt.Errorf("AI request timeout must be between 5 and %d seconds", maxAIRequestTimeoutSeconds)
 	}
 	if input.MaxOutputTokens < 0 {
 		return errors.New("AI max output tokens must be zero or greater")
@@ -465,6 +476,14 @@ func validatePlatformAIConfigInput(input PlatformAIConfigInput) error {
 		}
 	}
 	return nil
+}
+
+func aiRequestTimeout(config model.PlatformAIConfig) time.Duration {
+	seconds := config.RequestTimeoutSeconds
+	if seconds <= 0 {
+		seconds = defaultAIRequestTimeoutSeconds
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func aiOutputReservationTokens(config model.PlatformAIConfig) int64 {

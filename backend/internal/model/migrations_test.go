@@ -154,6 +154,49 @@ func TestPostgresSchema90MigratesLegacyAIOutputDefault(t *testing.T) {
 	}
 }
 
+func TestPostgresSchema91MigratesLegacyAIRequestTimeout(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	legacy := PlatformAIConfig{
+		ConfigKey: "legacy-request-timeout", Provider: "deepseek", BaseURL: "https://api.deepseek.com",
+		Model: "deepseek-chat", RequestTimeoutSeconds: 30,
+	}
+	if err := db.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("version = ?", CurrentPostgresSchemaVersion).Delete(&SchemaMigration{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&SchemaMigration{Version: 90, Name: "pre-extended-ai-request-timeout", AppliedAt: time.Now()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	var migrated PlatformAIConfig
+	if err := db.First(&migrated, legacy.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if migrated.RequestTimeoutSeconds != 120 {
+		t.Fatalf("legacy AI request timeout=%d, want 120", migrated.RequestTimeoutSeconds)
+	}
+	var columnDefault string
+	if err := db.Raw(`
+		SELECT column_default
+		FROM information_schema.columns
+		WHERE table_schema = CURRENT_SCHEMA()
+		  AND table_name = 'platform_ai_configs'
+		  AND column_name = 'request_timeout_seconds'
+	`).Scan(&columnDefault).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(columnDefault, "120") {
+		t.Fatalf("request_timeout_seconds column default=%q, want 120", columnDefault)
+	}
+}
+
 func TestPostgresSchema89AgentTaskOwnershipGuard(t *testing.T) {
 	db := testdb.Open(t)
 	if err := runMigrations(db); err != nil {

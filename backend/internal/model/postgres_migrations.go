@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 90
+const CurrentPostgresSchemaVersion = 91
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -152,6 +152,17 @@ func runPostgresMigrations(db *gorm.DB) error {
 			WHERE max_output_tokens = 1200;
 		`).Error; err != nil {
 			return fmt.Errorf("migrate AI output budget to provider default: %w", err)
+		}
+	}
+	if previousSchemaVersion > 0 && previousSchemaVersion < 91 {
+		if err := db.Exec(`
+			ALTER TABLE platform_ai_configs
+				ALTER COLUMN request_timeout_seconds SET DEFAULT 120;
+			UPDATE platform_ai_configs
+			SET request_timeout_seconds = 120
+			WHERE request_timeout_seconds = 30;
+		`).Error; err != nil {
+			return fmt.Errorf("migrate legacy AI request timeout: %w", err)
 		}
 	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
@@ -302,7 +313,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "provider-default AI output budget",
+		Name:      "provider-default AI output budget and extended request timeout",
 		AppliedAt: time.Now(),
 	}).Error
 }

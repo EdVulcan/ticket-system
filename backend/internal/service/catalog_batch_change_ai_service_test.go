@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"ticket-backend/internal/model"
+	"time"
 )
 
 func startCatalogAIProvider(t *testing.T, response string) (*httptest.Server, *atomic.Int32) {
@@ -57,6 +58,18 @@ func saveCatalogAIConfig(t *testing.T, baseURL string, requestLimit int) {
 	}, 77, "platform_admin"); err != nil {
 		t.Fatalf("save AI config: %v", err)
 	}
+}
+
+type deadlineCaptureTransport struct {
+	base     http.RoundTripper
+	deadline chan time.Duration
+}
+
+func (transport deadlineCaptureTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if deadline, ok := request.Context().Deadline(); ok {
+		transport.deadline <- time.Until(deadline)
+	}
+	return transport.base.RoundTrip(request)
 }
 
 func TestCatalogBatchAIPreviewUsesTenantContextAndDurableIdempotency(t *testing.T) {
@@ -150,6 +163,10 @@ func TestPlatformAITestConfigAcceptsSuccessfulEmptyProbeContent(t *testing.T) {
 			http.Error(writer, "probe must use provider-default output budget", http.StatusBadRequest)
 			return
 		}
+		if _, present := body["response_format"]; present {
+			http.Error(writer, "probe must not require planner JSON mode", http.StatusBadRequest)
+			return
+		}
 		_, _ = fmt.Fprint(writer, `{"choices":[{"message":{"role":"assistant","content":""}}]}`)
 	}))
 	defer server.Close()
@@ -175,16 +192,49 @@ func TestPlatformAIChatUsesProviderDefaultOutputBudget(t *testing.T) {
 			http.Error(writer, "max_tokens must be omitted in automatic mode", http.StatusBadRequest)
 			return
 		}
+		var responseFormat struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(body["response_format"], &responseFormat); err != nil || responseFormat.Type != "json_object" {
+			http.Error(writer, "planner must request JSON Output", http.StatusBadRequest)
+			return
+		}
 		writer.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(writer, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"{}"}}],"usage":{"total_tokens":32}}`)
 	}))
 	defer server.Close()
 
 	content, actualTokens, err := (&PlatformAIService{HTTPClient: server.Client()}).chat(t.Context(), model.PlatformAIConfig{
-		BaseURL: server.URL, Model: defaultAIModel, RequestTimeoutSeconds: 5, MaxOutputTokens: 0,
+		BaseURL: server.URL, Provider: defaultAIProvider, Model: defaultAIModel, RequestTimeoutSeconds: 5, MaxOutputTokens: 0,
 	}, "test-provider-key", []AIMessage{{Role: "user", Content: "生成计划"}}, 0)
 	if err != nil || content != "{}" || actualTokens != 32 {
 		t.Fatalf("provider-default chat content=%q tokens=%d err=%v", content, actualTokens, err)
+	}
+}
+
+func TestPlatformAIChatUsesExtendedDefaultRequestTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(writer, `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"{}"}}]}`)
+	}))
+	defer server.Close()
+
+	deadlineRemaining := make(chan time.Duration, 1)
+	providerClient := server.Client()
+	providerClient.Transport = deadlineCaptureTransport{base: providerClient.Transport, deadline: deadlineRemaining}
+	_, _, err := (&PlatformAIService{HTTPClient: providerClient}).chat(t.Context(), model.PlatformAIConfig{
+		BaseURL: server.URL, Model: defaultAIModel, RequestTimeoutSeconds: 0, MaxOutputTokens: 0,
+	}, "test-provider-key", []AIMessage{{Role: "user", Content: "生成计划"}}, 0)
+	if err != nil {
+		t.Fatalf("provider-default request should complete: %v", err)
+	}
+	select {
+	case remaining := <-deadlineRemaining:
+		if remaining < 119*time.Second || remaining > 121*time.Second {
+			t.Fatalf("default request timeout=%s, want about 120s", remaining)
+		}
+	default:
+		t.Fatal("provider request did not report its deadline")
 	}
 }
 

@@ -47,7 +47,7 @@
           <el-form-item label="月 Token 上限">
             <el-input-number v-model="form.default_monthly_token_limit" :min="1000" :max="1000000000" class="w-full" />
           </el-form-item>
-          <el-form-item label="单次超时（秒）">
+          <el-form-item label="单次超时（秒，最长 120）">
             <el-input-number v-model="form.request_timeout_seconds" :min="5" :max="120" class="w-full" />
           </el-form-item>
         </div>
@@ -91,7 +91,7 @@ const testSuccess = ref(false)
 const form = reactive<any>({
   provider: 'deepseek', base_url: 'https://api.deepseek.com', model: 'deepseek-chat', api_key: '', api_key_configured: false,
   enabled: false, default_monthly_request_limit: 100, default_monthly_token_limit: 200000,
-  request_timeout_seconds: 30, max_output_tokens: 0, temperature: 0.1, config_version: 1,
+  request_timeout_seconds: 120, max_output_tokens: 0, temperature: 0.1, config_version: 1,
 })
 
 const load = async () => {

@@ -127,9 +127,11 @@ func main() {
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      2 * time.Minute,
-		IdleTimeout:       2 * time.Minute,
-		MaxHeaderBytes:    1 << 20,
+		// AI planning may use the full configured 120-second provider timeout;
+		// leave a response-write buffer at the HTTP boundary.
+		WriteTimeout:   3 * time.Minute,
+		IdleTimeout:    2 * time.Minute,
+		MaxHeaderBytes: 1 << 20,
 	}
 	serverError := make(chan error, 1)
 	go func() {

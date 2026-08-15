@@ -145,7 +145,8 @@ type ErrorKind = 'auth' | 'timeout' | 'provider' | 'conflict' | 'generic' | ''
 type AgentAction = 'submit' | 'confirm' | 'cancel' | ''
 
 const AI_STATUS_TIMEOUT_MS = 15_000
-const AI_TASK_TIMEOUT_MS = 90_000
+// Keep a client-side buffer above the platform's 120-second provider timeout.
+const AI_TASK_TIMEOUT_MS = 180_000
 
 const open = ref(false)
 const inputText = ref('')
