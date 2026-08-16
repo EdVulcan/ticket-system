@@ -61,6 +61,7 @@ test('线上和窗口票种筛选会把查询条件传给服务端', async ({ pa
   })
 
   await page.goto('/product')
+  await expect(page.getByRole('heading', { name: '线上门票管理' })).toBeVisible()
   const onlineSearch = page.getByPlaceholder('搜索门票名称...')
   await onlineSearch.fill('成人')
   await onlineSearch.press('Enter')
@@ -72,6 +73,7 @@ test('线上和窗口票种筛选会把查询条件传给服务端', async ({ pa
   })).toBe(true)
 
   await page.goto('/product/offline')
+  await expect(page.getByRole('heading', { name: '窗口门票管理' })).toBeVisible()
   const offlineSearch = page.getByPlaceholder('搜索门票名称...')
   await offlineSearch.fill('窗口')
   await offlineSearch.press('Enter')
