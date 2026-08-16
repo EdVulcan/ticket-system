@@ -130,11 +130,23 @@
                 <span>active Offer {{ line.affected_offer_count }}</span>
                 <span v-if="line.affected_bundle_count">当前套餐 {{ line.affected_bundle_count }} 个</span>
               </div>
-              <div class="rule-diff">
-                <div><small>变更前</small><code>{{ compactRule(line.before_json) }}</code></div>
-                <el-icon><Right /></el-icon>
-                <div><small>变更后</small><code>{{ compactRule(line.after_json) }}</code></div>
-              </div>
+                <div class="rule-diff">
+                  <div class="diff-side"><small>变更前</small><div v-if="parseRuleSnapshot(line.before_json)" class="rule-snapshot">
+                    <div v-for="group in parseRuleSnapshot(line.before_json) || []" :key="group.key" class="rule-snapshot-group">
+                      <div class="rule-snapshot-heading"><strong>{{ group.group_name }}</strong><span>{{ ruleGroupMode(group) }}</span></div>
+                      <div v-for="item in group.items" :key="`${group.key}-${item.checkpoint_id || item.checkpoint_name}`" class="rule-snapshot-item"><span>{{ item.checkpoint_name }}</span><span>×{{ item.max_per_check_in }}</span></div>
+                      <div v-if="!group.items.length" class="rule-snapshot-empty">暂无检票点</div>
+                    </div>
+                  </div><code v-else>{{ line.before_json || '-' }}</code></div>
+                  <el-icon><Right /></el-icon>
+                  <div class="diff-side"><small>变更后</small><div v-if="parseRuleSnapshot(line.after_json)" class="rule-snapshot">
+                    <div v-for="group in parseRuleSnapshot(line.after_json) || []" :key="group.key" class="rule-snapshot-group">
+                      <div class="rule-snapshot-heading"><strong>{{ group.group_name }}</strong><span>{{ ruleGroupMode(group) }}</span></div>
+                      <div v-for="item in group.items" :key="`${group.key}-${item.checkpoint_id || item.checkpoint_name}`" class="rule-snapshot-item"><span>{{ item.checkpoint_name }}</span><span>×{{ item.max_per_check_in }}</span></div>
+                      <div v-if="!group.items.length" class="rule-snapshot-empty">暂无检票点</div>
+                    </div>
+                  </div><code v-else>{{ line.after_json || '-' }}</code></div>
+                </div>
               <p v-if="line.error_message" class="diff-error">{{ line.error_message }}</p>
             </article>
           </div>
@@ -156,6 +168,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { CircleCheck, Delete, Document, Plus, Refresh, Right, View } from '@element-plus/icons-vue'
 import request from '@/utils/request'
+import { parseRuleSnapshot, ruleGroupMode } from '@/utils/ruleSnapshot'
 
 type Operation = {
   kind: string
@@ -182,14 +195,6 @@ const affectedOffers = computed(() => (preview.value?.lines || []).reduce((total
 const statusText = (status: string) => ({ previewed: '待确认', completed: '已完成', expired: '已过期', failed: '执行失败' } as Record<string, string>)[status] || status
 const lineStatusText = (line: any) => line.status === 'applied' ? '已执行' : line.status === 'no_change' ? '无需变更' : line.error_message ? '无法执行' : '待执行'
 const formatTime = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : ''
-const compactRule = (value: string) => {
-  try {
-    const rule = JSON.parse(value)
-    return rule.groups.map((group: any) => `${group.group_name || '未命名'}：${group.items.map((item: any) => `${item.checkpoint_name || `#${item.checkpoint_id}`} ×${item.max_per_check_in}`).join('、')}`).join('；')
-  } catch {
-    return value || '-'
-  }
-}
 const operationText = (operation: Operation) => {
   const names = (ids: number[], source: any[]) => ids.map(id => source.find(item => item.id === id)?.name || `#${id}`).join('、')
   const action = operation.kind === 'add_checkpoints' ? '增加' : operation.kind === 'remove_checkpoints' ? '移除' : '设置次数'
@@ -307,7 +312,17 @@ onMounted(loadOptions)
 .rule-diff { display: grid; grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 11px; }
 .rule-diff > div { min-width: 0; padding: 8px; background: #f8fafc; border-radius: 4px; }
 .rule-diff small { display: block; margin-bottom: 4px; color: #929baa; font-size: 10px; }
-.rule-diff code { display: block; overflow: hidden; color: #344054; font-family: inherit; font-size: 11px; line-height: 17px; text-overflow: ellipsis; white-space: nowrap; }
+.diff-side { min-width: 0; }
+.rule-diff code { display: block; max-height: 168px; overflow: auto; color: #344054; font-family: inherit; font-size: 11px; line-height: 17px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.rule-snapshot { max-height: 168px; overflow: auto; color: #344054; font-size: 11px; line-height: 17px; }
+.rule-snapshot-group + .rule-snapshot-group { margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5eaf1; }
+.rule-snapshot-heading, .rule-snapshot-item { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.rule-snapshot-heading strong { min-width: 0; overflow-wrap: anywhere; color: #18202b; font-size: 11px; }
+.rule-snapshot-heading span { flex: 0 0 auto; color: #667085; font-size: 10px; }
+.rule-snapshot-item { padding-top: 2px; }
+.rule-snapshot-item span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.rule-snapshot-item span:last-child { flex: 0 0 auto; color: #667085; }
+.rule-snapshot-empty { padding-top: 2px; color: #929baa; }
 .rule-diff .el-icon { color: #929baa; }
 .diff-error { margin: 9px 0 0; color: #d94b54; font-size: 11px; line-height: 17px; }
 .confirm-bar { color: #667085; font-size: 12px; }
@@ -321,7 +336,7 @@ onMounted(loadOptions)
   .page-actions { width: 100%; justify-content: space-between; }
   .preview-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .field-row, .rule-diff { grid-template-columns: 1fr; }
-  .rule-diff > .el-icon { display: none; }
+  .rule-diff > .el-icon { display: block; justify-self: center; transform: rotate(90deg); }
   .panel-footer, .confirm-bar { align-items: flex-start; flex-direction: column; }
 }
 </style>

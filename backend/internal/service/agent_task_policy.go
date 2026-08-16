@@ -9,6 +9,7 @@ import (
 )
 
 var agentScopedProductPattern = regexp.MustCompile(`(?:所有|全部)([^,，。；;\n]+?)(?:增加|添加|新增|加上|加入|删除|移除|去掉|去除|取消|设置|设为|调整|修改|开放|支持)`)
+var agentNewRuleGroupPattern = regexp.MustCompile(`(?:新增|添加|新建|创建|增加)[^,，。；;\n]{0,24}规则组`)
 
 // validateAgentPlannerEnvelope treats the model response as an untrusted
 // proposal. The domain services remain authoritative, but this extra policy
@@ -118,6 +119,17 @@ func validateAgentTaskInputIntent(input string, task model.AgentTask) error {
 }
 
 func validateAgentPlannerEnvelopeForTask(input string, task model.AgentTask, envelope *agentAIEnvelope) error {
+	envelopeOperationType := ""
+	if envelope != nil {
+		envelopeOperationType = strings.TrimSpace(envelope.OperationType)
+	}
+	if task.OperationType == AgentOperationCatalogBatchChange && agentTaskMissingField(task, "group_name") && envelope != nil && envelope.Product == nil && len(envelope.Operations) == 0 && (envelopeOperationType == "" || envelopeOperationType == AgentOperationCatalogBatchChange) {
+		// A provider may return no structured operation for a one-token answer
+		// such as "水上乐园". The durable previous operation is authoritative;
+		// the planner will reconstruct it below instead of returning a 500 or
+		// discarding the user's answer.
+		return nil
+	}
 	if err := validateAgentPlannerEnvelope(input, envelope); err == nil {
 		return nil
 	} else if task.OperationType != AgentOperationCatalogBatchChange || !agentTaskMissingField(task, "group_name") {
@@ -171,6 +183,15 @@ func validateAgentCatalogOperations(input string, operations []CatalogRuleOperat
 	normalized := strings.ToLower(strings.TrimSpace(input))
 	for _, operation := range operations {
 		kind := strings.TrimSpace(operation.Kind)
+		if operation.CreateGroup && kind != CatalogBatchOpAddCheckpoint {
+			return agentInvalid("新增规则组只能和增加检票点一起使用")
+		}
+		if !operation.CreateGroup && operation.GroupMaxTotal != nil {
+			return agentInvalid("新规则组通行数量只能用于新增规则组")
+		}
+		if operation.GroupMaxTotal != nil && (*operation.GroupMaxTotal < 0 || *operation.GroupMaxTotal > 1000) {
+			return agentInvalid("新规则组通行数量必须在 0 到 1000 之间")
+		}
 		if operation.AllProducts && !agentExplicitAllProducts(normalized) {
 			return agentInvalid("模型不能自行扩大操作范围；如需处理全部票种，请在请求中明确写出“全部票种”")
 		}
@@ -194,6 +215,80 @@ func validateAgentCatalogOperations(input string, operations []CatalogRuleOperat
 		}
 	}
 	return nil
+}
+
+func normalizeAgentCatalogGroupIntent(input string, operations []CatalogRuleOperation) []CatalogRuleOperation {
+	if !agentRequestsNewRuleGroup(input) {
+		return operations
+	}
+	result := make([]CatalogRuleOperation, len(operations))
+	copy(result, operations)
+	for index, operation := range result {
+		if operation.Kind != CatalogBatchOpAddCheckpoint {
+			continue
+		}
+		operation.CreateGroup = true
+		if !agentExplicitNewRuleGroupName(input, operation.GroupName) {
+			operation.GroupName = ""
+		}
+		result[index] = operation
+	}
+	return result
+}
+
+func agentRequestsNewRuleGroup(input string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if agentNewRuleGroupPattern.MatchString(normalized) {
+		return true
+	}
+	for _, phrase := range []string{"新增一个规则组", "新增规则组", "添加一个规则组", "添加规则组", "新建一个规则组", "新建规则组", "创建一个规则组", "创建规则组", "增加一个规则组", "增加规则组", "新规则组"} {
+		if strings.Contains(normalized, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
+func agentExplicitNewRuleGroupName(input, candidate string) bool {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" || agentGenericNewRuleGroupName(candidate) || !agentTextContains(input, candidate) {
+		return false
+	}
+	normalized := strings.ToLower(input)
+	for _, marker := range []string{"规则组名称", "规则组名", "规则组叫", "规则组为", "规则组命名", "命名为", "名称为", "叫做"} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return strings.Contains(input, candidate+"规则组") || strings.Contains(input, "规则组"+candidate)
+}
+
+func agentGenericNewRuleGroupName(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "新规则组", "新增规则组", "添加规则组", "默认分组", "new group", "new rule group":
+		return true
+	default:
+		return false
+	}
+}
+
+func agentNewRuleGroupNameAnswer(input string) string {
+	value := strings.Trim(strings.TrimSpace(input), " \t\r\n，。；;：:、")
+	if value == "" {
+		return ""
+	}
+	normalized := strings.ToLower(value)
+	for _, marker := range []string{"规则组名称", "规则组名", "规则组叫", "规则组为", "规则组命名", "命名为", "名称为", "叫做"} {
+		if index := strings.Index(normalized, marker); index >= 0 {
+			value = strings.Trim(strings.TrimSpace(value[index+len(marker):]), " \t\r\n，。；;：:、")
+			break
+		}
+	}
+	value = strings.TrimSpace(strings.TrimSuffix(value, "规则组"))
+	if value == "" || agentGenericNewRuleGroupName(value) || len([]rune(value)) > 100 || agentHasAny(strings.ToLower(value), []string{"增加", "添加", "新增", "新建", "创建", "删除", "移除", "设置"}) {
+		return ""
+	}
+	return value
 }
 
 func validateAgentCatalogTargets(input string, operations []CatalogRuleOperation) error {

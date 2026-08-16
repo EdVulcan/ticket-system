@@ -118,9 +118,21 @@
                   <span>版本 {{ line.before_revision_id }}<template v-if="line.after_revision_id"> → {{ line.after_revision_id }}</template></span>
                 </div>
                 <div class="diff-values">
-                  <div><small>变更前</small><code>{{ compactRule(line.before_json) }}</code></div>
+                  <div class="diff-side"><small>变更前</small><div v-if="parseRuleSnapshot(line.before_json)" class="rule-snapshot">
+                    <div v-for="group in parseRuleSnapshot(line.before_json) || []" :key="group.key" class="rule-snapshot-group">
+                      <div class="rule-snapshot-heading"><strong>{{ group.group_name }}</strong><span>{{ ruleGroupMode(group) }}</span></div>
+                      <div v-for="item in group.items" :key="`${group.key}-${item.checkpoint_id || item.checkpoint_name}`" class="rule-snapshot-item"><span>{{ item.checkpoint_name }}</span><span>×{{ item.max_per_check_in }}</span></div>
+                      <div v-if="!group.items.length" class="rule-snapshot-empty">暂无检票点</div>
+                    </div>
+                  </div><code v-else>{{ line.before_json || '-' }}</code></div>
                   <el-icon><Right /></el-icon>
-                  <div><small>变更后</small><code>{{ compactRule(line.after_json) }}</code></div>
+                  <div class="diff-side"><small>变更后</small><div v-if="parseRuleSnapshot(line.after_json)" class="rule-snapshot">
+                    <div v-for="group in parseRuleSnapshot(line.after_json) || []" :key="group.key" class="rule-snapshot-group">
+                      <div class="rule-snapshot-heading"><strong>{{ group.group_name }}</strong><span>{{ ruleGroupMode(group) }}</span></div>
+                      <div v-for="item in group.items" :key="`${group.key}-${item.checkpoint_id || item.checkpoint_name}`" class="rule-snapshot-item"><span>{{ item.checkpoint_name }}</span><span>×{{ item.max_per_check_in }}</span></div>
+                      <div v-if="!group.items.length" class="rule-snapshot-empty">暂无检票点</div>
+                    </div>
+                  </div><code v-else>{{ line.after_json || '-' }}</code></div>
                 </div>
                 <p v-if="line.error_message" class="line-error">{{ line.error_message }}</p>
               </article>
@@ -144,6 +156,7 @@ import { ChatDotRound, CircleCheck, Close, Loading, Promotion, Refresh, Right, W
 import { useRouter } from 'vue-router'
 import request from '@/utils/request'
 import { localizeErrorMessage } from '@/utils/localize'
+import { parseRuleSnapshot, ruleGroupMode } from '@/utils/ruleSnapshot'
 
 type ErrorKind = 'auth' | 'timeout' | 'provider' | 'conflict' | 'generic' | ''
 type AgentAction = 'submit' | 'confirm' | 'cancel' | ''
@@ -220,13 +233,6 @@ const ruleItems = (group: any) => {
   const items = (group?.items || []).map((item: any) => `${item.checkpoint_name || `#${item.checkpoint_id}`} ×${item.max_per_check_in}`).join('、') || '-'
   return `${total}；${items}`
 }
-const compactRule = (value: string) => {
-  try {
-    const rule = JSON.parse(value)
-    return (rule.groups || []).map((group: any) => `${group.group_name || '未命名'}：${(group.items || []).map((item: any) => `${item.checkpoint_name || `#${item.checkpoint_id}`} ×${item.max_per_check_in}`).join('、')}`).join('；') || '-'
-  } catch { return value || '-' }
-}
-
 const loadStatus = async () => {
   statusLoading.value = true
   try {
@@ -452,9 +458,19 @@ const startNewTask = async () => {
 .diff-values { display: grid; grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr); align-items: center; gap: 6px; margin-top: 9px; }
 .diff-values > div { min-width: 0; padding: 7px; background: #f8fafc; border-radius: 4px; }
 .diff-values small { display: block; margin-bottom: 3px; color: #929baa; font-size: 9px; }
-.diff-values code { display: block; overflow: hidden; color: #344054; font-family: inherit; font-size: 10px; line-height: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.diff-side { min-width: 0; }
+.diff-values code { display: block; max-height: 150px; overflow: auto; color: #344054; font-family: inherit; font-size: 10px; line-height: 15px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.rule-snapshot { max-height: 156px; overflow: auto; color: #344054; font-size: 10px; line-height: 15px; }
+.rule-snapshot-group + .rule-snapshot-group { margin-top: 7px; padding-top: 7px; border-top: 1px solid #e5eaf1; }
+.rule-snapshot-heading, .rule-snapshot-item { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; }
+.rule-snapshot-heading strong { min-width: 0; overflow-wrap: anywhere; color: #18202b; font-size: 10px; }
+.rule-snapshot-heading span { flex: 0 0 auto; color: #667085; font-size: 9px; }
+.rule-snapshot-item { padding-top: 2px; }
+.rule-snapshot-item span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.rule-snapshot-item span:last-child { flex: 0 0 auto; color: #667085; }
+.rule-snapshot-empty { padding-top: 2px; color: #929baa; }
 .diff-values .el-icon { color: #929baa; }
 .line-error { margin: 8px 0 0; color: #d94b54; font-size: 11px; }
 .preview-actions { justify-content: flex-end; }
-@media (max-width: 560px) { .ai-assistant { right: 14px; bottom: 14px; } .assistant-panel { width: calc(100vw - 28px); max-height: calc(100vh - 28px); } .assistant-body { max-height: calc(100vh - 89px); padding: 12px; } .assistant-actions { align-items: flex-end; } }
+@media (max-width: 560px) { .ai-assistant { right: 14px; bottom: 14px; } .assistant-panel { width: calc(100vw - 28px); max-height: calc(100vh - 28px); } .assistant-body { max-height: calc(100vh - 89px); padding: 12px; } .assistant-actions { align-items: flex-end; } .diff-values { grid-template-columns: minmax(0, 1fr); } .diff-values > .el-icon { justify-self: center; transform: rotate(90deg); } }
 </style>

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -259,6 +260,62 @@ func TestCatalogBatchRemoveAndSetLimit(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("removing the only checkpoint should fail validation")
+	}
+}
+
+func TestCatalogBatchCreateRuleGroupPersistsCheckpointAndReadablePreview(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	service := &CatalogBatchChangeService{}
+	preview, err := service.Preview(fixture.tenant.ID, 11, "admin", CatalogBatchChangePreviewRequest{
+		InputText:      "给 Adult Ticket 新增水上乐园规则组并增加 North Gate",
+		IdempotencyKey: "catalog-batch-create-group-1",
+		Operations: []CatalogRuleOperation{{
+			Kind: CatalogBatchOpAddCheckpoint, ProductIDs: []uint{fixture.product.ID}, CheckpointIDs: []uint{fixture.extra.ID},
+			CreateGroup: true, GroupName: "Water Park",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("preview create group: %v", err)
+	}
+	if len(preview.Lines) != 1 || !strings.Contains(preview.Lines[0].AfterJSON, "Water Park") || !strings.Contains(preview.Lines[0].AfterJSON, "North Gate") {
+		t.Fatalf("preview omitted the new group or checkpoint name: %+v", preview.Lines)
+	}
+	completed, err := service.Confirm(fixture.tenant.ID, 11, "admin", preview.PlanID, preview.PlanHash)
+	if err != nil {
+		t.Fatalf("confirm create group: %v", err)
+	}
+	if completed.Status != CatalogBatchPlanCompleted {
+		t.Fatalf("unexpected completed status: %+v", completed)
+	}
+	var product model.Product
+	if err := model.DB.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Where("id = ? AND tenant_id = ?", fixture.product.ID, fixture.tenant.ID).First(&product).Error; err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, group := range product.Rule.Groups {
+		if group.GroupName != "Water Park" {
+			continue
+		}
+		for _, item := range group.Items {
+			if item.CheckPointID == fixture.extra.ID {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("confirmed plan did not persist the new group checkpoint: %+v", product.Rule.Groups)
+	}
+}
+
+func TestCatalogBatchUnknownRuleGroupReturnsTypedInputError(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	_, err := (&CatalogBatchChangeService{}).Preview(fixture.tenant.ID, 11, "admin", CatalogBatchChangePreviewRequest{
+		IdempotencyKey: "catalog-batch-unknown-group-1",
+		Operations:     []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductIDs: []uint{fixture.product.ID}, CheckpointIDs: []uint{fixture.extra.ID}, GroupName: "Not A Group"}},
+	})
+	var batchErr *CatalogBatchError
+	if !errors.As(err, &batchErr) || batchErr.HTTPStatus != 400 {
+		t.Fatalf("unknown rule group was not returned as typed input error: %v", err)
 	}
 }
 

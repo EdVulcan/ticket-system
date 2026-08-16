@@ -251,49 +251,104 @@
         <!-- Tab 3: 核销规则 (M选N) -->
         <el-tab-pane label="核销规则 (M选N)" name="rule">
           <el-form :model="form" label-width="100px" class="editor-form">
-            <el-alert title="设置门票可通行的检票点及通行次数" type="info" show-icon :closable="false" class="mb-4" />
-            
-            <div class="rule-group-card" v-for="(group, gIdx) in form.rule.groups" :key="gIdx">
-              <div class="rule-group-header">
-                <div class="flex items-center gap-2">
-                  <span class="font-bold text-sm text-slate-700">规则组 #{{ gIdx + 1 }}</span>
-                  <el-tag size="small" effect="plain">{{ group.max_total_check_in === 0 ? '全选模式' : `M选${group.max_total_check_in}` }}</el-tag>
+            <div class="rule-editor-intro">
+              <div class="rule-editor-intro-copy">
+                <div class="rule-editor-intro-icon"><el-icon><InfoFilled /></el-icon></div>
+                <div>
+                  <strong>设置核销路径</strong>
+                  <p>每个规则组描述一条可用的通行路径；组内可设置全部点位通行，或任选指定数量的点位。</p>
                 </div>
-                <el-button type="danger" link size="small" @click="removeGroup(gIdx)" v-if="form.rule.groups.length > 1">删除组</el-button>
               </div>
-              
-              <div class="form-grid rule-group-fields">
-                <el-form-item label="分组名称" label-width="80px" :required="true">
-                  <el-input v-model="group.group_name" placeholder="如：大门票、剧场票" />
-                </el-form-item>
-                <el-form-item label="可选点位数(M)" label-width="120px">
-                  <el-input-number v-model="group.max_total_check_in" :min="0" placeholder="0为不限" />
-                  <div class="text-xs text-gray-400 mt-1">0 = 组内所有点位都可通行 (全选)<br>N = 组内任选 N 个点位通行 (M选N)</div>
-                </el-form-item>
-              </div>
-
-              <div class="rule-items-list">
-                <div v-for="(item, iIdx) in group.items" :key="iIdx" class="flex items-center gap-2">
-                  <el-select v-model="item.check_point_id" aria-label="检票点" :placeholder="form.product.scenic_area_id ? '选择检票点' : '请先选择所属景区'" class="flex-1" :disabled="!form.product.scenic_area_id">
-                    <el-option 
-                      v-for="cp in filteredCheckpoints"
-                      :key="cp.id" 
-                      :label="cp.name" 
-                      :value="cp.id" 
-                      :disabled="isCheckPointDisabled(cp.id, item.check_point_id)"
-                    />
-                  </el-select>
-                  <el-input-number v-model="item.max_per_check_in" :min="1" controls-position="right" style="width: 120px" placeholder="单点次数" />
-                  <span class="text-xs text-gray-400">次</span>
-                  <el-button circle size="small" type="danger" @click="removeItem(gIdx, iIdx)">
-                    <el-icon><Minus /></el-icon>
-                  </el-button>
-                </div>
-                <el-button type="primary" link size="small" @click="addItem(gIdx)">+ 添加检票点</el-button>
+              <div class="rule-editor-stats" aria-label="规则统计">
+                <span><strong>{{ ruleGroupCount }}</strong><small>规则组</small></span>
+                <span><strong>{{ ruleCheckpointCount }}</strong><small>检票点</small></span>
               </div>
             </div>
-            
-            <el-button type="primary" plain class="w-full border-dashed" @click="addGroup">+ 添加新规则组</el-button>
+
+            <div class="rule-group-stack">
+              <div class="rule-group-card" v-for="(group, gIdx) in form.rule.groups" :key="gIdx">
+                <div class="rule-group-header">
+                  <div class="rule-group-title">
+                    <span class="rule-group-index">{{ formatRuleIndex(gIdx) }}</span>
+                    <div class="rule-group-title-copy">
+                      <div class="rule-group-name">规则组 {{ gIdx + 1 }}</div>
+                      <div class="rule-group-subtitle">{{ group.group_name || '未命名规则组' }}</div>
+                    </div>
+                    <el-tag size="small" effect="plain" type="info">
+                      {{ group.max_total_check_in === 0 ? '全部点位' : `任选 ${group.max_total_check_in} 个` }}
+                    </el-tag>
+                  </div>
+                  <el-button
+                    v-if="form.rule.groups.length > 1"
+                    type="danger"
+                    link
+                    size="small"
+                    class="delete-group-button"
+                    @click="removeGroup(gIdx)"
+                  >
+                    <el-icon><Delete /></el-icon>
+                    删除组
+                  </el-button>
+                </div>
+
+                <div class="rule-group-settings">
+                  <div class="rule-setting">
+                    <label>分组名称 <span>*</span></label>
+                    <el-input v-model="group.group_name" placeholder="如：大门票、剧场票" />
+                    <small>用于区分不同的核销路径。</small>
+                  </div>
+                  <div class="rule-setting rule-setting-mode">
+                    <label>组内可选点位数</label>
+                    <div class="rule-mode-control">
+                      <el-input-number v-model="group.max_total_check_in" :min="0" controls-position="right" placeholder="0为全部" />
+                      <span>{{ group.max_total_check_in === 0 ? '全部点位均可通行' : `任选 ${group.max_total_check_in} 个点位` }}</span>
+                    </div>
+                    <small>填 0 表示组内所有点位都可通行。</small>
+                  </div>
+                </div>
+
+                <div class="rule-items-section">
+                  <div class="rule-items-heading">
+                    <div>
+                      <strong>检票点配置</strong>
+                      <span>设置每个点位可通行的次数</span>
+                    </div>
+                    <span class="rule-items-count">{{ group.items.length }} 个点位</span>
+                  </div>
+                  <div class="rule-items-list">
+                    <div v-if="group.items.length === 0" class="rule-items-empty">暂未添加检票点，请先添加一个点位。</div>
+                    <div v-for="(item, iIdx) in group.items" :key="iIdx" class="rule-item-row">
+                      <span class="rule-item-index">{{ formatRuleIndex(iIdx) }}</span>
+                      <el-select v-model="item.check_point_id" aria-label="检票点" :placeholder="form.product.scenic_area_id ? '选择检票点' : '请先选择所属景区'" :disabled="!form.product.scenic_area_id">
+                        <el-option
+                          v-for="cp in filteredCheckpoints"
+                          :key="cp.id"
+                          :label="cp.name"
+                          :value="cp.id"
+                          :disabled="isCheckPointDisabled(cp.id, item.check_point_id)"
+                        />
+                      </el-select>
+                      <div class="rule-item-limit">
+                        <el-input-number v-model="item.max_per_check_in" :min="1" controls-position="right" placeholder="次数" />
+                        <span>次</span>
+                      </div>
+                      <el-button circle size="small" type="danger" plain aria-label="删除检票点" title="删除检票点" @click="removeItem(gIdx, iIdx)">
+                        <el-icon><Minus /></el-icon>
+                      </el-button>
+                    </div>
+                    <el-button type="primary" link size="small" class="add-rule-item" @click="addItem(gIdx)">
+                      <el-icon><Plus /></el-icon>
+                      添加检票点
+                    </el-button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <el-button type="primary" plain class="add-rule-group" @click="addGroup">
+              <el-icon><Plus /></el-icon>
+              添加新规则组
+            </el-button>
           </el-form>
         </el-tab-pane>
 
@@ -358,7 +413,7 @@
 import { computed, ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
-import { Plus, Minus, Refresh } from '@element-plus/icons-vue'
+import { Delete, InfoFilled, Minus, Plus, Refresh } from '@element-plus/icons-vue'
 import { hasPermission } from '@/utils/permissions'
 import { isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 
@@ -456,7 +511,11 @@ const fetchReferences = async () => {
 const activeScenicAreas = computed(() => scenicAreas.value.filter(area => area.status === 'active'))
 const scenicAreaOptions = computed(() => scenicAreas.value.filter(area => area.status === 'active' || area.id === form.product.scenic_area_id))
 const filteredCheckpoints = computed(() => checkpoints.value.filter(cp => cp.scenic_area_id === form.product.scenic_area_id))
+const ruleGroupCount = computed(() => form.rule.groups.length)
+const ruleCheckpointCount = computed(() => form.rule.groups.reduce((total, group) => total + group.items.length, 0))
 const scenicAreaName = (id: number) => scenicAreas.value.find(area => area.id === id)?.name || '未归属'
+
+const formatRuleIndex = (index: number) => String(index + 1).padStart(2, '0')
 
 const fetchData = async () => {
   loading.value = true
@@ -850,43 +909,295 @@ onMounted(() => {
   font-size: 12px;
 }
 
-.rule-group-card {
-  background: #f8fafc;
-  border: 1px solid #e5eaf1;
-  border-radius: 8px;
+.rule-editor-intro {
+  align-items: center;
+  background: #f7f9fc;
+  border: 1px solid #e4eaf2;
+  border-radius: 10px;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
   margin-bottom: 16px;
-  padding: 18px 18px 16px;
+  padding: 14px 16px;
+}
+
+.rule-editor-intro-copy {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rule-editor-intro-icon {
+  align-items: center;
+  background: #eaf1ff;
+  border-radius: 7px;
+  color: #2563eb;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 30px;
+  justify-content: center;
+  width: 30px;
+}
+
+.rule-editor-intro-copy strong {
+  color: #172033;
+  display: block;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.rule-editor-intro-copy p {
+  color: #667085;
+  font-size: 12px;
+  line-height: 18px;
+  margin: 2px 0 0;
+}
+
+.rule-editor-stats {
+  background: #e4eaf2;
+  border: 1px solid #e4eaf2;
+  border-radius: 7px;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 1px;
+  overflow: hidden;
+}
+
+.rule-editor-stats span {
+  align-items: center;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  min-width: 64px;
+  padding: 6px 10px;
+}
+
+.rule-editor-stats strong {
+  color: #172033;
+  font-size: 16px;
+  line-height: 20px;
+}
+
+.rule-editor-stats small {
+  color: #8a94a6;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.rule-group-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.rule-group-card {
+  background: #fff;
+  border: 1px solid #dfe5ee;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 3%);
+  padding: 16px;
 }
 
 .rule-group-header {
   align-items: center;
+  border-bottom: 1px solid #edf0f4;
   display: flex;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
 }
 
-.rule-group-fields {
-  gap: 16px 20px;
-}
-
-.rule-items-list {
-  border-left: 2px solid #dbe5f2;
-  display: grid;
-  gap: 10px;
-  margin-left: 4px;
-  padding-left: 16px;
-}
-
-.rule-items-list > div {
+.rule-group-title {
   align-items: center;
   display: flex;
   gap: 10px;
   min-width: 0;
 }
 
-.rule-items-list :deep(.el-select) {
-  flex: 1;
+.rule-group-index,
+.rule-item-index {
+  align-items: center;
+  background: #edf3ff;
+  border-radius: 6px;
+  color: #2563eb;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.rule-group-title-copy {
   min-width: 0;
+}
+
+.rule-group-name {
+  color: #344054;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 18px;
+}
+
+.rule-group-subtitle {
+  color: #98a2b3;
+  font-size: 11px;
+  line-height: 16px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delete-group-button {
+  flex: 0 0 auto;
+}
+
+.rule-group-settings {
+  display: grid;
+  gap: 14px 24px;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, .9fr);
+  margin-bottom: 16px;
+}
+
+.rule-setting label {
+  color: #475467;
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  margin-bottom: 6px;
+}
+
+.rule-setting label span {
+  color: #ef4444;
+  margin-left: 2px;
+}
+
+.rule-setting small {
+  color: #98a2b3;
+  display: block;
+  font-size: 11px;
+  line-height: 16px;
+  margin-top: 5px;
+}
+
+.rule-setting-mode .rule-mode-control {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.rule-mode-control :deep(.el-input-number) {
+  width: 142px;
+}
+
+.rule-mode-control span {
+  color: #667085;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.rule-items-section {
+  background: #f8fafc;
+  border: 1px solid #edf0f4;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.rule-items-heading {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+
+.rule-items-heading > div {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+}
+
+.rule-items-heading strong {
+  color: #475467;
+  font-size: 12px;
+}
+
+.rule-items-heading span {
+  color: #98a2b3;
+  font-size: 11px;
+}
+
+.rule-items-count {
+  background: #fff;
+  border: 1px solid #e4e7ec;
+  border-radius: 5px;
+  color: #667085 !important;
+  padding: 2px 7px;
+}
+
+.rule-items-list {
+  display: grid;
+  gap: 8px;
+}
+
+.rule-item-row {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: 28px minmax(0, 1fr) 154px 32px;
+  min-width: 0;
+}
+
+.rule-item-index {
+  background: #fff;
+  border: 1px solid #e4e7ec;
+  color: #667085;
+  height: 26px;
+  width: 26px;
+}
+
+.rule-item-row :deep(.el-select) {
+  min-width: 0;
+  width: 100%;
+}
+
+.rule-item-limit {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+
+.rule-item-limit :deep(.el-input-number) {
+  width: 124px;
+}
+
+.rule-item-limit span {
+  color: #667085;
+  font-size: 12px;
+}
+
+.rule-items-empty {
+  background: #fff;
+  border: 1px dashed #d0d5dd;
+  border-radius: 6px;
+  color: #98a2b3;
+  font-size: 12px;
+  padding: 12px;
+  text-align: center;
+}
+
+.add-rule-item {
+  justify-self: start;
+  margin-top: 2px;
+}
+
+.add-rule-group {
+  border-style: dashed;
+  height: 40px;
+  margin-top: 14px;
 }
 
 .editor-dialog-footer {
@@ -924,6 +1235,31 @@ onMounted(() => {
   .form-grid > .col-span-2,
   .form-grid > .form-item-wide {
     grid-column: auto;
+  }
+
+  .rule-editor-intro {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .rule-editor-stats {
+    width: 100%;
+  }
+
+  .rule-editor-stats span {
+    flex: 1;
+  }
+
+  .rule-group-settings {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rule-item-row {
+    grid-template-columns: 28px minmax(0, 1fr) 32px;
+  }
+
+  .rule-item-limit {
+    grid-column: 2 / 3;
   }
 }
 </style>

@@ -40,6 +40,8 @@ type CatalogRuleOperation struct {
 	CheckpointIDs   []uint   `json:"checkpoint_ids,omitempty"`
 	CheckpointNames []string `json:"checkpoint_names,omitempty"`
 	GroupName       string   `json:"group_name,omitempty"`
+	CreateGroup     bool     `json:"create_group,omitempty"`
+	GroupMaxTotal   *int     `json:"group_max_total_check_in,omitempty"`
 	MaxPerCheckIn   *int     `json:"max_per_check_in,omitempty"`
 }
 
@@ -209,10 +211,13 @@ func (s *CatalogBatchChangeService) Preview(tenantID, actorUserID uint, actorRol
 		if err != nil {
 			return err
 		}
+		if missing := catalogRuleGroupMissingFields(products, operations); len(missing) > 0 {
+			return batchInvalid(missing[0].Question)
+		}
 		if len(operations) == 0 {
 			return batchInvalid("at least one catalog operation is required")
 		}
-		builds, err := buildCatalogBatchLines(tx, tenantID, products, operations)
+		builds, err := buildCatalogBatchLines(tx, tenantID, products, checkpoints, operations)
 		if err != nil {
 			return err
 		}
@@ -356,6 +361,11 @@ func (s *CatalogBatchChangeService) Confirm(tenantID, actorUserID uint, actorRol
 				operationsByProduct[productID] = append(operationsByProduct[productID], operation)
 			}
 		}
+		var checkpoints []model.CheckPoint
+		if err := tx.Where("tenant_id = ?", tenantID).Find(&checkpoints).Error; err != nil {
+			return err
+		}
+		checkpointNames := catalogCheckpointNames(checkpoints)
 		products := make(map[uint]model.Product, len(lines))
 		for _, line := range lines {
 			var product model.Product
@@ -369,7 +379,7 @@ func (s *CatalogBatchChangeService) Confirm(tenantID, actorUserID uint, actorRol
 				applyErr = batchConflict(plan.ErrorMessage)
 				return nil
 			}
-			beforeJSON, err := projectCatalogRule(&product.Rule)
+			beforeJSON, err := projectCatalogRule(&product.Rule, checkpointNames)
 			if err != nil {
 				return err
 			}
@@ -405,7 +415,7 @@ func (s *CatalogBatchChangeService) Confirm(tenantID, actorUserID uint, actorRol
 			if err := assignProductScenicArea(tx, tenantID, &product, &product.Rule); err != nil {
 				return err
 			}
-			afterJSON, err := projectCatalogRule(&product.Rule)
+			afterJSON, err := projectCatalogRule(&product.Rule, checkpointNames)
 			if err != nil {
 				return err
 			}
@@ -647,12 +657,21 @@ func resolveCatalogBatchOperations(tx *gorm.DB, tenantID uint, operations []Cata
 		operation.CheckpointIDs = checkpointIDs
 		operation.CheckpointNames = nil
 		operation.GroupName = strings.TrimSpace(operation.GroupName)
+		if operation.CreateGroup && operation.Kind != CatalogBatchOpAddCheckpoint {
+			return nil, batchInvalid("create_group 只能用于增加检票点")
+		}
+		if !operation.CreateGroup && operation.GroupMaxTotal != nil {
+			return nil, batchInvalid("group_max_total_check_in 需要和 create_group 一起使用")
+		}
+		if operation.GroupMaxTotal != nil && (*operation.GroupMaxTotal < 0 || *operation.GroupMaxTotal > 1000) {
+			return nil, batchInvalid("新规则组的通行数量必须在 0 到 1000 之间")
+		}
 		resolved = append(resolved, operation)
 	}
 	return resolved, nil
 }
 
-func buildCatalogBatchLines(tx *gorm.DB, tenantID uint, products []model.Product, operations []CatalogRuleOperation) ([]catalogBatchLineBuild, error) {
+func buildCatalogBatchLines(tx *gorm.DB, tenantID uint, products []model.Product, checkpoints []model.CheckPoint, operations []CatalogRuleOperation) ([]catalogBatchLineBuild, error) {
 	productByID := make(map[uint]model.Product, len(products))
 	selected := make(map[uint]struct{})
 	for _, operation := range operations {
@@ -670,13 +689,14 @@ func buildCatalogBatchLines(tx *gorm.DB, tenantID uint, products []model.Product
 		ids = append(ids, id)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	checkpointNames := catalogCheckpointNames(checkpoints)
 	builds := make([]catalogBatchLineBuild, 0, len(ids))
 	for _, id := range ids {
 		product := productByID[id]
 		if product.CurrentRevisionID == 0 {
 			return nil, batchInvalid(fmt.Sprintf("票种 %s 没有当前规则版本", product.Name))
 		}
-		beforeJSON, err := projectCatalogRule(&product.Rule)
+		beforeJSON, err := projectCatalogRule(&product.Rule, checkpointNames)
 		if err != nil {
 			return nil, err
 		}
@@ -702,7 +722,7 @@ func buildCatalogBatchLines(tx *gorm.DB, tenantID uint, products []model.Product
 		if err := assignProductScenicArea(tx, tenantID, &product, &product.Rule); err != nil {
 			return nil, fmt.Errorf("票种 %s: %w", product.Name, err)
 		}
-		afterJSON, err := projectCatalogRule(&product.Rule)
+		afterJSON, err := projectCatalogRule(&product.Rule, checkpointNames)
 		if err != nil {
 			return nil, err
 		}
@@ -733,6 +753,29 @@ func applyCatalogRuleOperation(rule *model.TicketRule, operation CatalogRuleOper
 	if rule == nil {
 		return errors.New("ticket rule is required")
 	}
+	if operation.CreateGroup {
+		name := strings.TrimSpace(operation.GroupName)
+		if name == "" {
+			return batchInvalid("新增规则组需要提供 group_name")
+		}
+		for _, group := range rule.Groups {
+			if strings.EqualFold(strings.TrimSpace(group.GroupName), name) {
+				return batchInvalid(fmt.Sprintf("规则组 %q 已存在，请使用现有规则组或换一个名称", name))
+			}
+		}
+		maxTotal := 0
+		if operation.GroupMaxTotal != nil {
+			maxTotal = *operation.GroupMaxTotal
+		}
+		rule.Groups = append(rule.Groups, model.RuleGroup{GroupName: name, MaxTotalCheckIn: maxTotal})
+		groups := []*model.RuleGroup{&rule.Groups[len(rule.Groups)-1]}
+		for _, checkpointID := range operation.CheckpointIDs {
+			if err := addCatalogCheckpoint(groups, rule, checkpointID, operation.MaxPerCheckIn); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	groups := make([]*model.RuleGroup, 0)
 	for i := range rule.Groups {
 		if operation.GroupName == "" || rule.Groups[i].GroupName == operation.GroupName {
@@ -740,11 +783,11 @@ func applyCatalogRuleOperation(rule *model.TicketRule, operation CatalogRuleOper
 		}
 	}
 	if operation.GroupName != "" && len(groups) == 0 {
-		return fmt.Errorf("rule group %q does not exist", operation.GroupName)
+		return batchInvalid(fmt.Sprintf("规则组 %q 不存在，请选择当前票种已有规则组或明确要求新建规则组", operation.GroupName))
 	}
 	if operation.Kind == CatalogBatchOpAddCheckpoint && operation.GroupName == "" {
 		if len(rule.Groups) != 1 {
-			return errors.New("adding a checkpoint requires group_name when a product has multiple rule groups")
+			return batchInvalid("票种包含多个规则组，增加检票点时必须指定现有规则组，或明确要求新增规则组")
 		}
 		groups = []*model.RuleGroup{&rule.Groups[0]}
 	}
@@ -761,13 +804,13 @@ func applyCatalogRuleOperation(rule *model.TicketRule, operation CatalogRuleOper
 			removeCatalogCheckpoint(groups, checkpointID)
 		case CatalogBatchOpSetLimit:
 			if operation.MaxPerCheckIn == nil {
-				return errors.New("max_per_check_in is required")
+				return batchInvalid("设置检票次数时必须提供 max_per_check_in")
 			}
 			if !setCatalogCheckpointLimit(groups, checkpointID, *operation.MaxPerCheckIn) {
-				return fmt.Errorf("checkpoint %d is not in the selected rule group", checkpointID)
+				return batchInvalid(fmt.Sprintf("检票点 %d 不在所选规则组中，无法设置核销次数", checkpointID))
 			}
 		default:
-			return errors.New("unsupported catalog operation")
+			return batchInvalid("不支持的票规操作")
 		}
 	}
 	if operation.Kind == CatalogBatchOpRemoveCheckpoint {
@@ -811,7 +854,7 @@ func addCatalogCheckpoint(groups []*model.RuleGroup, rule *model.TicketRule, che
 			}
 		}
 		if !allowed {
-			return fmt.Errorf("checkpoint %d already belongs to another rule group", checkpointID)
+			return batchInvalid(fmt.Sprintf("检票点 %d 已属于其他规则组，不能重复加入当前规则组", checkpointID))
 		}
 		if limit != nil {
 			existing.MaxPerCheckIn = *limit
@@ -819,7 +862,7 @@ func addCatalogCheckpoint(groups []*model.RuleGroup, rule *model.TicketRule, che
 		return nil
 	}
 	if len(groups) != 1 {
-		return fmt.Errorf("checkpoint %d requires exactly one target rule group", checkpointID)
+		return batchInvalid(fmt.Sprintf("检票点 %d 必须明确一个目标规则组", checkpointID))
 	}
 	max := 1
 	if limit != nil {
@@ -921,7 +964,7 @@ func cloneTicketRule(rule *model.TicketRule) (model.TicketRule, error) {
 	return clone, nil
 }
 
-func projectCatalogRule(rule *model.TicketRule) (string, error) {
+func projectCatalogRule(rule *model.TicketRule, checkpointNames map[uint]string) (string, error) {
 	projection := catalogRuleProjection{}
 	if rule != nil {
 		projection.Name = rule.Name
@@ -930,7 +973,11 @@ func projectCatalogRule(rule *model.TicketRule) (string, error) {
 		for _, group := range rule.Groups {
 			itemProjection := make([]catalogRulePreviewItem, 0, len(group.Items))
 			for _, item := range group.Items {
-				itemProjection = append(itemProjection, catalogRulePreviewItem{CheckpointID: item.CheckPointID, CheckpointName: item.CheckPoint.Name, MaxPerCheckIn: item.MaxPerCheckIn})
+				checkpointName := strings.TrimSpace(item.CheckPoint.Name)
+				if checkpointName == "" {
+					checkpointName = strings.TrimSpace(checkpointNames[item.CheckPointID])
+				}
+				itemProjection = append(itemProjection, catalogRulePreviewItem{CheckpointID: item.CheckPointID, CheckpointName: checkpointName, MaxPerCheckIn: item.MaxPerCheckIn})
 			}
 			sort.Slice(itemProjection, func(i, j int) bool { return itemProjection[i].CheckpointID < itemProjection[j].CheckpointID })
 			projection.Groups = append(projection.Groups, catalogRulePreviewGroup{GroupName: group.GroupName, MaxTotalCheckIn: group.MaxTotalCheckIn, Items: itemProjection})
@@ -939,6 +986,16 @@ func projectCatalogRule(rule *model.TicketRule) (string, error) {
 	}
 	data, err := json.Marshal(projection)
 	return string(data), err
+}
+
+func catalogCheckpointNames(checkpoints []model.CheckPoint) map[uint]string {
+	result := make(map[uint]string, len(checkpoints))
+	for _, checkpoint := range checkpoints {
+		if name := strings.TrimSpace(checkpoint.Name); name != "" {
+			result[checkpoint.ID] = name
+		}
+	}
+	return result
 }
 
 func previewFromPlan(plan model.CatalogBatchChangePlan, lines []model.CatalogBatchChangeLine) *CatalogBatchChangePreview {

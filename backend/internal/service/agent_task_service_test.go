@@ -387,6 +387,51 @@ func TestAgentCatalogGroupMissingFieldPreservesExactCandidates(t *testing.T) {
 	}
 }
 
+func TestAgentNewRuleGroupIntentCollectsExplicitGroupName(t *testing.T) {
+	operations := normalizeAgentCatalogGroupIntent("新增一个规则组来增加这个检票点", []CatalogRuleOperation{{
+		Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"Adult Ticket"}, CheckpointNames: []string{"North Gate"}, GroupName: "新规则组",
+	}})
+	if len(operations) != 1 || !operations[0].CreateGroup || operations[0].GroupName != "" {
+		t.Fatalf("generic model group name was not converted into a collecting request: %+v", operations)
+	}
+	products := []model.Product{{
+		Base: model.Base{ID: 7}, Name: "Adult Ticket", Rule: model.TicketRule{Groups: []model.RuleGroup{{GroupName: "Admission"}}},
+	}}
+	missing := catalogRuleGroupMissingFields(products, []CatalogRuleOperation{{
+		Kind: CatalogBatchOpAddCheckpoint, CreateGroup: true, ProductIDs: []uint{7}, CheckpointIDs: []uint{9},
+	}})
+	if len(missing) != 1 || missing[0].Field != "operations[0].group_name" || missing[0].Label != "新规则组名称" {
+		t.Fatalf("new group name was not requested: %+v", missing)
+	}
+	explicit := normalizeAgentCatalogGroupIntent("新增水上乐园规则组来增加这个检票点", []CatalogRuleOperation{{
+		Kind: CatalogBatchOpAddCheckpoint, GroupName: "水上乐园",
+	}})
+	if len(explicit) != 1 || !explicit[0].CreateGroup || explicit[0].GroupName != "水上乐园" {
+		t.Fatalf("explicit new group name was not preserved: %+v", explicit)
+	}
+	continued := inheritAgentCatalogGroupIntent(
+		"水上乐园",
+		model.AgentTask{OperationType: AgentOperationCatalogBatchChange, MissingJSON: `[{"field":"operations[0].group_name"}]`},
+		`{"operations":[{"kind":"add_checkpoints","product_names":["Adult Ticket"],"checkpoint_names":["North Gate"],"create_group":true}]}`,
+		[]CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, GroupName: "Water Park"}},
+	)
+	if len(continued) != 1 || !continued[0].CreateGroup || len(continued[0].ProductNames) != 1 || continued[0].ProductNames[0] != "Adult Ticket" {
+		t.Fatalf("continuation did not retain durable create-group intent: %+v", continued)
+	}
+	if got := agentNewRuleGroupNameAnswer("水上乐园"); got != "水上乐园" {
+		t.Fatalf("short group-name answer was not normalized: %q", got)
+	}
+	continued = inheritAgentCatalogGroupIntent(
+		"",
+		model.AgentTask{OperationType: AgentOperationCatalogBatchChange, MissingJSON: `[{"field":"operations[0].group_name"}]`},
+		`{"operations":[{"kind":"add_checkpoints","product_names":["Adult Ticket"],"checkpoint_names":["North Gate"],"create_group":true}]}`,
+		nil,
+	)
+	if len(continued) != 1 || continued[0].GroupName != "" {
+		t.Fatalf("empty provider operation should remain collecting before the answer is applied: %+v", continued)
+	}
+}
+
 func TestAgentCatalogGroupContinuationAcceptsShortGroupAnswerWithStoredTargets(t *testing.T) {
 	task := model.AgentTask{
 		OperationType: AgentOperationCatalogBatchChange,
