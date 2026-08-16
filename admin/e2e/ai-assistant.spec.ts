@@ -211,8 +211,8 @@ test('AI 助手 provider 失败后可以放弃当前会话并新建任务', asyn
   await expect(assistant.getByRole('alert')).toContainText('模型没有调用受支持的查询或预览工具')
   await expect(assistant.getByRole('button', { name: '新建任务' })).toBeVisible()
   await assistant.getByRole('button', { name: '新建任务' }).click()
-  await page.getByRole('button', { name: '放弃并新建' }).click()
   await expect(input).toHaveValue('')
+  await expect(assistant.getByRole('alert')).toHaveCount(0)
 
   await input.fill('创建一个线上成人票')
   await assistant.getByRole('button', { name: '生成计划' }).click()
