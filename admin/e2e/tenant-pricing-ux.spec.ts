@@ -32,6 +32,8 @@ async function prepareSupplier(page: Page) {
     capabilities: supplierUser.capabilities,
     supplier_business_types: supplierUser.supplier_business_types,
   }))
+  await page.route('**/api/v1/checkpoints*', route => json(route, { data: [], total: 0 }))
+  await page.route('**/api/v1/scenic-areas*', route => json(route, { data: [] }))
   await page.route('**/api/v1/teams?page=*', route => json(route, { data: [], total: 0 }))
   await page.route('**/api/v1/teams/contracts', async route => {
     if (route.request().method() === 'POST') {
