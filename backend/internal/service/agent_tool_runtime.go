@@ -89,6 +89,23 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 	if len(visible) == 0 {
 		return nil, agentInvalid("当前账号没有可用的 AI 工具")
 	}
+	creationIntent := (task.OperationType != AgentOperationCatalogBatchChange && agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentProductCreateIntentWords)) || task.OperationType == AgentOperationTicketProductCreate
+	if creationIntent {
+		// DeepSeek thinking mode accepts automatic tool selection but rejects a
+		// named tool_choice. Limit the registry for creation requests so the
+		// provider can still choose automatically without wandering through
+		// unrelated read-only searches.
+		creationTools := make([]agentToolSpec, 0, 1)
+		for _, spec := range visible {
+			if spec.Name == "prepare_ticket_product_create" {
+				creationTools = append(creationTools, spec)
+			}
+		}
+		visible = creationTools
+		if len(visible) == 0 {
+			return nil, agentInvalid("当前账号没有创建票种预览权限")
+		}
+	}
 	contextJSON := strings.TrimSpace(task.ContextJSON)
 	if contextJSON == "" {
 		contextJSON = `{"operation_type":"pending"}`
@@ -118,11 +135,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 		if err := ai.ReserveUsage(tenantID, config, reservedTokens); err != nil {
 			return nil, err
 		}
-		toolChoice := interface{}("auto")
-		if (task.OperationType != AgentOperationCatalogBatchChange && agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentProductCreateIntentWords)) || task.OperationType == AgentOperationTicketProductCreate {
-			toolChoice = map[string]interface{}{"type": "function", "function": map[string]string{"name": "prepare_ticket_product_create"}}
-		}
-		completion, callErr := ai.chatWithToolsChoice(ctx, config, apiKey, messages, definitions, config.MaxOutputTokens, toolChoice)
+		completion, callErr := ai.chatWithToolsChoice(ctx, config, apiKey, messages, definitions, config.MaxOutputTokens, "auto")
 		if callErr != nil {
 			if auditErr := recordAgentProviderEvent(task, actorUserID, actorRole, config, providerCalls+1, "failed", callErr.Error(), 0, ""); auditErr != nil {
 				return nil, auditErr

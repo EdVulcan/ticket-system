@@ -144,20 +144,23 @@ func TestDeepSeekAutoConfigUsesToolProtocolForNewTasks(t *testing.T) {
 	}
 }
 
-func TestAgentProductCreateForcesNamedPrepareToolChoice(t *testing.T) {
+func TestAgentProductCreateScopesPlannerToPrepareTool(t *testing.T) {
 	fixture := seedCatalogBatchFixture(t)
 	var providerCalls atomic.Int32
 	var receivedToolChoice json.RawMessage
+	var receivedTools []AIToolDefinition
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		providerCalls.Add(1)
 		var body struct {
-			ToolChoice json.RawMessage `json:"tool_choice"`
+			ToolChoice json.RawMessage    `json:"tool_choice"`
+			Tools      []AIToolDefinition `json:"tools"`
 		}
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			http.Error(writer, "invalid request", http.StatusBadRequest)
 			return
 		}
 		receivedToolChoice = append(receivedToolChoice[:0], body.ToolChoice...)
+		receivedTools = append(receivedTools[:0], body.Tools...)
 		writer.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(writer).Encode(toolCallPayload("call-product-prepare", "prepare_ticket_product_create", `{"name":"Child Ticket","product_type":"online","scenic_area_name":"Batch Scenic","price":55,"settlement_price":30,"groups":[{"group_name":"Admission","items":[{"checkpoint_name":"Main Gate","max_per_check_in":1}]}]}`, 24))
 	}))
@@ -175,17 +178,11 @@ func TestAgentProductCreateForcesNamedPrepareToolChoice(t *testing.T) {
 	if view.State != AgentTaskAwaitingConfirmation || !view.CanConfirm || providerCalls.Load() != 1 {
 		t.Fatalf("product task did not converge to preview: view=%+v provider_calls=%d", view, providerCalls.Load())
 	}
-	var choice struct {
-		Type     string `json:"type"`
-		Function struct {
-			Name string `json:"name"`
-		} `json:"function"`
+	if string(receivedToolChoice) != `"auto"` {
+		t.Fatalf("creation planner must use automatic tool choice for thinking-compatible providers: %s", string(receivedToolChoice))
 	}
-	if err := json.Unmarshal(receivedToolChoice, &choice); err != nil {
-		t.Fatalf("named tool choice was not JSON: %v", err)
-	}
-	if choice.Type != "function" || choice.Function.Name != "prepare_ticket_product_create" {
-		t.Fatalf("unexpected named tool choice: %s", string(receivedToolChoice))
+	if len(receivedTools) != 1 || receivedTools[0].Function.Name != "prepare_ticket_product_create" {
+		t.Fatalf("creation planner exposed unrelated tools: %+v", receivedTools)
 	}
 }
 
