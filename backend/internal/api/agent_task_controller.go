@@ -13,6 +13,18 @@ type AgentTaskController struct {
 	Service service.AgentTaskService
 }
 
+// Availability is tenant-wide assistant readiness. It deliberately does not
+// require a scenic supplier capability: read-only tools are filtered later by
+// their own permission, capability, and business-type declarations.
+func (c *AgentTaskController) Availability(ctx *gin.Context) {
+	status, err := (&service.PlatformAIService{}).Availability(ctx.GetUint("tenant_id"))
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, status)
+}
+
 func (c *AgentTaskController) Submit(ctx *gin.Context) {
 	var req service.AgentTaskRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {

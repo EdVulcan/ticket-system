@@ -14,6 +14,7 @@ const (
 	agentModuleOrders    = "orders"
 	agentModuleInventory = "inventory"
 	agentModuleReports   = "reports"
+	agentModuleTeams     = "teams"
 )
 
 type agentModuleManifest struct {
@@ -78,6 +79,13 @@ var agentModuleManifests = []agentModuleManifest{
 		Summary:        "按收款期、首次有效核销日期生成的服务器报表事实",
 		KnowledgeFiles: []string{"skills/agent_reports_read.md"},
 		ToolNames:      []string{"query_sales_summary", "query_verification_summary"},
+	},
+	{
+		ID:             agentModuleTeams,
+		Label:          "旅行社团队",
+		Summary:        "合同、团队计划、入园确认和结算账户的关系范围内只读事实",
+		KnowledgeFiles: []string{"skills/agent_teams_read.md"},
+		ToolNames:      []string{"query_team_contracts", "query_team_groups", "query_team_settlement_summary", "query_team_account_summary"},
 	},
 }
 

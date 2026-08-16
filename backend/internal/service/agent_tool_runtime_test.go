@@ -72,7 +72,8 @@ func TestAgentToolRegistryContainsOnlyReadOrPreviewOperations(t *testing.T) {
 		if !spec.ReadOnly && !spec.PreviewOnly {
 			t.Fatalf("unsafe executable tool registered: %s", spec.Name)
 		}
-		if strings.Contains(spec.Name, "refund") || strings.Contains(spec.Name, "payment") || strings.Contains(spec.Name, "settlement") || strings.Contains(spec.Name, "channel") {
+		if strings.Contains(spec.Name, "refund") || strings.Contains(spec.Name, "payment") || strings.Contains(spec.Name, "channel") ||
+			(strings.Contains(spec.Name, "settlement") && spec.ActionKind != "query") {
 			t.Fatalf("high-risk tool leaked into initial registry: %s", spec.Name)
 		}
 	}
@@ -104,6 +105,14 @@ func TestAgentToolTaskQueriesOnlyCurrentTenantAndPersistsAudit(t *testing.T) {
 	}
 	if view.ProtocolMode != agentProtocolToolV1 || view.Message == "" {
 		t.Fatalf("unexpected tool query view: %+v", view)
+	}
+	var persisted agentQueryResultSet
+	if len(view.Result) == 0 || json.Unmarshal(view.Result, &persisted) != nil || len(persisted.QueryResults) != 1 {
+		t.Fatalf("query result was not persisted on task view: %s", string(view.Result))
+	}
+	var result agentQueryResult
+	if err := json.Unmarshal(persisted.QueryResults[0], &result); err != nil || result.Tool != "search_ticket_products" || result.Returned == 0 {
+		t.Fatalf("unexpected persisted query result: %s", string(persisted.QueryResults[0]))
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("query should use one tool call and one final response, got %d provider calls", calls.Load())

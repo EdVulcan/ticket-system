@@ -181,7 +181,18 @@ const configuredSupplierBusinessTypes = computed(() => configuredSupplierBusines
 const hasSupplierBusinessType = (value: string) => activeSupplierBusinessTypes.value.has(value)
 const hasConfiguredSupplierBusinessType = (value: string) => configuredSupplierBusinessTypes.value.has(value)
 const can = (permission: string) => hasPermission(user.value, permission)
-const showAIAssistant = computed(() => !isLoginPage.value && !isSuperAdmin.value && hasCapability('supplier') && hasSupplierBusinessType('scenic') && can('agent.use'))
+// The server remains authoritative for every registered AI tool. This only
+// controls whether a tenant user can discover the assistant: scenic suppliers
+// retain the existing catalog preview entry, while distributors and travel
+// agencies may enter for the read-only order/report tools they can already use.
+const showAIAssistant = computed(() => {
+  if (isLoginPage.value || isSuperAdmin.value || !can('agent.use')) return false
+  if (hasCapability('supplier') && hasSupplierBusinessType('scenic')) return true
+  const hasReadOnlyAgentSurface = can('orders.read') || can('reports.read') ||
+    (hasCapability('distributor') && (can('distribution.read') || can('settlements.read'))) ||
+    (hasCapability('travel_agency') && (can('teams.read') || can('settlements.read') || can('finance.read')))
+  return hasReadOnlyAgentSurface && hasAnyCapability('distributor', 'travel_agency')
+})
 
 const navGroups = computed<NavGroup[]>(() => {
   const overview: NavGroup = { label: '概览', items: [{ path: '/', label: '控制台', icon: Odometer }] }

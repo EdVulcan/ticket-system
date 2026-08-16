@@ -23,7 +23,7 @@ func TestAgentCapabilityRegistryIsVersionedAndToolSafe(t *testing.T) {
 			t.Fatalf("knowledge pack for %q does not contain the system contract", operationType)
 		}
 	}
-	for _, moduleID := range []string{agentModuleOrders, agentModuleInventory, agentModuleReports} {
+	for _, moduleID := range []string{agentModuleOrders, agentModuleInventory, agentModuleReports, agentModuleDistribution, agentModuleTeams} {
 		pack, err := agentKnowledgePackForModule(moduleID)
 		if err != nil {
 			t.Fatalf("load read-only module pack %q: %v", moduleID, err)

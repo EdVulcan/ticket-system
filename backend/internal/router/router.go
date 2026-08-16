@@ -175,6 +175,7 @@ func InitRouter(r *gin.Engine) {
 	// capability, business-type, and domain-permission filters at runtime.
 	agentTaskGroup.Use(middleware.RequireTenantPermission(authz.PermissionAgentUse))
 	{
+		agentTaskGroup.GET("/availability", agentTaskController.Availability)
 		agentTaskGroup.POST("", agentTaskController.Submit)
 		agentTaskGroup.GET("/:taskID", agentTaskController.Get)
 		agentTaskGroup.POST("/:taskID/cancel", agentTaskController.Cancel)

@@ -31,8 +31,8 @@ validation.
 | orders | query | Tenant-owned order summaries and order items; no order, payment, or refund mutation |
 | reports | query | Sales-period restatement and first-effective verification summaries; no financial mutation |
 | hotel | knowledge only | Scenic hotel packages, entitlements, reservations, and stay fulfillment; no AI tool is registered yet |
-| distribution | knowledge only | Offers, listings, channel authorization, and distributor ownership; no AI tool is registered yet |
-| teams | knowledge only | Travel-agency contracts, groups, rosters, admission, and team settlement; no AI tool is registered yet |
+| distribution | query | Distributor-owned partner, authorized listing, fulfillment, and settlement summaries; no offer, channel, inventory, or settlement mutation |
+| teams | query | Relationship-scoped travel-team contracts, group/admission/confirmation aggregates, settlement summaries, and account summaries; no roster, admission, payment, or settlement mutation |
 | channels | knowledge only | Ctrip/Xiaohongshu integration state; no external status mutation tool is registered |
 | finance | knowledge only | Payments, refunds, ledgers, and settlements; no AI tool is registered |
 
@@ -71,9 +71,11 @@ validation.
 - Existing sold rights and historical financial facts are never rewritten by a
   product or rule preview.
 - A request that combines unrelated modules or crosses a high-risk boundary
-  must be split or refused. Payment, refund, settlement, channel credentials,
-  permissions, external platform status, device commands, SQL, HTTP, code
+  must be split or refused. Payment, refund, settlement confirmation or
+  adjustment, channel credentials, permissions, external platform status,
+  device commands, admission execution, roster replacement, SQL, HTTP, code
   execution, automatic publishing, and automatic distribution are excluded.
+  Team query summaries remain allowed only as server-projected read facts.
 
 ## Extension contract
 

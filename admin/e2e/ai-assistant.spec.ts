@@ -37,7 +37,7 @@ test('AI 助手请求失败时保留输入并支持重试，且不会重复提�
       })
       return
     }
-    if (url.endsWith('/catalog/batch-changes/ai-status')) {
+    if (url.endsWith('/agent/availability')) {
       await json(route, { enabled: true, provider: 'deepseek', requests_remaining: 100 })
       return
     }
@@ -101,7 +101,7 @@ test('AI 助手预览明确区分窗口票类型和未上架状态', async ({ pa
       })
       return
     }
-    if (url.endsWith('/catalog/batch-changes/ai-status')) {
+    if (url.endsWith('/agent/availability')) {
       await json(route, { enabled: true, provider: 'deepseek', requests_remaining: 100 })
       return
     }
@@ -179,7 +179,7 @@ test('AI 助手 provider 失败后可以放弃当前会话并新建任务', asyn
       })
       return
     }
-    if (url.endsWith('/catalog/batch-changes/ai-status')) {
+    if (url.endsWith('/agent/availability')) {
       await json(route, { enabled: true, provider: 'deepseek', requests_remaining: 100 })
       return
     }
@@ -241,7 +241,7 @@ test('AI 助手可放弃过期任务并从新任务开始', async ({ page }) => 
       })
       return
     }
-    if (url.endsWith('/catalog/batch-changes/ai-status')) {
+    if (url.endsWith('/agent/availability')) {
       await json(route, { enabled: true, provider: 'deepseek', requests_remaining: 100 })
       return
     }
@@ -309,7 +309,7 @@ test('AI provider 未返回最终答案时提示使用自动输出额度', async
       })
       return
     }
-    if (url.endsWith('/catalog/batch-changes/ai-status')) {
+    if (url.endsWith('/agent/availability')) {
       await json(route, { enabled: true, provider: 'deepseek', requests_remaining: 97 })
       return
     }

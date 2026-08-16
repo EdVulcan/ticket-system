@@ -301,7 +301,12 @@ type agentPlanningResult struct {
 	Model            string
 	Availability     *AIAvailabilityView
 	ResponseText     string
+	QueryResults     []json.RawMessage
 	CompoundChildren []agentCompoundChildPlan
+}
+
+type agentQueryResultSet struct {
+	QueryResults []json.RawMessage `json:"query_results"`
 }
 
 type AgentTaskService struct {
@@ -408,6 +413,14 @@ func (s *AgentTaskService) Submit(ctx context.Context, tenantID, actorUserID uin
 		locked.PreviewJSON = planning.PreviewJSON
 		locked.PlanHash = planning.PlanHash
 		locked.LinkedPlanID = planning.LinkedPlanID
+		locked.ResultJSON = ""
+		if len(planning.QueryResults) > 0 {
+			resultJSON, marshalErr := json.Marshal(agentQueryResultSet{QueryResults: planning.QueryResults})
+			if marshalErr != nil {
+				return marshalErr
+			}
+			locked.ResultJSON = string(resultJSON)
+		}
 		locked.ProtocolMode = normalizeAgentProtocolMode(locked.ProtocolMode)
 		locked.ResponseText = planning.ResponseText
 		locked.ErrorMessage = ""

@@ -25,14 +25,18 @@ type agentToolRequest struct {
 type agentToolHandler func(*AgentTaskService, agentToolRequest) (agentToolExecution, error)
 
 var agentToolHandlers = map[string]agentToolHandler{
-	"search_scenic_areas":        executeAgentScenicAreaQuery,
-	"search_checkpoints":         executeAgentCheckpointQuery,
-	"search_ticket_products":     executeAgentProductQuery,
-	"get_ticket_product_rules":   executeAgentProductRuleQuery,
-	"search_orders":              executeAgentOrderQuery,
-	"query_ticket_inventory":     executeAgentTicketInventoryQuery,
-	"query_sales_summary":        executeAgentSalesSummaryQuery,
-	"query_verification_summary": executeAgentVerificationSummaryQuery,
+	"search_scenic_areas":           executeAgentScenicAreaQuery,
+	"search_checkpoints":            executeAgentCheckpointQuery,
+	"search_ticket_products":        executeAgentProductQuery,
+	"get_ticket_product_rules":      executeAgentProductRuleQuery,
+	"search_orders":                 executeAgentOrderQuery,
+	"query_ticket_inventory":        executeAgentTicketInventoryQuery,
+	"query_sales_summary":           executeAgentSalesSummaryQuery,
+	"query_verification_summary":    executeAgentVerificationSummaryQuery,
+	"query_team_contracts":          executeAgentTeamContractQuery,
+	"query_team_groups":             executeAgentTeamGroupQuery,
+	"query_team_settlement_summary": executeAgentTeamSettlementQuery,
+	"query_team_account_summary":    executeAgentTeamAccountQuery,
 }
 
 func agentToolHandlerFor(name string) (agentToolHandler, bool) {

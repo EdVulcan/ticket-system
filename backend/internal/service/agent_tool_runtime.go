@@ -53,6 +53,10 @@ var agentToolSpecs = []agentToolSpec{
 	{Name: "query_ticket_inventory", Description: "查询当前租户线上票种按日期和时段的库存事实，返回容量、已售和剩余量，不执行预占或修改", ModuleID: agentModuleInventory, ActionKind: "query", Permission: authz.PermissionOperationsRead, Capability: "supplier", BusinessType: "scenic", ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"product_name":{"type":"string","maxLength":100},"start_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"end_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"stock_slot":{"type":"string","maxLength":50},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
 	{Name: "query_sales_summary", Description: "查询当前租户按原收款期重述退款后的销售汇总，返回每日售券、退款和净额，不修改报表事实", ModuleID: agentModuleReports, ActionKind: "query", Permission: authz.PermissionReportsRead, CapabilityAny: []string{"supplier", "distributor", "travel_agency"}, ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"start_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"end_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}},"additionalProperties":false}`)},
 	{Name: "query_verification_summary", Description: "查询当前供应商按首次有效核销日期汇总的核销事实，已被成功退款的核销不再计入收入", ModuleID: agentModuleReports, ActionKind: "query", Permission: authz.PermissionReportsRead, Capability: "supplier", BusinessType: "scenic", ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"start_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"end_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}},"additionalProperties":false}`)},
+	{Name: "query_team_contracts", Description: "查询当前旅行社或供应商参与的团队合同摘要，只返回对方名称、合同状态、账期、授信额度和价目条数，不返回产品价格明细或内部编号", ModuleID: agentModuleTeams, ActionKind: "query", Permission: authz.PermissionTeamsRead, CapabilityAny: []string{"supplier", "travel_agency"}, ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"search":{"type":"string","maxLength":100},"status":{"type":"string","enum":["active","suspended"]},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
+	{Name: "query_team_groups", Description: "查询当前旅行社或供应商有关系的团队计划、人数状态、入园批次和确认汇总；不返回名单、票码、设备或操作员信息", ModuleID: agentModuleTeams, ActionKind: "query", Permission: authz.PermissionTeamsRead, CapabilityAny: []string{"supplier", "travel_agency"}, ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"search":{"type":"string","maxLength":100},"status":{"type":"string","enum":["draft","confirmed","partial_entry","entered","cancelled"]},"start_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"end_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
+	{Name: "query_team_settlement_summary", Description: "查询当前旅行社或供应商参与的团队结算摘要，仅返回状态、金额、到期和完成时间；不返回付款凭证、争议原因或调整明细，不能确认或付款", ModuleID: agentModuleTeams, ActionKind: "query", Permission: authz.PermissionSettlementsRead, CapabilityAny: []string{"supplier", "travel_agency"}, ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","enum":["draft","supplier_confirmed","confirmed","payment_submitted","disputed","paid"]},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
+	{Name: "query_team_account_summary", Description: "查询当前旅行社或供应商的团队合作账户汇总，只返回授信使用、待结算、已结算和争议计数；不执行充值、付款、结算确认或调整", ModuleID: agentModuleTeams, ActionKind: "query", Permission: authz.PermissionFinanceRead, CapabilityAny: []string{"supplier", "travel_agency"}, ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
 	{Name: "prepare_ticket_product_create", Description: "准备创建一个尚未上线的票种预览，不执行创建和分发。创建请求应直接调用此工具；服务端会按当前租户精确解析景区和检票点，并返回缺失字段或候选项", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"product_type":{"type":"string","enum":["online","offline"]},"scenic_area_name":{"type":"string"},"price":{"type":["number","null"]},"settlement_price":{"type":["number","null"]},"validity_type":{"type":"string"},"validity_days":{"type":["integer","null"]},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"rule_name":{"type":"string"},"groups":{"type":"array","items":{"type":"object","properties":{"group_name":{"type":"string"},"max_total_check_in":{"type":"integer"},"items":{"type":"array","items":{"type":"object","properties":{"checkpoint_name":{"type":"string"},"max_per_check_in":{"type":"integer"}},"additionalProperties":false}}},"additionalProperties":false}},"code_mode":{"type":"string"},"stock_type":{"type":"string"},"daily_stock":{"type":["integer","null"]},"real_name_required":{"type":["boolean","null"]},"refund_type":{"type":"string"},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":["integer","null"]},"limit_per_id":{"type":["integer","null"]}},"additionalProperties":false}`)},
 	{Name: "prepare_ticket_product_update", Description: "准备修改当前租户仍未上架、未分销票种的基础信息预览，不执行修改。不能修改票种类型、所属景区、上架状态、分销授权或检票规则", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","required":["product_name","changes"],"properties":{"product_name":{"type":"string","minLength":1,"maxLength":100},"changes":{"type":"object","properties":{"name":{"type":"string","maxLength":100},"price":{"type":"number","minimum":0},"settlement_price":{"type":"number","minimum":0},"validity_type":{"type":"string","enum":["date","days"]},"validity_days":{"type":"integer","minimum":0},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"code_mode":{"type":"string","enum":["order","ticket"]},"stock_type":{"type":"string","enum":["unlimited","daily","total"]},"daily_stock":{"type":"integer","minimum":0},"real_name_required":{"type":"boolean"},"refund_type":{"type":"string","enum":["no_refund","free","ladder"]},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":"integer","minimum":0},"limit_per_id":{"type":"integer","minimum":0}},"additionalProperties":false}},"additionalProperties":false}`)},
 	{Name: "prepare_ticket_product_batch_update", Description: "准备批量修改当前租户仍未上架、未分销票种的共同基础信息预览，不执行修改。必须提供至少两个准确票种名称；不能修改统一名称、票种类型、所属景区、上架状态、分销授权或检票规则", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","required":["product_names","changes"],"properties":{"product_names":{"type":"array","minItems":2,"maxItems":50,"items":{"type":"string","minLength":1,"maxLength":100}},"changes":{"type":"object","properties":{"price":{"type":"number","minimum":0},"settlement_price":{"type":"number","minimum":0},"validity_type":{"type":"string","enum":["date","days"]},"validity_days":{"type":"integer","minimum":0},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"code_mode":{"type":"string","enum":["order","ticket"]},"stock_type":{"type":"string","enum":["unlimited","daily","total"]},"daily_stock":{"type":"integer","minimum":0},"real_name_required":{"type":"boolean"},"refund_type":{"type":"string","enum":["no_refund","free","ladder"]},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":"integer","minimum":0},"limit_per_id":{"type":"integer","minimum":0}},"additionalProperties":false}},"additionalProperties":false}`)},
@@ -199,6 +203,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 	definitions := agentToolDefinitions(visible)
 	toolCalls := 0
 	successfulToolCalls := 0
+	queryResults := make([]json.RawMessage, 0)
 	for providerCalls := 0; providerCalls < maxAgentProviderCalls; providerCalls++ {
 		reservedTokens := int64((len([]byte(systemPrompt)) + len([]byte(input))) / 4)
 		reservedTokens += aiOutputReservationTokens(config)
@@ -227,7 +232,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 			}
 			var prior agentTaskContext
 			_ = json.Unmarshal([]byte(contextJSON), &prior)
-			result := &agentPlanningResult{OperationType: strings.TrimSpace(task.OperationType), Context: prior, ResponseText: strings.TrimSpace(completion.Message.Content), Provider: config.Provider, Model: config.Model}
+			result := &agentPlanningResult{OperationType: strings.TrimSpace(task.OperationType), Context: prior, ResponseText: strings.TrimSpace(completion.Message.Content), Provider: config.Provider, Model: config.Model, QueryResults: queryResults}
 			if result.OperationType == "" {
 				result.OperationType = AgentOperationPending
 				result.Context.OperationType = AgentOperationPending
@@ -259,13 +264,25 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 				return nil, invokeErr
 			}
 			successfulToolCalls++
+			if isAgentQueryResultJSON(execution.ResultJSON) {
+				queryResults = append(queryResults, json.RawMessage(execution.ResultJSON))
+			}
 			if execution.Planning != nil {
+				execution.Planning.QueryResults = queryResults
 				return execution.Planning, nil
 			}
 			messages = append(messages, AIMessage{Role: "tool", ToolCallID: call.ID, Content: execution.ResultJSON})
 		}
 	}
 	return nil, agentInvalid("AI 任务需要的工具调用次数过多，请拆分请求")
+}
+
+func isAgentQueryResultJSON(value string) bool {
+	var result agentQueryResult
+	if err := json.Unmarshal([]byte(value), &result); err != nil {
+		return false
+	}
+	return result.SchemaVersion == agentQuerySchemaVersion && strings.TrimSpace(result.Module) != "" && strings.TrimSpace(result.Tool) != ""
 }
 
 func recordAgentProviderEvent(task model.AgentTask, actorUserID uint, actorRole string, config model.PlatformAIConfig, attempt int, status, message string, tokenCount int64, providerRequestID string) error {
