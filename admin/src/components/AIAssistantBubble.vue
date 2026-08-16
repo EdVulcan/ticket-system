@@ -77,7 +77,29 @@
             <el-tag size="small" :type="task.can_confirm ? 'warning' : 'info'" effect="plain">{{ statusText(task.state) }}</el-tag>
           </div>
           <p class="original-request">“{{ task.input_text }}”</p>
-          <template v-if="isProductPreview">
+          <template v-if="isProductBatchUpdatePreview">
+            <div class="operation-summary product-batch-summary">
+              <div><span>批量票种</span><strong>{{ preview.product_count || preview.lines?.length || 0 }} 个</strong></div>
+              <div><span>共同变更</span><strong>{{ preview.changes?.length || 0 }} 项</strong></div>
+            </div>
+            <div class="batch-update-list">
+              <article v-for="line in preview.lines || []" :key="line.product_name" class="diff-row">
+                <div class="diff-heading"><strong>{{ line.product_name }}</strong><span>{{ line.scenic_area_name || '-' }}</span></div>
+                <div v-for="row in productUpdateRows" :key="`${line.product_name}-${row.key}`" class="product-update-row">
+                  <span class="product-update-label">{{ row.label }}</span>
+                  <div class="product-update-values">
+                    <div><small>变更前</small><strong>{{ row.format(line.before) }}</strong></div>
+                    <el-icon><Right /></el-icon>
+                    <div><small>变更后</small><strong>{{ row.format(line.after) }}</strong></div>
+                  </div>
+                </div>
+              </article>
+            </div>
+            <ul v-if="preview.safety?.length" class="assumption-list">
+              <li v-for="item in preview.safety" :key="item">{{ item }}</li>
+            </ul>
+          </template>
+          <template v-else-if="isProductPreview">
             <div class="product-summary">
               <div><span>票种名称</span><strong>{{ productPreview.product?.name }}</strong></div>
               <div><span>所属景区</span><strong>{{ productPreview.scenic_area_name || '-' }}</strong></div>
@@ -218,6 +240,8 @@ const errorActionLabel = computed(() => errorKind.value === 'auth' ? '重新登�
 const providerLabel = computed(() => `${task.value?.provider || availability.value?.provider || '平台模型'}${task.value?.model ? ` / ${task.value.model}` : ''}`)
 const preview = computed(() => task.value?.preview || {})
 const isProductUpdatePreview = computed(() => preview.value?.operation_type === 'ticket_product_update')
+const isProductBatchUpdatePreview = computed(() => preview.value?.operation_type === 'ticket_product_batch_update')
+const isAnyProductUpdatePreview = computed(() => isProductUpdatePreview.value || isProductBatchUpdatePreview.value)
 const productPreview = computed(() => {
   if (preview.value?.operation_type === 'ticket_product_create') return preview.value
   if (isProductUpdatePreview.value) return { ...preview.value, product: preview.value.after }
@@ -225,7 +249,7 @@ const productPreview = computed(() => {
 })
 const isProductPreview = computed(() => preview.value?.operation_type === 'ticket_product_create' || isProductUpdatePreview.value)
 const productUpdateRows = computed(() => {
-  if (!isProductUpdatePreview.value) return []
+  if (!isAnyProductUpdatePreview.value) return []
   const labels: Array<{ key: string, label: string, format: (product: any) => string }> = [
     { key: 'name', label: '票种名称', format: (product) => product?.name || '-' },
     { key: 'price', label: '售价', format: (product) => money(product?.price) },
@@ -485,6 +509,8 @@ const startNewTask = async () => {
 .product-detail-grid strong { margin-top: 3px; overflow-wrap: anywhere; color: #344054; font-size: 11px; line-height: 16px; }
 .rule-preview { padding: 10px; border: 1px solid #e2e7ee; border-radius: 5px; }
 .product-update-diff { margin-top: 10px; padding: 10px; border: 1px solid #e2e7ee; border-radius: 5px; }
+.product-batch-summary { margin-bottom: 10px; }
+.batch-update-list { display: flex; flex-direction: column; gap: 9px; }
 .product-update-row { padding-top: 8px; }
 .product-update-row + .product-update-row { margin-top: 8px; border-top: 1px solid #edf0f4; }
 .product-update-label { display: block; color: #667085; font-size: 10px; }

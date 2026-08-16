@@ -197,13 +197,13 @@ func TestPostgresSchema91MigratesLegacyAIRequestTimeout(t *testing.T) {
 	}
 }
 
-func TestPostgresSchema95AgentTaskOwnershipGuard(t *testing.T) {
+func TestPostgresSchema96AgentTaskOwnershipGuard(t *testing.T) {
 	db := testdb.Open(t)
 	if err := runMigrations(db); err != nil {
 		t.Fatal(err)
 	}
-	if CurrentPostgresSchemaVersion < 95 {
-		t.Fatalf("current schema version=%d, want at least 95", CurrentPostgresSchemaVersion)
+	if CurrentPostgresSchemaVersion < 96 {
+		t.Fatalf("current schema version=%d, want at least 96", CurrentPostgresSchemaVersion)
 	}
 	first := Tenant{Name: "Agent Task Guard A", SystemCode: "AGENT-TASK-GUARD-A", SecretKey: "a", Status: "active"}
 	second := Tenant{Name: "Agent Task Guard B", SystemCode: "AGENT-TASK-GUARD-B", SecretKey: "b", Status: "active"}
@@ -223,6 +223,13 @@ func TestPostgresSchema95AgentTaskOwnershipGuard(t *testing.T) {
 	validUpdate.IdempotencyKey = "agent-task-guard-update-key"
 	if err := db.Create(&validUpdate).Error; err != nil {
 		t.Fatalf("agent product update task was rejected: %v", err)
+	}
+	validBatchUpdate := valid
+	validBatchUpdate.ID = 0
+	validBatchUpdate.OperationType = "ticket_product_batch_update"
+	validBatchUpdate.IdempotencyKey = "agent-task-guard-batch-update-key"
+	if err := db.Create(&validBatchUpdate).Error; err != nil {
+		t.Fatalf("agent batch product update task was rejected: %v", err)
 	}
 	unknownTenant := valid
 	unknownTenant.ID = 0

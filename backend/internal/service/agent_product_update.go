@@ -390,18 +390,56 @@ func productStatusLabel(status string) string {
 
 func productUpdateChangeLabels(changes agentProductUpdateChanges) []string {
 	labels := make([]string, 0, 17)
-	for _, item := range []struct {
-		value interface{}
-		label string
-	}{
-		{changes.Name, "票种名称"}, {changes.Price, "售价"}, {changes.SettlementPrice, "结算价"}, {changes.ValidityType, "有效期类型"},
-		{changes.ValidityDays, "有效天数"}, {changes.ValidityStart, "有效期开始"}, {changes.ValidityEnd, "有效期结束"}, {changes.CodeMode, "出票方式"},
-		{changes.StockType, "库存类型"}, {changes.DailyStock, "每日库存"}, {changes.RealNameRequired, "实名要求"}, {changes.RefundType, "退款类型"},
-		{changes.RefundRule, "退款说明"}, {changes.Tags, "标签"}, {changes.GateVoiceCode, "闸机语音"}, {changes.LimitPerPhone, "手机号限购"}, {changes.LimitPerID, "证件限购"},
-	} {
-		if item.value != nil {
-			labels = append(labels, item.label)
-		}
+	if changes.Name != nil {
+		labels = append(labels, "票种名称")
+	}
+	if changes.Price != nil {
+		labels = append(labels, "售价")
+	}
+	if changes.SettlementPrice != nil {
+		labels = append(labels, "结算价")
+	}
+	if changes.ValidityType != nil {
+		labels = append(labels, "有效期类型")
+	}
+	if changes.ValidityDays != nil {
+		labels = append(labels, "有效天数")
+	}
+	if changes.ValidityStart != nil {
+		labels = append(labels, "有效期开始")
+	}
+	if changes.ValidityEnd != nil {
+		labels = append(labels, "有效期结束")
+	}
+	if changes.CodeMode != nil {
+		labels = append(labels, "出票方式")
+	}
+	if changes.StockType != nil {
+		labels = append(labels, "库存类型")
+	}
+	if changes.DailyStock != nil {
+		labels = append(labels, "每日库存")
+	}
+	if changes.RealNameRequired != nil {
+		labels = append(labels, "实名要求")
+	}
+	if changes.RefundType != nil {
+		labels = append(labels, "退款类型")
+	}
+	if changes.RefundRule != nil {
+		labels = append(labels, "退款说明")
+	}
+	if changes.Tags != nil {
+		labels = append(labels, "标签")
+	}
+	if changes.GateVoiceCode != nil {
+		labels = append(labels, "闸机语音")
+	}
+	if changes.LimitPerPhone != nil {
+		labels = append(labels, "手机号限购")
+	}
+	if changes.LimitPerID != nil {
+		labels = append(labels, "证件限购")
 	}
 	return labels
 }

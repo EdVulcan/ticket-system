@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 95
+const CurrentPostgresSchemaVersion = 96
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -353,7 +353,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "previewable unpublished product updates for AI tasks",
+		Name:      "batch previewable unpublished product updates for AI tasks",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -563,7 +563,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 			IF NEW.tenant_id = 0
 			   OR NEW.actor_role = ''
 			   OR COALESCE(NEW.protocol_mode, 'legacy_json') NOT IN ('legacy_json','tool_v1')
-			   OR NEW.operation_type NOT IN ('pending','catalog_batch_change','ticket_product_create','ticket_product_update')
+			   OR NEW.operation_type NOT IN ('pending','catalog_batch_change','ticket_product_create','ticket_product_update','ticket_product_batch_update')
 			   OR NEW.state NOT IN ('collecting','ready_for_preview','awaiting_confirmation','executing','completed','failed','expired','cancelled')
 			   OR COALESCE(NEW.input_text, '') = ''
 			   OR COALESCE(NEW.context_json, '') = ''

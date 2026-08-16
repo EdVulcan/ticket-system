@@ -72,6 +72,12 @@ func TestAgentProductUpdateRejectsOnlineOrDistributedProduct(t *testing.T) {
 	if _, _, err := resolveProductUpdateDraft(model.DB, fixture.tenant.ID, draft); err == nil {
 		t.Fatal("online product was accepted for AI update")
 	}
+	if err := model.DB.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", fixture.product.ID, fixture.tenant.ID).Updates(map[string]interface{}{"status": "offline", "source_product_id": 999}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := resolveProductUpdateDraft(model.DB, fixture.tenant.ID, draft); err == nil {
+		t.Fatal("distributed product was accepted for AI update")
+	}
 }
 
 func TestAgentProductUpdateEnvelopeRejectsRuleMutation(t *testing.T) {
