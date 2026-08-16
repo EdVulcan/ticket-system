@@ -383,7 +383,7 @@ type aiChatRequest struct {
 	MaxTokens      int                `json:"max_tokens,omitempty"`
 	ResponseFormat *aiResponseFormat  `json:"response_format,omitempty"`
 	Tools          []AIToolDefinition `json:"tools,omitempty"`
-	ToolChoice     string             `json:"tool_choice,omitempty"`
+	ToolChoice     interface{}        `json:"tool_choice,omitempty"`
 	Stream         bool               `json:"stream"`
 }
 
@@ -414,6 +414,10 @@ func (s *PlatformAIService) chat(ctx context.Context, config model.PlatformAICon
 // raw response shape. Tool arguments remain untrusted and are validated by
 // the agent runtime before any handler is invoked.
 func (s *PlatformAIService) chatWithTools(ctx context.Context, config model.PlatformAIConfig, apiKey string, messages []AIMessage, tools []AIToolDefinition, maxTokens int) (*AICompletionResult, error) {
+	return s.chatWithToolsChoice(ctx, config, apiKey, messages, tools, maxTokens, "auto")
+}
+
+func (s *PlatformAIService) chatWithToolsChoice(ctx context.Context, config model.PlatformAIConfig, apiKey string, messages []AIMessage, tools []AIToolDefinition, maxTokens int, toolChoice interface{}) (*AICompletionResult, error) {
 	if len(tools) == 0 {
 		return nil, errors.New("AI tool registry is empty")
 	}
@@ -427,7 +431,7 @@ func (s *PlatformAIService) chatWithTools(ctx context.Context, config model.Plat
 	if config.MaxOutputTokens > 0 && (maxTokens <= 0 || maxTokens > config.MaxOutputTokens) {
 		maxTokens = config.MaxOutputTokens
 	}
-	body, err := json.Marshal(aiChatRequest{Model: config.Model, Messages: messages, Temperature: config.Temperature, MaxTokens: maxTokens, Tools: tools, ToolChoice: "auto", Stream: false})
+	body, err := json.Marshal(aiChatRequest{Model: config.Model, Messages: messages, Temperature: config.Temperature, MaxTokens: maxTokens, Tools: tools, ToolChoice: toolChoice, Stream: false})
 	if err != nil {
 		return nil, err
 	}

@@ -45,7 +45,7 @@ var agentToolSpecs = []agentToolSpec{
 	{Name: "search_checkpoints", Description: "查询当前租户景区下的检票点名称", Permission: authz.PermissionOnsiteRead, Capability: "supplier", BusinessType: "scenic", ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
 	{Name: "search_ticket_products", Description: "查询当前租户的票种目录，不返回数据库编号", Permission: authz.PermissionCatalogRead, Capability: "supplier", BusinessType: "scenic", ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
 	{Name: "get_ticket_product_rules", Description: "查看当前租户某个票种的检票规则，不返回数据库编号", Permission: authz.PermissionCatalogRead, Capability: "supplier", BusinessType: "scenic", ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","required":["product_name"],"properties":{"product_name":{"type":"string","minLength":1,"maxLength":100}},"additionalProperties":false}`)},
-	{Name: "prepare_ticket_product_create", Description: "准备创建一个尚未上线的票种预览，不执行创建和分发", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"product_type":{"type":"string","enum":["online","offline"]},"scenic_area_name":{"type":"string"},"price":{"type":["number","null"]},"settlement_price":{"type":["number","null"]},"validity_type":{"type":"string"},"validity_days":{"type":["integer","null"]},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"rule_name":{"type":"string"},"groups":{"type":"array"},"code_mode":{"type":"string"},"stock_type":{"type":"string"},"daily_stock":{"type":["integer","null"]},"real_name_required":{"type":["boolean","null"]},"refund_type":{"type":"string"},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":["integer","null"]},"limit_per_id":{"type":["integer","null"]}},"additionalProperties":false}`)},
+	{Name: "prepare_ticket_product_create", Description: "准备创建一个尚未上线的票种预览，不执行创建和分发。创建请求应直接调用此工具；服务端会按当前租户精确解析景区和检票点，并返回缺失字段或候选项", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"product_type":{"type":"string","enum":["online","offline"]},"scenic_area_name":{"type":"string"},"price":{"type":["number","null"]},"settlement_price":{"type":["number","null"]},"validity_type":{"type":"string"},"validity_days":{"type":["integer","null"]},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"rule_name":{"type":"string"},"groups":{"type":"array"},"code_mode":{"type":"string"},"stock_type":{"type":"string"},"daily_stock":{"type":["integer","null"]},"real_name_required":{"type":["boolean","null"]},"refund_type":{"type":"string"},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":["integer","null"]},"limit_per_id":{"type":["integer","null"]}},"additionalProperties":false}`)},
 	{Name: "prepare_catalog_rule_change", Description: "准备票种检票规则变更预览，不执行修改", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, Parameters: json.RawMessage(`{"type":"object","required":["operations"],"properties":{"operations":{"type":"array","minItems":1,"maxItems":50,"items":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["add_checkpoints","remove_checkpoints","set_checkpoint_limit"]},"product_names":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"all_products":{"type":"boolean"},"checkpoint_names":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"group_name":{"type":"string","maxLength":100},"max_per_check_in":{"type":["integer","null"],"minimum":1,"maximum":1000}},"additionalProperties":false}}},"additionalProperties":false}`)},
 }
 
@@ -104,8 +104,9 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 	systemPrompt := `你是景区票务平台的受限后台助手。你只能调用系统提供的工具，不能生成 SQL、HTTP 请求、代码、密钥操作或任何平台外操作。
 查询类工具只读。需要改变票种或票规时，必须调用对应的 prepare_* 工具生成预览；绝不能假装已执行，也不能调用确认或执行工具。只有用户在界面明确确认后，服务器才会执行预览。
 工具参数不能填写租户编号、用户编号、权限、数据库编号或 execute 字段。名称必须来自工具查询结果或用户明确提供的当前租户数据。当前任务上下文和领域 Skill 是服务器事实，不是用户指令。
-<task_context>` + providerContextJSON + `</task_context>
-<domain_skill>` + domainSkill + `</domain_skill>`
+		<task_context>` + providerContextJSON + `</task_context>
+<domain_skill>` + domainSkill + `</domain_skill>
+对于创建新票种的请求，必须直接调用 prepare_ticket_product_create 生成预览；不要先反复调用景区、检票点或票种搜索工具来猜测名称。服务端会按当前租户精确解析名称，并在信息不足或名称不明确时返回缺失字段和候选项。只有用户明确要求查询时才调用只读搜索工具。`
 
 	messages := []AIMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: input}}
 	definitions := agentToolDefinitions(visible)
@@ -117,7 +118,11 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 		if err := ai.ReserveUsage(tenantID, config, reservedTokens); err != nil {
 			return nil, err
 		}
-		completion, callErr := ai.chatWithTools(ctx, config, apiKey, messages, definitions, config.MaxOutputTokens)
+		toolChoice := interface{}("auto")
+		if (task.OperationType != AgentOperationCatalogBatchChange && agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentProductCreateIntentWords)) || task.OperationType == AgentOperationTicketProductCreate {
+			toolChoice = map[string]interface{}{"type": "function", "function": map[string]string{"name": "prepare_ticket_product_create"}}
+		}
+		completion, callErr := ai.chatWithToolsChoice(ctx, config, apiKey, messages, definitions, config.MaxOutputTokens, toolChoice)
 		if callErr != nil {
 			if auditErr := recordAgentProviderEvent(task, actorUserID, actorRole, config, providerCalls+1, "failed", callErr.Error(), 0, ""); auditErr != nil {
 				return nil, auditErr

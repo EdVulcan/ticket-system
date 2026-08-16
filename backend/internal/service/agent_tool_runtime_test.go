@@ -144,6 +144,51 @@ func TestDeepSeekAutoConfigUsesToolProtocolForNewTasks(t *testing.T) {
 	}
 }
 
+func TestAgentProductCreateForcesNamedPrepareToolChoice(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	var providerCalls atomic.Int32
+	var receivedToolChoice json.RawMessage
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		providerCalls.Add(1)
+		var body struct {
+			ToolChoice json.RawMessage `json:"tool_choice"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			http.Error(writer, "invalid request", http.StatusBadRequest)
+			return
+		}
+		receivedToolChoice = append(receivedToolChoice[:0], body.ToolChoice...)
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(toolCallPayload("call-product-prepare", "prepare_ticket_product_create", `{"name":"Child Ticket","product_type":"online","scenic_area_name":"Batch Scenic","price":55,"settlement_price":30,"groups":[{"group_name":"Admission","items":[{"checkpoint_name":"Main Gate","max_per_check_in":1}]}]}`, 24))
+	}))
+	defer server.Close()
+	if _, err := (&PlatformAIService{}).SaveConfig(toolConfig(server.URL), 77, "platform_admin"); err != nil {
+		t.Fatalf("save tool config: %v", err)
+	}
+	view, err := (&AgentTaskService{}).Submit(t.Context(), fixture.tenant.ID, 11, "admin", AgentTaskRequest{
+		InputText:      "创建一个线上 Child Ticket，所属景区 Batch Scenic，售价 55 元，结算价 30 元，使用 Main Gate",
+		IdempotencyKey: "tool-product-forced-prepare", TurnKey: "turn-1",
+	})
+	if err != nil {
+		t.Fatalf("product preview task: %v", err)
+	}
+	if view.State != AgentTaskAwaitingConfirmation || !view.CanConfirm || providerCalls.Load() != 1 {
+		t.Fatalf("product task did not converge to preview: view=%+v provider_calls=%d", view, providerCalls.Load())
+	}
+	var choice struct {
+		Type     string `json:"type"`
+		Function struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	}
+	if err := json.Unmarshal(receivedToolChoice, &choice); err != nil {
+		t.Fatalf("named tool choice was not JSON: %v", err)
+	}
+	if choice.Type != "function" || choice.Function.Name != "prepare_ticket_product_create" {
+		t.Fatalf("unexpected named tool choice: %s", string(receivedToolChoice))
+	}
+}
+
 func TestAgentToolTaskRejectsProviderTextWithoutSupportedToolCall(t *testing.T) {
 	fixture := seedCatalogBatchFixture(t)
 	server, _ := toolProvider(t, func(messages []AIMessage) (map[string]interface{}, error) {
