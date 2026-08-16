@@ -54,18 +54,25 @@ async function prepareSupplier(page: Page) {
 test('线上和窗口票种筛选会把查询条件传给服务端', async ({ page }) => {
   await prepareSupplier(page)
   const productRequests: URL[] = []
+  const orderRequests: URL[] = []
   await page.unroute('**/api/v1/products?*')
   await page.route('**/api/v1/products?*', async route => {
     productRequests.push(new URL(route.request().url()))
     await json(route, { data: [], total: 0 })
   })
+  await page.route('**/api/v1/orders?*', async route => {
+    orderRequests.push(new URL(route.request().url()))
+    await json(route, { data: [], total: 0 })
+  })
 
   await page.goto('/product')
   await expect(page.getByRole('heading', { name: '线上门票管理' })).toBeVisible()
-  const onlineSearch = page.getByPlaceholder('搜索门票名称...')
+  const onlineFilters = page.locator('.catalog-filter-bar')
+  const onlineSearch = onlineFilters.locator('input[placeholder="搜索门票名称..."]')
+  await expect(onlineSearch).toBeVisible()
   await onlineSearch.fill('成人')
   await onlineSearch.press('Enter')
-  await page.getByPlaceholder('全部状态').click()
+  await onlineFilters.locator('.status-filter').click()
   await page.getByRole('option', { name: '已下架' }).click()
   await expect.poll(() => productRequests.some(url => {
     const params = url.searchParams
@@ -74,12 +81,42 @@ test('线上和窗口票种筛选会把查询条件传给服务端', async ({ pa
 
   await page.goto('/product/offline')
   await expect(page.getByRole('heading', { name: '窗口门票管理' })).toBeVisible()
-  const offlineSearch = page.getByPlaceholder('搜索门票名称...')
+  const offlineFilters = page.locator('.catalog-filter-bar')
+  const offlineSearch = offlineFilters.locator('input[placeholder="搜索门票名称..."]')
+  await expect(offlineSearch).toBeVisible()
   await offlineSearch.fill('窗口')
   await offlineSearch.press('Enter')
   await expect.poll(() => productRequests.some(url => {
     const params = url.searchParams
     return params.get('type') === 'offline' && params.get('search') === '窗口' && params.get('page') === '1'
+  })).toBe(true)
+
+  await page.goto('/online-order')
+  await expect(page.getByRole('heading', { name: '订单管理' })).toBeVisible()
+  const onlineOrderFilters = page.locator('.filter-toolbar')
+  const onlineOrderSearch = onlineOrderFilters.locator('input[placeholder="搜索订单号/手机号..."]')
+  await expect(onlineOrderSearch).toBeVisible()
+  await onlineOrderSearch.fill('ON-100')
+  await onlineOrderSearch.press('Enter')
+  await onlineOrderFilters.locator('.el-select').click()
+  await page.getByRole('option', { name: '已退款' }).click()
+  await expect.poll(() => orderRequests.some(url => {
+    const params = url.searchParams
+    return params.get('channel') === 'online' && params.get('search') === 'ON-100' && params.get('status') === 'refunded' && params.get('page') === '1'
+  })).toBe(true)
+
+  await page.goto('/offline-order')
+  await expect(page.getByRole('heading', { name: '线下/窗口订单' })).toBeVisible()
+  const offlineOrderFilters = page.locator('.mb-4.flex.gap-4')
+  const offlineOrderSearch = offlineOrderFilters.locator('input[placeholder="搜索订单号/手机号..."]')
+  await expect(offlineOrderSearch).toBeVisible()
+  await offlineOrderSearch.fill('OFF-100')
+  await offlineOrderSearch.press('Enter')
+  await offlineOrderFilters.locator('.el-select').click()
+  await page.getByRole('option', { name: '已退款' }).click()
+  await expect.poll(() => orderRequests.some(url => {
+    const params = url.searchParams
+    return params.get('channel') === 'window' && params.get('search') === 'OFF-100' && params.get('status') === 'refunded' && params.get('page') === '1'
   })).toBe(true)
 })
 
