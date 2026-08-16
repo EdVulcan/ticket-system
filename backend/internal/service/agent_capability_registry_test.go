@@ -22,6 +22,15 @@ func TestAgentCapabilityRegistryIsVersionedAndToolSafe(t *testing.T) {
 			t.Fatalf("knowledge pack for %q does not contain the system contract", operationType)
 		}
 	}
+	for _, moduleID := range []string{agentModuleOrders, agentModuleInventory, agentModuleReports} {
+		pack, err := agentKnowledgePackForModule(moduleID)
+		if err != nil {
+			t.Fatalf("load read-only module pack %q: %v", moduleID, err)
+		}
+		if pack.ID != moduleID || pack.Version == "" || pack.Hash == "" || pack.Content == "" {
+			t.Fatalf("incomplete read-only module pack %q: %+v", moduleID, pack)
+		}
+	}
 }
 
 func TestAgentKnowledgePackRejectsSilentContinuationDrift(t *testing.T) {
@@ -47,7 +56,7 @@ func TestAgentToolDefinitionsExposeModuleContext(t *testing.T) {
 		t.Fatalf("tool definitions=%d, want %d", len(definitions), len(agentToolSpecs))
 	}
 	for _, definition := range definitions {
-		if !strings.Contains(definition.Function.Description, "模块：票种与检票规则") || !strings.Contains(definition.Function.Description, "模块范围：线上/窗口票种") {
+		if !strings.Contains(definition.Function.Description, "模块：") || !strings.Contains(definition.Function.Description, "模块范围：") {
 			t.Fatalf("tool %q is missing module context: %q", definition.Function.Name, definition.Function.Description)
 		}
 	}

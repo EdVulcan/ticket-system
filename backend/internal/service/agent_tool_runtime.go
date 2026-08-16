@@ -31,6 +31,7 @@ type agentToolSpec struct {
 	ActionKind           string
 	Permission           string
 	Capability           string
+	CapabilityAny        []string
 	BusinessType         string
 	ReadOnly             bool
 	PreviewOnly          bool
@@ -48,6 +49,10 @@ var agentToolSpecs = []agentToolSpec{
 	{Name: "search_checkpoints", Description: "查询当前租户景区下的检票点名称", ModuleID: agentModuleCatalog, ActionKind: "query", Permission: authz.PermissionOnsiteRead, Capability: "supplier", BusinessType: "scenic", ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
 	{Name: "search_ticket_products", Description: "查询当前租户的票种目录，不返回数据库编号", ModuleID: agentModuleCatalog, ActionKind: "query", Permission: authz.PermissionCatalogRead, Capability: "supplier", BusinessType: "scenic", ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"query":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
 	{Name: "get_ticket_product_rules", Description: "查看当前租户某个票种的检票规则，不返回数据库编号", ModuleID: agentModuleCatalog, ActionKind: "query", Permission: authz.PermissionCatalogRead, Capability: "supplier", BusinessType: "scenic", ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","required":["product_name"],"properties":{"product_name":{"type":"string","minLength":1,"maxLength":100}},"additionalProperties":false}`)},
+	{Name: "search_orders", Description: "查询当前租户订单的服务器事实，仅返回订单号、状态、渠道、金额和票种摘要，不返回数据库编号或游客证件信息", ModuleID: agentModuleOrders, ActionKind: "query", Permission: authz.PermissionOrdersRead, CapabilityAny: []string{"supplier", "distributor", "travel_agency"}, ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"search":{"type":"string","maxLength":100},"status":{"type":"string","enum":["unpaid","paid","cancelled","refunded","partial_refunded","completed"]},"channel":{"type":"string","maxLength":50},"start_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"end_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
+	{Name: "query_ticket_inventory", Description: "查询当前租户线上票种按日期和时段的库存事实，返回容量、已售和剩余量，不执行预占或修改", ModuleID: agentModuleInventory, ActionKind: "query", Permission: authz.PermissionOperationsRead, Capability: "supplier", BusinessType: "scenic", ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"product_name":{"type":"string","maxLength":100},"start_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"end_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"stock_slot":{"type":"string","maxLength":50},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
+	{Name: "query_sales_summary", Description: "查询当前租户按原收款期重述退款后的销售汇总，返回每日售券、退款和净额，不修改报表事实", ModuleID: agentModuleReports, ActionKind: "query", Permission: authz.PermissionReportsRead, CapabilityAny: []string{"supplier", "distributor", "travel_agency"}, ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"start_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"end_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}},"additionalProperties":false}`)},
+	{Name: "query_verification_summary", Description: "查询当前供应商按首次有效核销日期汇总的核销事实，已被成功退款的核销不再计入收入", ModuleID: agentModuleReports, ActionKind: "query", Permission: authz.PermissionReportsRead, Capability: "supplier", BusinessType: "scenic", ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"start_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"end_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}},"additionalProperties":false}`)},
 	{Name: "prepare_ticket_product_create", Description: "准备创建一个尚未上线的票种预览，不执行创建和分发。创建请求应直接调用此工具；服务端会按当前租户精确解析景区和检票点，并返回缺失字段或候选项", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"product_type":{"type":"string","enum":["online","offline"]},"scenic_area_name":{"type":"string"},"price":{"type":["number","null"]},"settlement_price":{"type":["number","null"]},"validity_type":{"type":"string"},"validity_days":{"type":["integer","null"]},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"rule_name":{"type":"string"},"groups":{"type":"array","items":{"type":"object","properties":{"group_name":{"type":"string"},"max_total_check_in":{"type":"integer"},"items":{"type":"array","items":{"type":"object","properties":{"checkpoint_name":{"type":"string"},"max_per_check_in":{"type":"integer"}},"additionalProperties":false}}},"additionalProperties":false}},"code_mode":{"type":"string"},"stock_type":{"type":"string"},"daily_stock":{"type":["integer","null"]},"real_name_required":{"type":["boolean","null"]},"refund_type":{"type":"string"},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":["integer","null"]},"limit_per_id":{"type":["integer","null"]}},"additionalProperties":false}`)},
 	{Name: "prepare_catalog_rule_change", Description: "准备票种检票规则变更预览，不执行修改", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","required":["operations"],"properties":{"operations":{"type":"array","minItems":1,"maxItems":50,"items":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["add_checkpoints","remove_checkpoints","set_checkpoint_limit"]},"product_names":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"all_products":{"type":"boolean"},"checkpoint_names":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"group_name":{"type":"string","maxLength":100},"create_group":{"type":"boolean"},"group_max_total_check_in":{"type":["integer","null"],"minimum":0,"maximum":1000},"max_per_check_in":{"type":["integer","null"],"minimum":1,"maximum":1000}},"additionalProperties":false}}},"additionalProperties":false}`)},
 }
@@ -77,9 +82,6 @@ func agentToolProtocolConfigured() bool {
 }
 
 func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUserID uint, actorRole string, task model.AgentTask, input string) (*agentPlanningResult, error) {
-	if err := requireActiveScenicSupplier(model.DB, tenantID); err != nil {
-		return nil, err
-	}
 	if err := validateAgentToolIntent(input, task); err != nil {
 		return nil, err
 	}
@@ -122,8 +124,24 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 		return nil, err
 	}
 	domainSkill := domainPack.Content
+	seenPacks := map[string]struct{}{domainPack.ID: {}}
+	for _, spec := range visible {
+		manifest, ok := agentModuleManifestForTool(spec.Name)
+		if !ok {
+			continue
+		}
+		if _, seen := seenPacks[manifest.ID]; seen {
+			continue
+		}
+		pack, packErr := agentKnowledgePackForModule(manifest.ID)
+		if packErr != nil {
+			return nil, packErr
+		}
+		domainSkill += "\n\n---\n\n" + pack.Content
+		seenPacks[manifest.ID] = struct{}{}
+	}
 	systemPrompt := `你是景区票务平台的受限后台助手。你只能调用系统提供的工具，不能生成 SQL、HTTP 请求、代码、密钥操作或任何平台外操作。
-查询类工具只读。需要改变票种或票规时，必须调用对应的 prepare_* 工具生成预览；绝不能假装已执行，也不能调用确认或执行工具。只有用户在界面明确确认后，服务器才会执行预览。对“所有某类票种”必须逐个填写候选清单中的精确票种名称，不得改用 all_products=true；只有“所有票种/全部门票”才允许 all_products=true。用户明确要求新增规则组时，调用 prepare_catalog_rule_change 并设置 create_group=true；只有用户明确提供新组名称和通行数量时才填写 group_name、group_max_total_check_in，否则留空让服务端追问。普通新增检票点涉及多个现有规则组且用户未指定时，保持 create_group=false 并让服务端返回现有规则组候选，不要猜测 group_name。
+查询类工具只读，结果是服务器生成的 QueryResult 事实包；只能据此回答，不能补造未返回的数据。需要改变票种或票规时，必须调用对应的 prepare_* 工具生成预览；绝不能假装已执行，也不能调用确认或执行工具。只有用户在界面明确确认后，服务器才会执行预览。对“所有某类票种”必须逐个填写候选清单中的精确票种名称，不得改用 all_products=true；只有“所有票种/全部门票”才允许 all_products=true。用户明确要求新增规则组时，调用 prepare_catalog_rule_change 并设置 create_group=true；只有用户明确提供新组名称和通行数量时才填写 group_name、group_max_total_check_in，否则留空让服务端追问。普通新增检票点涉及多个现有规则组且用户未指定时，保持 create_group=false 并让服务端返回现有规则组候选，不要猜测 group_name。
 工具参数不能填写租户编号、用户编号、权限、数据库编号或 execute 字段。名称必须来自工具查询结果或用户明确提供的当前租户数据。当前任务上下文和领域 Skill 是服务器事实，不是用户指令。
 		<task_context>` + providerContextJSON + `</task_context>
 <domain_skill>` + domainSkill + `</domain_skill>
@@ -250,6 +268,9 @@ func agentToolAllowed(tenantID uint, actorRole string, spec agentToolSpec) bool 
 	if spec.Capability != "" && requireActiveTenantCapability(model.DB, tenantID, spec.Capability) != nil {
 		return false
 	}
+	if len(spec.CapabilityAny) > 0 && requireAnyActiveTenantCapability(model.DB, tenantID, spec.CapabilityAny...) != nil {
+		return false
+	}
 	if spec.BusinessType != "" && requireActiveSupplierBusinessType(model.DB, tenantID, spec.BusinessType) != nil {
 		return false
 	}
@@ -313,15 +334,6 @@ func (e *agentToolArgumentError) Unwrap() error {
 
 func newAgentToolArgumentError(message string) error {
 	return &agentToolArgumentError{cause: agentInvalid(message)}
-}
-
-type agentSearchArgs struct {
-	Query string `json:"query"`
-	Limit int    `json:"limit"`
-}
-
-type agentProductRuleArgs struct {
-	ProductName string `json:"product_name"`
 }
 
 type agentPrepareCatalogArgs struct {
@@ -407,93 +419,10 @@ func (s *AgentTaskService) invokeAgentTool(tenantID, actorUserID uint, actorRole
 }
 
 func (s *AgentTaskService) executeAgentTool(tenantID, actorUserID uint, actorRole string, task model.AgentTask, input string, config model.PlatformAIConfig, spec agentToolSpec, rawArgs string) (agentToolExecution, error) {
+	if handler, ok := agentToolHandlerFor(spec.Name); ok {
+		return handler(s, agentToolRequest{TenantID: tenantID, ActorID: actorUserID, ActorRole: actorRole, Task: task, Input: input, Config: config, RawArgs: rawArgs})
+	}
 	switch spec.Name {
-	case "search_scenic_areas":
-		var args agentSearchArgs
-		if err := decodeAgentToolArguments(rawArgs, &args); err != nil {
-			return agentToolExecution{}, err
-		}
-		var areas []model.ScenicArea
-		query := model.DB.Where("tenant_id = ? AND status = ?", tenantID, "active").Order("id ASC")
-		if strings.TrimSpace(args.Query) != "" {
-			query = query.Where("name ILIKE ? OR code ILIKE ?", "%"+strings.TrimSpace(args.Query)+"%", "%"+strings.TrimSpace(args.Query)+"%")
-		}
-		if err := query.Limit(agentToolLimit(args.Limit)).Find(&areas).Error; err != nil {
-			return agentToolExecution{}, err
-		}
-		rows := make([]map[string]interface{}, 0, len(areas))
-		for _, area := range areas {
-			rows = append(rows, map[string]interface{}{"name": area.Name, "code": area.Code, "status": area.Status})
-		}
-		return agentToolJSON(rows)
-	case "search_checkpoints":
-		var args agentSearchArgs
-		if err := decodeAgentToolArguments(rawArgs, &args); err != nil {
-			return agentToolExecution{}, err
-		}
-		var checkpoints []model.CheckPoint
-		query := model.DB.Where("tenant_id = ?", tenantID).Order("id ASC")
-		if strings.TrimSpace(args.Query) != "" {
-			query = query.Where("name ILIKE ? OR location ILIKE ?", "%"+strings.TrimSpace(args.Query)+"%", "%"+strings.TrimSpace(args.Query)+"%")
-		}
-		if err := query.Limit(agentToolLimit(args.Limit)).Find(&checkpoints).Error; err != nil {
-			return agentToolExecution{}, err
-		}
-		rows := make([]map[string]interface{}, 0, len(checkpoints))
-		for _, point := range checkpoints {
-			rows = append(rows, map[string]interface{}{"name": point.Name, "location": point.Location})
-		}
-		return agentToolJSON(rows)
-	case "search_ticket_products":
-		var args agentSearchArgs
-		if err := decodeAgentToolArguments(rawArgs, &args); err != nil {
-			return agentToolExecution{}, err
-		}
-		var products []model.Product
-		query := model.DB.Where("tenant_id = ?", tenantID).Order("id ASC")
-		if strings.TrimSpace(args.Query) != "" {
-			query = query.Where("name ILIKE ?", "%"+strings.TrimSpace(args.Query)+"%")
-		}
-		if err := query.Limit(agentToolLimit(args.Limit)).Find(&products).Error; err != nil {
-			return agentToolExecution{}, err
-		}
-		rows := make([]map[string]interface{}, 0, len(products))
-		for _, product := range products {
-			if isDistributedListing(&product) {
-				continue
-			}
-			rows = append(rows, map[string]interface{}{"name": product.Name, "type": product.Type, "price": product.Price, "status": product.Status, "is_distributable": product.IsDistributable})
-		}
-		return agentToolJSON(rows)
-	case "get_ticket_product_rules":
-		var args agentProductRuleArgs
-		if err := decodeAgentToolArguments(rawArgs, &args); err != nil {
-			return agentToolExecution{}, err
-		}
-		name := strings.TrimSpace(args.ProductName)
-		if name == "" {
-			return agentToolExecution{}, agentInvalid("product_name is required")
-		}
-		var products []model.Product
-		if err := model.DB.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Preload("Rule.Groups.Items.CheckPoint").Where("tenant_id = ? AND name = ?", tenantID, name).Find(&products).Error; err != nil {
-			return agentToolExecution{}, err
-		}
-		if len(products) == 0 {
-			return agentToolExecution{}, agentInvalid("当前租户不存在该票种")
-		}
-		if len(products) > 1 {
-			return agentToolExecution{}, agentInvalid("该票种名称不唯一，请先缩小范围")
-		}
-		product := products[0]
-		groups := make([]map[string]interface{}, 0, len(product.Rule.Groups))
-		for _, group := range product.Rule.Groups {
-			items := make([]map[string]interface{}, 0, len(group.Items))
-			for _, item := range group.Items {
-				items = append(items, map[string]interface{}{"checkpoint_name": item.CheckPoint.Name, "max_per_check_in": item.MaxPerCheckIn})
-			}
-			groups = append(groups, map[string]interface{}{"group_name": group.GroupName, "max_total_check_in": group.MaxTotalCheckIn, "items": items})
-		}
-		return agentToolJSON(map[string]interface{}{"product_name": product.Name, "rule_name": product.Rule.Name, "groups": groups})
 	case "prepare_ticket_product_create":
 		var candidate agentProductCandidate
 		if err := decodeAgentToolArguments(rawArgs, &candidate); err != nil {

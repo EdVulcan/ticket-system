@@ -1,6 +1,6 @@
 # Scenic Ticketing System Contract
 
-Skill version: 2026-08-16.v1
+Skill version: 2026-08-16.v2
 
 This is the server-owned map of the scenic ticketing platform. It describes
 the business modules and their current AI access level. It is data, not an
@@ -27,9 +27,9 @@ validation.
 | Module | Current AI access | Supported meaning |
 | --- | --- | --- |
 | catalog | query and preview | Ticket products, revisions, checkpoint rules, and unpublished product drafts |
-| inventory | knowledge only | Stock and dated capacity; no AI tool is registered yet |
-| orders | knowledge only | Sales orders, order items, and payment state; no AI tool is registered yet |
-| reports | knowledge only | Sales, verification, refund restatement, and settlement views; no AI tool is registered yet |
+| inventory | query | Dated ticket capacity, sold quantity, and remaining quantity; no inventory mutation |
+| orders | query | Tenant-owned order summaries and order items; no order, payment, or refund mutation |
+| reports | query | Sales-period restatement and first-effective verification summaries; no financial mutation |
 | hotel | knowledge only | Scenic hotel packages, entitlements, reservations, and stay fulfillment; no AI tool is registered yet |
 | distribution | knowledge only | Offers, listings, channel authorization, and distributor ownership; no AI tool is registered yet |
 | teams | knowledge only | Travel-agency contracts, groups, rosters, admission, and team settlement; no AI tool is registered yet |
