@@ -1227,6 +1227,20 @@ onMounted(() => {
     padding: 0 10px;
   }
 
+  .product-editor-tabs :deep(.el-tabs__nav-prev),
+  .product-editor-tabs :deep(.el-tabs__nav-next) {
+    display: none;
+  }
+
+  .product-editor-tabs :deep(.el-tabs__nav-scroll) {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .product-editor-tabs :deep(.el-tabs__nav-scroll::-webkit-scrollbar) {
+    display: none;
+  }
+
   .product-editor-tabs :deep(.el-tabs__nav) {
     min-width: max-content;
   }
