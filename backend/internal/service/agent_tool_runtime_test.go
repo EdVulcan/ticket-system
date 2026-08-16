@@ -117,6 +117,33 @@ func TestAgentToolTaskQueriesOnlyCurrentTenantAndPersistsAudit(t *testing.T) {
 	}
 }
 
+func TestDeepSeekAutoConfigUsesToolProtocolForNewTasks(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	server, calls := toolProvider(t, func(messages []AIMessage) (map[string]interface{}, error) {
+		for _, message := range messages {
+			if message.Role == "tool" {
+				return toolTextPayload("当前租户有 Adult Ticket。", 18), nil
+			}
+		}
+		return toolCallPayload("call-default-protocol", "search_ticket_products", `{"query":"Adult Ticket","limit":10}`, 12), nil
+	})
+	config := toolConfig(server.URL)
+	config.AgentProtocolMode = agentProtocolAuto
+	if _, err := (&PlatformAIService{}).SaveConfig(config, 77, "platform_admin"); err != nil {
+		t.Fatalf("save automatic DeepSeek config: %v", err)
+	}
+
+	view, err := (&AgentTaskService{}).Submit(t.Context(), fixture.tenant.ID, 11, "product_operator", AgentTaskRequest{
+		InputText: "查询当前票种 Adult Ticket", IdempotencyKey: "tool-default-protocol-1", TurnKey: "turn-1",
+	})
+	if err != nil {
+		t.Fatalf("new task should use native tools for DeepSeek: %v", err)
+	}
+	if view.ProtocolMode != agentProtocolToolV1 || view.Message == "" || calls.Load() != 2 {
+		t.Fatalf("unexpected default protocol behavior: view=%+v provider_calls=%d", view, calls.Load())
+	}
+}
+
 func TestAgentToolTaskRejectsProviderTextWithoutSupportedToolCall(t *testing.T) {
 	fixture := seedCatalogBatchFixture(t)
 	server, _ := toolProvider(t, func(messages []AIMessage) (map[string]interface{}, error) {

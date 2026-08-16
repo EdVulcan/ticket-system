@@ -39,6 +39,7 @@ const englishErrorRules: Array<[RegExp, string]> = [
   [/AI provider did not return a final answer|increase max_output_tokens/i, '模型没有返回最终计划；请将“最大输出 Token”设为自动（0），或确认当前模型支持返回最终 JSON'],
   [/AI provider returned an empty plan/i, 'AI 服务返回了空的最终计划，请检查模型名称、接口地址和最大输出 Token'],
   [/AI provider returned no choices/i, 'AI 服务返回格式不兼容，请检查接口地址或模型配置'],
+  [/AI provider returned no supported tool calls|AI provider did not return a tool call|AI 未调用受支持的查询或预览工具/i, '模型没有调用受支持的查询或预览工具，请检查协议模式或模型是否支持工具调用'],
   [/authentication fails|invalid api key|invalid api-key|AI provider returned HTTP 401/i, 'AI API Key 无效或已过期，请检查密钥'],
   [/AI provider returned HTTP 404|model.*not found/i, 'AI 模型或接口地址不存在，请检查配置'],
   [/AI provider returned HTTP 429|rate limit/i, 'AI 服务请求过于频繁，请稍后重试'],

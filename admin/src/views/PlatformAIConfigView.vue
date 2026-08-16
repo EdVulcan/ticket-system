@@ -99,7 +99,7 @@ const testSuccess = ref(false)
 const form = reactive<any>({
   provider: 'deepseek', base_url: 'https://api.deepseek.com', model: 'deepseek-chat', api_key: '', api_key_configured: false,
   enabled: false, default_monthly_request_limit: 100, default_monthly_token_limit: 200000,
-  request_timeout_seconds: 120, max_output_tokens: 0, temperature: 0.1, agent_protocol_mode: 'legacy_json', config_version: 1,
+  request_timeout_seconds: 120, max_output_tokens: 0, temperature: 0.1, agent_protocol_mode: 'auto', config_version: 1,
 })
 
 const load = async () => {

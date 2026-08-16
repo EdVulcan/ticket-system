@@ -64,7 +64,7 @@
           <div class="assistant-actions">
             <div class="action-meta">
               <span v-if="availability" class="quota-copy">本月剩余 {{ availability.requests_remaining }} 次请求</span>
-              <el-button v-if="task" text size="small" :disabled="loading || confirming || taskLoading" @click="startNewTask">新建任务</el-button>
+              <el-button v-if="task || errorMessage" text size="small" :disabled="loading || confirming || taskLoading" @click="startNewTask">新建任务</el-button>
               <el-button v-if="inputText.trim()" text size="small" @click="clearInput">清空</el-button>
             </div>
             <el-button type="primary" :icon="Promotion" :loading="loading" :disabled="!inputText.trim() || taskLoading || (availability && !availability.enabled)" @click="submitInput">{{ task ? '继续处理' : '生成计划' }}</el-button>
@@ -278,7 +278,7 @@ const retryLastAction = () => {
     return
   }
   if (lastAction.value === 'confirm') confirmTask()
-  else if (lastAction.value === 'submit') submitInput()
+  else if (lastAction.value === 'submit') inputText.value.trim() ? submitInput() : startNewTask()
   else if (lastAction.value === 'cancel') startNewTask()
 }
 
@@ -303,6 +303,13 @@ const submitInput = async () => {
     if (response.data.can_confirm) ElMessage.success('计划已生成，请核对后确认执行')
     else ElMessage.info('还需要补充信息')
   } catch (error: any) {
+    // The server no longer accepts this local task context. Detach it while
+    // preserving the typed request so the next submit starts a fresh task.
+    if (error?.response?.status === 409) {
+      task.value = null
+      localStorage.removeItem('ticket-agent-task-id')
+      idempotencyKey.value = newKey()
+    }
     setError(error, 'AI 任务处理失败，请检查输入或稍后重试', 'submit')
   } finally { loading.value = false }
 }

@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 93
+const CurrentPostgresSchemaVersion = 94
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -128,6 +128,21 @@ func runPostgresMigrations(db *gorm.DB) error {
 			WHERE COALESCE(idempotency_key, '') <> '';
 		`).Error; err != nil {
 			return fmt.Errorf("migrate agent tool event attempt identities: %w", err)
+		}
+	}
+	if previousSchemaVersion > 0 && previousSchemaVersion < 94 {
+		if err := db.Exec(`
+			ALTER TABLE platform_ai_configs
+				ALTER COLUMN agent_protocol_mode SET DEFAULT 'auto';
+			-- The old UI defaulted DeepSeek to legacy JSON even though the
+			-- deployed tool registry only exists in the native protocol. Existing
+			-- DeepSeek configurations therefore migrate to the automatic selector;
+			-- explicitly selected legacy mode for other providers stays unchanged.
+			UPDATE platform_ai_configs
+			SET agent_protocol_mode = 'auto'
+			WHERE provider = 'deepseek' AND agent_protocol_mode = 'legacy_json';
+		`).Error; err != nil {
+			return fmt.Errorf("migrate DeepSeek AI protocol default: %w", err)
 		}
 	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 86 {

@@ -283,6 +283,63 @@ func TestPostgresSchema93AgentTaskEventOwnershipGuard(t *testing.T) {
 	}
 }
 
+func TestPostgresSchema94MigratesDeepSeekProtocolDefault(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	legacy := PlatformAIConfig{
+		ConfigKey: "legacy-deepseek-protocol", Provider: "deepseek", BaseURL: "https://api.deepseek.com",
+		Model: "deepseek-chat", AgentProtocolMode: "legacy_json",
+	}
+	if err := db.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	other := PlatformAIConfig{
+		ConfigKey: "legacy-compatible-protocol", Provider: "openai_compatible", BaseURL: "https://example.com",
+		Model: "compatible", AgentProtocolMode: "legacy_json",
+	}
+	if err := db.Create(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("version = ?", CurrentPostgresSchemaVersion).Delete(&SchemaMigration{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&SchemaMigration{Version: 93, Name: "pre-deepseek-protocol-default", AppliedAt: time.Now()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	var migrated PlatformAIConfig
+	if err := db.First(&migrated, legacy.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if migrated.AgentProtocolMode != "auto" {
+		t.Fatalf("DeepSeek protocol=%q, want auto", migrated.AgentProtocolMode)
+	}
+	var untouched PlatformAIConfig
+	if err := db.First(&untouched, other.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if untouched.AgentProtocolMode != "legacy_json" {
+		t.Fatalf("compatible protocol=%q, want legacy_json", untouched.AgentProtocolMode)
+	}
+	var columnDefault string
+	if err := db.Raw(`
+		SELECT column_default
+		FROM information_schema.columns
+		WHERE table_schema = CURRENT_SCHEMA()
+		  AND table_name = 'platform_ai_configs'
+		  AND column_name = 'agent_protocol_mode'
+	`).Scan(&columnDefault).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(columnDefault, "auto") {
+		t.Fatalf("agent_protocol_mode column default=%q, want auto", columnDefault)
+	}
+}
+
 func TestPostgresSchema87CatalogBatchChangeOwnershipGuards(t *testing.T) {
 	db := testdb.Open(t)
 	if err := runMigrations(db); err != nil {

@@ -159,6 +159,67 @@ test('AI 助手预览明确区分窗口票类型和未上架状态', async ({ pa
   await expect(assistant.getByRole('button', { name: '确认执行' })).toBeEnabled()
 })
 
+test('AI 助手 provider 失败后可以放弃当前会话并新建任务', async ({ page }) => {
+  let submitCount = 0
+  await page.addInitScript(user => {
+    localStorage.setItem('token', 'tenant-token')
+    localStorage.setItem('user', JSON.stringify(user))
+  }, tenantUser)
+  await page.route('**/api/v1/**', async route => {
+    const url = route.request().url()
+    if (url.endsWith('/tenants/me')) {
+      await json(route, {
+        id: tenantUser.tenant_id,
+        name: tenantUser.tenant_name,
+        system_code: tenantUser.system_code,
+        status: 'active',
+        permissions: tenantUser.permissions,
+        capabilities: tenantUser.capabilities,
+        supplier_business_types: tenantUser.supplier_business_types,
+      })
+      return
+    }
+    if (url.endsWith('/catalog/batch-changes/ai-status')) {
+      await json(route, { enabled: true, provider: 'deepseek', requests_remaining: 100 })
+      return
+    }
+    if (url.endsWith('/agent/tasks') && route.request().method() === 'POST') {
+      submitCount += 1
+      if (submitCount === 1) {
+        await json(route, { error: 'AI provider returned no supported tool calls', code: 'invalid_request' }, 400)
+        return
+      }
+      await json(route, {
+        task_id: 43,
+        state: 'collecting',
+        input_text: '创建一个线上成人票',
+        missing_fields: [{ field: 'price', label: '售价', question: '请提供票面售价。' }],
+        can_confirm: false,
+        availability: { enabled: true, provider: 'deepseek', requests_remaining: 98 },
+      })
+      return
+    }
+    await json(route, {})
+  })
+
+  await page.goto('/')
+  const assistant = page.getByTestId('ai-assistant')
+  await assistant.getByRole('button', { name: '打开 AI 助手' }).click()
+  const input = assistant.getByLabel('操作描述')
+  await input.fill('查询当前票种')
+  await assistant.getByRole('button', { name: '生成计划' }).click()
+  await expect(assistant.getByRole('alert')).toContainText('模型没有调用受支持的查询或预览工具')
+  await expect(assistant.getByRole('button', { name: '新建任务' })).toBeVisible()
+  await assistant.getByRole('button', { name: '新建任务' }).click()
+  await page.getByRole('button', { name: '放弃并新建' }).click()
+  await expect(input).toHaveValue('')
+
+  await input.fill('创建一个线上成人票')
+  await assistant.getByRole('button', { name: '生成计划' }).click()
+  await expect(assistant.getByText('售价', { exact: true })).toBeVisible()
+  expect(submitCount).toBe(2)
+})
+
 test('AI 助手可放弃过期任务并从新任务开始', async ({ page }) => {
   let newTaskBody: Record<string, unknown> | null = null
   await page.addInitScript(user => {

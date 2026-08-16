@@ -97,6 +97,7 @@ type AIAvailabilityView struct {
 	Enabled             bool   `json:"enabled"`
 	Provider            string `json:"provider,omitempty"`
 	Model               string `json:"model,omitempty"`
+	ProtocolMode        string `json:"protocol_mode,omitempty"`
 	RequestsRemaining   int    `json:"requests_remaining"`
 	TokensRemaining     int64  `json:"tokens_remaining"`
 	MonthlyRequestLimit int    `json:"monthly_request_limit"`
@@ -125,7 +126,7 @@ func defaultPlatformAIConfig() model.PlatformAIConfig {
 		ConfigKey: platformAIConfigKey, Provider: defaultAIProvider, BaseURL: defaultAIBaseURL,
 		Model: defaultAIModel, DefaultMonthlyRequestLimit: 100, DefaultMonthlyTokenLimit: 200000,
 		RequestTimeoutSeconds: defaultAIRequestTimeoutSeconds, MaxOutputTokens: 0, Temperature: 0.1, ConfigVersion: 1,
-		AgentProtocolMode: agentProtocolLegacyJSON,
+		AgentProtocolMode: agentProtocolAuto,
 	}
 }
 
@@ -321,6 +322,7 @@ func (s *PlatformAIService) Availability(tenantID uint) (*AIAvailabilityView, er
 	result.Enabled = true
 	result.Provider = config.Provider
 	result.Model = config.Model
+	result.ProtocolMode = resolveAgentTaskProtocol(config)
 	result.MonthlyRequestLimit = config.DefaultMonthlyRequestLimit
 	result.MonthlyTokenLimit = config.DefaultMonthlyTokenLimit
 	usage, err := aiUsageForPeriod(tenantID, time.Now().Format("2006-01"))
