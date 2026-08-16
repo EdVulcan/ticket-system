@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -10,7 +11,7 @@ func TestAgentCapabilityRegistryIsVersionedAndToolSafe(t *testing.T) {
 	if err := validateAgentCapabilityRegistry(); err != nil {
 		t.Fatalf("invalid agent capability registry: %v", err)
 	}
-	for _, operationType := range []string{AgentOperationPending, AgentOperationCatalogBatchChange, AgentOperationTicketProductCreate} {
+	for _, operationType := range []string{AgentOperationPending, AgentOperationCatalogBatchChange, AgentOperationTicketProductCreate, AgentOperationTicketProductUpdate} {
 		pack, err := agentKnowledgePackForOperation(operationType)
 		if err != nil {
 			t.Fatalf("load knowledge pack for %q: %v", operationType, err)
@@ -29,6 +30,12 @@ func TestAgentCapabilityRegistryIsVersionedAndToolSafe(t *testing.T) {
 		}
 		if pack.ID != moduleID || pack.Version == "" || pack.Hash == "" || pack.Content == "" {
 			t.Fatalf("incomplete read-only module pack %q: %+v", moduleID, pack)
+		}
+	}
+	for _, spec := range agentToolSpecs {
+		var schema interface{}
+		if err := json.Unmarshal(spec.Parameters, &schema); err != nil {
+			t.Fatalf("tool %q has invalid JSON schema: %v", spec.Name, err)
 		}
 	}
 }

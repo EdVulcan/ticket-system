@@ -19,14 +19,19 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 	if envelope == nil {
 		return agentInvalid("AI 未返回任务计划")
 	}
-	if envelope.Product != nil && len(envelope.Operations) > 0 {
-		return agentInvalid("AI 计划同时包含票种创建和票规调整，请一次只描述一种操作")
+	if envelope.Product != nil && (envelope.ProductUpdate != nil || len(envelope.Operations) > 0) {
+		return agentInvalid("AI 计划同时包含票种目录操作，请一次只描述一种操作")
+	}
+	if envelope.ProductUpdate != nil && len(envelope.Operations) > 0 {
+		return agentInvalid("AI 计划同时包含票种修改和票规调整，请一次只描述一种操作")
 	}
 	operationType := strings.TrimSpace(envelope.OperationType)
 	if operationType == "" {
 		switch {
 		case envelope.Product != nil:
 			operationType = AgentOperationTicketProductCreate
+		case envelope.ProductUpdate != nil:
+			operationType = AgentOperationTicketProductUpdate
 		case len(envelope.Operations) > 0:
 			operationType = AgentOperationCatalogBatchChange
 		}
@@ -34,11 +39,18 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 	normalizedInput := strings.ToLower(strings.TrimSpace(input))
 	hasCatalogIntent := agentHasAny(normalizedInput, agentCatalogIntentWords)
 	hasProductIntent := agentHasAny(normalizedInput, agentProductCreateIntentWords)
+	hasProductUpdateIntent := agentHasAny(normalizedInput, agentProductUpdateIntentWords)
 	if operationType == AgentOperationCatalogBatchChange && hasProductIntent && !hasCatalogIntent {
 		return agentInvalid("模型把新票种创建请求解释成了票规调整，请重新生成计划")
 	}
 	if operationType == AgentOperationTicketProductCreate && hasCatalogIntent && !hasProductIntent {
 		return agentInvalid("模型把票规调整请求解释成了新票种创建，请重新生成计划")
+	}
+	if operationType == AgentOperationTicketProductUpdate && hasProductIntent && !hasProductUpdateIntent {
+		return agentInvalid("模型把新票种创建请求解释成了票种修改，请重新生成计划")
+	}
+	if operationType == AgentOperationTicketProductUpdate && hasCatalogIntent && !hasProductUpdateIntent && agentHasAny(normalizedInput, []string{"检票点", "核销", "规则组", "分组", "票规"}) {
+		return agentInvalid("模型把票规调整请求解释成了票种基础信息修改，请重新生成计划")
 	}
 	switch operationType {
 	case AgentOperationCatalogBatchChange:
@@ -51,9 +63,17 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 			return agentInvalid("AI 未返回票种创建内容")
 		}
 		return validateAgentProductCandidate(input, envelope.Product)
+	case AgentOperationTicketProductUpdate:
+		if envelope.ProductUpdate == nil {
+			return agentInvalid("AI 未返回票种修改内容")
+		}
+		return validateAgentProductUpdateCandidate(input, envelope.ProductUpdate)
 	case AgentOperationPending, "":
 		if envelope.Product != nil {
 			return validateAgentProductCandidate(input, envelope.Product)
+		}
+		if envelope.ProductUpdate != nil {
+			return validateAgentProductUpdateCandidate(input, envelope.ProductUpdate)
 		}
 		if len(envelope.Operations) > 0 {
 			if err := validateAgentCatalogOperations(input, envelope.Operations); err != nil {
@@ -86,6 +106,49 @@ func validateAgentProductCandidate(input string, product *agentProductCandidate)
 	return nil
 }
 
+func validateAgentProductUpdateCandidate(input string, candidate *agentProductUpdateCandidate) error {
+	if candidate == nil {
+		return agentInvalid("AI 未返回票种修改内容")
+	}
+	if len([]rune(strings.TrimSpace(candidate.ProductName))) > 100 {
+		return agentInvalid("待修改票种名称不能超过 100 个字符")
+	}
+	if candidate.Changes.Name != nil && strings.TrimSpace(*candidate.Changes.Name) == "" {
+		return agentInvalid("修改后的票种名称不能为空")
+	}
+	if candidate.Changes.Price != nil && *candidate.Changes.Price < 0 {
+		return agentInvalid("售价不能为负数")
+	}
+	if candidate.Changes.SettlementPrice != nil && *candidate.Changes.SettlementPrice < 0 {
+		return agentInvalid("结算价不能为负数")
+	}
+	if candidate.Changes.ValidityType != nil && *candidate.Changes.ValidityType != "date" && *candidate.Changes.ValidityType != "days" {
+		return agentInvalid("有效期类型只能是 date 或 days")
+	}
+	if candidate.Changes.CodeMode != nil && *candidate.Changes.CodeMode != "order" && *candidate.Changes.CodeMode != "ticket" {
+		return agentInvalid("出票方式只能是 order 或 ticket")
+	}
+	if candidate.Changes.StockType != nil && *candidate.Changes.StockType != "unlimited" && *candidate.Changes.StockType != "daily" && *candidate.Changes.StockType != "total" {
+		return agentInvalid("库存类型只能是 unlimited、daily 或 total")
+	}
+	if candidate.Changes.RefundType != nil && *candidate.Changes.RefundType != "no_refund" && *candidate.Changes.RefundType != "free" && *candidate.Changes.RefundType != "ladder" {
+		return agentInvalid("退款类型不是受支持的值")
+	}
+	for field, value := range map[string]*int{"validity_days": candidate.Changes.ValidityDays, "daily_stock": candidate.Changes.DailyStock, "limit_per_phone": candidate.Changes.LimitPerPhone, "limit_per_id": candidate.Changes.LimitPerID} {
+		if value != nil && *value < 0 {
+			return agentInvalid(fmt.Sprintf("%s 不能为负数", field))
+		}
+	}
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if agentHasAny(normalized, agentProductCreateIntentWords) && !agentHasAny(normalized, agentProductUpdateIntentWords) {
+		return agentInvalid("票种修改请求不能创建新票种，请明确使用修改或更新")
+	}
+	if agentHasAny(normalized, []string{"检票点", "核销规则", "规则组", "票规"}) {
+		return agentInvalid("检票点和核销规则请使用批量票规操作")
+	}
+	return nil
+}
+
 // validateAgentInputIntent is deliberately conservative for a new task. A
 // later product turn may be a short answer such as a checkpoint name, so the
 // existing task type is the authority for continuation turns.
@@ -103,7 +166,10 @@ func validateAgentInputIntent(input, existingOperationType string) error {
 		}
 		return agentInvalid("请明确要增加、移除或设置哪些检票规则")
 	}
-	if agentHasAny(normalized, agentCatalogIntentWords) || agentHasAny(normalized, agentProductCreateIntentWords) {
+	if existingOperationType == AgentOperationTicketProductUpdate {
+		return nil
+	}
+	if agentHasAny(normalized, agentCatalogIntentWords) || agentHasAny(normalized, agentProductCreateIntentWords) || agentHasAny(normalized, agentProductUpdateIntentWords) {
 		return nil
 	}
 	return agentInvalid("AI 助手只处理票规调整或新票种创建，请先描述明确的业务操作")
@@ -128,6 +194,9 @@ func validateAgentPlannerEnvelopeForTask(input string, task model.AgentTask, env
 		// such as "水上乐园". The durable previous operation is authoritative;
 		// the planner will reconstruct it below instead of returning a 500 or
 		// discarding the user's answer.
+		return nil
+	}
+	if task.OperationType == AgentOperationTicketProductUpdate && envelope != nil && envelope.Product == nil && envelope.ProductUpdate == nil && len(envelope.Operations) == 0 && (envelopeOperationType == "" || envelopeOperationType == AgentOperationTicketProductUpdate) {
 		return nil
 	}
 	if err := validateAgentPlannerEnvelope(input, envelope); err == nil {
@@ -170,6 +239,10 @@ var agentCatalogIntentWords = []string{
 
 var agentProductCreateIntentWords = []string{
 	"创建", "新建", "生成票种", "创建票种", "新票种", "建一个票", "做一个票", "需要一个票", "要一个票", "开一个票种",
+}
+
+var agentProductUpdateIntentWords = []string{
+	"修改票种", "更新票种", "调整票种", "编辑票种", "改票种", "修改售价", "调整售价", "修改价格", "调整价格", "修改结算价", "调整结算价", "修改有效期", "调整有效期", "修改标签", "调整标签", "改名",
 }
 
 var agentReadIntentWords = []string{

@@ -1,6 +1,6 @@
 # Scenic Ticketing System Contract
 
-Skill version: 2026-08-16.v2
+Skill version: 2026-08-16.v3
 
 This is the server-owned map of the scenic ticketing platform. It describes
 the business modules and their current AI access level. It is data, not an
@@ -26,7 +26,7 @@ validation.
 
 | Module | Current AI access | Supported meaning |
 | --- | --- | --- |
-| catalog | query and preview | Ticket products, revisions, checkpoint rules, and unpublished product drafts |
+| catalog | query and preview | Ticket products, revisions, checkpoint rules, unpublished product drafts, and restricted unpublished product updates |
 | inventory | query | Dated ticket capacity, sold quantity, and remaining quantity; no inventory mutation |
 | orders | query | Tenant-owned order summaries and order items; no order, payment, or refund mutation |
 | reports | query | Sales-period restatement and first-effective verification summaries; no financial mutation |
@@ -46,7 +46,9 @@ validation.
 1. Query tools are read-only and return server-owned, tenant-scoped facts.
 2. Preview tools may create a durable plan or preview record, but must not
    change the business product, ticket, inventory, order, payment, channel,
-   or financial fact.
+   or financial fact before confirmation. The restricted unpublished product
+   update changes a product only after confirmation and only under its closed
+   status, distribution, and revision preconditions.
 3. Confirmation is a user action outside the model tool registry. It rechecks
    the task version, plan hash, tenant, actor, permissions, current revision,
    and domain preconditions before invoking the existing service.

@@ -68,69 +68,49 @@ func (s *ProductService) createTx(tx *gorm.DB, product *model.Product, rule *mod
 // Update 更新产品及规则 (事务处理)
 func (s *ProductService) Update(id, tenantID uint, product *model.Product, rule *model.TicketRule) error {
 	return model.Write(func(tx *gorm.DB) error {
-		// 1. Find existing product to get RuleID
-		var existingProduct model.Product
-		if err := tx.Where("id = ? AND tenant_id = ?", id, tenantID).First(&existingProduct).Error; err != nil {
+		return s.updateTx(tx, id, tenantID, product, rule)
+	})
+}
+
+// updateTx is the transaction-aware product update path used by both the
+// management API and durable agent confirmations. Keeping the domain write in
+// one implementation prevents an approval flow from drifting from the normal
+// product editor's ownership, validation, and revision semantics.
+func (s *ProductService) updateTx(tx *gorm.DB, id, tenantID uint, product *model.Product, rule *model.TicketRule) error {
+	// 1. Find existing product to get RuleID
+	var existingProduct model.Product
+	if err := tx.Where("id = ? AND tenant_id = ?", id, tenantID).First(&existingProduct).Error; err != nil {
+		return err
+	}
+	if isDistributedListing(&existingProduct) {
+		if err := requireActiveTenantCapability(tx, tenantID, "distributor"); err != nil {
 			return err
 		}
-		if isDistributedListing(&existingProduct) {
-			if err := requireActiveTenantCapability(tx, tenantID, "distributor"); err != nil {
+		if err := requireActiveScenicSupplier(tx, productFulfillmentTenantID(&existingProduct)); err != nil {
+			return fmt.Errorf("supplier is unavailable: %w", err)
+		}
+	} else if err := requireActiveScenicSupplier(tx, tenantID); err != nil {
+		return err
+	}
+
+	// A distributor listing does not own the supplier's fulfillment rule.
+	// It may change its sell-side presentation, but its source and settlement
+	// ownership stay immutable and its local rule is never rewritten.
+	if isDistributedListing(&existingProduct) {
+		if product.Status == "online" {
+			fulfillmentProductID := existingProduct.FulfillmentProductID
+			if fulfillmentProductID == 0 {
+				fulfillmentProductID = existingProduct.SourceProductID
+			}
+			if err := rejectScenicHotelPackageDistributionTx(tx, fulfillmentProductID); err != nil {
 				return err
 			}
-			if err := requireActiveScenicSupplier(tx, productFulfillmentTenantID(&existingProduct)); err != nil {
-				return fmt.Errorf("supplier is unavailable: %w", err)
-			}
-		} else if err := requireActiveScenicSupplier(tx, tenantID); err != nil {
+		}
+		if err := validateSellerListingFields(product); err != nil {
 			return err
 		}
-
-		// A distributor listing does not own the supplier's fulfillment rule.
-		// It may change its sell-side presentation, but its source and settlement
-		// ownership stay immutable and its local rule is never rewritten.
-		if isDistributedListing(&existingProduct) {
-			if product.Status == "online" {
-				fulfillmentProductID := existingProduct.FulfillmentProductID
-				if fulfillmentProductID == 0 {
-					fulfillmentProductID = existingProduct.SourceProductID
-				}
-				if err := rejectScenicHotelPackageDistributionTx(tx, fulfillmentProductID); err != nil {
-					return err
-				}
-			}
-			if err := validateSellerListingFields(product); err != nil {
-				return err
-			}
-			product.ID = id
-			product.RuleID = existingProduct.RuleID
-			product.TenantID = existingProduct.TenantID
-			product.SourceProductID = existingProduct.SourceProductID
-			product.SourceTenantID = existingProduct.SourceTenantID
-			product.FulfillmentProductID = existingProduct.FulfillmentProductID
-			product.FulfillmentTenantID = existingProduct.FulfillmentTenantID
-			product.FulfillmentScenicAreaID = existingProduct.FulfillmentScenicAreaID
-			product.ProductOfferID = existingProduct.ProductOfferID
-			product.ScenicAreaID = existingProduct.ScenicAreaID
-			product.SettlementPrice = existingProduct.SettlementPrice
-			product.GateVoiceCode = existingProduct.GateVoiceCode
-			return tx.Model(&existingProduct).
-				Select("*").
-				Omit("id", "created_at", "updated_at", "deleted_at", "tenant_id", "rule_id",
-					"source_product_id", "source_tenant_id", "fulfillment_product_id", "fulfillment_tenant_id", "fulfillment_scenic_area_id", "product_offer_id", "settlement_price", "scenic_area_id").
-				Updates(product).Error
-		}
-		if err := (PackageFulfillmentLifecycle{}).AssertProductCodeModeSupported(tx, tenantID, id, product.CodeMode); err != nil {
-			return err
-		}
-
-		if err := validateProduct(tx, tenantID, product, rule); err != nil {
-			return err
-		}
-		if err := assignProductScenicArea(tx, tenantID, product, rule); err != nil {
-			return err
-		}
-		// 2. Update Product Fields
 		product.ID = id
-		product.RuleID = existingProduct.RuleID // Keep the same Rule ID
+		product.RuleID = existingProduct.RuleID
 		product.TenantID = existingProduct.TenantID
 		product.SourceProductID = existingProduct.SourceProductID
 		product.SourceTenantID = existingProduct.SourceTenantID
@@ -138,75 +118,103 @@ func (s *ProductService) Update(id, tenantID uint, product *model.Product, rule 
 		product.FulfillmentTenantID = existingProduct.FulfillmentTenantID
 		product.FulfillmentScenicAreaID = existingProduct.FulfillmentScenicAreaID
 		product.ProductOfferID = existingProduct.ProductOfferID
-		if product.ScenicAreaID == 0 {
-			product.ScenicAreaID = existingProduct.ScenicAreaID
-		}
-
-		// Use Select("*") to update all fields including zero values (e.g. 0, "", false)
-		// Omit protected fields
-		if err := tx.Model(&existingProduct).
+		product.ScenicAreaID = existingProduct.ScenicAreaID
+		product.SettlementPrice = existingProduct.SettlementPrice
+		product.GateVoiceCode = existingProduct.GateVoiceCode
+		return tx.Model(&existingProduct).
 			Select("*").
 			Omit("id", "created_at", "updated_at", "deleted_at", "tenant_id", "rule_id",
-				"source_product_id", "source_tenant_id", "fulfillment_product_id", "fulfillment_tenant_id", "fulfillment_scenic_area_id", "product_offer_id").
-			Updates(product).Error; err != nil {
+				"source_product_id", "source_tenant_id", "fulfillment_product_id", "fulfillment_tenant_id", "fulfillment_scenic_area_id", "product_offer_id", "settlement_price", "scenic_area_id").
+			Updates(product).Error
+	}
+	if err := (PackageFulfillmentLifecycle{}).AssertProductCodeModeSupported(tx, tenantID, id, product.CodeMode); err != nil {
+		return err
+	}
+
+	if err := validateProduct(tx, tenantID, product, rule); err != nil {
+		return err
+	}
+	if err := assignProductScenicArea(tx, tenantID, product, rule); err != nil {
+		return err
+	}
+	// 2. Update Product Fields
+	product.ID = id
+	product.RuleID = existingProduct.RuleID // Keep the same Rule ID
+	product.TenantID = existingProduct.TenantID
+	product.SourceProductID = existingProduct.SourceProductID
+	product.SourceTenantID = existingProduct.SourceTenantID
+	product.FulfillmentProductID = existingProduct.FulfillmentProductID
+	product.FulfillmentTenantID = existingProduct.FulfillmentTenantID
+	product.FulfillmentScenicAreaID = existingProduct.FulfillmentScenicAreaID
+	product.ProductOfferID = existingProduct.ProductOfferID
+	if product.ScenicAreaID == 0 {
+		product.ScenicAreaID = existingProduct.ScenicAreaID
+	}
+
+	// Use Select("*") to update all fields including zero values (e.g. 0, "", false)
+	// Omit protected fields
+	if err := tx.Model(&existingProduct).
+		Select("*").
+		Omit("id", "created_at", "updated_at", "deleted_at", "tenant_id", "rule_id",
+			"source_product_id", "source_tenant_id", "fulfillment_product_id", "fulfillment_tenant_id", "fulfillment_scenic_area_id", "product_offer_id").
+		Updates(product).Error; err != nil {
+		return err
+	}
+
+	// 3. Update Rule Basic Info
+	rule.ID = existingProduct.RuleID
+	rule.TenantID = tenantID
+	if err := tx.Model(&model.TicketRule{Base: model.Base{ID: rule.ID}}).Updates(rule).Error; err != nil {
+		return err
+	}
+
+	// 4. Replace Rule Groups & Items (Simplest strategy for complex nested updates)
+	// 4.1 Find all existing groups for this rule
+	var existingGroups []model.RuleGroup
+	if err := tx.Where("rule_id = ?", rule.ID).Find(&existingGroups).Error; err != nil {
+		return err
+	}
+
+	// 4.2 Delete all items in these groups
+	for _, g := range existingGroups {
+		if err := tx.Where("group_id = ?", g.ID).Delete(&model.RuleItem{}).Error; err != nil {
 			return err
 		}
+	}
 
-		// 3. Update Rule Basic Info
-		rule.ID = existingProduct.RuleID
-		rule.TenantID = tenantID
-		if err := tx.Model(&model.TicketRule{Base: model.Base{ID: rule.ID}}).Updates(rule).Error; err != nil {
+	// 4.3 Delete all groups
+	if err := tx.Where("rule_id = ?", rule.ID).Delete(&model.RuleGroup{}).Error; err != nil {
+		return err
+	}
+
+	// 4.4 Re-create Groups and Items
+	for _, group := range rule.Groups {
+		group.RuleID = rule.ID
+		// Clear IDs to force create (avoid PK conflict with soft-deleted records)
+		group.ID = 0
+
+		for i := range group.Items {
+			group.Items[i].ID = 0
+			group.Items[i].GroupID = 0
+		}
+
+		if err := tx.Create(&group).Error; err != nil {
 			return err
 		}
-
-		// 4. Replace Rule Groups & Items (Simplest strategy for complex nested updates)
-		// 4.1 Find all existing groups for this rule
-		var existingGroups []model.RuleGroup
-		if err := tx.Where("rule_id = ?", rule.ID).Find(&existingGroups).Error; err != nil {
-			return err
-		}
-
-		// 4.2 Delete all items in these groups
-		for _, g := range existingGroups {
-			if err := tx.Where("group_id = ?", g.ID).Delete(&model.RuleItem{}).Error; err != nil {
-				return err
-			}
-		}
-
-		// 4.3 Delete all groups
-		if err := tx.Where("rule_id = ?", rule.ID).Delete(&model.RuleGroup{}).Error; err != nil {
-			return err
-		}
-
-		// 4.4 Re-create Groups and Items
-		for _, group := range rule.Groups {
-			group.RuleID = rule.ID
-			// Clear IDs to force create (avoid PK conflict with soft-deleted records)
-			group.ID = 0
-
-			for i := range group.Items {
-				group.Items[i].ID = 0
-				group.Items[i].GroupID = 0
-			}
-
-			if err := tx.Create(&group).Error; err != nil {
-				return err
-			}
-		}
-		var revised model.Product
-		if err := tx.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Where("id = ? AND tenant_id = ?", id, tenantID).First(&revised).Error; err != nil {
-			return err
-		}
-		if _, err := createProductRevisionTx(tx, &revised); err != nil {
-			return err
-		}
-		if err := tx.Model(&model.ProductOffer{}).
-			Where("source_product_id = ? AND supplier_tenant_id = ? AND status = ? AND product_revision_id != ?", revised.ID, tenantID, "active", revised.CurrentRevisionID).
-			Update("product_revision_id", revised.CurrentRevisionID).Error; err != nil {
-			return err
-		}
-		return syncListingsForSourceProductTx(tx, tenantID, revised.ID, 0, "supplier product revision changed; active offers follow the new rule revision")
-	})
+	}
+	var revised model.Product
+	if err := tx.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Where("id = ? AND tenant_id = ?", id, tenantID).First(&revised).Error; err != nil {
+		return err
+	}
+	if _, err := createProductRevisionTx(tx, &revised); err != nil {
+		return err
+	}
+	if err := tx.Model(&model.ProductOffer{}).
+		Where("source_product_id = ? AND supplier_tenant_id = ? AND status = ? AND product_revision_id != ?", revised.ID, tenantID, "active", revised.CurrentRevisionID).
+		Update("product_revision_id", revised.CurrentRevisionID).Error; err != nil {
+		return err
+	}
+	return syncListingsForSourceProductTx(tx, tenantID, revised.ID, 0, "supplier product revision changed; active offers follow the new rule revision")
 }
 
 func createProductRevisionTx(tx *gorm.DB, product *model.Product) (*model.ProductRevision, error) {

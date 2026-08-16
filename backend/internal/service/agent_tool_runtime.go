@@ -54,6 +54,7 @@ var agentToolSpecs = []agentToolSpec{
 	{Name: "query_sales_summary", Description: "查询当前租户按原收款期重述退款后的销售汇总，返回每日售券、退款和净额，不修改报表事实", ModuleID: agentModuleReports, ActionKind: "query", Permission: authz.PermissionReportsRead, CapabilityAny: []string{"supplier", "distributor", "travel_agency"}, ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"start_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"end_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}},"additionalProperties":false}`)},
 	{Name: "query_verification_summary", Description: "查询当前供应商按首次有效核销日期汇总的核销事实，已被成功退款的核销不再计入收入", ModuleID: agentModuleReports, ActionKind: "query", Permission: authz.PermissionReportsRead, Capability: "supplier", BusinessType: "scenic", ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"start_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"end_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"}},"additionalProperties":false}`)},
 	{Name: "prepare_ticket_product_create", Description: "准备创建一个尚未上线的票种预览，不执行创建和分发。创建请求应直接调用此工具；服务端会按当前租户精确解析景区和检票点，并返回缺失字段或候选项", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"product_type":{"type":"string","enum":["online","offline"]},"scenic_area_name":{"type":"string"},"price":{"type":["number","null"]},"settlement_price":{"type":["number","null"]},"validity_type":{"type":"string"},"validity_days":{"type":["integer","null"]},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"rule_name":{"type":"string"},"groups":{"type":"array","items":{"type":"object","properties":{"group_name":{"type":"string"},"max_total_check_in":{"type":"integer"},"items":{"type":"array","items":{"type":"object","properties":{"checkpoint_name":{"type":"string"},"max_per_check_in":{"type":"integer"}},"additionalProperties":false}}},"additionalProperties":false}},"code_mode":{"type":"string"},"stock_type":{"type":"string"},"daily_stock":{"type":["integer","null"]},"real_name_required":{"type":["boolean","null"]},"refund_type":{"type":"string"},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":["integer","null"]},"limit_per_id":{"type":["integer","null"]}},"additionalProperties":false}`)},
+	{Name: "prepare_ticket_product_update", Description: "准备修改当前租户仍未上架、未分销票种的基础信息预览，不执行修改。不能修改票种类型、所属景区、上架状态、分销授权或检票规则", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","required":["product_name","changes"],"properties":{"product_name":{"type":"string","minLength":1,"maxLength":100},"changes":{"type":"object","properties":{"name":{"type":"string","maxLength":100},"price":{"type":"number","minimum":0},"settlement_price":{"type":"number","minimum":0},"validity_type":{"type":"string","enum":["date","days"]},"validity_days":{"type":"integer","minimum":0},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"code_mode":{"type":"string","enum":["order","ticket"]},"stock_type":{"type":"string","enum":["unlimited","daily","total"]},"daily_stock":{"type":"integer","minimum":0},"real_name_required":{"type":"boolean"},"refund_type":{"type":"string","enum":["no_refund","free","ladder"]},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":"integer","minimum":0},"limit_per_id":{"type":"integer","minimum":0}},"additionalProperties":false}},"additionalProperties":false}`)},
 	{Name: "prepare_catalog_rule_change", Description: "准备票种检票规则变更预览，不执行修改", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","required":["operations"],"properties":{"operations":{"type":"array","minItems":1,"maxItems":50,"items":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["add_checkpoints","remove_checkpoints","set_checkpoint_limit"]},"product_names":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"all_products":{"type":"boolean"},"checkpoint_names":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"group_name":{"type":"string","maxLength":100},"create_group":{"type":"boolean"},"group_max_total_check_in":{"type":["integer","null"],"minimum":0,"maximum":1000},"max_per_check_in":{"type":["integer","null"],"minimum":1,"maximum":1000}},"additionalProperties":false}}},"additionalProperties":false}`)},
 }
 
@@ -110,6 +111,17 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 		if len(visible) == 0 {
 			return nil, agentInvalid("当前账号没有创建票种预览权限")
 		}
+	} else if task.OperationType == AgentOperationTicketProductUpdate || (agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentProductUpdateIntentWords) && !agentHasAny(strings.ToLower(strings.TrimSpace(input)), []string{"检票点", "核销规则", "规则组", "票规"})) {
+		updateTools := make([]agentToolSpec, 0, 1)
+		for _, spec := range visible {
+			if spec.Name == "prepare_ticket_product_update" {
+				updateTools = append(updateTools, spec)
+			}
+		}
+		visible = updateTools
+		if len(visible) == 0 {
+			return nil, agentInvalid("当前账号没有票种修改预览权限")
+		}
 	}
 	contextJSON := strings.TrimSpace(task.ContextJSON)
 	if contextJSON == "" {
@@ -146,6 +158,10 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 		<task_context>` + providerContextJSON + `</task_context>
 <domain_skill>` + domainSkill + `</domain_skill>
 对于创建新票种的请求，必须直接调用 prepare_ticket_product_create 生成预览；不要先反复调用景区、检票点或票种搜索工具来猜测名称。服务端会按当前租户精确解析名称，并在信息不足或名称不明确时返回缺失字段和候选项。只有用户明确要求查询时才调用只读搜索工具。`
+	// Keep the tool prompt explicit about the new preview seam so a provider
+	// cannot mistake a product update for a rule deployment.
+	systemPrompt += `
+对于修改票种基础信息的请求，必须直接调用 prepare_ticket_product_update；只填写用户明确提供的票种名称和字段，服务端只接受当前租户仍未上架、未分销的票种，并在确认时再次锁定当前版本。不要通过该工具修改检票点、规则组、上架状态、分销授权、渠道、库存预占或资金事实。`
 
 	messages := []AIMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: input}}
 	definitions := agentToolDefinitions(visible)
@@ -429,6 +445,21 @@ func (s *AgentTaskService) executeAgentTool(tenantID, actorUserID uint, actorRol
 			return agentToolExecution{}, err
 		}
 		envelope := &agentAIEnvelope{OperationType: AgentOperationTicketProductCreate, Product: &candidate}
+		if err := validateAgentPlannerEnvelopeForTask(input, task, envelope); err != nil {
+			return agentToolExecution{}, err
+		}
+		planning, err := s.planFromEnvelope(tenantID, actorUserID, actorRole, task, input, task.ContextJSON, config, s.aiService(), envelope)
+		if err != nil {
+			return agentToolExecution{}, err
+		}
+		encoded, _ := json.Marshal(planning)
+		return agentToolExecution{ResultJSON: string(encoded), Planning: planning}, nil
+	case "prepare_ticket_product_update":
+		var candidate agentProductUpdateCandidate
+		if err := decodeAgentToolArguments(rawArgs, &candidate); err != nil {
+			return agentToolExecution{}, err
+		}
+		envelope := &agentAIEnvelope{OperationType: AgentOperationTicketProductUpdate, ProductUpdate: &candidate}
 		if err := validateAgentPlannerEnvelopeForTask(input, task, envelope); err != nil {
 			return agentToolExecution{}, err
 		}

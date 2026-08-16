@@ -197,13 +197,13 @@ func TestPostgresSchema91MigratesLegacyAIRequestTimeout(t *testing.T) {
 	}
 }
 
-func TestPostgresSchema89AgentTaskOwnershipGuard(t *testing.T) {
+func TestPostgresSchema95AgentTaskOwnershipGuard(t *testing.T) {
 	db := testdb.Open(t)
 	if err := runMigrations(db); err != nil {
 		t.Fatal(err)
 	}
-	if CurrentPostgresSchemaVersion < 89 {
-		t.Fatalf("current schema version=%d, want at least 89", CurrentPostgresSchemaVersion)
+	if CurrentPostgresSchemaVersion < 95 {
+		t.Fatalf("current schema version=%d, want at least 95", CurrentPostgresSchemaVersion)
 	}
 	first := Tenant{Name: "Agent Task Guard A", SystemCode: "AGENT-TASK-GUARD-A", SecretKey: "a", Status: "active"}
 	second := Tenant{Name: "Agent Task Guard B", SystemCode: "AGENT-TASK-GUARD-B", SecretKey: "b", Status: "active"}
@@ -216,6 +216,13 @@ func TestPostgresSchema89AgentTaskOwnershipGuard(t *testing.T) {
 	valid := AgentTask{TenantID: first.ID, ActorUserID: 1, ActorRole: "admin", OperationType: "ticket_product_create", State: "collecting", InputText: "创建成人票", ContextJSON: `{}`, MissingJSON: `[]`, IdempotencyKey: "agent-task-guard-key", Version: 1, ExpiresAt: time.Now().Add(time.Hour)}
 	if err := db.Create(&valid).Error; err != nil {
 		t.Fatal(err)
+	}
+	validUpdate := valid
+	validUpdate.ID = 0
+	validUpdate.OperationType = "ticket_product_update"
+	validUpdate.IdempotencyKey = "agent-task-guard-update-key"
+	if err := db.Create(&validUpdate).Error; err != nil {
+		t.Fatalf("agent product update task was rejected: %v", err)
 	}
 	unknownTenant := valid
 	unknownTenant.ID = 0

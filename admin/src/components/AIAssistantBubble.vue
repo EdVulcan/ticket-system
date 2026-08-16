@@ -95,7 +95,7 @@
               <div class="wide"><span>标签</span><strong>{{ productPreview.product?.tags || '-' }}</strong></div>
               <div class="wide"><span>其他退款说明</span><strong>{{ productPreview.product?.refund_rule || '-' }}</strong></div>
             </div>
-            <div class="rule-preview">
+            <div v-if="!isProductUpdatePreview" class="rule-preview">
               <div class="diff-heading"><strong>{{ productPreview.rule?.name || '检票规则' }}</strong><span>{{ productPreview.rule?.validity_type || 'date' }}</span></div>
               <div v-for="group in productPreview.rule_groups || []" :key="group.group_name" class="rule-group">
                 <span>{{ group.group_name || '默认分组' }}</span>
@@ -105,6 +105,20 @@
             <ul v-if="productPreview.assumptions?.length" class="assumption-list">
               <li v-for="assumption in productPreview.assumptions" :key="assumption">{{ assumption }}</li>
             </ul>
+            <div v-if="isProductUpdatePreview" class="product-update-diff">
+              <div class="diff-heading"><strong>基础信息变更</strong><span>确认后生成新版本</span></div>
+              <div v-for="row in productUpdateRows" :key="row.key" class="product-update-row">
+                <span class="product-update-label">{{ row.label }}</span>
+                <div class="product-update-values">
+                  <div><small>变更前</small><strong>{{ row.format(preview.before) }}</strong></div>
+                  <el-icon><Right /></el-icon>
+                  <div><small>变更后</small><strong>{{ row.format(preview.after) }}</strong></div>
+                </div>
+              </div>
+              <ul v-if="preview.safety?.length" class="assumption-list">
+                <li v-for="item in preview.safety" :key="item">{{ item }}</li>
+              </ul>
+            </div>
           </template>
           <template v-else>
             <div class="operation-summary">
@@ -203,8 +217,30 @@ const errorTitle = computed(() => {
 const errorActionLabel = computed(() => errorKind.value === 'auth' ? '重新登录' : '重试')
 const providerLabel = computed(() => `${task.value?.provider || availability.value?.provider || '平台模型'}${task.value?.model ? ` / ${task.value.model}` : ''}`)
 const preview = computed(() => task.value?.preview || {})
-const productPreview = computed(() => preview.value?.operation_type === 'ticket_product_create' ? preview.value : {})
-const isProductPreview = computed(() => preview.value?.operation_type === 'ticket_product_create')
+const isProductUpdatePreview = computed(() => preview.value?.operation_type === 'ticket_product_update')
+const productPreview = computed(() => {
+  if (preview.value?.operation_type === 'ticket_product_create') return preview.value
+  if (isProductUpdatePreview.value) return { ...preview.value, product: preview.value.after }
+  return {}
+})
+const isProductPreview = computed(() => preview.value?.operation_type === 'ticket_product_create' || isProductUpdatePreview.value)
+const productUpdateRows = computed(() => {
+  if (!isProductUpdatePreview.value) return []
+  const labels: Array<{ key: string, label: string, format: (product: any) => string }> = [
+    { key: 'name', label: '票种名称', format: (product) => product?.name || '-' },
+    { key: 'price', label: '售价', format: (product) => money(product?.price) },
+    { key: 'settlement_price', label: '结算价', format: (product) => money(product?.settlement_price) },
+    { key: 'validity', label: '有效期', format: (product) => validityText(product) },
+    { key: 'stock', label: '库存', format: (product) => stockText(product) },
+    { key: 'identity', label: '实名与限购', format: (product) => identityLimitText(product) },
+    { key: 'refund', label: '退款规则', format: (product) => refundText(product) },
+    { key: 'code_mode', label: '出票方式', format: (product) => product?.code_mode || '-' },
+    { key: 'gate_voice_code', label: '闸机语音', format: (product) => product?.gate_voice_code || '-' },
+    { key: 'tags', label: '标签', format: (product) => product?.tags || '-' },
+  ]
+  const changed = new Set(preview.value?.changes || [])
+  return labels.filter((row) => changed.has(row.label))
+})
 
 function newKey() { return `catalog-ai-${Date.now()}-${Math.random().toString(36).slice(2, 9)}` }
 const statusText = (status: string) => ({ awaiting_confirmation: '待确认', completed: '已完成', collecting: '补充信息', expired: '已过期', failed: '执行失败', cancelled: '已放弃' } as Record<string, string>)[status] || status
@@ -448,6 +484,16 @@ const startNewTask = async () => {
 .product-detail-grid span { color: #929baa; font-size: 10px; }
 .product-detail-grid strong { margin-top: 3px; overflow-wrap: anywhere; color: #344054; font-size: 11px; line-height: 16px; }
 .rule-preview { padding: 10px; border: 1px solid #e2e7ee; border-radius: 5px; }
+.product-update-diff { margin-top: 10px; padding: 10px; border: 1px solid #e2e7ee; border-radius: 5px; }
+.product-update-row { padding-top: 8px; }
+.product-update-row + .product-update-row { margin-top: 8px; border-top: 1px solid #edf0f4; }
+.product-update-label { display: block; color: #667085; font-size: 10px; }
+.product-update-values { display: grid; grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr); align-items: center; gap: 6px; margin-top: 5px; }
+.product-update-values > div { min-width: 0; padding: 7px; background: #f8fafc; border-radius: 4px; }
+.product-update-values small, .product-update-values strong { display: block; }
+.product-update-values small { margin-bottom: 2px; color: #929baa; font-size: 9px; }
+.product-update-values strong { overflow-wrap: anywhere; color: #344054; font-size: 10px; line-height: 15px; }
+.product-update-values .el-icon { color: #929baa; }
 .rule-group { display: flex; justify-content: space-between; gap: 10px; padding-top: 8px; color: #344054; font-size: 11px; }
 .rule-group code { color: #667085; font-family: inherit; text-align: right; }
 .assumption-list { margin: 10px 0 0; padding-left: 18px; color: #667085; font-size: 11px; line-height: 17px; }
@@ -472,5 +518,5 @@ const startNewTask = async () => {
 .diff-values .el-icon { color: #929baa; }
 .line-error { margin: 8px 0 0; color: #d94b54; font-size: 11px; }
 .preview-actions { justify-content: flex-end; }
-@media (max-width: 560px) { .ai-assistant { right: 14px; bottom: 14px; } .assistant-panel { width: calc(100vw - 28px); max-height: calc(100vh - 28px); } .assistant-body { max-height: calc(100vh - 89px); padding: 12px; } .assistant-actions { align-items: flex-end; } .diff-values { grid-template-columns: minmax(0, 1fr); } .diff-values > .el-icon { justify-self: center; transform: rotate(90deg); } }
+@media (max-width: 560px) { .ai-assistant { right: 14px; bottom: 14px; } .assistant-panel { width: calc(100vw - 28px); max-height: calc(100vh - 28px); } .assistant-body { max-height: calc(100vh - 89px); padding: 12px; } .assistant-actions { align-items: flex-end; } .diff-values, .product-update-values { grid-template-columns: minmax(0, 1fr); } .diff-values > .el-icon, .product-update-values > .el-icon { justify-self: center; transform: rotate(90deg); } }
 </style>

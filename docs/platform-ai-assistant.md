@@ -28,7 +28,7 @@
 4. 明确确认后才执行。批量规则仍由原计划哈希和产品锁保护；新票种在同一个任务事务中调用现有产品创建服务。重复确认返回同一结果，过期或当前数据变化会拒绝执行。
 5. 任务过期、冲突或输入方向改变时，可以点击“新建任务”。系统会把当前规划任务标记为 `cancelled` 并保留审计记录，不删除历史上下文；正在执行的任务不能被放弃，避免把已开始的业务操作误认为已取消。
 
-`tool_v1` 当前注册的查询工具包括目录、`search_orders`、`query_ticket_inventory`、`query_sales_summary` 和 `query_verification_summary`；`prepare_ticket_product_create` 与 `prepare_catalog_rule_change` 仍是唯一的预览工具。查询工具返回带模块、筛选条件、生成时间和数量信息的服务器 `QueryResult`，不返回数据库编号，也不执行写入。销售汇总按原收款期重述后续退款，核销汇总按首次有效核销日期计算。酒店、分销和渠道状态尚未注册工具，后续仍按同一注册表增加低风险能力。
+`tool_v1` 当前注册的查询工具包括目录、`search_orders`、`query_ticket_inventory`、`query_sales_summary` 和 `query_verification_summary`；预览工具包括 `prepare_ticket_product_create`、`prepare_ticket_product_update` 和 `prepare_catalog_rule_change`。其中 `prepare_ticket_product_update` 仅接受当前租户仍未上架、未分销票种的基础字段修改，确认时锁定当前产品版本并生成新版本；检票规则仍使用批量票规预览。查询工具返回带模块、筛选条件、生成时间和数量信息的服务器 `QueryResult`，不返回数据库编号，也不执行写入。销售汇总按原收款期重述后续退款，核销汇总按首次有效核销日期计算。酒店、分销和渠道状态尚未注册工具，后续仍按同一注册表增加低风险能力。
 
 悬浮助手没有直接写商品、票规、库存、分销授权或订单的权限。模型返回非法 JSON、未知工具、未知参数、跨租户对象或不支持的操作时，服务端拒绝生成预览，不会猜测执行。任务状态和规范化上下文持久保存在 `AgentTask`，模型请求和工具调用的脱敏结果、token 用量、调用编号和耗时追加写入 `AgentTaskEvent`；工具幂等键绑定任务版本、工具和参数，失败调用不会伪装成成功。批量领域计划已提交但任务收尾中断时，后续确认会依据计划状态恢复或标记失败，不会重复执行。刷新页面后可继续未完成任务，任务按租户和操作者隔离并有过期时间。
 
