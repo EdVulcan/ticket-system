@@ -132,6 +132,31 @@ func TestAgentProductCandidateCannotInventCriticalFacts(t *testing.T) {
 	}
 }
 
+func TestAgentProductSanitizesMalformedGroupTotal(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	candidate := &agentProductCandidate{
+		Groups: []agentRuleDraftGroup{{
+			GroupName:       "Admission",
+			MaxTotalCheckIn: 10,
+			Items:           []agentRuleDraftItem{{CheckpointName: fixture.checkpoint.Name, MaxPerCheckIn: 10}},
+		}},
+	}
+	facts, err := mergeAgentProductUserFacts(agentProductUserFacts{}, "使用 Main Gate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sanitized, err := sanitizeAgentProductCandidate("使用 Main Gate", agentTaskContext{}, candidate, &facts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sanitized.Groups) != 1 || sanitized.Groups[0].MaxTotalCheckIn != 0 {
+		t.Fatalf("malformed provider group total survived sanitization: %+v", sanitized.Groups)
+	}
+	if sanitized.Groups[0].Items[0].MaxPerCheckIn != 10 {
+		t.Fatalf("explicit per-checkpoint limit was discarded: %+v", sanitized.Groups)
+	}
+}
+
 func TestAgentProductExplicitFactsOverrideStaleModelCandidates(t *testing.T) {
 	fixture := seedCatalogBatchFixture(t)
 	price := 55.0

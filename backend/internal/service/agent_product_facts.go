@@ -110,6 +110,13 @@ func sanitizeAgentProductCandidate(input string, previous agentTaskContext, sour
 			}
 		}
 		if len(filteredItems) > 0 {
+			// Group totals are optional and are not a substitute for an item's
+			// per-check-in limit. A provider can easily mistake a number such as
+			// "elevator: 10 times" for a group total; ignore only malformed
+			// provider values so the server can still preview the explicit items.
+			if group.MaxTotalCheckIn < 0 || group.MaxTotalCheckIn > len(filteredItems) {
+				group.MaxTotalCheckIn = 0
+			}
 			group.Items = filteredItems
 			filteredGroups = append(filteredGroups, group)
 		}
