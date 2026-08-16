@@ -128,11 +128,12 @@ jobs:
         env:
           CGO_ENABLED: "0"
       - name: Upload Linux server artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: server-backend
           path: backend/ticket-backend
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
 
   frontend:
@@ -153,12 +154,12 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Upload admin artifact
-        if: matrix.app == 'admin'
+        if: matrix.app == 'admin' && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: admin-web
           path: admin/dist
-          retention-days: 3
+          retention-days: 1
           if-no-files-found: error
 
   admin-e2e:
@@ -239,11 +240,12 @@ jobs:
             throw 'Windows POS was not built with the production API endpoint'
           }
       - name: Upload Windows POS
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: windows-ticket-pos
           path: desktop/build/bin/ticket-pos.exe
-          retention-days: 14
+          retention-days: 3
           if-no-files-found: error
 
   deploy:
