@@ -321,6 +321,9 @@ func TestAgentPlannerPolicyRejectsInventedBroadOrOppositeOperations(t *testing.T
 	if err := validateAgentPlannerEnvelope("线上票所有飞车套票增加检票点水上乐园，可检票1次", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"成人票飞车套票"}, CheckpointNames: []string{"水上乐园"}}}}); err != nil {
 		t.Fatalf("bounded product scope was rejected: %v", err)
 	}
+	if err := validateAgentPlannerEnvelope("线上票所有飞车套票增加检票点水上乐园，可检票1次", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"成人票"}, CheckpointNames: []string{"水上乐园"}}}}); err != nil {
+		t.Fatalf("bounded product fragment was rejected before catalog canonicalization: %v", err)
+	}
 	if err := validateAgentPlannerEnvelope("所有票种增加 North Gate", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"Adult Ticket"}, CheckpointNames: []string{"North Gate"}}}}); err == nil {
 		t.Fatal("generic all-products wording incorrectly covered a named product")
 	}
@@ -335,6 +338,32 @@ func TestAgentPlannerPolicyRejectsInventedBroadOrOppositeOperations(t *testing.T
 	}
 	if err := validateAgentPlannerEnvelope("帮我介绍一下系统", &agentAIEnvelope{OperationType: AgentOperationPending}); err == nil {
 		t.Fatal("agent policy accepted an unrelated request")
+	}
+}
+
+func TestCanonicalizeAgentCatalogProductNamesUsesExplicitAndBoundedCatalogScope(t *testing.T) {
+	products := []model.Product{
+		{Name: "【成人票】飞车套票"},
+		{Name: "【儿童票】飞车套票"},
+		{Name: "普通成人票"},
+	}
+
+	explicit := canonicalizeAgentCatalogProductNames(
+		"线上门票【成人票】飞车套票增加检票点水上乐园，可检票1次",
+		[]CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"成人票"}}},
+		products,
+	)
+	if len(explicit) != 1 || len(explicit[0].ProductNames) != 1 || explicit[0].ProductNames[0] != "【成人票】飞车套票" {
+		t.Fatalf("explicit full product name was not canonicalized: %+v", explicit)
+	}
+
+	bounded := canonicalizeAgentCatalogProductNames(
+		"线上票所有飞车套票增加检票点水上乐园，可检票1次",
+		[]CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"成人票飞车套票"}}},
+		products,
+	)
+	if len(bounded) != 1 || len(bounded[0].ProductNames) != 2 || bounded[0].ProductNames[0] != "【成人票】飞车套票" || bounded[0].ProductNames[1] != "【儿童票】飞车套票" {
+		t.Fatalf("bounded category was not expanded to matching catalog products: %+v", bounded)
 	}
 }
 
@@ -382,10 +411,10 @@ func TestAgentTaskCollectsMissingGroupForMultiGroupTicket(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("add second rule group: %v", err)
 	}
-	server, _ := startCatalogAIProvider(t, `{"operation_type":"catalog_batch_change","operations":[{"kind":"add_checkpoints","product_names":["Adult Ticket"],"checkpoint_names":["North Gate"]}]}`)
+	server, _ := startCatalogAIProvider(t, `{"operation_type":"catalog_batch_change","operations":[{"kind":"add_checkpoints","product_names":["Adult"],"checkpoint_names":["North Gate"]}]}`)
 	saveCatalogAIConfig(t, server.URL, 10)
 	planned, err := (&AgentTaskService{}).Submit(t.Context(), fixture.tenant.ID, 11, "admin", AgentTaskRequest{
-		InputText: "给 Adult Ticket 增加 North Gate 检票点", IdempotencyKey: "agent-missing-group", TurnKey: "turn-1",
+		InputText: "给【Adult Ticket】增加 North Gate 检票点", IdempotencyKey: "agent-missing-group", TurnKey: "turn-1",
 	})
 	if err != nil {
 		t.Fatalf("multi-group planning should collect a group: %v", err)

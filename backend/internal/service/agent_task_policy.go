@@ -200,7 +200,8 @@ func validateAgentCatalogTargets(input string, operations []CatalogRuleOperation
 	for _, operation := range operations {
 		if !operation.AllProducts {
 			for _, productName := range operation.ProductNames {
-				if !agentTextContains(input, productName) && !agentProductNameCoveredByExplicitScope(input, productName) {
+				if !agentTextContains(input, productName) && !agentProductNameCoveredByExplicitScope(input, productName) &&
+					!(agentHasBoundedProductScope(input) && agentCanBeBoundedProductFragment(productName)) {
 					return agentInvalid(fmt.Sprintf("票种 %q 未在当前请求中明确指定，请使用当前租户的准确名称", productName))
 				}
 			}
@@ -212,6 +213,159 @@ func validateAgentCatalogTargets(input string, operations []CatalogRuleOperation
 		}
 	}
 	return nil
+}
+
+// canonicalizeAgentCatalogProductNames keeps natural-language planning
+// flexible without making the provider authoritative for tenant-owned
+// references. A user may write a full catalog name while a provider returns
+// a shortened fragment; when that fragment maps to one explicit catalog
+// candidate, use the server-owned canonical name. Explicit bounded scopes
+// such as "所有飞车套票" are expanded only to matching current-tenant
+// products. Ambiguous fragments are left untouched so the normal resolver
+// returns a clarification/error instead of guessing.
+func canonicalizeAgentCatalogProductNames(input string, operations []CatalogRuleOperation, products []model.Product) []CatalogRuleOperation {
+	byLowerName := make(map[string][]string, len(products))
+	scopedNames := make([]string, 0)
+	for _, product := range products {
+		if isDistributedListing(&product) {
+			continue
+		}
+		name := strings.TrimSpace(product.Name)
+		if name == "" {
+			continue
+		}
+		byLowerName[strings.ToLower(name)] = append(byLowerName[strings.ToLower(name)], name)
+		if agentProductNameCoveredByExplicitScope(input, name) {
+			scopedNames = append(scopedNames, name)
+		}
+	}
+	explicitCatalogNames := make(map[string]string, len(byLowerName))
+	for key, names := range byLowerName {
+		if len(names) == 1 {
+			explicitCatalogNames[key] = names[0]
+		}
+	}
+	explicitNames := explicitAgentCatalogNamesInText(input, explicitCatalogNames)
+	hasBoundedScope := agentHasBoundedProductScope(input)
+	result := make([]CatalogRuleOperation, len(operations))
+	copy(result, operations)
+	for index, operation := range result {
+		if operation.AllProducts || len(operation.ProductNames) == 0 {
+			if !operation.AllProducts && len(operation.ProductNames) == 0 {
+				switch {
+				case len(explicitNames) == 1:
+					operation.ProductNames = append([]string(nil), explicitNames...)
+				case len(scopedNames) > 0:
+					operation.ProductNames = append([]string(nil), scopedNames...)
+				}
+				result[index] = operation
+			}
+			continue
+		}
+
+		canonicalNames := make([]string, 0, len(operation.ProductNames))
+		for _, requested := range operation.ProductNames {
+			requested = strings.TrimSpace(requested)
+			if requested == "" {
+				continue
+			}
+			matches := make([]string, 0, 1)
+			if len(scopedNames) > 0 {
+				for _, scopedName := range scopedNames {
+					if agentCatalogNameCompatible(requested, scopedName) {
+						matches = append(matches, scopedNames...)
+						break
+					}
+				}
+				if len(matches) == 0 && agentProductNameCoveredByExplicitScope(input, requested) {
+					matches = append(matches, scopedNames...)
+				}
+			}
+			if len(matches) == 0 {
+				for _, explicitName := range explicitNames {
+					if agentCatalogNameCompatible(requested, explicitName) {
+						matches = append(matches, explicitName)
+					}
+				}
+				if len(matches) == 0 && !hasBoundedScope {
+					if exact, ok := byLowerName[strings.ToLower(requested)]; ok && len(exact) == 1 {
+						matches = append(matches, exact[0])
+					} else if !ok {
+						for _, product := range products {
+							if isDistributedListing(&product) {
+								continue
+							}
+							name := strings.TrimSpace(product.Name)
+							if name != "" && agentCatalogNameCompatible(requested, name) {
+								matches = append(matches, name)
+							}
+						}
+					}
+				}
+			}
+			if len(matches) == 1 {
+				canonicalNames = appendUniqueAgentCatalogNames(canonicalNames, matches[0])
+				continue
+			}
+			if len(matches) > 1 && len(scopedNames) > 0 {
+				for _, match := range matches {
+					canonicalNames = appendUniqueAgentCatalogNames(canonicalNames, match)
+				}
+				continue
+			}
+			// Preserve an ambiguous or unknown name. The existing resolver will
+			// produce a tenant-safe error instead of silently selecting one.
+			canonicalNames = appendUniqueAgentCatalogNames(canonicalNames, requested)
+		}
+		operation.ProductNames = canonicalNames
+		result[index] = operation
+	}
+	return result
+}
+
+func agentCatalogNameCompatible(requested, candidate string) bool {
+	requested = normalizeAgentCatalogName(requested)
+	candidate = normalizeAgentCatalogName(candidate)
+	return requested != "" && candidate != "" && (strings.Contains(candidate, requested) || strings.Contains(requested, candidate))
+}
+
+func normalizeAgentCatalogName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, separator := range []string{" ", "\t", "\r", "\n", "【", "】", "[", "]", "（", "）", "(", ")"} {
+		value = strings.ReplaceAll(value, separator, "")
+	}
+	return value
+}
+
+func appendUniqueAgentCatalogNames(values []string, name string) []string {
+	for _, existing := range values {
+		if strings.EqualFold(strings.TrimSpace(existing), strings.TrimSpace(name)) {
+			return values
+		}
+	}
+	return append(values, name)
+}
+
+func agentHasBoundedProductScope(input string) bool {
+	for _, match := range agentScopedProductPattern.FindAllStringSubmatch(input, -1) {
+		if len(match) != 2 {
+			continue
+		}
+		scope := strings.TrimSpace(match[1])
+		if scope != "" && scope != "票种" && scope != "门票" && scope != "产品" && scope != "票" && scope != "all products" && scope != "all tickets" {
+			return true
+		}
+	}
+	return false
+}
+
+func agentCanBeBoundedProductFragment(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "票", "票种", "门票", "产品", "所有", "全部", "所有票种", "全部票种":
+		return false
+	default:
+		return true
+	}
 }
 
 func agentExplicitAllProducts(input string) bool {

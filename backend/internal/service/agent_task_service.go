@@ -719,6 +719,12 @@ func (s *AgentTaskService) planFromEnvelope(tenantID, actorUserID uint, actorRol
 		if err != nil {
 			return nil, err
 		}
+		// The provider is only responsible for understanding the requested
+		// action. Resolve product references against the tenant catalog before
+		// the executable DSL is built. This prevents a model shorthand such as
+		// "成人票" from losing the explicitly named catalog product
+		// "【成人票】飞车套票" while keeping ambiguous matches fail-closed.
+		envelope.Operations = canonicalizeAgentCatalogProductNames(input, envelope.Operations, products)
 		operations, err := resolveCatalogBatchOperations(model.DB, tenantID, envelope.Operations, products, checkpoints)
 		if err != nil {
 			return nil, err
