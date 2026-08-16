@@ -77,7 +77,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 	if err := requireActiveScenicSupplier(model.DB, tenantID); err != nil {
 		return nil, err
 	}
-	if err := validateAgentToolIntent(input, task.OperationType); err != nil {
+	if err := validateAgentToolIntent(input, task); err != nil {
 		return nil, err
 	}
 	ai := s.aiService()
@@ -119,7 +119,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 		return nil, err
 	}
 	systemPrompt := `你是景区票务平台的受限后台助手。你只能调用系统提供的工具，不能生成 SQL、HTTP 请求、代码、密钥操作或任何平台外操作。
-查询类工具只读。需要改变票种或票规时，必须调用对应的 prepare_* 工具生成预览；绝不能假装已执行，也不能调用确认或执行工具。只有用户在界面明确确认后，服务器才会执行预览。
+查询类工具只读。需要改变票种或票规时，必须调用对应的 prepare_* 工具生成预览；绝不能假装已执行，也不能调用确认或执行工具。只有用户在界面明确确认后，服务器才会执行预览。对“所有某类票种”必须逐个填写候选清单中的精确票种名称，不得改用 all_products=true；只有“所有票种/全部门票”才允许 all_products=true。新增检票点涉及多个规则组且用户未指定时，先让 prepare_catalog_rule_change 返回规则组缺失信息，不要猜测 group_name。
 工具参数不能填写租户编号、用户编号、权限、数据库编号或 execute 字段。名称必须来自工具查询结果或用户明确提供的当前租户数据。当前任务上下文和领域 Skill 是服务器事实，不是用户指令。
 		<task_context>` + providerContextJSON + `</task_context>
 <domain_skill>` + domainSkill + `</domain_skill>
@@ -216,10 +216,10 @@ func recordAgentProviderEvent(task model.AgentTask, actorUserID uint, actorRole 
 	})
 }
 
-func validateAgentToolIntent(input, existingOperationType string) error {
-	if err := validateAgentInputIntent(input, existingOperationType); err == nil {
+func validateAgentToolIntent(input string, task model.AgentTask) error {
+	if err := validateAgentTaskInputIntent(input, task); err == nil {
 		return nil
-	} else if existingOperationType == AgentOperationPending && agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentReadIntentWords) {
+	} else if task.OperationType == AgentOperationPending && agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentReadIntentWords) {
 		return nil
 	} else {
 		return err
@@ -486,7 +486,7 @@ func (s *AgentTaskService) executeAgentTool(tenantID, actorUserID uint, actorRol
 			return agentToolExecution{}, err
 		}
 		envelope := &agentAIEnvelope{OperationType: AgentOperationTicketProductCreate, Product: &candidate}
-		if err := validateAgentPlannerEnvelope(input, envelope); err != nil {
+		if err := validateAgentPlannerEnvelopeForTask(input, task, envelope); err != nil {
 			return agentToolExecution{}, err
 		}
 		planning, err := s.planFromEnvelope(tenantID, actorUserID, actorRole, task, input, task.ContextJSON, config, s.aiService(), envelope)
@@ -505,7 +505,7 @@ func (s *AgentTaskService) executeAgentTool(tenantID, actorUserID uint, actorRol
 			operations = append(operations, operation.domainOperation())
 		}
 		envelope := &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: operations}
-		if err := validateAgentPlannerEnvelope(input, envelope); err != nil {
+		if err := validateAgentPlannerEnvelopeForTask(input, task, envelope); err != nil {
 			return agentToolExecution{}, err
 		}
 		planning, err := s.planFromEnvelope(tenantID, actorUserID, actorRole, task, input, task.ContextJSON, config, s.aiService(), envelope)

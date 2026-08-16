@@ -72,8 +72,19 @@ func (c *ProductController) List(ctx *gin.Context) {
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "10"))
 	productType := ctx.DefaultQuery("type", "")
+	status := ctx.DefaultQuery("status", "")
+	search := ctx.DefaultQuery("search", "")
+	scenicAreaID, _ := strconv.Atoi(ctx.DefaultQuery("scenic_area_id", "0"))
 
-	products, total, err := c.Service.List(page, pageSize, ctx.GetUint("tenant_id"), productType)
+	filter := service.ProductListFilter{
+		ProductType: productType,
+		Status:      status,
+		Search:      search,
+	}
+	if scenicAreaID > 0 {
+		filter.ScenicAreaID = uint(scenicAreaID)
+	}
+	products, total, err := c.Service.ListFiltered(page, pageSize, ctx.GetUint("tenant_id"), filter)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

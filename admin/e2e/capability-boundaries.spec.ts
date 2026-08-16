@@ -360,7 +360,7 @@ test('suspended scenic business keeps history workspaces but blocks new sales an
   }
 
   let productStatus: Record<string, unknown> | undefined
-  await page.route('**/api/v1/products?type=online', route => route.fulfill({
+  await page.route('**/api/v1/products?*', route => route.fulfill({
     status: 200,
     contentType: 'application/json',
     body: JSON.stringify({ data: [{ id: 77, name: '历史线上票', scenic_area_id: 1, price: 80, settlement_price: 60, type: 'online', status: 'online', validity_type: 'relative', validity_days: 1, stock_type: 'unlimited', code_mode: 'order' }] }),

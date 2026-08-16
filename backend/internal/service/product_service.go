@@ -244,7 +244,21 @@ func createProductRevisionTx(tx *gorm.DB, product *model.Product) (*model.Produc
 	return &revision, nil
 }
 
+// ProductListFilter contains server-side filters shared by the admin catalog
+// views. ProductType remains a required scope for the existing callers while
+// the optional filters keep the public service API backwards compatible.
+type ProductListFilter struct {
+	ProductType  string
+	Status       string
+	Search       string
+	ScenicAreaID uint
+}
+
 func (s *ProductService) List(page, pageSize int, tenantID uint, productType string) ([]model.Product, int64, error) {
+	return s.ListFiltered(page, pageSize, tenantID, ProductListFilter{ProductType: productType})
+}
+
+func (s *ProductService) ListFiltered(page, pageSize int, tenantID uint, filter ProductListFilter) ([]model.Product, int64, error) {
 	var products []model.Product
 	var total int64
 
@@ -264,8 +278,18 @@ func (s *ProductService) List(page, pageSize int, tenantID uint, productType str
 
 	query := model.DB.Model(&model.Product{}).Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Preload("Rule.Groups.Items.CheckPoint")
 	query = query.Where("tenant_id = ?", tenantID)
-	if productType != "" {
+	if productType := strings.TrimSpace(filter.ProductType); productType != "" {
 		query = query.Where("type = ?", productType)
+	}
+	if status := strings.TrimSpace(filter.Status); status != "" {
+		query = query.Where("status = ?", status)
+	}
+	if filter.ScenicAreaID > 0 {
+		query = query.Where("scenic_area_id = ?", filter.ScenicAreaID)
+	}
+	if search := strings.TrimSpace(filter.Search); search != "" {
+		escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(search)
+		query = query.Where(`name ILIKE ? ESCAPE '\'`, "%"+escaped+"%")
 	}
 
 	err := query.Count(&total).Error
@@ -273,7 +297,7 @@ func (s *ProductService) List(page, pageSize int, tenantID uint, productType str
 		return nil, 0, err
 	}
 
-	err = query.Offset(offset).Limit(pageSize).Find(&products).Error
+	err = query.Order("id DESC").Offset(offset).Limit(pageSize).Find(&products).Error
 	if err == nil {
 		hydrateFulfillmentRules(products)
 	}

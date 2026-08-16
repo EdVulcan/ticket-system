@@ -1,9 +1,14 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
+	"ticket-backend/internal/model"
 )
+
+var agentScopedProductPattern = regexp.MustCompile(`(?:所有|全部)([^,，。；;\n]+?)(?:增加|添加|新增|加上|加入|删除|移除|去掉|去除|取消|设置|设为|调整|修改|开放|支持)`)
 
 // validateAgentPlannerEnvelope treats the model response as an untrusted
 // proposal. The domain services remain authoritative, but this extra policy
@@ -92,7 +97,7 @@ func validateAgentInputIntent(input, existingOperationType string) error {
 		return nil
 	}
 	if existingOperationType == AgentOperationCatalogBatchChange {
-		if agentHasAny(normalized, agentCatalogIntentWords) {
+		if agentHasAny(normalized, agentCatalogIntentWords) || agentHasAny(normalized, []string{"规则组", "分组"}) {
 			return nil
 		}
 		return agentInvalid("请明确要增加、移除或设置哪些检票规则")
@@ -101,6 +106,50 @@ func validateAgentInputIntent(input, existingOperationType string) error {
 		return nil
 	}
 	return agentInvalid("AI 助手只处理票规调整或新票种创建，请先描述明确的业务操作")
+}
+
+func validateAgentTaskInputIntent(input string, task model.AgentTask) error {
+	if err := validateAgentInputIntent(input, task.OperationType); err == nil {
+		return nil
+	} else if task.OperationType != AgentOperationCatalogBatchChange || !agentTaskMissingField(task, "group_name") {
+		return err
+	}
+	return nil
+}
+
+func validateAgentPlannerEnvelopeForTask(input string, task model.AgentTask, envelope *agentAIEnvelope) error {
+	if err := validateAgentPlannerEnvelope(input, envelope); err == nil {
+		return nil
+	} else if task.OperationType != AgentOperationCatalogBatchChange || !agentTaskMissingField(task, "group_name") {
+		return err
+	}
+	var previous agentTaskContext
+	if err := json.Unmarshal([]byte(task.ContextJSON), &previous); err != nil {
+		return err
+	}
+	augmented := strings.TrimSpace(input) + " 增加检票点"
+	for _, operation := range previous.Operations {
+		for _, name := range operation.ProductNames {
+			augmented += " " + name
+		}
+		for _, name := range operation.CheckpointNames {
+			augmented += " " + name
+		}
+	}
+	return validateAgentPlannerEnvelope(augmented, envelope)
+}
+
+func agentTaskMissingField(task model.AgentTask, suffix string) bool {
+	var fields []AgentMissingField
+	if err := json.Unmarshal([]byte(task.MissingJSON), &fields); err != nil {
+		return false
+	}
+	for _, field := range fields {
+		if strings.HasSuffix(strings.TrimSpace(field.Field), suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 var agentCatalogIntentWords = []string{
@@ -151,7 +200,7 @@ func validateAgentCatalogTargets(input string, operations []CatalogRuleOperation
 	for _, operation := range operations {
 		if !operation.AllProducts {
 			for _, productName := range operation.ProductNames {
-				if !agentTextContains(input, productName) {
+				if !agentTextContains(input, productName) && !agentProductNameCoveredByExplicitScope(input, productName) {
 					return agentInvalid(fmt.Sprintf("票种 %q 未在当前请求中明确指定，请使用当前租户的准确名称", productName))
 				}
 			}
@@ -167,6 +216,31 @@ func validateAgentCatalogTargets(input string, operations []CatalogRuleOperation
 
 func agentExplicitAllProducts(input string) bool {
 	return agentHasAny(input, []string{"所有票种", "全部票种", "所有门票", "全部门票", "all products", "all tickets"})
+}
+
+// agentProductNameCoveredByExplicitScope accepts a bounded category such as
+// "所有飞车套票" while keeping generic all-products language on the strict
+// all_products path. The model still has to return an exact current-tenant
+// product name, and the domain resolver remains authoritative afterwards.
+func agentProductNameCoveredByExplicitScope(input, productName string) bool {
+	productName = strings.TrimSpace(productName)
+	if productName == "" {
+		return false
+	}
+	for _, match := range agentScopedProductPattern.FindAllStringSubmatch(input, -1) {
+		if len(match) != 2 {
+			continue
+		}
+		scope := strings.TrimSpace(match[1])
+		switch scope {
+		case "", "票种", "门票", "产品", "票", "all products", "all tickets":
+			continue
+		}
+		if strings.Contains(productName, scope) {
+			return true
+		}
+	}
+	return false
 }
 
 func agentHasAny(input string, values []string) bool {

@@ -51,6 +51,36 @@ async function prepareSupplier(page: Page) {
   ] }))
 }
 
+test('线上和窗口票种筛选会把查询条件传给服务端', async ({ page }) => {
+  await prepareSupplier(page)
+  const productRequests: URL[] = []
+  await page.unroute('**/api/v1/products?*')
+  await page.route('**/api/v1/products?*', async route => {
+    productRequests.push(new URL(route.request().url()))
+    await json(route, { data: [], total: 0 })
+  })
+
+  await page.goto('/product')
+  const onlineSearch = page.getByPlaceholder('搜索门票名称...')
+  await onlineSearch.fill('成人')
+  await onlineSearch.press('Enter')
+  await page.getByPlaceholder('全部状态').click()
+  await page.getByRole('option', { name: '已下架' }).click()
+  await expect.poll(() => productRequests.some(url => {
+    const params = url.searchParams
+    return params.get('type') === 'online' && params.get('search') === '成人' && params.get('status') === 'offline' && params.get('page') === '1'
+  })).toBe(true)
+
+  await page.goto('/product/offline')
+  const offlineSearch = page.getByPlaceholder('搜索门票名称...')
+  await offlineSearch.fill('窗口')
+  await offlineSearch.press('Enter')
+  await expect.poll(() => productRequests.some(url => {
+    const params = url.searchParams
+    return params.get('type') === 'offline' && params.get('search') === '窗口' && params.get('page') === '1'
+  })).toBe(true)
+})
+
 test('供应商按旅行社和产品名称维护合同结算价', async ({ page }) => {
   await prepareSupplier(page)
   await page.goto('/teams')

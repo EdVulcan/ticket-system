@@ -1,5 +1,5 @@
 <template>
-  <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+  <div class="catalog-page bg-white rounded-xl p-6 shadow-sm border border-gray-100">
     <div class="flex justify-between items-center mb-6">
       <div>
         <h2 class="text-lg font-bold text-gray-900">窗口门票管理</h2>
@@ -11,16 +11,17 @@
     </div>
 
     <!-- Filter -->
-    <div class="mb-4 flex gap-4">
-      <el-input v-model="searchQuery" placeholder="搜索门票名称..." class="w-64" prefix-icon="Search" />
-      <el-select v-model="filterStatus" placeholder="状态" class="w-32">
+    <div class="filter-toolbar catalog-filter-bar">
+      <el-input v-model="searchQuery" placeholder="搜索门票名称..." class="search-filter" prefix-icon="Search" clearable @keyup.enter="applyFilters" @clear="applyFilters" />
+      <el-select v-model="filterStatus" placeholder="全部状态" class="status-filter" clearable @change="applyFilters">
         <el-option label="全部" value="" />
         <el-option label="上架中" value="online" />
         <el-option label="已下架" value="offline" />
       </el-select>
+      <el-button :icon="Refresh" @click="resetFilters">重置</el-button>
     </div>
 
-    <el-table :data="tableData" style="width: 100%" v-loading="loading" border>
+    <el-table :data="tableData" class="catalog-table" style="width: 100%" v-loading="loading" border>
       <el-table-column prop="id" label="编号" width="70" align="center" />
       <el-table-column prop="name" label="门票名称" min-width="180">
         <template #default="{ row }">
@@ -67,20 +68,45 @@
            <el-button v-if="canWrite" link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
+      <template #empty><el-empty description="没有匹配的窗口票种" :image-size="72" /></template>
     </el-table>
+
+    <div class="table-footer catalog-pagination">
+      <span class="table-caption">共 {{ total }} 个窗口票种</span>
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :total="total"
+        :page-sizes="[10, 20, 50]"
+        layout="sizes, prev, pager, next"
+        @current-change="fetchData"
+        @size-change="handlePageSizeChange"
+      />
+    </div>
 
     <!-- Dialog -->
     <el-dialog
       v-model="dialogVisible"
       :title="isEdit ? '编辑窗口票' : '发布窗口票'"
-      width="800px"
-      top="5vh"
+      width="min(920px, calc(100vw - 32px))"
+      top="4vh"
+      class="product-editor-dialog"
+      :close-on-click-modal="false"
       destroy-on-close
     >
-      <el-form :model="form" label-width="100px" :rules="rules" ref="formRef">
+      <template #header>
+        <div class="editor-dialog-header">
+          <div>
+            <div class="editor-dialog-title">{{ isEdit ? '编辑窗口票种' : '发布窗口票种' }}</div>
+            <div class="editor-dialog-subtitle">完善窗口销售与检票规则后保存，票种默认仅供现场使用。</div>
+          </div>
+          <el-tag size="small" effect="plain" type="warning">窗口票</el-tag>
+        </div>
+      </template>
+      <el-form :model="form" label-width="100px" :rules="rules" ref="formRef" class="editor-form">
         
         <el-divider content-position="left">基础信息</el-divider>
-        <div class="grid grid-cols-2 gap-4">
+        <div class="form-grid">
           <el-form-item label="门票名称" prop="product.name" class="col-span-2">
             <el-input v-model="form.product.name" placeholder="例如：成人全天通票(窗口)" />
           </el-form-item>
@@ -160,7 +186,7 @@
         <el-form-item label="核销规则">
           <el-alert title="设置门票可通行的检票点及通行次数" type="info" show-icon :closable="false" class="mb-4" />
           
-          <div class="bg-slate-50 p-4 rounded-lg mb-4 border border-slate-200" v-for="(group, gIdx) in form.rule.groups" :key="gIdx">
+          <div class="rule-group-card" v-for="(group, gIdx) in form.rule.groups" :key="gIdx">
             <div class="flex justify-between items-center mb-2">
               <div class="flex items-center gap-2">
                 <span class="font-bold text-sm text-slate-700">规则组 #{{ gIdx + 1 }}</span>
@@ -169,7 +195,7 @@
               <el-button type="danger" link size="small" @click="removeGroup(gIdx)" v-if="form.rule.groups.length > 1">删除组</el-button>
             </div>
             
-            <div class="grid grid-cols-2 gap-4 mb-2">
+            <div class="rule-group-fields form-grid">
               <el-form-item label="分组名称" label-width="80px" :required="true" class="mb-0">
                 <el-input v-model="group.group_name" placeholder="如：大门票、剧场票" />
               </el-form-item>
@@ -179,7 +205,7 @@
               </el-form-item>
             </div>
 
-            <div class="space-y-2 pl-4 border-l-2 border-slate-200 mt-2">
+            <div class="rule-items-list">
               <div v-for="(item, iIdx) in group.items" :key="iIdx" class="flex items-center gap-2">
                 <el-select v-model="item.check_point_id" aria-label="检票点" :placeholder="form.product.scenic_area_id ? '选择检票点' : '请先选择所属景区'" class="flex-1" :disabled="!form.product.scenic_area_id">
                   <el-option 
@@ -206,7 +232,7 @@
       </el-form>
 
       <template #footer>
-        <span class="dialog-footer">
+        <span class="dialog-footer editor-dialog-footer">
           <el-button @click="dialogVisible = false">取消</el-button>
           <el-button type="primary" @click="handleSubmit" :loading="submitting">保存并发布</el-button>
         </span>
@@ -219,7 +245,7 @@
 import { computed, ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
-import { Plus, Minus } from '@element-plus/icons-vue'
+import { Plus, Minus, Refresh } from '@element-plus/icons-vue'
 import { hasPermission } from '@/utils/permissions'
 import { isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 
@@ -230,7 +256,10 @@ const canHistoryWrite = hasCatalogWritePermission && isScenicHistorySupplier(cur
 
 const loading = ref(false)
 const submitting = ref(false)
-const tableData = ref([])
+const tableData = ref<any[]>([])
+const total = ref(0)
+const currentPage = ref(1)
+const pageSize = ref(10)
 const checkpoints = ref<any[]>([])
 const scenicAreas = ref<any[]>([])
 const dialogVisible = ref(false)
@@ -292,14 +321,38 @@ const scenicAreaName = (id: number) => scenicAreas.value.find(area => area.id ==
 const fetchData = async () => {
   loading.value = true
   try {
-    // Filter by type=offline
-    const res = await request.get('/products', { params: { type: 'offline', page_size: 100 } })
-    tableData.value = res.data.data
+    const res = await request.get('/products', {
+      params: {
+        type: 'offline',
+        page: currentPage.value,
+        page_size: pageSize.value,
+        status: filterStatus.value || undefined,
+        search: searchQuery.value.trim() || undefined,
+      }
+    })
+    tableData.value = res.data.data || []
+    total.value = res.data.total || 0
   } catch (error) {
     ElMessage.error('获取数据失败')
   } finally {
     loading.value = false
   }
+}
+
+const applyFilters = () => {
+  currentPage.value = 1
+  fetchData()
+}
+
+const resetFilters = () => {
+  searchQuery.value = ''
+  filterStatus.value = ''
+  applyFilters()
+}
+
+const handlePageSizeChange = () => {
+  currentPage.value = 1
+  fetchData()
 }
 
 const validityDateRange = ref<[string, string] | null>(null)
@@ -442,3 +495,148 @@ onMounted(() => {
   fetchReferences()
 })
 </script>
+
+<style scoped>
+.catalog-filter-bar {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 20px 0 16px;
+}
+
+.search-filter {
+  width: min(360px, 100%);
+}
+
+.status-filter {
+  width: 144px;
+}
+
+.catalog-table {
+  --el-table-header-bg-color: #f8fafc;
+  --el-table-border-color: #e6eaf0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.catalog-pagination {
+  align-items: center;
+  border-top: 1px solid #eef1f5;
+  display: flex;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 16px;
+}
+
+.table-caption {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.editor-dialog-header {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  padding-right: 28px;
+}
+
+.editor-dialog-title {
+  color: #172033;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.editor-dialog-subtitle {
+  color: #7a8699;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.product-editor-dialog :deep(.el-dialog__body) {
+  max-height: 76vh;
+  overflow-y: auto;
+  padding: 8px 32px 20px;
+}
+
+.editor-form :deep(.el-form-item) {
+  margin-bottom: 20px;
+}
+
+.form-grid {
+  display: grid;
+  gap: 20px 24px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-grid > .col-span-2 {
+  grid-column: 1 / -1;
+}
+
+.rule-group-card {
+  background: #f8fafc;
+  border: 1px solid #e5eaf1;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  padding: 18px 18px 16px;
+}
+
+.rule-group-fields {
+  gap: 16px 20px;
+}
+
+.rule-items-list {
+  border-left: 2px solid #dbe5f2;
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 0 4px;
+  padding-left: 16px;
+}
+
+.rule-items-list > div {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rule-items-list :deep(.el-select) {
+  flex: 1;
+  min-width: 0;
+}
+
+.editor-dialog-footer {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 760px) {
+  .catalog-page {
+    padding: 16px;
+  }
+
+  .catalog-pagination {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .product-editor-dialog :deep(.el-dialog__body) {
+    padding: 8px 18px 20px;
+  }
+
+  .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .form-grid > .col-span-2 {
+    grid-column: auto;
+  }
+
+  .rule-items-list > div {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+}
+</style>

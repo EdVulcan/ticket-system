@@ -10,6 +10,8 @@ import (
 	"testing"
 	"ticket-backend/internal/model"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func TestAgentTaskCollectsMissingProductPriceBeforePreviewAndConfirmation(t *testing.T) {
@@ -316,6 +318,12 @@ func TestAgentPlannerPolicyRejectsInventedBroadOrOppositeOperations(t *testing.T
 	if err := validateAgentPlannerEnvelope("全部票种增加 North Gate", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, AllProducts: true, CheckpointNames: []string{"North Gate"}}}}); err != nil {
 		t.Fatalf("explicit all-products request was rejected: %v", err)
 	}
+	if err := validateAgentPlannerEnvelope("线上票所有飞车套票增加检票点水上乐园，可检票1次", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"成人票飞车套票"}, CheckpointNames: []string{"水上乐园"}}}}); err != nil {
+		t.Fatalf("bounded product scope was rejected: %v", err)
+	}
+	if err := validateAgentPlannerEnvelope("所有票种增加 North Gate", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"Adult Ticket"}, CheckpointNames: []string{"North Gate"}}}}); err == nil {
+		t.Fatal("generic all-products wording incorrectly covered a named product")
+	}
 	if err := validateAgentPlannerEnvelope("给 Adult Ticket 增加 North Gate", &agentAIEnvelope{OperationType: AgentOperationCatalogBatchChange, Operations: add, Product: &agentProductCandidate{Name: "Other Ticket"}}); err == nil {
 		t.Fatal("agent policy accepted a mixed product and batch envelope")
 	}
@@ -327,6 +335,73 @@ func TestAgentPlannerPolicyRejectsInventedBroadOrOppositeOperations(t *testing.T
 	}
 	if err := validateAgentPlannerEnvelope("帮我介绍一下系统", &agentAIEnvelope{OperationType: AgentOperationPending}); err == nil {
 		t.Fatal("agent policy accepted an unrelated request")
+	}
+}
+
+func TestAgentCatalogGroupMissingFieldPreservesExactCandidates(t *testing.T) {
+	products := []model.Product{{
+		Base: model.Base{ID: 7}, Name: "Adult Ticket", Rule: model.TicketRule{Groups: []model.RuleGroup{
+			{GroupName: "Admission"}, {GroupName: "Water Park"},
+		}},
+	}}
+	missing := catalogRuleGroupMissingFields(products, []CatalogRuleOperation{{
+		Kind: CatalogBatchOpAddCheckpoint, ProductIDs: []uint{7}, CheckpointIDs: []uint{9},
+	}})
+	if len(missing) != 1 || missing[0].Field != "operations[0].group_name" {
+		t.Fatalf("unexpected group missing field: %+v", missing)
+	}
+	if len(missing[0].Options) != 2 || missing[0].Options[0] != "Admission" || missing[0].Options[1] != "Water Park" {
+		t.Fatalf("group options were not preserved: %+v", missing[0])
+	}
+	if !strings.Contains(missing[0].Question, "Adult Ticket") {
+		t.Fatalf("group question omitted the product name: %+v", missing[0])
+	}
+}
+
+func TestAgentCatalogGroupContinuationAcceptsShortGroupAnswerWithStoredTargets(t *testing.T) {
+	task := model.AgentTask{
+		OperationType: AgentOperationCatalogBatchChange,
+		MissingJSON:   `[{"field":"operations[0].group_name"}]`,
+		ContextJSON:   `{"operations":[{"kind":"add_checkpoints","product_names":["Adult Ticket"],"checkpoint_names":["North Gate"]}]}`,
+	}
+	if err := validateAgentTaskInputIntent("Admission", task); err != nil {
+		t.Fatalf("short rule-group answer was rejected: %v", err)
+	}
+	if err := validateAgentPlannerEnvelopeForTask("Admission", task, &agentAIEnvelope{
+		OperationType: AgentOperationCatalogBatchChange,
+		Operations:    []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"Adult Ticket"}, CheckpointNames: []string{"North Gate"}, GroupName: "Admission"}},
+	}); err != nil {
+		t.Fatalf("stored target context was not accepted for group continuation: %v", err)
+	}
+}
+
+func TestAgentTaskCollectsMissingGroupForMultiGroupTicket(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Create(&model.RuleGroup{RuleID: fixture.product.RuleID, GroupName: "Water Park", MaxTotalCheckIn: 1}).Error
+	}); err != nil {
+		t.Fatalf("add second rule group: %v", err)
+	}
+	server, _ := startCatalogAIProvider(t, `{"operation_type":"catalog_batch_change","operations":[{"kind":"add_checkpoints","product_names":["Adult Ticket"],"checkpoint_names":["North Gate"]}]}`)
+	saveCatalogAIConfig(t, server.URL, 10)
+	planned, err := (&AgentTaskService{}).Submit(t.Context(), fixture.tenant.ID, 11, "admin", AgentTaskRequest{
+		InputText: "给 Adult Ticket 增加 North Gate 检票点", IdempotencyKey: "agent-missing-group", TurnKey: "turn-1",
+	})
+	if err != nil {
+		t.Fatalf("multi-group planning should collect a group: %v", err)
+	}
+	if planned.State != AgentTaskCollecting || planned.CanConfirm || len(planned.MissingFields) != 1 {
+		t.Fatalf("unexpected multi-group planning result: %+v", planned)
+	}
+	if planned.MissingFields[0].Field != "operations[0].group_name" || len(planned.MissingFields[0].Options) != 2 {
+		t.Fatalf("unexpected group question: %+v", planned.MissingFields)
+	}
+	var task model.AgentTask
+	if err := model.DB.First(&task, planned.TaskID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(task.ContextJSON, "Adult Ticket") || strings.Contains(task.ContextJSON, "product_ids") {
+		t.Fatalf("continuation context lost exact names or leaked IDs: %s", task.ContextJSON)
 	}
 }
 

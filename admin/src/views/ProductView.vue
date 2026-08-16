@@ -1,5 +1,5 @@
 <template>
-  <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
+  <div class="catalog-page bg-white rounded-xl p-6 shadow-sm border border-gray-100">
     <header class="page-heading">
       <div class="page-heading-copy">
         <h2 class="text-lg font-bold text-gray-900">线上门票管理</h2>
@@ -10,16 +10,17 @@
       </div>
     </header>
 
-    <div class="filter-toolbar">
-      <el-input v-model="searchQuery" placeholder="搜索门票名称..." class="w-64" prefix-icon="Search" />
-      <el-select v-model="filterStatus" placeholder="全部状态" class="w-32">
+    <div class="filter-toolbar catalog-filter-bar">
+      <el-input v-model="searchQuery" placeholder="搜索门票名称..." class="search-filter" prefix-icon="Search" clearable @keyup.enter="applyFilters" @clear="applyFilters" />
+      <el-select v-model="filterStatus" placeholder="全部状态" class="status-filter" clearable @change="applyFilters">
         <el-option label="全部" value="" />
         <el-option label="上架中" value="online" />
         <el-option label="已下架" value="offline" />
       </el-select>
+      <el-button :icon="Refresh" @click="resetFilters">重置</el-button>
     </div>
 
-    <el-table :data="tableData" style="width: 100%" v-loading="loading" border>
+    <el-table :data="tableData" class="catalog-table" style="width: 100%" v-loading="loading" border>
       <el-table-column prop="id" label="编号" width="70" align="center" />
       <el-table-column prop="name" label="门票名称" min-width="180">
         <template #default="{ row }">
@@ -73,21 +74,46 @@
            <el-button v-if="canWrite" link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
+      <template #empty><el-empty description="没有匹配的线上票种" :image-size="72" /></template>
     </el-table>
+
+    <div class="table-footer catalog-pagination">
+      <span class="table-caption">共 {{ total }} 个线上票种</span>
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :total="total"
+        :page-sizes="[10, 20, 50]"
+        layout="sizes, prev, pager, next"
+        @current-change="fetchData"
+        @size-change="handlePageSizeChange"
+      />
+    </div>
 
     <!-- Dialog -->
     <el-dialog
       v-model="dialogVisible"
       :title="isEdit ? '编辑门票' : '发布新门票'"
-      width="900px"
-      top="5vh"
+      width="min(980px, calc(100vw - 32px))"
+      top="4vh"
+      class="product-editor-dialog"
+      :close-on-click-modal="false"
       destroy-on-close
     >
-      <el-tabs v-model="activeTab" class="demo-tabs">
+      <template #header>
+        <div class="editor-dialog-header">
+          <div>
+            <div class="editor-dialog-title">{{ isEdit ? '编辑线上票种' : '发布线上票种' }}</div>
+            <div class="editor-dialog-subtitle">先完善票种事实，再保存为当前租户的未上架产品。</div>
+          </div>
+          <el-tag size="small" effect="plain" type="info">线上票</el-tag>
+        </div>
+      </template>
+      <el-tabs v-model="activeTab" tab-position="left" class="product-editor-tabs">
         <!-- Tab 1: 基础信息 -->
         <el-tab-pane label="基础信息" name="basic">
-          <el-form :model="form" label-width="100px" :rules="rules" ref="formRefBasic">
-            <div class="grid grid-cols-2 gap-4">
+          <el-form :model="form" label-width="100px" :rules="rules" ref="formRefBasic" class="editor-form">
+            <div class="form-section form-grid">
               <el-form-item label="门票名称" prop="product.name" class="col-span-2">
                 <el-input v-model="form.product.name" placeholder="例如：成人全天通票" />
               </el-form-item>
@@ -97,10 +123,10 @@
                 </el-select>
                 <div class="text-xs text-gray-400 mt-1">切换景区会清空已选检票点；已售门票仍按售票时的景区核销。</div>
               </el-form-item>
-              <el-form-item label="销售价格" prop="product.price">
+              <el-form-item label="销售价格" prop="product.price" class="price-field">
                 <el-input-number v-model="form.product.price" :precision="2" :step="1" :min="0" class="w-full" />
               </el-form-item>
-              <el-form-item label="结算价格" prop="product.settlement_price">
+              <el-form-item label="结算价格" prop="product.settlement_price" class="price-field">
                 <el-input-number v-model="form.product.settlement_price" :precision="2" :step="1" :min="0" class="w-full" />
               </el-form-item>
               
@@ -122,7 +148,7 @@
                 </el-select>
               </el-form-item>
               
-               <el-form-item label="供应商分销" prop="product.is_distributable">
+               <el-form-item label="供应商分销" prop="product.is_distributable" class="form-item-wide">
                   <el-switch v-model="form.product.is_distributable" active-text="允许分销商代理销售" />
                   <div class="text-xs text-gray-400 mt-1" v-if="form.product.is_distributable">
                     开启后，已建立合作关系的分销商可在其后台看到并代理此产品。结算价为 ¥{{ form.product.settlement_price }}。
@@ -131,14 +157,14 @@
 
               <!-- Type is implicitly 'online' -->
 
-                <el-form-item label="发码模式" prop="product.code_mode">
+                <el-form-item label="发码模式" prop="product.code_mode" class="form-item-wide">
                   <el-radio-group v-model="form.product.code_mode">
                     <el-radio label="order" border>一单一码 (全家一张)</el-radio>
                     <el-radio label="ticket" border>一票一码 (一人一张)</el-radio>
                   </el-radio-group>
                 </el-form-item>
 
-                <el-form-item label="闸机本地语音" prop="product.gate_voice_code" class="col-span-2">
+                <el-form-item label="闸机本地语音" prop="product.gate_voice_code" class="form-item-wide">
                   <el-select
                     v-model="form.product.gate_voice_code"
                     filterable
@@ -162,7 +188,7 @@
         <!-- Tab 2: 有效期与库存 -->
         <el-tab-pane label="有效期 & 库存" name="stock">
           <el-form :model="form" label-width="120px">
-            <el-divider content-position="left">有效期设置</el-divider>
+            <div class="editor-section-heading"><strong>有效期设置</strong><span>决定游客何时可以使用这张票</span></div>
             <el-form-item label="有效期类型">
               <el-radio-group v-model="form.product.validity_type">
                 <el-radio label="date">指定日期范围</el-radio>
@@ -190,7 +216,7 @@
               </el-form-item>
             </div>
 
-            <el-divider content-position="left">库存与分时</el-divider>
+            <div class="editor-section-heading"><strong>库存与分时</strong><span>控制每日库存和可选时段</span></div>
             <el-form-item label="库存模式">
               <el-radio-group v-model="form.product.stock_type">
                 <el-radio label="unlimited">不限库存</el-radio>
@@ -224,11 +250,11 @@
 
         <!-- Tab 3: 核销规则 (M选N) -->
         <el-tab-pane label="核销规则 (M选N)" name="rule">
-          <el-form :model="form" label-width="100px">
+          <el-form :model="form" label-width="100px" class="editor-form">
             <el-alert title="设置门票可通行的检票点及通行次数" type="info" show-icon :closable="false" class="mb-4" />
             
-            <div class="bg-slate-50 p-4 rounded-lg mb-4 border border-slate-200" v-for="(group, gIdx) in form.rule.groups" :key="gIdx">
-              <div class="flex justify-between items-center mb-2">
+            <div class="rule-group-card" v-for="(group, gIdx) in form.rule.groups" :key="gIdx">
+              <div class="rule-group-header">
                 <div class="flex items-center gap-2">
                   <span class="font-bold text-sm text-slate-700">规则组 #{{ gIdx + 1 }}</span>
                   <el-tag size="small" effect="plain">{{ group.max_total_check_in === 0 ? '全选模式' : `M选${group.max_total_check_in}` }}</el-tag>
@@ -236,7 +262,7 @@
                 <el-button type="danger" link size="small" @click="removeGroup(gIdx)" v-if="form.rule.groups.length > 1">删除组</el-button>
               </div>
               
-              <div class="grid grid-cols-2 gap-4 mb-2">
+              <div class="form-grid rule-group-fields">
                 <el-form-item label="分组名称" label-width="80px" :required="true">
                   <el-input v-model="group.group_name" placeholder="如：大门票、剧场票" />
                 </el-form-item>
@@ -246,7 +272,7 @@
                 </el-form-item>
               </div>
 
-              <div class="space-y-2 pl-4 border-l-2 border-slate-200">
+              <div class="rule-items-list">
                 <div v-for="(item, iIdx) in group.items" :key="iIdx" class="flex items-center gap-2">
                   <el-select v-model="item.check_point_id" aria-label="检票点" :placeholder="form.product.scenic_area_id ? '选择检票点' : '请先选择所属景区'" class="flex-1" :disabled="!form.product.scenic_area_id">
                     <el-option 
@@ -273,7 +299,7 @@
 
         <!-- Tab 4: 购买限制 -->
         <el-tab-pane label="购买限制" name="limit">
-          <el-form :model="form" label-width="120px">
+          <el-form :model="form" label-width="120px" class="editor-form">
             <el-form-item label="实名制要求">
               <el-switch v-model="form.product.real_name_required" active-text="强制实名 (需输入姓名+身份证)" />
             </el-form-item>
@@ -302,7 +328,7 @@
 
         <!-- Tab 5: 退改规则 -->
         <el-tab-pane label="退改规则" name="refund">
-          <el-form :model="form" label-width="120px">
+          <el-form :model="form" label-width="120px" class="editor-form">
             <el-form-item label="退票类型">
               <el-radio-group v-model="form.product.refund_type">
                 <el-radio label="no_refund" border>不可退</el-radio>
@@ -319,7 +345,7 @@
       </el-tabs>
 
       <template #footer>
-        <span class="dialog-footer">
+        <span class="dialog-footer editor-dialog-footer">
           <el-button @click="dialogVisible = false">取消</el-button>
           <el-button type="primary" @click="handleSubmit" :loading="submitting">保存并发布</el-button>
         </span>
@@ -332,7 +358,7 @@
 import { computed, ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
-import { Plus, Minus } from '@element-plus/icons-vue'
+import { Plus, Minus, Refresh } from '@element-plus/icons-vue'
 import { hasPermission } from '@/utils/permissions'
 import { isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 
@@ -343,7 +369,10 @@ const canHistoryWrite = hasCatalogWritePermission && isScenicHistorySupplier(cur
 
 const loading = ref(false)
 const submitting = ref(false)
-const tableData = ref([])
+const tableData = ref<any[]>([])
+const total = ref(0)
+const currentPage = ref(1)
+const pageSize = ref(10)
 const checkpoints = ref<any[]>([])
 const scenicAreas = ref<any[]>([])
 const dialogVisible = ref(false)
@@ -432,13 +461,38 @@ const scenicAreaName = (id: number) => scenicAreas.value.find(area => area.id ==
 const fetchData = async () => {
   loading.value = true
   try {
-    const res = await request.get('/products', { params: { type: 'online' } })
-    tableData.value = res.data.data
+    const res = await request.get('/products', {
+      params: {
+        type: 'online',
+        page: currentPage.value,
+        page_size: pageSize.value,
+        status: filterStatus.value || undefined,
+        search: searchQuery.value.trim() || undefined,
+      }
+    })
+    tableData.value = res.data.data || []
+    total.value = res.data.total || 0
   } catch (error) {
     ElMessage.error('获取数据失败')
   } finally {
     loading.value = false
   }
+}
+
+const applyFilters = () => {
+  currentPage.value = 1
+  fetchData()
+}
+
+const resetFilters = () => {
+  searchQuery.value = ''
+  filterStatus.value = ''
+  applyFilters()
+}
+
+const handlePageSizeChange = () => {
+  currentPage.value = 1
+  fetchData()
 }
 
 const handleAdd = () => {
@@ -649,3 +703,227 @@ onMounted(() => {
   fetchReferences()
 })
 </script>
+
+<style scoped>
+.catalog-filter-bar {
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 20px 0 16px;
+}
+
+.search-filter {
+  width: min(360px, 100%);
+}
+
+.status-filter {
+  width: 144px;
+}
+
+.catalog-table {
+  --el-table-header-bg-color: #f8fafc;
+  --el-table-border-color: #e6eaf0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.catalog-pagination {
+  align-items: center;
+  border-top: 1px solid #eef1f5;
+  display: flex;
+  justify-content: space-between;
+  margin-top: 16px;
+  padding-top: 16px;
+}
+
+.table-caption {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.editor-dialog-header {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+  padding-right: 28px;
+}
+
+.editor-dialog-title {
+  color: #172033;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+.editor-dialog-subtitle {
+  color: #7a8699;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.product-editor-tabs {
+  min-height: 540px;
+}
+
+.product-editor-tabs :deep(.el-tabs__header) {
+  background: #f7f9fc;
+  border-right: 1px solid #e8edf3;
+  margin: 0;
+  padding: 16px 8px;
+  width: 156px;
+}
+
+.product-editor-tabs :deep(.el-tabs__nav-wrap::after) {
+  display: none;
+}
+
+.product-editor-tabs :deep(.el-tabs__item) {
+  border-radius: 8px;
+  color: #667085;
+  font-size: 13px;
+  height: 44px;
+  justify-content: flex-start;
+  margin: 3px 0;
+  padding: 0 14px;
+  transition: background-color .2s ease, color .2s ease;
+}
+
+.product-editor-tabs :deep(.el-tabs__item:hover) {
+  color: #2563eb;
+}
+
+.product-editor-tabs :deep(.el-tabs__item.is-active) {
+  background: #eaf1ff;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.product-editor-tabs :deep(.el-tabs__active-bar) {
+  display: none;
+}
+
+.product-editor-tabs :deep(.el-tabs__content) {
+  box-sizing: border-box;
+  height: 540px;
+  overflow-y: auto;
+  padding: 28px 32px 36px;
+}
+
+.editor-form :deep(.el-form-item) {
+  margin-bottom: 20px;
+}
+
+.form-section,
+.form-grid {
+  display: grid;
+  gap: 20px 24px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-section > .col-span-2,
+.form-section > .form-item-wide,
+.form-grid > .col-span-2,
+.form-grid > .form-item-wide {
+  grid-column: 1 / -1;
+}
+
+.price-field :deep(.el-input-number) {
+  width: 100%;
+}
+
+.editor-section-heading {
+  align-items: baseline;
+  border-bottom: 1px solid #edf0f4;
+  display: flex;
+  gap: 12px;
+  margin: 0 0 22px;
+  padding-bottom: 10px;
+}
+
+.editor-section-heading strong {
+  color: #172033;
+  font-size: 14px;
+}
+
+.editor-section-heading span {
+  color: #8a94a6;
+  font-size: 12px;
+}
+
+.rule-group-card {
+  background: #f8fafc;
+  border: 1px solid #e5eaf1;
+  border-radius: 8px;
+  margin-bottom: 16px;
+  padding: 18px 18px 16px;
+}
+
+.rule-group-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.rule-group-fields {
+  gap: 16px 20px;
+}
+
+.rule-items-list {
+  border-left: 2px solid #dbe5f2;
+  display: grid;
+  gap: 10px;
+  margin-left: 4px;
+  padding-left: 16px;
+}
+
+.rule-items-list > div {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rule-items-list :deep(.el-select) {
+  flex: 1;
+  min-width: 0;
+}
+
+.editor-dialog-footer {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 760px) {
+  .catalog-page {
+    padding: 16px;
+  }
+
+  .catalog-pagination {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .product-editor-tabs :deep(.el-tabs__header) {
+    width: 122px;
+  }
+
+  .product-editor-tabs :deep(.el-tabs__content) {
+    padding: 22px 18px 28px;
+  }
+
+  .form-section,
+  .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .form-section > .col-span-2,
+  .form-section > .form-item-wide,
+  .form-grid > .col-span-2,
+  .form-grid > .form-item-wide {
+    grid-column: auto;
+  }
+}
+</style>
