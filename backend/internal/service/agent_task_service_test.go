@@ -132,6 +132,40 @@ func TestAgentProductCandidateCannotInventCriticalFacts(t *testing.T) {
 	}
 }
 
+func TestAgentProductExplicitFactsOverrideStaleModelCandidates(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	price := 55.0
+	settlement := 30.0
+	candidate := &agentProductCandidate{
+		Name: "Child Ticket", ProductType: "online", ScenicAreaName: "Batch Scenic",
+		Price: &price, SettlementPrice: &settlement,
+		Groups: []agentRuleDraftGroup{{GroupName: "Admission", Items: []agentRuleDraftItem{{CheckpointName: "Stale Gate"}}}},
+	}
+	previous := agentTaskContext{UserFacts: agentProductUserFacts{CheckpointNames: []string{"Stale Gate"}}}
+	facts := previous.UserFacts
+	if err := applyExplicitAgentProductFacts(model.DB, fixture.tenant.ID, "选择 Batch Scenic，检票点 Main Gate", previous, candidate, &facts); err != nil {
+		t.Fatalf("apply explicit product facts: %v", err)
+	}
+	if candidate.ScenicAreaName != "Batch Scenic" || facts.ScenicAreaName != "Batch Scenic" {
+		t.Fatalf("explicit scenic area did not override stale value: candidate=%+v facts=%+v", candidate, facts)
+	}
+	if len(candidate.Groups) != 1 || len(candidate.Groups[0].Items) != 1 || candidate.Groups[0].Items[0].CheckpointName != "Main Gate" {
+		t.Fatalf("explicit checkpoint did not replace stale model candidate: %+v", candidate.Groups)
+	}
+	if len(facts.CheckpointNames) != 1 || !agentStringInList(facts.CheckpointNames, "Main Gate") || agentStringInList(facts.CheckpointNames, "Stale Gate") {
+		t.Fatalf("checkpoint facts were not normalized: %+v", facts)
+	}
+	nextCandidate := &agentProductCandidate{
+		Groups: []agentRuleDraftGroup{{GroupName: "Admission", Items: []agentRuleDraftItem{{CheckpointName: "Stale Gate"}}}},
+	}
+	if err := applyExplicitAgentProductFacts(model.DB, fixture.tenant.ID, "补充售价 60 元", agentTaskContext{UserFacts: facts}, nextCandidate, &facts); err != nil {
+		t.Fatalf("filter stale continuation facts: %v", err)
+	}
+	if len(nextCandidate.Groups) != 0 || len(facts.CheckpointNames) != 1 || !agentStringInList(facts.CheckpointNames, "Main Gate") {
+		t.Fatalf("stale checkpoint reappeared on a follow-up turn: candidate=%+v facts=%+v", nextCandidate.Groups, facts)
+	}
+}
+
 func TestAgentLegacyPlanningRequiresCatalogWritePermission(t *testing.T) {
 	fixture := seedCatalogBatchFixture(t)
 	_, err := (&AgentTaskService{}).Submit(t.Context(), fixture.tenant.ID, 11, "team_operator", AgentTaskRequest{

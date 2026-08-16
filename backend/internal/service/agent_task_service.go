@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"ticket-backend/internal/authz"
 	"ticket-backend/internal/model"
@@ -764,6 +765,9 @@ func (s *AgentTaskService) planFromEnvelope(tenantID, actorUserID uint, actorRol
 		if sanitizeErr != nil {
 			return nil, sanitizeErr
 		}
+		if err := applyExplicitAgentProductFacts(model.DB, tenantID, input, previous, sanitizedCandidate, &facts); err != nil {
+			return nil, err
+		}
 		merged := mergeProductDraft(previous.Product, sanitizedCandidate)
 		resolved, missing, err := resolveProductDraft(model.DB, tenantID, merged)
 		if err != nil {
@@ -1067,6 +1071,144 @@ func mergeProductDraft(previous *agentProductDraft, candidate *agentProductCandi
 		result.LimitPerID = candidate.LimitPerID
 	}
 	return result
+}
+
+// applyExplicitAgentProductFacts keeps continuation turns deterministic when
+// a provider repeats a stale candidate. Only names that occur verbatim in the
+// current tenant catalog and in the user's current turn can override the
+// previous model proposal; all other values remain subject to normal draft
+// resolution and missing-field validation.
+func applyExplicitAgentProductFacts(tx *gorm.DB, tenantID uint, input string, previous agentTaskContext, candidate *agentProductCandidate, facts *agentProductUserFacts) error {
+	if tx == nil || candidate == nil || facts == nil {
+		return nil
+	}
+	var areas []model.ScenicArea
+	if err := tx.Where("tenant_id = ? AND status = ?", tenantID, "active").Order("id ASC").Find(&areas).Error; err != nil {
+		return err
+	}
+	areaNames := make([]string, 0, len(areas))
+	for _, area := range areas {
+		areaNames = append(areaNames, area.Name)
+	}
+	if explicitArea := longestAgentCatalogNameInText(input, areaNames); explicitArea != "" {
+		candidate.ScenicAreaName = explicitArea
+		facts.ScenicAreaName = explicitArea
+	}
+
+	var checkpoints []model.CheckPoint
+	if err := tx.Where("tenant_id = ?", tenantID).Order("id ASC").Find(&checkpoints).Error; err != nil {
+		return err
+	}
+	validCheckpointNames := make(map[string]string, len(checkpoints))
+	for _, checkpoint := range checkpoints {
+		name := strings.TrimSpace(checkpoint.Name)
+		if name != "" {
+			validCheckpointNames[strings.ToLower(name)] = name
+		}
+	}
+	previousCheckpointNames := make([]string, 0, len(previous.UserFacts.CheckpointNames))
+	for _, name := range previous.UserFacts.CheckpointNames {
+		if canonicalName, ok := validCheckpointNames[strings.ToLower(strings.TrimSpace(name))]; ok && !agentStringInList(previousCheckpointNames, canonicalName) {
+			previousCheckpointNames = append(previousCheckpointNames, canonicalName)
+		}
+	}
+	explicitCheckpointNames := explicitAgentCatalogNamesInText(input, validCheckpointNames)
+	allowedCheckpointNames := append([]string{}, previousCheckpointNames...)
+	for _, name := range explicitCheckpointNames {
+		if !agentStringInList(allowedCheckpointNames, name) {
+			allowedCheckpointNames = append(allowedCheckpointNames, name)
+		}
+	}
+	normalizedFacts := make([]string, 0, len(facts.CheckpointNames)+len(explicitCheckpointNames))
+	for _, name := range facts.CheckpointNames {
+		if canonicalName, ok := validCheckpointNames[strings.ToLower(strings.TrimSpace(name))]; ok && !agentStringInList(normalizedFacts, canonicalName) {
+			normalizedFacts = append(normalizedFacts, canonicalName)
+		}
+	}
+	facts.CheckpointNames = normalizedFacts
+
+	groups := make([]agentRuleDraftGroup, 0, len(candidate.Groups)+1)
+	for _, group := range candidate.Groups {
+		filteredItems := make([]agentRuleDraftItem, 0, len(group.Items))
+		for _, item := range group.Items {
+			name := strings.TrimSpace(item.CheckpointName)
+			canonicalName, valid := validCheckpointNames[strings.ToLower(name)]
+			if !valid {
+				continue
+			}
+			if !agentStringInList(allowedCheckpointNames, canonicalName) {
+				continue
+			}
+			item.CheckpointName = canonicalName
+			filteredItems = append(filteredItems, item)
+		}
+		if len(filteredItems) > 0 {
+			group.Items = filteredItems
+			groups = append(groups, group)
+		}
+	}
+	if len(groups) == 0 && len(explicitCheckpointNames) > 0 {
+		groups = append(groups, agentRuleDraftGroup{GroupName: "默认分组"})
+	}
+	for _, name := range explicitCheckpointNames {
+		found := false
+		for _, group := range groups {
+			for _, item := range group.Items {
+				if strings.EqualFold(strings.TrimSpace(item.CheckpointName), name) {
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			groups[0].Items = append(groups[0].Items, agentRuleDraftItem{CheckpointName: name, MaxPerCheckIn: 1})
+		}
+		if !agentStringInList(facts.CheckpointNames, name) {
+			facts.CheckpointNames = append(facts.CheckpointNames, name)
+		}
+	}
+	candidate.Groups = groups
+	return nil
+}
+
+func explicitAgentCatalogNamesInText(input string, names map[string]string) []string {
+	candidates := make([]string, 0, len(names))
+	for _, name := range names {
+		if agentTextContains(input, name) {
+			candidates = append(candidates, name)
+		}
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return len([]rune(candidates[i])) > len([]rune(candidates[j]))
+	})
+	selected := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		shadowed := false
+		for _, existing := range selected {
+			if agentTextContains(existing, candidate) {
+				shadowed = true
+				break
+			}
+		}
+		if !shadowed {
+			selected = append(selected, candidate)
+		}
+	}
+	return selected
+}
+
+func longestAgentCatalogNameInText(input string, names []string) string {
+	var match string
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name != "" && agentTextContains(input, name) && len([]rune(name)) > len([]rune(match)) {
+			match = name
+		}
+	}
+	return match
 }
 
 func resolveProductDraft(tx *gorm.DB, tenantID uint, draft *agentProductDraft) (*agentProductDraft, []AgentMissingField, error) {
