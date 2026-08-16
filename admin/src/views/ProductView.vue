@@ -109,7 +109,7 @@
           <el-tag size="small" effect="plain" type="info">线上票</el-tag>
         </div>
       </template>
-      <el-tabs v-model="activeTab" tab-position="left" class="product-editor-tabs">
+      <el-tabs v-model="activeTab" class="product-editor-tabs">
         <!-- Tab 1: 基础信息 -->
         <el-tab-pane label="基础信息" name="basic">
           <el-form :model="form" label-width="100px" :rules="rules" ref="formRefBasic" class="editor-form">
@@ -826,46 +826,51 @@ onMounted(() => {
 
 .product-editor-tabs :deep(.el-tabs__header) {
   background: #f7f9fc;
-  border-right: 1px solid #e8edf3;
+  border-bottom: 1px solid #e4eaf2;
   margin: 0;
-  padding: 16px 8px;
-  width: 156px;
+  padding: 0 18px;
 }
 
 .product-editor-tabs :deep(.el-tabs__nav-wrap::after) {
-  display: none;
+  background-color: transparent;
 }
 
 .product-editor-tabs :deep(.el-tabs__item) {
-  border-radius: 8px;
   color: #667085;
   font-size: 13px;
-  height: 44px;
-  justify-content: flex-start;
-  margin: 3px 0;
+  height: 48px;
+  line-height: 48px;
+  margin: 0 4px;
   padding: 0 14px;
-  transition: background-color .2s ease, color .2s ease;
+  transition: color .2s ease, background-color .2s ease;
+  white-space: nowrap;
 }
 
 .product-editor-tabs :deep(.el-tabs__item:hover) {
+  background: #edf3ff;
+  border-radius: 6px 6px 0 0;
   color: #2563eb;
 }
 
 .product-editor-tabs :deep(.el-tabs__item.is-active) {
-  background: #eaf1ff;
+  background: #edf3ff;
+  border-radius: 6px 6px 0 0;
   color: #1d4ed8;
   font-weight: 600;
 }
 
 .product-editor-tabs :deep(.el-tabs__active-bar) {
-  display: none;
+  background-color: #2563eb;
+  border-radius: 3px 3px 0 0;
+  bottom: 0;
+  height: 3px;
 }
 
 .product-editor-tabs :deep(.el-tabs__content) {
   box-sizing: border-box;
   height: 540px;
   overflow-y: auto;
-  padding: 28px 32px 36px;
+  padding: 24px 32px 36px;
 }
 
 .editor-form :deep(.el-form-item) {
@@ -1218,7 +1223,12 @@ onMounted(() => {
   }
 
   .product-editor-tabs :deep(.el-tabs__header) {
-    width: 122px;
+    overflow-x: auto;
+    padding: 0 10px;
+  }
+
+  .product-editor-tabs :deep(.el-tabs__nav) {
+    min-width: max-content;
   }
 
   .product-editor-tabs :deep(.el-tabs__content) {

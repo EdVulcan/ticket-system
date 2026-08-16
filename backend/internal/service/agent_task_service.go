@@ -1422,16 +1422,11 @@ func resolveProductDraft(tx *gorm.DB, tenantID uint, draft *agentProductDraft) (
 		return nil, nil, err
 	}
 	if strings.TrimSpace(result.ScenicAreaName) == "" {
-		if len(areas) == 1 {
-			result.ScenicAreaName = areas[0].Name
-			result.ScenicAreaID = areas[0].ID
-		} else {
-			options := make([]string, 0, len(areas))
-			for _, area := range areas {
-				options = append(options, area.Name)
-			}
-			missing = append(missing, AgentMissingField{Field: "scenic_area_name", Label: "所属景区", Question: "请指定票种所属景区。", Options: options})
+		options := make([]string, 0, len(areas))
+		for _, area := range areas {
+			options = append(options, area.Name)
 		}
+		missing = append(missing, AgentMissingField{Field: "scenic_area_name", Label: "所属景区", Question: "请指定票种所属景区，系统不会根据当前租户的默认景区自动代填。", Options: options})
 	} else {
 		matches := make([]model.ScenicArea, 0, 1)
 		for _, area := range areas {
