@@ -103,13 +103,14 @@ type AgentTaskView struct {
 }
 
 type agentTaskContext struct {
-	OperationType string                 `json:"operation_type"`
-	SkillVersion  string                 `json:"skill_version,omitempty"`
-	SkillHash     string                 `json:"skill_hash,omitempty"`
-	Operations    []CatalogRuleOperation `json:"operations,omitempty"`
-	Product       *agentProductDraft     `json:"product,omitempty"`
-	Assumptions   []string               `json:"assumptions,omitempty"`
-	UserFacts     agentProductUserFacts  `json:"user_facts,omitempty"`
+	OperationType   string                 `json:"operation_type"`
+	KnowledgePackID string                 `json:"knowledge_pack_id,omitempty"`
+	SkillVersion    string                 `json:"skill_version,omitempty"`
+	SkillHash       string                 `json:"skill_hash,omitempty"`
+	Operations      []CatalogRuleOperation `json:"operations,omitempty"`
+	Product         *agentProductDraft     `json:"product,omitempty"`
+	Assumptions     []string               `json:"assumptions,omitempty"`
+	UserFacts       agentProductUserFacts  `json:"user_facts,omitempty"`
 }
 
 type agentProductDraft struct {
@@ -663,10 +664,11 @@ func (s *AgentTaskService) plan(ctx context.Context, tenantID, actorUserID uint,
 	if err != nil {
 		return nil, err
 	}
-	domainSkill, _, err := agentDomainSkill(task.OperationType)
+	domainPack, err := agentKnowledgePackForContext(task.OperationType, contextJSON)
 	if err != nil {
 		return nil, err
 	}
+	domainSkill := domainPack.Content
 	systemPrompt := `你是景区票务平台的受限操作规划器。你只能输出严格 JSON，不能解释、不能调用工具、不能生成 SQL，也不能直接修改数据。
 输出格式必须是：{"operation_type":"catalog_batch_change|ticket_product_create","operations":[...],"product":{...}}。
 	catalog_batch_change 只能使用 add_checkpoints、remove_checkpoints、set_checkpoint_limit；增加检票点时，如果用户明确要求“新增/新建/添加规则组”，可以设置 create_group=true，但 group_name 必须来自用户明确提供的名称，未提供时留空，让服务端追问；group_max_total_check_in 只有用户明确提供新组通行数量时才填写，不要猜测。普通增加检票点在票种有多个规则组且用户未指定组时，保留 create_group=false、group_name 为空，让服务端追问，不要猜测规则组。票种和检票点只能填写候选清单中的精确名称，不要输出 product_ids 或 checkpoint_ids。用户说“所有某类票种”时，只选择名称中明确包含该类别的候选票种并逐个输出精确名称，不要把它扩大为 all_products=true；只有用户明确说“所有票种/全部门票”才能使用 all_products=true。无法确定时输出空 operations。
@@ -719,7 +721,7 @@ func (s *AgentTaskService) planFromEnvelope(tenantID, actorUserID uint, actorRol
 			operationType = AgentOperationCatalogBatchChange
 		}
 	}
-	_, skillHash, err := agentDomainSkill(operationType)
+	domainPack, err := agentKnowledgePackForContext(operationType, contextJSON)
 	if err != nil {
 		return nil, err
 	}
@@ -727,7 +729,7 @@ func (s *AgentTaskService) planFromEnvelope(tenantID, actorUserID uint, actorRol
 	case AgentOperationCatalogBatchChange:
 		result.OperationType = operationType
 		if len(envelope.Operations) == 0 {
-			result.Context = agentTaskContext{OperationType: operationType, SkillVersion: agentDomainSkillVersion, SkillHash: skillHash}
+			result.Context = agentTaskContext{OperationType: operationType, KnowledgePackID: domainPack.ID, SkillVersion: domainPack.Version, SkillHash: domainPack.Hash}
 			result.Missing = []AgentMissingField{{Field: "operations", Label: "操作内容", Question: "请说明要操作哪些票种、检票点以及增加、移除或设置次数。"}}
 			return result, nil
 		}
@@ -752,7 +754,7 @@ func (s *AgentTaskService) planFromEnvelope(tenantID, actorUserID uint, actorRol
 			// collected. The resolver intentionally strips names after it has
 			// established tenant ownership, but a continuation needs them to
 			// produce the same operation again with group_name filled in.
-			result.Context = agentTaskContext{OperationType: operationType, SkillVersion: agentDomainSkillVersion, SkillHash: skillHash, Operations: envelope.Operations}
+			result.Context = agentTaskContext{OperationType: operationType, KnowledgePackID: domainPack.ID, SkillVersion: domainPack.Version, SkillHash: domainPack.Hash, Operations: envelope.Operations}
 			result.Missing = missing
 			return result, nil
 		}
@@ -765,7 +767,7 @@ func (s *AgentTaskService) planFromEnvelope(tenantID, actorUserID uint, actorRol
 		if err != nil {
 			return nil, err
 		}
-		result.Context = agentTaskContext{OperationType: operationType, SkillVersion: agentDomainSkillVersion, SkillHash: skillHash, Operations: operations}
+		result.Context = agentTaskContext{OperationType: operationType, KnowledgePackID: domainPack.ID, SkillVersion: domainPack.Version, SkillHash: domainPack.Hash, Operations: operations}
 		result.PreviewJSON = string(previewJSON)
 		result.LinkedPlanID = preview.PlanID
 		result.PlanHash = preview.PlanHash
@@ -782,7 +784,7 @@ func (s *AgentTaskService) planFromEnvelope(tenantID, actorUserID uint, actorRol
 			if factsErr != nil {
 				return nil, factsErr
 			}
-			result.Context = agentTaskContext{OperationType: operationType, SkillVersion: agentDomainSkillVersion, SkillHash: skillHash, Product: &agentProductDraft{}, UserFacts: facts}
+			result.Context = agentTaskContext{OperationType: operationType, KnowledgePackID: domainPack.ID, SkillVersion: domainPack.Version, SkillHash: domainPack.Hash, Product: &agentProductDraft{}, UserFacts: facts}
 			result.Missing = []AgentMissingField{{Field: "product", Label: "票种信息", Question: "请提供票种名称、所属景区、售价、结算价和至少一个检票点。"}}
 			return result, nil
 		}
@@ -807,7 +809,7 @@ func (s *AgentTaskService) planFromEnvelope(tenantID, actorUserID uint, actorRol
 			return nil, err
 		}
 		facts = enrichAgentProductUserFacts(facts, resolved)
-		result.Context = agentTaskContext{OperationType: operationType, SkillVersion: agentDomainSkillVersion, SkillHash: skillHash, Product: resolved, Assumptions: productAssumptions(resolved), UserFacts: facts}
+		result.Context = agentTaskContext{OperationType: operationType, KnowledgePackID: domainPack.ID, SkillVersion: domainPack.Version, SkillHash: domainPack.Hash, Product: resolved, Assumptions: productAssumptions(resolved), UserFacts: facts}
 		result.Missing = missing
 		if len(missing) == 0 {
 			preview, err := productPreviewJSON(model.DB, tenantID, resolved, result.Context.Assumptions)
