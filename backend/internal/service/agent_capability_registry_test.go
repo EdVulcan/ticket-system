@@ -11,7 +11,7 @@ func TestAgentCapabilityRegistryIsVersionedAndToolSafe(t *testing.T) {
 	if err := validateAgentCapabilityRegistry(); err != nil {
 		t.Fatalf("invalid agent capability registry: %v", err)
 	}
-	for _, operationType := range []string{AgentOperationPending, AgentOperationCatalogBatchChange, AgentOperationTicketProductCreate, AgentOperationTicketProductUpdate, AgentOperationTicketProductBatchUpdate} {
+	for _, operationType := range []string{AgentOperationPending, AgentOperationCatalogBatchChange, AgentOperationTicketProductCreate, AgentOperationTicketProductUpdate, AgentOperationTicketProductBatchUpdate, AgentOperationCompound} {
 		pack, err := agentKnowledgePackForOperation(operationType)
 		if err != nil {
 			t.Fatalf("load knowledge pack for %q: %v", operationType, err)

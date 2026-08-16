@@ -77,7 +77,25 @@
             <el-tag size="small" :type="task.can_confirm ? 'warning' : 'info'" effect="plain">{{ statusText(task.state) }}</el-tag>
           </div>
           <p class="original-request">“{{ task.input_text }}”</p>
-          <template v-if="isProductBatchUpdatePreview">
+          <template v-if="isCompoundPreview">
+            <div class="operation-summary compound-summary">
+              <div><span>顺序步骤</span><strong>{{ preview.step_count || preview.steps?.length || 0 }} 步</strong></div>
+              <div><span>执行方式</span><strong>逐步确认</strong></div>
+            </div>
+            <div class="compound-step-list">
+              <article v-for="step in preview.steps || []" :key="step.index" class="compound-step">
+                <div class="diff-heading">
+                  <strong>步骤 {{ step.index }} · {{ compoundOperationLabel(step.operation_type) }}</strong>
+                  <el-tag size="small" effect="plain" type="info">{{ statusText(step.status) }}</el-tag>
+                </div>
+                <div class="compound-step-summary">{{ compoundStepSummary(step.preview) }}</div>
+              </article>
+            </div>
+            <ul v-if="preview.safety?.length" class="assumption-list">
+              <li v-for="item in preview.safety" :key="item">{{ item }}</li>
+            </ul>
+          </template>
+          <template v-else-if="isProductBatchUpdatePreview">
             <div class="operation-summary product-batch-summary">
               <div><span>批量票种</span><strong>{{ preview.product_count || preview.lines?.length || 0 }} 个</strong></div>
               <div><span>共同变更</span><strong>{{ preview.changes?.length || 0 }} 项</strong></div>
@@ -239,6 +257,7 @@ const errorTitle = computed(() => {
 const errorActionLabel = computed(() => errorKind.value === 'auth' ? '重新登录' : '重试')
 const providerLabel = computed(() => `${task.value?.provider || availability.value?.provider || '平台模型'}${task.value?.model ? ` / ${task.value.model}` : ''}`)
 const preview = computed(() => task.value?.preview || {})
+const isCompoundPreview = computed(() => preview.value?.operation_type === 'compound_preview')
 const isProductUpdatePreview = computed(() => preview.value?.operation_type === 'ticket_product_update')
 const isProductBatchUpdatePreview = computed(() => preview.value?.operation_type === 'ticket_product_batch_update')
 const isAnyProductUpdatePreview = computed(() => isProductUpdatePreview.value || isProductBatchUpdatePreview.value)
@@ -288,6 +307,19 @@ const identityLimitText = (product: any) => {
   return `${identity} · ${phone} · ${id}`
 }
 const refundText = (product: any) => product?.refund_type || '未设置'
+const compoundOperationLabel = (operationType: string) => ({
+  catalog_batch_change: '检票规则调整',
+  ticket_product_create: '创建未上线票种',
+  ticket_product_update: '修改未上线票种',
+  ticket_product_batch_update: '批量修改未上线票种',
+} as Record<string, string>)[operationType] || operationType
+const compoundStepSummary = (step: any) => {
+  if (!step) return '预览内容不可用'
+  if (step.product_count) return `影响 ${step.product_count} 个票种，变更 ${step.changes?.length || 0} 项`
+  if (step.lines?.length) return `影响 ${step.lines.length} 个票种规则`
+  if (step.product?.name) return `票种：${step.product.name} · ${step.product?.type_label || step.product?.type || '未上架'}`
+  return '已生成服务器预览，确认时会再次校验当前数据'
+}
 const ruleItems = (group: any) => {
   const total = group?.max_total_check_in > 0 ? `总计最多 ${group.max_total_check_in} 次` : '总次数不限'
   const items = (group?.items || []).map((item: any) => `${item.checkpoint_name || `#${item.checkpoint_id}`} ×${item.max_per_check_in}`).join('、') || '-'
@@ -510,6 +542,10 @@ const startNewTask = async () => {
 .rule-preview { padding: 10px; border: 1px solid #e2e7ee; border-radius: 5px; }
 .product-update-diff { margin-top: 10px; padding: 10px; border: 1px solid #e2e7ee; border-radius: 5px; }
 .product-batch-summary { margin-bottom: 10px; }
+.compound-step-list { display: flex; flex-direction: column; gap: 8px; }
+.compound-step { padding: 10px; border: 1px solid #e2e7ee; border-radius: 5px; background: #fbfcfe; }
+.compound-step .diff-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.compound-step-summary { margin-top: 7px; color: #667085; font-size: 11px; line-height: 17px; }
 .batch-update-list { display: flex; flex-direction: column; gap: 9px; }
 .product-update-row { padding-top: 8px; }
 .product-update-row + .product-update-row { margin-top: 8px; border-top: 1px solid #edf0f4; }

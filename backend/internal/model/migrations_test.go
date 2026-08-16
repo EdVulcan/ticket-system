@@ -231,6 +231,13 @@ func TestPostgresSchema96AgentTaskOwnershipGuard(t *testing.T) {
 	if err := db.Create(&validBatchUpdate).Error; err != nil {
 		t.Fatalf("agent batch product update task was rejected: %v", err)
 	}
+	validCompound := valid
+	validCompound.ID = 0
+	validCompound.OperationType = "compound_preview"
+	validCompound.IdempotencyKey = "agent-task-guard-compound-key"
+	if err := db.Create(&validCompound).Error; err != nil {
+		t.Fatalf("agent compound preview task was rejected: %v", err)
+	}
 	unknownTenant := valid
 	unknownTenant.ID = 0
 	unknownTenant.TenantID = second.ID + 999

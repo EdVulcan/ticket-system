@@ -45,7 +45,7 @@ var agentModuleManifests = []agentModuleManifest{
 		Label:          "票种与检票规则",
 		Summary:        "线上/窗口票种、产品版本、检票点和规则预览",
 		KnowledgeFiles: []string{"skills/agent_system.md", "skills/agent_core.md", "skills/agent_product_create.md", "skills/agent_product_update.md", "skills/agent_product_batch_update.md", "skills/agent_catalog_batch_change.md"},
-		OperationTypes: []string{AgentOperationCatalogBatchChange, AgentOperationTicketProductCreate, AgentOperationTicketProductUpdate, AgentOperationTicketProductBatchUpdate},
+		OperationTypes: []string{AgentOperationCatalogBatchChange, AgentOperationTicketProductCreate, AgentOperationTicketProductUpdate, AgentOperationTicketProductBatchUpdate, AgentOperationCompound},
 		ToolNames: []string{
 			"search_scenic_areas",
 			"search_checkpoints",
@@ -54,6 +54,7 @@ var agentModuleManifests = []agentModuleManifest{
 			"prepare_ticket_product_create",
 			"prepare_ticket_product_update",
 			"prepare_ticket_product_batch_update",
+			"prepare_compound_preview",
 			"prepare_catalog_rule_change",
 		},
 	},

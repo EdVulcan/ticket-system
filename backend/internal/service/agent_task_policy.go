@@ -19,6 +19,9 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 	if envelope == nil {
 		return agentInvalid("AI 未返回任务计划")
 	}
+	if envelope.Compound != nil && (envelope.Product != nil || envelope.ProductUpdate != nil || envelope.ProductBatchUpdate != nil || len(envelope.Operations) > 0) {
+		return agentInvalid("AI 复合计划不能同时包含顶层票种或票规操作")
+	}
 	if envelope.Product != nil && (envelope.ProductUpdate != nil || envelope.ProductBatchUpdate != nil || len(envelope.Operations) > 0) {
 		return agentInvalid("AI 计划同时包含票种目录操作，请一次只描述一种操作")
 	}
@@ -37,6 +40,8 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 			operationType = AgentOperationTicketProductUpdate
 		case envelope.ProductBatchUpdate != nil:
 			operationType = AgentOperationTicketProductBatchUpdate
+		case envelope.Compound != nil:
+			operationType = AgentOperationCompound
 		case len(envelope.Operations) > 0:
 			operationType = AgentOperationCatalogBatchChange
 		}
@@ -58,6 +63,24 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 		return agentInvalid("模型把票规调整请求解释成了票种基础信息修改，请重新生成计划")
 	}
 	switch operationType {
+	case AgentOperationCompound:
+		if envelope.Compound == nil {
+			return agentInvalid("AI 未返回复合计划内容")
+		}
+		if len(envelope.Compound.Steps) < 2 || len(envelope.Compound.Steps) > 5 {
+			return agentInvalid("复合计划必须包含 2 到 5 个低风险操作步骤")
+		}
+		for index, step := range envelope.Compound.Steps {
+			stepOperation := strings.TrimSpace(step.OperationType)
+			if stepOperation != AgentOperationCatalogBatchChange && stepOperation != AgentOperationTicketProductCreate && stepOperation != AgentOperationTicketProductUpdate && stepOperation != AgentOperationTicketProductBatchUpdate {
+				return agentInvalid(fmt.Sprintf("复合计划第 %d 步包含不受支持的操作", index+1))
+			}
+			child := &agentAIEnvelope{OperationType: stepOperation, Operations: step.Operations, Product: step.Product, ProductUpdate: step.ProductUpdate, ProductBatchUpdate: step.ProductBatchUpdate}
+			if err := validateAgentPlannerEnvelope(compoundStepValidationInput(input, stepOperation), child); err != nil {
+				return agentInvalid(fmt.Sprintf("复合计划第 %d 步无效：%s", index+1, err.Error()))
+			}
+		}
+		return nil
 	case AgentOperationCatalogBatchChange:
 		if err := validateAgentCatalogOperations(input, envelope.Operations); err != nil {
 			return err
@@ -88,6 +111,9 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 		if envelope.ProductBatchUpdate != nil {
 			return validateAgentProductBatchUpdateCandidate(input, envelope.ProductBatchUpdate)
 		}
+		if envelope.Compound != nil {
+			return validateAgentPlannerEnvelope(input, &agentAIEnvelope{OperationType: AgentOperationCompound, Compound: envelope.Compound})
+		}
 		if len(envelope.Operations) > 0 {
 			if err := validateAgentCatalogOperations(input, envelope.Operations); err != nil {
 				return err
@@ -98,6 +124,17 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 	default:
 		return agentInvalid("AI 返回了不受支持的操作类型")
 	}
+}
+
+func compoundStepValidationInput(input, operationType string) string {
+	if operationType != AgentOperationTicketProductUpdate && operationType != AgentOperationTicketProductBatchUpdate {
+		return input
+	}
+	cleaned := input
+	for _, word := range []string{"检票点", "核销规则", "规则组", "分组", "票规"} {
+		cleaned = strings.ReplaceAll(cleaned, word, "")
+	}
+	return strings.TrimSpace(cleaned + " 修改票种")
 }
 
 func validateAgentProductCandidate(input string, product *agentProductCandidate) error {
@@ -212,6 +249,9 @@ func validateAgentInputIntent(input, existingOperationType string) error {
 	if existingOperationType == AgentOperationTicketProductBatchUpdate {
 		return nil
 	}
+	if existingOperationType == AgentOperationCompound {
+		return nil
+	}
 	if agentHasAny(normalized, agentCatalogIntentWords) || agentHasAny(normalized, agentProductCreateIntentWords) || agentHasAny(normalized, agentProductUpdateIntentWords) || agentHasAny(normalized, agentProductBatchUpdateIntentWords) {
 		return nil
 	}
@@ -243,6 +283,9 @@ func validateAgentPlannerEnvelopeForTask(input string, task model.AgentTask, env
 		return nil
 	}
 	if task.OperationType == AgentOperationTicketProductBatchUpdate && envelope != nil && envelope.Product == nil && envelope.ProductUpdate == nil && envelope.ProductBatchUpdate == nil && len(envelope.Operations) == 0 && (envelopeOperationType == "" || envelopeOperationType == AgentOperationTicketProductBatchUpdate) {
+		return nil
+	}
+	if task.OperationType == AgentOperationCompound && envelope != nil && envelope.Compound == nil && envelope.Product == nil && envelope.ProductUpdate == nil && envelope.ProductBatchUpdate == nil && len(envelope.Operations) == 0 && (envelopeOperationType == "" || envelopeOperationType == AgentOperationCompound) {
 		return nil
 	}
 	if err := validateAgentPlannerEnvelope(input, envelope); err == nil {
@@ -293,6 +336,16 @@ var agentProductUpdateIntentWords = []string{
 
 var agentProductBatchUpdateIntentWords = []string{
 	"批量修改", "批量更新", "批量调整", "多个票种", "这些票种", "这几个票种", "一批票种",
+}
+
+var agentCompoundIntentWords = []string{"然后", "接着", "随后", "同时", "并且", "分别", "再", "第一步", "第二步", "步骤"}
+
+func agentCompoundIntent(input string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if !agentHasAny(normalized, agentCompoundIntentWords) {
+		return false
+	}
+	return agentHasAny(normalized, agentCatalogIntentWords) || agentHasAny(normalized, agentProductCreateIntentWords) || agentHasAny(normalized, agentProductUpdateIntentWords) || agentHasAny(normalized, agentProductBatchUpdateIntentWords)
 }
 
 var agentReadIntentWords = []string{

@@ -174,6 +174,11 @@ func executeAgentProductRuleQuery(_ *AgentTaskService, request agentToolRequest)
 	if name == "" {
 		return agentToolExecution{}, agentInvalid("product_name is required")
 	}
+	canonicalName, err := resolveAgentAlias(model.DB, request.TenantID, agentAliasProduct, name)
+	if err != nil {
+		return agentToolExecution{}, err
+	}
+	name = canonicalName
 	var products []model.Product
 	if err := model.DB.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Preload("Rule.Groups.Items.CheckPoint").Where("tenant_id = ? AND name = ?", request.TenantID, name).Find(&products).Error; err != nil {
 		return agentToolExecution{}, err
@@ -370,6 +375,13 @@ func executeAgentTicketInventoryQuery(_ *AgentTaskService, request agentToolRequ
 	start, end, err := agentQueryDateRange(args.StartDate, args.EndDate, 93, 30)
 	if err != nil {
 		return agentToolExecution{}, err
+	}
+	if value := strings.TrimSpace(args.ProductName); value != "" {
+		canonical, aliasErr := resolveAgentAlias(model.DB, request.TenantID, agentAliasProduct, value)
+		if aliasErr != nil {
+			return agentToolExecution{}, aliasErr
+		}
+		args.ProductName = canonical
 	}
 	limit := agentQueryLimit(args.Limit)
 	query := model.DB.Table("product_inventories AS inventory").

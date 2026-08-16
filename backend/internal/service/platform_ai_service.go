@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/utils"
 	"time"
@@ -27,7 +28,11 @@ const (
 	// Provider-default mode deliberately leaves max_tokens out of the request.
 	// Reservations still need a bounded estimate so concurrent calls cannot all
 	// consume the complete monthly allowance before usage is reconciled.
-	defaultAIOutputReservationTokens int64 = 8192
+	defaultAIOutputReservationTokens  int64 = 8192
+	aiProviderMaxAttempts                   = 2
+	aiProviderCircuitFailureThreshold       = 3
+	aiProviderCircuitCooldown               = 30 * time.Second
+	aiProviderRetryDelay                    = 250 * time.Millisecond
 )
 
 var (
@@ -36,10 +41,13 @@ var (
 )
 
 // AIProviderError marks a response or transport failure after the request
-// reached the configured provider. Controllers expose it as a 502 so the
-// tenant can distinguish provider/configuration problems from server bugs.
+// reached the configured provider. Controllers expose provider failures as
+// typed 502/503 responses so tenants can distinguish them from server bugs.
 type AIProviderError struct {
-	Err error
+	Err        error
+	Code       string
+	HTTPStatus int
+	Retryable  bool
 }
 
 func (e *AIProviderError) Error() string {
@@ -54,6 +62,64 @@ func (e *AIProviderError) Unwrap() error {
 		return nil
 	}
 	return e.Err
+}
+
+type aiProviderCircuitState struct {
+	Failures  int
+	OpenedAt  time.Time
+	LastError string
+}
+
+var aiProviderCircuit = struct {
+	sync.Mutex
+	states map[string]aiProviderCircuitState
+}{states: make(map[string]aiProviderCircuitState)}
+
+func aiProviderCircuitKey(config model.PlatformAIConfig) string {
+	return strings.Join([]string{normalizeAIProvider(config.Provider), strings.TrimRight(strings.TrimSpace(config.BaseURL), "/"), strings.TrimSpace(config.Model)}, "|")
+}
+
+func beforeAIProviderRequest(config model.PlatformAIConfig) error {
+	key := aiProviderCircuitKey(config)
+	aiProviderCircuit.Lock()
+	defer aiProviderCircuit.Unlock()
+	state := aiProviderCircuit.states[key]
+	if state.OpenedAt.IsZero() {
+		return nil
+	}
+	if time.Since(state.OpenedAt) >= aiProviderCircuitCooldown {
+		// Allow one half-open request. A success closes the circuit; a failure
+		// records a fresh cooldown in recordAIProviderResult.
+		return nil
+	}
+	return &AIProviderError{
+		Err:       errors.New("AI provider temporarily unavailable; retry after the provider circuit cooldown"),
+		Code:      "circuit_open",
+		Retryable: true,
+	}
+}
+
+func recordAIProviderResult(config model.PlatformAIConfig, providerErr *AIProviderError) {
+	key := aiProviderCircuitKey(config)
+	aiProviderCircuit.Lock()
+	defer aiProviderCircuit.Unlock()
+	if providerErr == nil {
+		delete(aiProviderCircuit.states, key)
+		return
+	}
+	if !providerErr.Retryable {
+		return
+	}
+	state := aiProviderCircuit.states[key]
+	if !state.OpenedAt.IsZero() && time.Since(state.OpenedAt) < aiProviderCircuitCooldown {
+		return
+	}
+	state.Failures++
+	state.LastError = providerErr.Error()
+	if state.Failures >= aiProviderCircuitFailureThreshold {
+		state.OpenedAt = time.Now()
+	}
+	aiProviderCircuit.states[key] = state
 }
 
 // PlatformAIConfigInput is accepted only by platform administrators. The API
@@ -435,41 +501,37 @@ func (s *PlatformAIService) chatWithToolsChoice(ctx context.Context, config mode
 	if err != nil {
 		return nil, err
 	}
-	requestCtx, cancel := context.WithTimeout(ctx, aiRequestTimeout(config))
-	defer cancel()
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+	responseBody, statusCode, err := s.doAIProviderRequest(ctx, config, apiKey, endpoint, body)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	response, err := s.client().Do(req)
-	if err != nil {
-		return nil, &AIProviderError{Err: fmt.Errorf("AI provider request failed: %w", err)}
-	}
-	defer response.Body.Close()
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
-	if err != nil {
-		return nil, &AIProviderError{Err: fmt.Errorf("AI provider response could not be read: %w", err)}
-	}
 	var decoded aiChatResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return nil, &AIProviderError{Err: fmt.Errorf("AI provider returned invalid JSON: %w", err)}
+		providerErr := &AIProviderError{Err: fmt.Errorf("AI provider returned invalid JSON: %w", err), Code: "invalid_json", Retryable: true}
+		recordAIProviderResult(config, providerErr)
+		return nil, providerErr
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		message := fmt.Sprintf("AI provider returned HTTP %d", response.StatusCode)
+	if statusCode < 200 || statusCode >= 300 {
+		message := fmt.Sprintf("AI provider returned HTTP %d", statusCode)
 		if decoded.Error != nil && strings.TrimSpace(decoded.Error.Message) != "" {
 			message = decoded.Error.Message
 		}
-		return nil, &AIProviderError{Err: errors.New(message)}
+		providerErr := &AIProviderError{Err: errors.New(message), Code: aiProviderHTTPErrorCode(statusCode), HTTPStatus: statusCode, Retryable: aiProviderHTTPRetryable(statusCode)}
+		recordAIProviderResult(config, providerErr)
+		return nil, providerErr
 	}
 	if len(decoded.Choices) == 0 {
-		return nil, &AIProviderError{Err: errors.New("AI provider returned no choices")}
+		providerErr := &AIProviderError{Err: errors.New("AI provider returned no choices"), Code: "empty_choices", Retryable: true}
+		recordAIProviderResult(config, providerErr)
+		return nil, providerErr
 	}
 	choice := decoded.Choices[0]
 	if strings.TrimSpace(choice.Message.Content) == "" && len(choice.Message.ToolCalls) == 0 {
-		return nil, &AIProviderError{Err: errors.New("AI provider returned neither a tool call nor a response")}
+		providerErr := &AIProviderError{Err: errors.New("AI provider returned neither a tool call nor a response"), Code: "empty_response", Retryable: true}
+		recordAIProviderResult(config, providerErr)
+		return nil, providerErr
 	}
+	recordAIProviderResult(config, nil)
 	return &AICompletionResult{Message: choice.Message, UsageTokens: decoded.Usage.TotalTokens, FinishReason: choice.FinishReason, ProviderRequestID: decoded.ID}, nil
 }
 
@@ -506,45 +568,124 @@ func (s *PlatformAIService) chatWithContentRequirement(ctx context.Context, conf
 	if err != nil {
 		return "", 0, err
 	}
-	timeout := aiRequestTimeout(config)
-	requestCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+	responseBody, statusCode, err := s.doAIProviderRequest(ctx, config, apiKey, endpoint, body)
 	if err != nil {
 		return "", 0, err
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Content-Type", "application/json")
-	response, err := s.client().Do(req)
-	if err != nil {
-		return "", 0, &AIProviderError{Err: fmt.Errorf("AI provider request failed: %w", err)}
-	}
-	defer response.Body.Close()
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
-	if err != nil {
-		return "", 0, &AIProviderError{Err: fmt.Errorf("AI provider response could not be read: %w", err)}
-	}
 	var decoded aiChatResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
-		return "", 0, &AIProviderError{Err: fmt.Errorf("AI provider returned invalid JSON: %w", err)}
+		providerErr := &AIProviderError{Err: fmt.Errorf("AI provider returned invalid JSON: %w", err), Code: "invalid_json", Retryable: true}
+		recordAIProviderResult(config, providerErr)
+		return "", 0, providerErr
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		message := fmt.Sprintf("AI provider returned HTTP %d", response.StatusCode)
+	if statusCode < 200 || statusCode >= 300 {
+		message := fmt.Sprintf("AI provider returned HTTP %d", statusCode)
 		if decoded.Error != nil && strings.TrimSpace(decoded.Error.Message) != "" {
 			message = decoded.Error.Message
 		}
-		return "", decoded.Usage.TotalTokens, &AIProviderError{Err: errors.New(message)}
+		providerErr := &AIProviderError{Err: errors.New(message), Code: aiProviderHTTPErrorCode(statusCode), HTTPStatus: statusCode, Retryable: aiProviderHTTPRetryable(statusCode)}
+		recordAIProviderResult(config, providerErr)
+		return "", decoded.Usage.TotalTokens, providerErr
 	}
 	if len(decoded.Choices) == 0 {
-		return "", decoded.Usage.TotalTokens, &AIProviderError{Err: errors.New("AI provider returned no choices")}
+		providerErr := &AIProviderError{Err: errors.New("AI provider returned no choices"), Code: "empty_choices", Retryable: true}
+		recordAIProviderResult(config, providerErr)
+		return "", decoded.Usage.TotalTokens, providerErr
 	}
 	if requireContent && strings.TrimSpace(decoded.Choices[0].Message.Content) == "" {
 		if strings.TrimSpace(decoded.Choices[0].Message.ReasoningContent) != "" || strings.EqualFold(strings.TrimSpace(decoded.Choices[0].FinishReason), "length") {
-			return "", decoded.Usage.TotalTokens, &AIProviderError{Err: errors.New("AI provider did not return a final answer; verify the output budget and final JSON response")}
+			return "", decoded.Usage.TotalTokens, &AIProviderError{Err: errors.New("AI provider did not return a final answer; verify the output budget and final JSON response"), Code: "incomplete_response", Retryable: false}
 		}
-		return "", decoded.Usage.TotalTokens, &AIProviderError{Err: errors.New("AI provider returned an empty plan")}
+		return "", decoded.Usage.TotalTokens, &AIProviderError{Err: errors.New("AI provider returned an empty plan"), Code: "empty_plan", Retryable: false}
 	}
+	recordAIProviderResult(config, nil)
 	return decoded.Choices[0].Message.Content, decoded.Usage.TotalTokens, nil
+}
+
+func aiProviderHTTPRetryable(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests || statusCode >= 500
+}
+
+func aiProviderHTTPErrorCode(statusCode int) string {
+	if statusCode == http.StatusTooManyRequests {
+		return "rate_limited"
+	}
+	if statusCode >= 500 {
+		return "server_error"
+	}
+	return "http_error"
+}
+
+// doAIProviderRequest is deliberately the only network retry seam for the
+// assistant. It retries transport/429/5xx failures once within the caller's
+// deadline, never retries 4xx authentication or validation failures, and
+// trips a short process-local circuit after repeated provider failures.
+func (s *PlatformAIService) doAIProviderRequest(ctx context.Context, config model.PlatformAIConfig, apiKey, endpoint string, body []byte) ([]byte, int, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := beforeAIProviderRequest(config); err != nil {
+		return nil, 0, err
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, aiRequestTimeout(config))
+	defer cancel()
+	var lastErr *AIProviderError
+	for attempt := 0; attempt < aiProviderMaxAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, strings.NewReader(string(body)))
+		if err != nil {
+			return nil, 0, err
+		}
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Content-Type", "application/json")
+		response, err := s.client().Do(req)
+		if err != nil {
+			lastErr = &AIProviderError{Err: fmt.Errorf("AI provider request failed: %w", err), Code: "transport", Retryable: true}
+			if attempt+1 < aiProviderMaxAttempts && requestCtx.Err() == nil {
+				if !waitAIProviderRetry(requestCtx) {
+					break
+				}
+				continue
+			}
+			recordAIProviderResult(config, lastErr)
+			return nil, 0, lastErr
+		}
+		responseBody, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+		response.Body.Close()
+		if readErr != nil {
+			lastErr = &AIProviderError{Err: fmt.Errorf("AI provider response could not be read: %w", readErr), Code: "read_response", Retryable: true}
+			if attempt+1 < aiProviderMaxAttempts && requestCtx.Err() == nil {
+				if !waitAIProviderRetry(requestCtx) {
+					break
+				}
+				continue
+			}
+			recordAIProviderResult(config, lastErr)
+			return nil, response.StatusCode, lastErr
+		}
+		if aiProviderHTTPRetryable(response.StatusCode) && attempt+1 < aiProviderMaxAttempts {
+			if !waitAIProviderRetry(requestCtx) {
+				break
+			}
+			continue
+		}
+		return responseBody, response.StatusCode, nil
+	}
+	if lastErr != nil {
+		recordAIProviderResult(config, lastErr)
+		return nil, 0, lastErr
+	}
+	return nil, 0, &AIProviderError{Err: errors.New("AI provider request deadline exceeded"), Code: "timeout", Retryable: true}
+}
+
+func waitAIProviderRetry(ctx context.Context) bool {
+	timer := time.NewTimer(aiProviderRetryDelay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 func aiCompletionEndpoint(baseURL string) (string, error) {

@@ -222,6 +222,7 @@ const navGroups = computed<NavGroup[]>(() => {
   if (scenicSupplier && can('onsite.manage')) operations.push({ path: '/device', label: '终端设备', icon: Monitor })
   if (scenicSupplier && can('onsite.read')) operations.push({ path: '/checkpoint', label: '检票点位', icon: Location })
   if (scenicSupplier && can('catalog.read')) operations.push({ path: '/product/batch', label: '批量规则操作', icon: Operation })
+  if (scenicSupplier && can('catalog.read')) operations.push({ path: '/agent-aliases', label: 'AI 业务别名', icon: Reading })
 
   const data: NavItem[] = []
   if ((scenicHistorySupplier || hasCapability('distributor')) && can('finance.read')) data.push({ path: '/finance', label: '财务报表', icon: Money })

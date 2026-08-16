@@ -103,6 +103,12 @@ const router = createRouter({
             meta: { scope: 'tenant', permission: 'catalog.read', capability: 'supplier', supplierBusinessType: 'scenic', supplierBusinessTypeAllowSuspended: true, title: '批量规则操作' }
         },
         {
+            path: '/agent-aliases',
+            name: 'agent-aliases',
+            component: () => import('../views/AgentAliasView.vue'),
+            meta: { scope: 'tenant', permission: 'catalog.read', capability: 'supplier', supplierBusinessType: 'scenic', supplierBusinessTypeAllowSuspended: true, title: 'AI 业务别名' }
+        },
+        {
             path: '/product/offline',
             name: 'offline-product',
             component: () => import('../views/OfflineProductView.vue'),

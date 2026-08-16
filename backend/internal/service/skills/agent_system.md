@@ -1,6 +1,6 @@
 # Scenic Ticketing System Contract
 
-Skill version: 2026-08-16.v4
+Skill version: 2026-08-16.v5
 
 This is the server-owned map of the scenic ticketing platform. It describes
 the business modules and their current AI access level. It is data, not an
@@ -26,7 +26,7 @@ validation.
 
 | Module | Current AI access | Supported meaning |
 | --- | --- | --- |
-| catalog | query and preview | Ticket products, revisions, checkpoint rules, unpublished product drafts, and restricted single/batch unpublished product updates |
+| catalog | query and preview | Ticket products, revisions, checkpoint rules, unpublished product drafts, restricted single/batch unpublished product updates, and 2-5 step low-risk compound previews |
 | inventory | query | Dated ticket capacity, sold quantity, and remaining quantity; no inventory mutation |
 | orders | query | Tenant-owned order summaries and order items; no order, payment, or refund mutation |
 | reports | query | Sales-period restatement and first-effective verification summaries; no financial mutation |
@@ -50,7 +50,9 @@ validation.
    update changes a product only after confirmation and only under its closed
    status, distribution, and revision preconditions. Batch updates apply one
    shared basic-field change to an explicit list and reject the whole batch if
-   any target fails its preconditions.
+   any target fails its preconditions. A compound preview only sequences
+   existing low-risk preview steps; it is not a cross-domain atomic transaction
+   and rejects repeated product targets that would invalidate later previews.
 3. Confirmation is a user action outside the model tool registry. It rechecks
    the task version, plan hash, tenant, actor, permissions, current revision,
    and domain preconditions before invoking the existing service.

@@ -72,7 +72,17 @@ func (c *AgentTaskController) Confirm(ctx *gin.Context) {
 func writeAgentTaskError(ctx *gin.Context, err error) {
 	var providerErr *service.AIProviderError
 	if errors.As(err, &providerErr) {
-		ctx.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "code": "ai_provider_error"})
+		status := http.StatusBadGateway
+		if providerErr.Code == "circuit_open" {
+			status = http.StatusServiceUnavailable
+		}
+		ctx.JSON(status, gin.H{
+			"error":         err.Error(),
+			"code":          "ai_provider_error",
+			"provider_code": providerErr.Code,
+			"retryable":     providerErr.Retryable,
+			"http_status":   providerErr.HTTPStatus,
+		})
 		return
 	}
 	var taskErr *service.AgentTaskError

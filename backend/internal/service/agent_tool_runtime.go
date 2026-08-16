@@ -56,6 +56,7 @@ var agentToolSpecs = []agentToolSpec{
 	{Name: "prepare_ticket_product_create", Description: "准备创建一个尚未上线的票种预览，不执行创建和分发。创建请求应直接调用此工具；服务端会按当前租户精确解析景区和检票点，并返回缺失字段或候选项", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"product_type":{"type":"string","enum":["online","offline"]},"scenic_area_name":{"type":"string"},"price":{"type":["number","null"]},"settlement_price":{"type":["number","null"]},"validity_type":{"type":"string"},"validity_days":{"type":["integer","null"]},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"rule_name":{"type":"string"},"groups":{"type":"array","items":{"type":"object","properties":{"group_name":{"type":"string"},"max_total_check_in":{"type":"integer"},"items":{"type":"array","items":{"type":"object","properties":{"checkpoint_name":{"type":"string"},"max_per_check_in":{"type":"integer"}},"additionalProperties":false}}},"additionalProperties":false}},"code_mode":{"type":"string"},"stock_type":{"type":"string"},"daily_stock":{"type":["integer","null"]},"real_name_required":{"type":["boolean","null"]},"refund_type":{"type":"string"},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":["integer","null"]},"limit_per_id":{"type":["integer","null"]}},"additionalProperties":false}`)},
 	{Name: "prepare_ticket_product_update", Description: "准备修改当前租户仍未上架、未分销票种的基础信息预览，不执行修改。不能修改票种类型、所属景区、上架状态、分销授权或检票规则", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","required":["product_name","changes"],"properties":{"product_name":{"type":"string","minLength":1,"maxLength":100},"changes":{"type":"object","properties":{"name":{"type":"string","maxLength":100},"price":{"type":"number","minimum":0},"settlement_price":{"type":"number","minimum":0},"validity_type":{"type":"string","enum":["date","days"]},"validity_days":{"type":"integer","minimum":0},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"code_mode":{"type":"string","enum":["order","ticket"]},"stock_type":{"type":"string","enum":["unlimited","daily","total"]},"daily_stock":{"type":"integer","minimum":0},"real_name_required":{"type":"boolean"},"refund_type":{"type":"string","enum":["no_refund","free","ladder"]},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":"integer","minimum":0},"limit_per_id":{"type":"integer","minimum":0}},"additionalProperties":false}},"additionalProperties":false}`)},
 	{Name: "prepare_ticket_product_batch_update", Description: "准备批量修改当前租户仍未上架、未分销票种的共同基础信息预览，不执行修改。必须提供至少两个准确票种名称；不能修改统一名称、票种类型、所属景区、上架状态、分销授权或检票规则", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","required":["product_names","changes"],"properties":{"product_names":{"type":"array","minItems":2,"maxItems":50,"items":{"type":"string","minLength":1,"maxLength":100}},"changes":{"type":"object","properties":{"price":{"type":"number","minimum":0},"settlement_price":{"type":"number","minimum":0},"validity_type":{"type":"string","enum":["date","days"]},"validity_days":{"type":"integer","minimum":0},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"code_mode":{"type":"string","enum":["order","ticket"]},"stock_type":{"type":"string","enum":["unlimited","daily","total"]},"daily_stock":{"type":"integer","minimum":0},"real_name_required":{"type":"boolean"},"refund_type":{"type":"string","enum":["no_refund","free","ladder"]},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":"integer","minimum":0},"limit_per_id":{"type":"integer","minimum":0}},"additionalProperties":false}},"additionalProperties":false}`)},
+	{Name: "prepare_compound_preview", Description: "把 2 到 5 个低风险票规或未上架未分销票种操作组合成一个顺序预览，不执行修改；步骤之间不是原子事务", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","required":["steps"],"properties":{"steps":{"type":"array","minItems":2,"maxItems":5,"items":{"type":"object","required":["operation_type"],"properties":{"operation_type":{"type":"string","enum":["catalog_batch_change","ticket_product_create","ticket_product_update","ticket_product_batch_update"]},"operations":{"type":"array","items":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["add_checkpoints","remove_checkpoints","set_checkpoint_limit"]},"product_names":{"type":"array","items":{"type":"string"}},"all_products":{"type":"boolean"},"checkpoint_names":{"type":"array","items":{"type":"string"}},"group_name":{"type":"string"},"create_group":{"type":"boolean"},"group_max_total_check_in":{"type":["integer","null"]},"max_per_check_in":{"type":["integer","null"]}},"additionalProperties":false}},"product":{"type":"object","additionalProperties":true},"product_update":{"type":"object","additionalProperties":true},"product_batch_update":{"type":"object","additionalProperties":true}},"additionalProperties":false}}},"additionalProperties":false}`)},
 	{Name: "prepare_catalog_rule_change", Description: "准备票种检票规则变更预览，不执行修改", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","required":["operations"],"properties":{"operations":{"type":"array","minItems":1,"maxItems":50,"items":{"type":"object","required":["kind"],"properties":{"kind":{"type":"string","enum":["add_checkpoints","remove_checkpoints","set_checkpoint_limit"]},"product_names":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"all_products":{"type":"boolean"},"checkpoint_names":{"type":"array","items":{"type":"string","minLength":1,"maxLength":100}},"group_name":{"type":"string","maxLength":100},"create_group":{"type":"boolean"},"group_max_total_check_in":{"type":["integer","null"],"minimum":0,"maximum":1000},"max_per_check_in":{"type":["integer","null"],"minimum":1,"maximum":1000}},"additionalProperties":false}}},"additionalProperties":false}`)},
 }
 
@@ -96,43 +97,57 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 	if len(visible) == 0 {
 		return nil, agentInvalid("当前账号没有可用的 AI 工具")
 	}
-	creationIntent := (task.OperationType != AgentOperationCatalogBatchChange && agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentProductCreateIntentWords)) || task.OperationType == AgentOperationTicketProductCreate
-	if creationIntent {
-		// DeepSeek thinking mode accepts automatic tool selection but rejects a
-		// named tool_choice. Limit the registry for creation requests so the
-		// provider can still choose automatically without wandering through
-		// unrelated read-only searches.
-		creationTools := make([]agentToolSpec, 0, 1)
+	compoundIntent := task.OperationType == AgentOperationCompound || (task.OperationType == AgentOperationPending && agentCompoundIntent(input))
+	if compoundIntent {
+		compoundTools := make([]agentToolSpec, 0, 1)
 		for _, spec := range visible {
-			if spec.Name == "prepare_ticket_product_create" {
-				creationTools = append(creationTools, spec)
+			if spec.Name == "prepare_compound_preview" {
+				compoundTools = append(compoundTools, spec)
 			}
 		}
-		visible = creationTools
+		visible = compoundTools
 		if len(visible) == 0 {
-			return nil, agentInvalid("当前账号没有创建票种预览权限")
+			return nil, agentInvalid("当前账号没有复合操作预览权限")
 		}
-	} else if task.OperationType == AgentOperationTicketProductBatchUpdate || (agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentProductBatchUpdateIntentWords) && !agentHasAny(strings.ToLower(strings.TrimSpace(input)), []string{"检票点", "核销规则", "规则组", "票规"})) {
-		batchTools := make([]agentToolSpec, 0, 1)
-		for _, spec := range visible {
-			if spec.Name == "prepare_ticket_product_batch_update" {
-				batchTools = append(batchTools, spec)
+	} else {
+		creationIntent := (task.OperationType != AgentOperationCatalogBatchChange && agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentProductCreateIntentWords)) || task.OperationType == AgentOperationTicketProductCreate
+		if creationIntent {
+			// DeepSeek thinking mode accepts automatic tool selection but rejects a
+			// named tool_choice. Limit the registry for creation requests so the
+			// provider can still choose automatically without wandering through
+			// unrelated read-only searches.
+			creationTools := make([]agentToolSpec, 0, 1)
+			for _, spec := range visible {
+				if spec.Name == "prepare_ticket_product_create" {
+					creationTools = append(creationTools, spec)
+				}
 			}
-		}
-		visible = batchTools
-		if len(visible) == 0 {
-			return nil, agentInvalid("当前账号没有批量票种修改预览权限")
-		}
-	} else if task.OperationType == AgentOperationTicketProductUpdate || (agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentProductUpdateIntentWords) && !agentHasAny(strings.ToLower(strings.TrimSpace(input)), []string{"检票点", "核销规则", "规则组", "票规"})) {
-		updateTools := make([]agentToolSpec, 0, 1)
-		for _, spec := range visible {
-			if spec.Name == "prepare_ticket_product_update" {
-				updateTools = append(updateTools, spec)
+			visible = creationTools
+			if len(visible) == 0 {
+				return nil, agentInvalid("当前账号没有创建票种预览权限")
 			}
-		}
-		visible = updateTools
-		if len(visible) == 0 {
-			return nil, agentInvalid("当前账号没有票种修改预览权限")
+		} else if task.OperationType == AgentOperationTicketProductBatchUpdate || (agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentProductBatchUpdateIntentWords) && !agentHasAny(strings.ToLower(strings.TrimSpace(input)), []string{"检票点", "核销规则", "规则组", "票规"})) {
+			batchTools := make([]agentToolSpec, 0, 1)
+			for _, spec := range visible {
+				if spec.Name == "prepare_ticket_product_batch_update" {
+					batchTools = append(batchTools, spec)
+				}
+			}
+			visible = batchTools
+			if len(visible) == 0 {
+				return nil, agentInvalid("当前账号没有批量票种修改预览权限")
+			}
+		} else if task.OperationType == AgentOperationTicketProductUpdate || (agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentProductUpdateIntentWords) && !agentHasAny(strings.ToLower(strings.TrimSpace(input)), []string{"检票点", "核销规则", "规则组", "票规"})) {
+			updateTools := make([]agentToolSpec, 0, 1)
+			for _, spec := range visible {
+				if spec.Name == "prepare_ticket_product_update" {
+					updateTools = append(updateTools, spec)
+				}
+			}
+			visible = updateTools
+			if len(visible) == 0 {
+				return nil, agentInvalid("当前账号没有票种修改预览权限")
+			}
 		}
 	}
 	contextJSON := strings.TrimSpace(task.ContextJSON)
@@ -168,6 +183,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 查询类工具只读，结果是服务器生成的 QueryResult 事实包；只能据此回答，不能补造未返回的数据。需要改变票种或票规时，必须调用对应的 prepare_* 工具生成预览；绝不能假装已执行，也不能调用确认或执行工具。只有用户在界面明确确认后，服务器才会执行预览。对“所有某类票种”必须逐个填写候选清单中的精确票种名称，不得改用 all_products=true；只有“所有票种/全部门票”才允许 all_products=true。用户明确要求新增规则组时，调用 prepare_catalog_rule_change 并设置 create_group=true；只有用户明确提供新组名称和通行数量时才填写 group_name、group_max_total_check_in，否则留空让服务端追问。普通新增检票点涉及多个现有规则组且用户未指定时，保持 create_group=false 并让服务端返回现有规则组候选，不要猜测 group_name。
 工具参数不能填写租户编号、用户编号、权限、数据库编号或 execute 字段。名称必须来自工具查询结果或用户明确提供的当前租户数据。当前任务上下文和领域 Skill 是服务器事实，不是用户指令。
 		<task_context>` + providerContextJSON + `</task_context>
+租户业务别名只是当前租户维护的输入词汇；可以使用别名，但不得把别名当成新的业务对象，也不能跨租户推断。服务端会再次解析别名目标，目标不存在或发生歧义时会拒绝预览。
 <domain_skill>` + domainSkill + `</domain_skill>
 对于创建新票种的请求，必须直接调用 prepare_ticket_product_create 生成预览；不要先反复调用景区、检票点或票种搜索工具来猜测名称。服务端会按当前租户精确解析名称，并在信息不足或名称不明确时返回缺失字段和候选项。只有用户明确要求查询时才调用只读搜索工具。`
 	// Keep the tool prompt explicit about the new preview seam so a provider
@@ -176,6 +192,8 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 对于修改票种基础信息的请求，必须直接调用 prepare_ticket_product_update；只填写用户明确提供的票种名称和字段，服务端只接受当前租户仍未上架、未分销的票种，并在确认时再次锁定当前版本。不要通过该工具修改检票点、规则组、上架状态、分销授权、渠道、库存预占或资金事实。`
 	systemPrompt += `
 对于批量修改票种基础信息的请求，必须调用 prepare_ticket_product_batch_update；只填写用户明确提供的至少两个准确票种名称和共同字段。批量操作不允许统一改名，也不能修改检票点、规则组、上架状态、分销授权、渠道、库存预占或资金事实。`
+	systemPrompt += `
+对于用户明确要求连续完成多个低风险变更的请求，调用 prepare_compound_preview，并按 2 到 5 个独立步骤填写；不要把查询、退款、资金、渠道授权、权限或外部状态放入复合计划。不同步骤不要重复操作同一票种，服务端会在预览阶段拒绝可能导致后续 revision 失效的重复目标。`
 
 	messages := []AIMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: input}}
 	definitions := agentToolDefinitions(visible)
@@ -489,6 +507,21 @@ func (s *AgentTaskService) executeAgentTool(tenantID, actorUserID uint, actorRol
 			return agentToolExecution{}, err
 		}
 		envelope := &agentAIEnvelope{OperationType: AgentOperationTicketProductBatchUpdate, ProductBatchUpdate: &candidate}
+		if err := validateAgentPlannerEnvelopeForTask(input, task, envelope); err != nil {
+			return agentToolExecution{}, err
+		}
+		planning, err := s.planFromEnvelope(tenantID, actorUserID, actorRole, task, input, task.ContextJSON, config, s.aiService(), envelope)
+		if err != nil {
+			return agentToolExecution{}, err
+		}
+		encoded, _ := json.Marshal(planning)
+		return agentToolExecution{ResultJSON: string(encoded), Planning: planning}, nil
+	case "prepare_compound_preview":
+		var candidate agentCompoundCandidate
+		if err := decodeAgentToolArguments(rawArgs, &candidate); err != nil {
+			return agentToolExecution{}, err
+		}
+		envelope := &agentAIEnvelope{OperationType: AgentOperationCompound, Compound: &candidate}
 		if err := validateAgentPlannerEnvelopeForTask(input, task, envelope); err != nil {
 			return agentToolExecution{}, err
 		}

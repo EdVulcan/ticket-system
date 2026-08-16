@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 96
+const CurrentPostgresSchemaVersion = 98
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -42,6 +42,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&CatalogBatchChangePlan{}, &CatalogBatchChangeLine{},
 		&PlatformAIConfig{}, &AIUsageMonth{},
 		&AgentTask{}, &AgentTaskEvent{},
+		&AgentBusinessAlias{},
 		&BundleProduct{}, &BundleVersion{}, &BundleComponent{},
 		&Order{}, &OrderItem{}, &Ticket{}, &OrderVisitor{}, &FulfillmentOrder{}, &TicketEntitlement{}, &CheckInRecord{},
 		&DistributorRelationship{}, &CapitalAccount{}, &TransactionRecord{}, &LedgerEntry{},
@@ -205,6 +206,25 @@ func runPostgresMigrations(db *gorm.DB) error {
 			return fmt.Errorf("migrate legacy AI request timeout: %w", err)
 		}
 	}
+	if previousSchemaVersion > 0 && previousSchemaVersion < 97 {
+		if err := db.Exec(`
+			DELETE FROM agent_business_aliases
+			WHERE BTRIM(alias) = '' OR BTRIM(canonical_name) = ''
+		`).Error; err != nil {
+			return fmt.Errorf("clean invalid AI business aliases: %w", err)
+		}
+	}
+	if previousSchemaVersion < 98 {
+		// Schema 98 registers the durable compound-preview parent task. The
+		// ownership trigger below is recreated on every upgrade, so no data
+		// rewrite is required for existing tasks.
+		if err := db.Exec(`
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_business_alias_ci
+			ON agent_business_aliases (tenant_id, kind, LOWER(alias))
+		`).Error; err != nil {
+			return fmt.Errorf("register compound AI preview task and business alias index: %w", err)
+		}
+	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
 		if err := db.Exec(`
 			INSERT INTO supplier_business_types
@@ -353,7 +373,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "batch previewable unpublished product updates for AI tasks",
+		Name:      "compound AI preview tasks and tenant business aliases",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -559,11 +579,20 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 			   OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = NEW.tenant_id AND t.deleted_at IS NULL) THEN
 				RAISE EXCEPTION 'AI usage tenant or accounting facts are invalid';
 			END IF;
+		WHEN 'agent_business_aliases' THEN
+			IF NEW.tenant_id = 0
+			   OR COALESCE(BTRIM(NEW.alias), '') = ''
+			   OR COALESCE(BTRIM(NEW.canonical_name), '') = ''
+			   OR NEW.kind NOT IN ('scenic_area','checkpoint','product')
+			   OR LOWER(BTRIM(NEW.alias)) = LOWER(BTRIM(NEW.canonical_name))
+			   OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = NEW.tenant_id AND t.deleted_at IS NULL) THEN
+				RAISE EXCEPTION 'AI business alias ownership or shape is invalid';
+			END IF;
 		WHEN 'agent_tasks' THEN
 			IF NEW.tenant_id = 0
 			   OR NEW.actor_role = ''
 			   OR COALESCE(NEW.protocol_mode, 'legacy_json') NOT IN ('legacy_json','tool_v1')
-			   OR NEW.operation_type NOT IN ('pending','catalog_batch_change','ticket_product_create','ticket_product_update','ticket_product_batch_update')
+			   OR NEW.operation_type NOT IN ('pending','catalog_batch_change','ticket_product_create','ticket_product_update','ticket_product_batch_update','compound_preview')
 			   OR NEW.state NOT IN ('collecting','ready_for_preview','awaiting_confirmation','executing','completed','failed','expired','cancelled')
 			   OR COALESCE(NEW.input_text, '') = ''
 			   OR COALESCE(NEW.context_json, '') = ''
@@ -800,7 +829,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "agent_tasks", "agent_task_events", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_room_inventories", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
+	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_room_inventories", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

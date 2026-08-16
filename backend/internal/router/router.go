@@ -180,6 +180,17 @@ func InitRouter(r *gin.Engine) {
 		agentTaskGroup.POST("/:taskID/cancel", agentTaskController.Cancel)
 		agentTaskGroup.POST("/:taskID/confirm", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), agentTaskController.Confirm)
 	}
+	// Tenant-owned business vocabulary is only an input aid for the
+	// restricted assistant. It cannot point outside the current supplier
+	// catalog and never grants an additional permission.
+	agentAliasController := &api.AgentAliasController{Service: service.AgentTaskService{}}
+	agentAliasGroup := protected.Group("/agent/aliases")
+	agentAliasGroup.Use(middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
+	{
+		agentAliasGroup.GET("", middleware.RequireTenantPermission(authz.PermissionCatalogRead), agentAliasController.List)
+		agentAliasGroup.POST("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), agentAliasController.Save)
+		agentAliasGroup.DELETE("/:aliasID", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), agentAliasController.Delete)
+	}
 
 	orderController := &api.OrderController{}
 	orderGroup := protected.Group("/orders")

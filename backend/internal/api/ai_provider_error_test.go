@@ -20,11 +20,11 @@ func TestAgentTaskProviderErrorUsesBadGateway(t *testing.T) {
 	if recorder.Code != 502 {
 		t.Fatalf("status=%d, want 502", recorder.Code)
 	}
-	var body map[string]string
+	var body map[string]interface{}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
-	if body["code"] != "ai_provider_error" {
+	if body["code"] != "ai_provider_error" || body["retryable"] != false {
 		t.Fatalf("code=%q, want ai_provider_error", body["code"])
 	}
 }
@@ -39,7 +39,7 @@ func TestCatalogBatchProviderErrorUsesBadGateway(t *testing.T) {
 	if recorder.Code != 502 {
 		t.Fatalf("status=%d, want 502", recorder.Code)
 	}
-	var body map[string]string
+	var body map[string]interface{}
 	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
 		t.Fatalf("decode error response: %v", err)
 	}
