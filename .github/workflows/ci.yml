@@ -280,7 +280,7 @@ jobs:
           # The release tree is immutable after activation. Runtime state must
           # resolve outside the versioned tree so uploads, instance keys and
           # backups survive the next deployment.
-          ln -s /opt/ticket-system/data release/backend/data
+          ln -s /var/lib/ticket-system release/backend/data
           chmod 0755 release/backend/ticket-backend
           pos_sha256="$(sha256sum release/admin/dist/downloads/ticket-pos.exe | awk '{print $1}')"
           printf '{"version":"%s","download_url":"https://ymsq.edvulcan.top/downloads/ticket-pos.exe","sha256":"%s"}\n' "$GITHUB_SHA" "$pos_sha256" > release/admin/dist/downloads/pos-version.json
@@ -315,7 +315,7 @@ jobs:
           release_sha="$1"
           archive="$2"
           release_directory="/opt/ticket-system/releases/$release_sha"
-          runtime_data='/opt/ticket-system/data'
+          runtime_data='/var/lib/ticket-system'
           legacy_data='/opt/ticket-system/current/backend/data'
 
           # Create the target before extraction so the absolute symlink in the
@@ -324,11 +324,11 @@ jobs:
           # privileged activation helper, so this preflight must be writable by
           # that account already.
           install -d -m 2775 "$runtime_data" "$runtime_data/uploads" "$runtime_data/backups"
-          if [ ! -e "$runtime_data/instance-key.json" ] && [ -d "$legacy_data" ]; then
+          if [ -d "$legacy_data" ]; then
             legacy_real="$(readlink -f "$legacy_data" 2>/dev/null || true)"
             runtime_real="$(readlink -f "$runtime_data" 2>/dev/null || true)"
             if [ -n "$legacy_real" ] && [ "$legacy_real" != "$runtime_real" ]; then
-              cp -a "$legacy_data/." "$runtime_data/"
+              cp -a -n "$legacy_data/." "$runtime_data/"
             fi
           fi
 
@@ -337,12 +337,5 @@ jobs:
           rm -f "$archive"
           sudo /usr/local/sbin/ticket-system-deploy "$release_sha"
 
-          echo '--- ticket-system runtime path diagnostics ---'
-          id
-          pwd
-          systemctl show ticket-system --property=User,Group,WorkingDirectory,ProtectSystem,ReadWritePaths --no-pager 2>/dev/null || true
-          ls -ld /opt/ticket-system /opt/ticket-system/current /opt/ticket-system/current/data /opt/ticket-system/current/backend /opt/ticket-system/current/backend/data /opt/ticket-system/data 2>&1 || true
-          readlink -f /opt/ticket-system/current/data 2>/dev/null || true
-          readlink -f /opt/ticket-system/current/backend/data 2>/dev/null || true
           test -w "$runtime_data"
           REMOTE

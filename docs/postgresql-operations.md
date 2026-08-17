@@ -83,6 +83,6 @@ go run ./cmd/restore `
 
 ## 7. 生产发布目录与上传文件
 
-生产发布包中的 `backend` 目录属于版本化 release，服务不得把运行时数据直接写入该目录。主线 CI 发布包会把 `backend/data` 映射到 `/opt/ticket-system/data`，该目录用于保存实例密钥、PostgreSQL 备份和小红书商品图片；部署账号必须预先拥有该目录及其子目录的写权限，发布步骤会在切换版本前执行可写性检查。首次迁移会从旧版本的 `current/backend/data` 补齐尚不存在的文件，不覆盖已有持久化数据。
+生产发布包中的 `backend` 目录属于版本化 release，服务不得把运行时数据直接写入该目录。systemd 当前以 `ProtectSystem=strict` 运行服务，仅开放 `/var/lib/ticket-system` 和日志目录写入；主线 CI 发布包会把 `backend/data` 映射到 `/var/lib/ticket-system`，该目录用于保存实例密钥、PostgreSQL 备份和小红书商品图片。发布步骤会在切换版本前把旧版本数据按“不覆盖已有文件”迁移到该目录，并执行可写性检查。
 
-如果部署环境不是由仓库中的主线 CI 发布，必须在服务启动前完成等价配置：让服务账号对 `/opt/ticket-system/data` 及其子目录拥有读写权限，并确保 `backend/data` 不落在只读 release 文件系统内。商品图片上传接口返回成功前会写入该目录；小红书同步使用的 HTTPS 图片地址随后必须能通过 `/api/v1/public/channel-product-images/{tenant}/{account}/{filename}` 访问。目录不可写时，系统应保持同步失败并记录原因，不能把本地保存失败报告为商品发布成功。
+如果部署环境不是由仓库中的主线 CI 发布，必须在服务启动前完成等价配置：让服务账号对 `/var/lib/ticket-system` 及其子目录拥有读写权限，并确保 `backend/data` 不落在只读 release 文件系统内。商品图片上传接口返回成功前会写入该目录；小红书同步使用的 HTTPS 图片地址随后必须能通过 `/api/v1/public/channel-product-images/{tenant}/{account}/{filename}` 访问。目录不可写时，系统应保持同步失败并记录原因，不能把本地保存失败报告为商品发布成功。
