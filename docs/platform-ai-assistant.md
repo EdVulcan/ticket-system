@@ -6,6 +6,12 @@
 
 > **Phase 4（2026-08-16）**：新增批量修改未上架、未分销票种基础信息的预览/确认操作。一次至少两个、最多 50 个精确票种名称，共享一组基础字段；统一改名、检票规则、上架、分销、渠道、库存预占和资金事实仍不开放。
 
+> **当前开发状态与恢复入口（2026-08-17）**：AI 助手第一阶段已完成并随 `main` 的 `cd954ec` 发布。当前可用范围包括新建未上架且不可分销票种、单票种和批量基础信息修改、检票点/核销规则调整、统一 `target_scope` 范围解析、预览/确认、租户与版本锁定、候选快照、审计和任务恢复；分销商与旅行社仅开放关系范围内的只读查询。高风险写入仍关闭，包括支付、退款、结算确认、分销授权、渠道配置、库存预占、权限、设备和外部平台状态变更。恢复 AI 开发时，先阅读本节、`skills/agent_system.md` 和 `docs/current-development-roadmap-2026-08-01.md`，再从明确的业务工具需求开始，不要绕过现有领域服务直接增加通用执行能力。
+
+> AI 关键入口：范围解析在 `backend/internal/service/agent_target_scope.go`；任务编排在 `backend/internal/service/agent_task_service.go` 与 `backend/internal/service/agent_compound_task.go`；工具运行时在 `backend/internal/service/agent_tool_runtime.go`；版本化领域 Skill 位于 `backend/internal/service/skills/`。平台管理员在管理端统一配置 Provider、模型、协议、超时和租户月度额度，API Key 只在服务端加密保存。新任务默认使用原生受限工具调用；输出预算为 `0` 时不发送单次 `max_tokens`，但月度用量和服务端 allowlist、租户权限、目标范围校验仍生效。
+
+> 本阶段已完成的验证包括后端 `go test ./...`、`go vet ./...`、管理端构建与 E2E、小程序 JavaScript 语法检查，以及 GitHub Actions 的 Race、PostgreSQL、Wails、E2E 和部署检查。AI 后续开发暂停，直到小红书沙盒主线完成当前联调；需要新增 AI 能力时，应先补充系统知识契约、模块 Skill、工具权限与预览语义，再实现代码和回归测试。
+
 平台 AI 助手是管理端的受限操作入口。它把自然语言转换成后端已定义的查询工具或预览计划，再复用现有领域服务的预览、锁定、revision 和审计流程。运行时使用独立的、版本化的领域 Skill（不是开发 Agent 的 `.codex` Skill）；服务端通过 `agentModuleManifest` 按任务类型加载系统知识契约和模块 Skill，并把 Knowledge Pack ID、版本和哈希保存到任务上下文。Skill 资源位于 `backend/internal/service/skills/`，通过 Go embed 随服务端发布，租户不能修改。任务续聊会继续使用创建时的 Knowledge Pack；部署后知识包发生变化时，旧任务会要求新建任务，不会静默改变规划规则。
 
 ### 已有票种的统一目标范围
