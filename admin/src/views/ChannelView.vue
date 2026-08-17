@@ -568,6 +568,27 @@ const addMapping = async () => {
   mappings.value.unshift(response.data)
   Object.assign(mapping, { external_code: '', display_name: '', product_id: null, channel_sale_yuan: 0, channel_cost_yuan: 0 })
 }
+const xiaohongshuResourceError = (error: any) => error?.response?.data?.error || '暂时无法加载，请稍后重试'
+const loadXiaohongshuResources = async () => {
+  xiaohongshuCategoryError.value = ''
+  xiaohongshuPOIError.value = ''
+  // The sandbox may return business code 12 when category and POI requests run concurrently.
+  // Keep these upstream reads serialized while leaving local config loading independent.
+  try {
+    const categoryResult = await request.get(`/channel-accounts/${selectedAccount.value?.id}/xiaohongshu-categories`, { skipErrorToast: true } as any)
+    xiaohongshuCategories.value = categoryResult.data.data || []
+  } catch (error: any) {
+    xiaohongshuCategories.value = []
+    xiaohongshuCategoryError.value = xiaohongshuResourceError(error)
+  }
+  try {
+    const poiResult = await request.get(`/channel-accounts/${selectedAccount.value?.id}/xiaohongshu-pois`, { params: { page: 1, page_size: 100 }, skipErrorToast: true } as any)
+    xiaohongshuPOIs.value = poiResult.data.data || []
+  } catch (error: any) {
+    xiaohongshuPOIs.value = []
+    xiaohongshuPOIError.value = xiaohongshuResourceError(error)
+  }
+}
 const openXiaohongshuMappingEdit = async (row: any) => {
   if (!selectedAccount.value) return
   Object.assign(xiaohongshuMapping, { mapping_id: row.id, external_code: row.external_code || '', external_sku_id: `${row.external_code || 'XHS'}_SKU`, display_name: row.display_name || '', channel_sale_yuan: Number(row.channel_sale_cents || 0) / 100, category_id: '', poi_ids: [], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, status: row.status || 'active', sync_status: '', last_sync_error: '' })
@@ -576,18 +597,16 @@ const openXiaohongshuMappingEdit = async (row: any) => {
   xiaohongshuCategoryError.value = ''
   xiaohongshuPOIError.value = ''
   try {
-    const [categoryResult, poiResult, configResult] = await Promise.allSettled([
-      request.get(`/channel-accounts/${selectedAccount.value.id}/xiaohongshu-categories`, { skipErrorToast: true } as any),
-      request.get(`/channel-accounts/${selectedAccount.value.id}/xiaohongshu-pois`, { params: { page: 1, page_size: 100 }, skipErrorToast: true } as any),
+    const [resourceResult, configResult] = await Promise.allSettled([
+      loadXiaohongshuResources(),
       request.get(`/channel-accounts/${selectedAccount.value.id}/mappings/${row.id}/xiaohongshu-product`),
     ])
-    xiaohongshuCategories.value = categoryResult.status === 'fulfilled' ? categoryResult.value.data.data || [] : []
-    xiaohongshuPOIs.value = poiResult.status === 'fulfilled' ? poiResult.value.data.data || [] : []
-    xiaohongshuCategoryError.value = categoryResult.status === 'rejected' ? categoryResult.reason?.response?.data?.error || '暂时无法加载，请稍后重试' : ''
-    xiaohongshuPOIError.value = poiResult.status === 'rejected' ? poiResult.reason?.response?.data?.error || '暂时无法加载，请稍后重试' : ''
     if (configResult.status === 'fulfilled') {
       const config = configResult.value.data
       Object.assign(xiaohongshuMapping, { external_sku_id: config.external_sku_id || xiaohongshuMapping.external_sku_id, category_id: config.category_id || '', poi_ids: config.poi_ids || [], image_url: config.image_url || '', description: config.description || '', product_path: config.product_path || '/pages/index/index', order_path: config.order_path || '/pages/order/detail', product_type: config.product_type || 1, settle_type: config.settle_type || 1, sync_status: config.sync_status || '', last_sync_error: config.last_sync_error || '' })
+    }
+    if (resourceResult.status === 'rejected') {
+      xiaohongshuCategoryError.value = xiaohongshuResourceError(resourceResult.reason)
     }
   } finally { xiaohongshuMappingLoading.value = false }
 }
@@ -595,14 +614,7 @@ const reloadXiaohongshuResources = async () => {
   if (!selectedAccount.value) return
   xiaohongshuResourceLoading.value = true
   try {
-    const [categoryResult, poiResult] = await Promise.allSettled([
-      request.get(`/channel-accounts/${selectedAccount.value.id}/xiaohongshu-categories`, { skipErrorToast: true } as any),
-      request.get(`/channel-accounts/${selectedAccount.value.id}/xiaohongshu-pois`, { params: { page: 1, page_size: 100 }, skipErrorToast: true } as any),
-    ])
-    xiaohongshuCategories.value = categoryResult.status === 'fulfilled' ? categoryResult.value.data.data || [] : []
-    xiaohongshuPOIs.value = poiResult.status === 'fulfilled' ? poiResult.value.data.data || [] : []
-    xiaohongshuCategoryError.value = categoryResult.status === 'rejected' ? categoryResult.reason?.response?.data?.error || '暂时无法加载，请稍后重试' : ''
-    xiaohongshuPOIError.value = poiResult.status === 'rejected' ? poiResult.reason?.response?.data?.error || '暂时无法加载，请稍后重试' : ''
+    await loadXiaohongshuResources()
     if (!xiaohongshuCategoryError.value && !xiaohongshuPOIError.value) ElMessage.success('类目和门店已重新加载')
   } finally { xiaohongshuResourceLoading.value = false }
 }
