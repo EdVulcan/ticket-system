@@ -1,9 +1,10 @@
-# Scenic Ticketing Runtime Skill: Unpublished Product Updates
+# Scenic Ticketing Runtime Skill: Owned Product Updates
 
-This skill covers one supplier-owned ticket product that is still offline and
-has never been authorized for distribution. It is a preview-only operation;
-the server rechecks the product before confirmation and then uses the normal
-product update transaction.
+This skill covers one supplier-owned ticket product. It is a preview-only
+operation; the server rechecks the product before confirmation and then uses
+the normal product update transaction. A product may be online or marked
+distributable and still be edited by its owning supplier. A distributor copy
+is not supplier-owned and is rejected.
 
 ## Allowed fields
 
@@ -24,16 +25,17 @@ an optional text/date field where the domain permits it.
 This operation cannot change product type, scenic area, online/offline status,
 distribution authorization, channel mapping, inventory reservations, payment,
 refund execution, settlement, or checkpoint/rule-group membership. Use the
-existing catalog rule preview for checkpoint rules. Distributed listings and
-online products are rejected even if their name is known.
+existing catalog rule preview for checkpoint rules. Distributed listings are
+rejected even if their name is known.
 
 ## Preview and confirmation
 
 The preview shows server-loaded before/after product facts and the changed
-field labels. Confirmation locks the current product revision, requires it to
-remain offline and non-distributable, and creates the next `ProductRevision`
-through `ProductService`. Sold ticket snapshots and existing channel facts are
-not rewritten. A version or status change requires a new task.
+field labels. Confirmation locks the current product revision, requires the
+product to remain the same tenant-owned product, and creates the next
+`ProductRevision` through `ProductService`. Sold ticket snapshots and existing
+channel facts are not rewritten. A version, name, or ownership change requires
+a new task; status and distribution authorization are immutable in this tool.
 
 Never return product IDs, tenant IDs, revision IDs, SQL, or an execution claim
 to the provider. The server owns target resolution and all protected fields.

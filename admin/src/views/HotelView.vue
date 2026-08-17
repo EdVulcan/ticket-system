@@ -36,7 +36,7 @@
       <el-button v-if="canWrite" type="primary" @click="openHotelDialog()">创建第一家酒店</el-button>
     </el-empty>
 
-    <el-tabs v-if="selectedHotel" v-model="activeTab" class="hotel-tabs">
+    <el-tabs v-if="selectedHotel" v-model="activeTab" class="hotel-tabs" @tab-change="changeHotelTab">
       <el-tab-pane label="房型与价格" name="rooms">
         <div class="section-toolbar">
           <div>
@@ -85,6 +85,7 @@
               <el-option v-for="room in roomTypes" :key="room.id" :label="room.name" :value="room.id" />
             </el-select>
             <el-date-picker v-model="inventoryRange" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" :clearable="false" :disabled-date="disablePastDate" @change="loadInventory" />
+            <el-button v-if="canWrite" plain :disabled="!inventoryRows.length" @click="openInventoryBatchDialog">批量设置</el-button>
             <el-button v-if="canWrite" type="primary" :disabled="!inventoryRows.length" @click="saveInventory">保存房量</el-button>
           </div>
         </div>
@@ -105,6 +106,42 @@
             <el-table-column label="关闭销售" min-width="120">
               <template #default="{ row }"><el-switch v-model="row.closed" :disabled="!canWrite" /></template>
             </el-table-column>
+          </el-table>
+        </div>
+      </el-tab-pane>
+
+      <el-tab-pane label="价格日历" name="pricing">
+        <div class="section-toolbar inventory-toolbar">
+          <div>
+            <h2>入住日期价格日历</h2>
+            <p>未设置日期价时沿用价格计划基础价；日期价只影响后续报价，不改写已售套餐和历史预约快照。</p>
+          </div>
+          <div class="inventory-filters">
+            <el-select v-model="calendarRoomTypeId" placeholder="选择房型" @change="changeCalendarRoomType">
+              <el-option v-for="room in roomTypes" :key="room.id" :label="room.name" :value="room.id" />
+            </el-select>
+            <el-select v-model="calendarRatePlanId" placeholder="选择价格计划" :disabled="!calendarRatePlans.length" @change="loadRatePlanCalendar">
+              <el-option v-for="rate in calendarRatePlans" :key="rate.id" :label="rate.name" :value="rate.id" />
+            </el-select>
+            <el-date-picker v-model="calendarRange" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" :clearable="false" :disabled-date="disablePastDate" @change="loadRatePlanCalendar" />
+            <el-button v-if="canWrite" plain :disabled="!calendarRows.length" @click="openCalendarBatchDialog">批量套用</el-button>
+            <el-button v-if="canWrite" type="primary" :disabled="!calendarRows.length" @click="saveRatePlanCalendar">保存价格</el-button>
+          </div>
+        </div>
+        <el-alert type="info" :closable="false" show-icon title="基础价是价格计划的默认值。把日期价改回基础价后保存，系统会清除该日期覆盖，后续基础价调整仍可自然生效。" />
+        <div class="data-panel calendar-panel">
+          <el-table :data="calendarRows" empty-text="请选择房型、价格计划和日期范围">
+            <el-table-column prop="stay_date" label="入住日期" width="150" />
+            <el-table-column label="星期" width="80"><template #default="{ row }">{{ weekday(row.stay_date) }}</template></el-table-column>
+            <el-table-column label="基础零售价" width="120"><template #default="{ row }">¥{{ money(row.base_retail_price_cents) }}</template></el-table-column>
+            <el-table-column label="入住日零售价" width="190">
+              <template #default="{ row }"><el-input-number v-model="row.retail_price" :min="0.01" :precision="2" :step="10" :disabled="!canWrite" /></template>
+            </el-table-column>
+            <el-table-column label="基础结算价" width="120"><template #default="{ row }">¥{{ money(row.base_settlement_price_cents) }}</template></el-table-column>
+            <el-table-column label="入住日结算价" width="190">
+              <template #default="{ row }"><el-input-number v-model="row.settlement_price" :min="0" :precision="2" :step="10" :disabled="!canWrite" /></template>
+            </el-table-column>
+            <el-table-column label="价格来源" min-width="110"><template #default="{ row }"><el-tag :type="row.has_override ? 'warning' : 'info'">{{ row.has_override ? '日期覆盖' : '基础价' }}</el-tag></template></el-table-column>
           </el-table>
         </div>
       </el-tab-pane>
@@ -266,7 +303,7 @@
         <el-table-column label="售价" width="100"><template #default="{ row }">¥{{ money(row.retail_price_cents) }}</template></el-table-column>
         <el-table-column label="结算价" width="100"><template #default="{ row }">¥{{ money(row.settlement_price_cents) }}</template></el-table-column>
         <el-table-column label="早餐" width="80"><template #default="{ row }">{{ row.breakfast_count ? `${row.breakfast_count}份` : '无' }}</template></el-table-column>
-        <el-table-column label="操作" width="130"><template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openRateEdit(row)">编辑</el-button><el-button v-if="canWrite" link type="danger" @click="removeRate(row)">删除</el-button></template></el-table-column>
+        <el-table-column label="操作" width="210"><template #default="{ row }"><el-button link type="primary" @click="openRateCalendar(activeRoom, row)">价格日历</el-button><el-button v-if="canWrite" link type="primary" @click="openRateEdit(row)">编辑</el-button><el-button v-if="canWrite" link type="danger" @click="removeRate(row)">删除</el-button></template></el-table-column>
       </el-table>
     </el-dialog>
 
@@ -286,6 +323,37 @@
         </el-form-item>
       </el-form>
       <template #footer><el-button @click="rateEditVisible = false">取消</el-button><el-button type="primary" @click="saveRate">保存</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="inventoryBatchVisible" title="批量设置房量" width="560px">
+      <el-alert type="info" :closable="false" show-icon :title="`当前房型：${roomTypes.find(row => row.id === inventoryRoomTypeId)?.name || '-'} · ${inventoryRange?.[0] ? formatDate(inventoryRange[0]) : '-'} 至 ${inventoryRange?.[1] ? formatDate(inventoryRange[1]) : '-'}`" />
+      <el-form label-position="top" class="batch-form">
+        <el-form-item label="应用星期">
+          <el-checkbox-group v-model="inventoryBatch.weekdays">
+            <el-checkbox v-for="(label, value) in weekdayOptions" :key="value" :label="Number(value)">{{ label }}</el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
+        <el-form-item label="可售总量（留空表示不修改）"><el-input-number v-model="inventoryBatch.capacity" :min="0" :max="100000" :step="1" /></el-form-item>
+        <el-form-item label="销售状态"><el-radio-group v-model="inventoryBatch.closedMode"><el-radio-button label="unchanged">不修改</el-radio-button><el-radio-button label="open">开放销售</el-radio-button><el-radio-button label="closed">关闭销售</el-radio-button></el-radio-group></el-form-item>
+      </el-form>
+      <small class="field-hint">批量设置只会修改当前日期范围内选中的星期；已预留或已售房量不会被覆盖，新的可售总量不能低于它们的合计。</small>
+      <template #footer><el-button @click="inventoryBatchVisible = false">取消</el-button><el-button type="primary" @click="applyInventoryBatch">套用到页面</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="calendarBatchVisible" title="批量套用日期价格" width="560px">
+      <el-alert type="info" :closable="false" show-icon title="批量套用只修改当前价格日历的页面数据，确认无误后请点击“保存价格”提交。" />
+      <el-form label-position="top" class="batch-form">
+        <el-form-item label="应用星期">
+          <el-checkbox-group v-model="calendarBatch.weekdays">
+            <el-checkbox v-for="(label, value) in weekdayOptions" :key="value" :label="Number(value)">{{ label }}</el-checkbox>
+          </el-checkbox-group>
+        </el-form-item>
+        <div class="form-grid">
+          <el-form-item label="零售价（元）"><el-input-number v-model="calendarBatch.retailPrice" :min="0.01" :precision="2" :step="10" /></el-form-item>
+          <el-form-item label="结算价（元）"><el-input-number v-model="calendarBatch.settlementPrice" :min="0" :precision="2" :step="10" /></el-form-item>
+        </div>
+      </el-form>
+      <template #footer><el-button @click="calendarBatchVisible = false">取消</el-button><el-button type="primary" @click="applyCalendarBatch">套用到页面</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="packageDialogVisible" :title="packageForm.id ? '编辑酒景套餐' : '新增酒景套餐'" width="680px">
@@ -364,6 +432,8 @@ const roomDialogVisible = ref(false)
 const rateDialogVisible = ref(false)
 const rateEditVisible = ref(false)
 const packageDialogVisible = ref(false)
+const inventoryBatchVisible = ref(false)
+const calendarBatchVisible = ref(false)
 const hotelFormRef = ref()
 const roomFormRef = ref()
 const rateFormRef = ref()
@@ -429,6 +499,15 @@ const end = new Date(start); end.setDate(end.getDate() + 13)
 const inventoryRange = ref<[Date, Date]>([start, end])
 const inventoryRoomTypeId = ref<number | null>(null)
 const inventoryRows = ref<any[]>([])
+const calendarRoomTypeId = ref<number | null>(null)
+const calendarRatePlanId = ref<number | null>(null)
+const calendarRows = ref<any[]>([])
+const calendarStart = new Date(start); const calendarEnd = new Date(start); calendarEnd.setDate(calendarEnd.getDate() + 13)
+const calendarRange = ref<[Date, Date]>([calendarStart, calendarEnd])
+const weekdayOptions = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+const inventoryBatch = reactive<any>({ weekdays: [0, 1, 2, 3, 4, 5, 6], capacity: null, closedMode: 'unchanged' })
+const calendarBatch = reactive<any>({ weekdays: [0, 1, 2, 3, 4, 5, 6], retailPrice: 0.01, settlementPrice: 0 })
+const calendarRatePlans = computed(() => calendarRoomTypeId.value ? (ratePlans.value[calendarRoomTypeId.value] || []) : [])
 
 const loadHotels = async () => {
   loading.value = true
@@ -547,19 +626,29 @@ const exportReservations = async () => {
 }
 
 const loadHotelWorkspace = async () => {
-  if (!selectedHotelId.value) { roomTypes.value = []; return }
+  if (!selectedHotelId.value) { roomTypes.value = []; inventoryRows.value = []; calendarRows.value = []; return }
   const response = await request.get(`/hotels/${selectedHotelId.value}/room-types`)
   roomTypes.value = response.data.data || []
   const plans = await Promise.all(roomTypes.value.map(async room => [room.id, (await request.get(`/hotels/${selectedHotelId.value}/room-types/${room.id}/rate-plans`)).data.data || []]))
   ratePlans.value = Object.fromEntries(plans)
   if (!roomTypes.value.some(item => item.id === inventoryRoomTypeId.value)) inventoryRoomTypeId.value = roomTypes.value[0]?.id || null
+  if (!roomTypes.value.some(item => item.id === calendarRoomTypeId.value)) calendarRoomTypeId.value = roomTypes.value[0]?.id || null
+  if (!calendarRatePlans.value.some(item => item.id === calendarRatePlanId.value)) calendarRatePlanId.value = calendarRatePlans.value[0]?.id || null
   if (activeTab.value === 'inventory') await loadInventory()
+  if (activeTab.value === 'pricing') await loadRatePlanCalendar()
 }
 
 const switchHotel = async () => {
   reservationPage.value = 1
   await loadHotelWorkspace()
   if (showPackages.value) await loadPackageWorkspace()
+}
+const changeHotelTab = async (tab: string | number) => {
+  if (tab === 'pricing') {
+    if (!calendarRoomTypeId.value) calendarRoomTypeId.value = roomTypes.value[0]?.id || null
+    if (!calendarRatePlanId.value) calendarRatePlanId.value = calendarRatePlans.value[0]?.id || null
+    await loadRatePlanCalendar()
+  }
 }
 
 const openHotelDialog = (row?: any) => {
@@ -596,6 +685,12 @@ const removeRoom = async (row: any) => {
 }
 
 const openRateDialog = (room: any) => { activeRoom.value = room; rateDialogVisible.value = true }
+const openRateCalendar = (room: any, rate: any) => {
+  rateDialogVisible.value = false
+  calendarRoomTypeId.value = room.id
+  calendarRatePlanId.value = rate.id
+  activeTab.value = 'pricing'
+}
 const openRateEdit = (row?: any) => {
   Object.assign(rateForm, row ? { ...row, retail_price: row.retail_price_cents / 100, settlement_price: row.settlement_price_cents / 100 } : { id: 0, code: '', name: '', retail_price: 0.01, settlement_price: 0, breakfast_count: 0, cancellation_policy: '', status: 'active' })
   rateEditVisible.value = true
@@ -649,6 +744,79 @@ const saveInventory = async () => {
   ElMessage.success('每日房量已保存'); await loadInventory()
 }
 
+const openInventoryBatchDialog = () => {
+  if (!inventoryRows.value.length) return
+  inventoryBatch.weekdays = [0, 1, 2, 3, 4, 5, 6]
+  inventoryBatch.capacity = null
+  inventoryBatch.closedMode = 'unchanged'
+  inventoryBatchVisible.value = true
+}
+const applyInventoryBatch = () => {
+  const weekdays = new Set((inventoryBatch.weekdays || []).map((value: number) => Number(value)))
+  const targets = inventoryRows.value.filter(row => weekdays.has(new Date(`${row.stay_date}T00:00:00`).getDay()))
+  if (!targets.length) { ElMessage.warning('请至少选择一个应用星期'); return }
+  const capacity = inventoryBatch.capacity === null || inventoryBatch.capacity === undefined || inventoryBatch.capacity === '' ? null : Number(inventoryBatch.capacity)
+  if (capacity !== null && targets.some(row => capacity < Number(row.reserved || 0) + Number(row.sold || 0))) {
+    ElMessage.warning('批量可售总量不能低于已预留和已售房量')
+    return
+  }
+  targets.forEach(row => {
+    if (capacity !== null) row.capacity = capacity
+    if (inventoryBatch.closedMode === 'open') row.closed = false
+    if (inventoryBatch.closedMode === 'closed') row.closed = true
+  })
+  inventoryBatchVisible.value = false
+  ElMessage.success(`已套用 ${targets.length} 个日期，请确认后保存房量`)
+}
+
+const loadRatePlanCalendar = async () => {
+  if (!selectedHotelId.value || !calendarRoomTypeId.value || !calendarRatePlanId.value || !calendarRange.value?.length) { calendarRows.value = []; return }
+  const from = formatDate(calendarRange.value[0]); const to = formatDate(calendarRange.value[1])
+  const response = await request.get(`/hotels/${selectedHotelId.value}/room-types/${calendarRoomTypeId.value}/rate-plans/${calendarRatePlanId.value}/calendar`, { params: { start_date: from, end_date: to } })
+  calendarRows.value = (response.data.data || []).map((row: any) => ({ ...row, retail_price: Number(row.retail_price_cents || 0) / 100, settlement_price: Number(row.settlement_price_cents || 0) / 100 }))
+}
+const changeCalendarRoomType = async () => {
+  calendarRatePlanId.value = calendarRatePlans.value[0]?.id || null
+  await loadRatePlanCalendar()
+}
+const saveRatePlanCalendar = async () => {
+  if (!calendarRows.value.length || !calendarRoomTypeId.value || !calendarRatePlanId.value) return
+  const items: any[] = []
+  for (const row of calendarRows.value) {
+    const retail = Math.round(Number(row.retail_price || 0) * 100)
+    const settlement = Math.round(Number(row.settlement_price || 0) * 100)
+    if (retail <= 0 || settlement < 0 || settlement > retail) { ElMessage.warning(`${row.stay_date} 的价格无效，结算价不能高于零售价`); return }
+    items.push({ stay_date: row.stay_date, retail_price_cents: retail, settlement_price_cents: settlement, clear_override: retail === Number(row.base_retail_price_cents) && settlement === Number(row.base_settlement_price_cents) })
+  }
+  await request.put(`/hotels/${selectedHotelId.value}/room-types/${calendarRoomTypeId.value}/rate-plans/${calendarRatePlanId.value}/calendar`, { items })
+  ElMessage.success('价格日历已保存')
+  await loadRatePlanCalendar()
+}
+const openCalendarBatchDialog = () => {
+  if (!calendarRows.value.length) return
+  const first = calendarRows.value[0]
+  calendarBatch.weekdays = [0, 1, 2, 3, 4, 5, 6]
+  calendarBatch.retailPrice = Number(first.retail_price || 0)
+  calendarBatch.settlementPrice = Number(first.settlement_price || 0)
+  calendarBatchVisible.value = true
+}
+const applyCalendarBatch = () => {
+  const retail = Math.round(Number(calendarBatch.retailPrice || 0) * 100)
+  const settlement = Math.round(Number(calendarBatch.settlementPrice || 0) * 100)
+  if (retail <= 0 || settlement < 0 || settlement > retail) { ElMessage.warning('结算价不能高于零售价，且零售价必须大于0'); return }
+  const weekdays = new Set((calendarBatch.weekdays || []).map((value: number) => Number(value)))
+  const targets = calendarRows.value.filter(row => weekdays.has(new Date(`${row.stay_date}T00:00:00`).getDay()))
+  if (!targets.length) { ElMessage.warning('请至少选择一个应用星期'); return }
+  targets.forEach(row => {
+    row.retail_price = retail / 100
+    row.settlement_price = settlement / 100
+    row.has_override = retail !== Number(row.base_retail_price_cents) || settlement !== Number(row.base_settlement_price_cents)
+    row.source = row.has_override ? 'override' : 'base'
+  })
+  calendarBatchVisible.value = false
+  ElMessage.success(`已套用 ${targets.length} 个日期，请确认后保存价格`)
+}
+
 const formatDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
 const weekday = (value: string) => `周${'日一二三四五六'[new Date(`${value}T00:00:00`).getDay()]}`
 const disablePastDate = (value: Date) => value.getTime() < start.getTime()
@@ -681,7 +849,10 @@ onMounted(loadHotels)
 .section-toolbar h2 { margin: 0; font-size: 18px !important; }
 .section-toolbar p { margin: 4px 0 0; font-size: 13px; }
 .inventory-toolbar { align-items: flex-end; }
+.inventory-filters { flex-wrap: wrap; justify-content: flex-end; }
 .inventory-filters .el-select { width: 180px; }
+.calendar-panel { margin-top: 14px; }
+.batch-form { margin-top: 18px; }
 .dialog-toolbar { justify-content: space-between; margin-bottom: 14px; color: var(--ui-text-secondary); }
 .package-section { margin-bottom: 14px; }
 .reservation-workspace { display: flex; flex-direction: column; gap: 14px; }

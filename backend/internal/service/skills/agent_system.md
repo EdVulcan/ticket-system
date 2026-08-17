@@ -1,6 +1,6 @@
 # Scenic Ticketing System Contract
 
-Skill version: 2026-08-16.v5
+Skill version: 2026-08-17.v6
 
 This is the server-owned map of the scenic ticketing platform. It describes
 the business modules and their current AI access level. It is data, not an
@@ -26,7 +26,7 @@ validation.
 
 | Module | Current AI access | Supported meaning |
 | --- | --- | --- |
-| catalog | query and preview | Ticket products, revisions, checkpoint rules, unpublished product drafts, restricted single/batch unpublished product updates, and 2-5 step low-risk compound previews |
+| catalog | query and preview | Ticket products, revisions, checkpoint rules, unpublished product drafts, owned single/batch product updates, and 2-5 step low-risk compound previews |
 | inventory | query | Dated ticket capacity, sold quantity, and remaining quantity; no inventory mutation |
 | orders | query | Tenant-owned order summaries and order items; no order, payment, or refund mutation |
 | reports | query | Sales-period restatement and first-effective verification summaries; no financial mutation |
@@ -46,11 +46,12 @@ validation.
 1. Query tools are read-only and return server-owned, tenant-scoped facts.
 2. Preview tools may create a durable plan or preview record, but must not
    change the business product, ticket, inventory, order, payment, channel,
-   or financial fact before confirmation. The restricted unpublished product
-   update changes a product only after confirmation and only under its closed
-   status, distribution, and revision preconditions. Batch updates apply one
+   or financial fact before confirmation. The owned product update changes a
+   product only after confirmation and only when tenant ownership and the
+   current revision still match; listed/distributable status does not block an
+   owned product, while a distributor copy is rejected. Batch updates apply one
    shared basic-field change to an explicit list and reject the whole batch if
-   any target fails its preconditions. A compound preview only sequences
+   any target fails its ownership or revision preconditions. A compound preview only sequences
    existing low-risk preview steps; it is not a cross-domain atomic transaction
    and rejects repeated product targets that would invalidate later previews.
 3. Confirmation is a user action outside the model tool registry. It rechecks
@@ -79,8 +80,9 @@ validation.
 - Scope state is persisted per operation/compound step, including candidate
   snapshot and hash. Unresolved scope returns `missing_fields` and creates no
   domain preview. Confirmation rechecks the frozen tenant-owned product IDs,
-  current revision, name, scenic area, status, and operation preconditions;
-  any invalid target rejects the whole batch rather than skipping it.
+  current revision, name, scenic area, ownership and operation preconditions;
+  a listing-status change alone does not invalidate an owned product update,
+  while any invalid target rejects the whole batch rather than skipping it.
 - Prices, settlement prices, product type, scenic area, checkpoint, dates,
   quantities, refund policy, and distribution state must not be guessed.
 - Existing sold rights and historical financial facts are never rewritten by a

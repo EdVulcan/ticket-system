@@ -49,6 +49,23 @@ type HotelInventoryInput struct {
 	Closed   bool   `json:"closed"`
 }
 
+type HotelRatePlanPriceInput struct {
+	StayDate             string `json:"stay_date"`
+	RetailPriceCents     int64  `json:"retail_price_cents"`
+	SettlementPriceCents int64  `json:"settlement_price_cents"`
+	ClearOverride        bool   `json:"clear_override"`
+}
+
+type HotelRatePlanCalendarRow struct {
+	StayDate                 string `json:"stay_date"`
+	RetailPriceCents         int64  `json:"retail_price_cents"`
+	SettlementPriceCents     int64  `json:"settlement_price_cents"`
+	BaseRetailPriceCents     int64  `json:"base_retail_price_cents"`
+	BaseSettlementPriceCents int64  `json:"base_settlement_price_cents"`
+	HasOverride              bool   `json:"has_override"`
+	Source                   string `json:"source"`
+}
+
 func normalizeHotelStatus(status string) (string, error) {
 	status = strings.TrimSpace(status)
 	if status == "" {
@@ -277,6 +294,121 @@ func (s *HotelService) ListRatePlans(tenantID, hotelID, roomTypeID uint) ([]mode
 	return rows, err
 }
 
+func (s *HotelService) ListRatePlanCalendar(tenantID, hotelID, roomTypeID, ratePlanID uint, startDate, endDate string) ([]HotelRatePlanCalendarRow, error) {
+	start, end, err := parseHotelDateRange(startDate, endDate, "calendar")
+	if err != nil {
+		return nil, err
+	}
+	var rate model.HotelRatePlan
+	if err := model.DB.Where("id = ? AND tenant_id = ? AND hotel_id = ? AND room_type_id = ?", ratePlanID, tenantID, hotelID, roomTypeID).First(&rate).Error; err != nil {
+		return nil, err
+	}
+	var overrides []model.HotelRatePlanPrice
+	if err := model.DB.Where("tenant_id = ? AND hotel_id = ? AND room_type_id = ? AND rate_plan_id = ? AND stay_date BETWEEN ? AND ?", tenantID, hotelID, roomTypeID, ratePlanID, start, end).Order("stay_date ASC").Find(&overrides).Error; err != nil {
+		return nil, err
+	}
+	byDate := make(map[string]model.HotelRatePlanPrice, len(overrides))
+	for _, override := range overrides {
+		byDate[override.StayDate.Format("2006-01-02")] = override
+	}
+	rows := make([]HotelRatePlanCalendarRow, 0, int(end.Sub(start)/(24*time.Hour))+1)
+	for date := start; !date.After(end); date = date.AddDate(0, 0, 1) {
+		key := date.Format("2006-01-02")
+		row := HotelRatePlanCalendarRow{
+			StayDate:                 key,
+			RetailPriceCents:         rate.RetailPriceCents,
+			SettlementPriceCents:     rate.SettlementPriceCents,
+			BaseRetailPriceCents:     rate.RetailPriceCents,
+			BaseSettlementPriceCents: rate.SettlementPriceCents,
+			Source:                   "base",
+		}
+		if override, ok := byDate[key]; ok {
+			row.RetailPriceCents = override.RetailPriceCents
+			row.SettlementPriceCents = override.SettlementPriceCents
+			row.HasOverride = true
+			row.Source = "override"
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+func (s *HotelService) SetRatePlanCalendar(tenantID, hotelID, roomTypeID, ratePlanID, operatorID uint, inputs []HotelRatePlanPriceInput) error {
+	if len(inputs) == 0 || len(inputs) > 93 {
+		return errors.New("hotel rate plan calendar update must contain between 1 and 93 dates")
+	}
+	parsed := make(map[string]struct {
+		date                 time.Time
+		retailPriceCents     int64
+		settlementPriceCents int64
+		clearOverride        bool
+	}, len(inputs))
+	var minDate, maxDate time.Time
+	for _, input := range inputs {
+		date, err := time.Parse("2006-01-02", strings.TrimSpace(input.StayDate))
+		if err != nil {
+			return errors.New("hotel rate plan calendar stay date must use YYYY-MM-DD")
+		}
+		key := date.Format("2006-01-02")
+		if _, duplicate := parsed[key]; duplicate {
+			return errors.New("hotel rate plan calendar contains duplicate dates")
+		}
+		if !input.ClearOverride && (input.RetailPriceCents <= 0 || input.SettlementPriceCents < 0 || input.SettlementPriceCents > input.RetailPriceCents) {
+			return errors.New("hotel rate plan calendar prices are invalid")
+		}
+		if minDate.IsZero() || date.Before(minDate) {
+			minDate = date
+		}
+		if maxDate.IsZero() || date.After(maxDate) {
+			maxDate = date
+		}
+		parsed[key] = struct {
+			date                 time.Time
+			retailPriceCents     int64
+			settlementPriceCents int64
+			clearOverride        bool
+		}{date: date, retailPriceCents: input.RetailPriceCents, settlementPriceCents: input.SettlementPriceCents, clearOverride: input.ClearOverride}
+	}
+	if maxDate.Sub(minDate) > 92*24*time.Hour {
+		return errors.New("hotel rate plan calendar date range must be between 1 and 93 days")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveHotelSupplier(tx, tenantID); err != nil {
+			return err
+		}
+		var rate model.HotelRatePlan
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND hotel_id = ? AND room_type_id = ?", ratePlanID, tenantID, hotelID, roomTypeID).First(&rate).Error; err != nil {
+			return err
+		}
+		overrideCount := 0
+		for _, input := range parsed {
+			if input.clearOverride {
+				if err := tx.Unscoped().Where("tenant_id = ? AND hotel_id = ? AND room_type_id = ? AND rate_plan_id = ? AND stay_date = ?", tenantID, hotelID, roomTypeID, ratePlanID, input.date).Delete(&model.HotelRatePlanPrice{}).Error; err != nil {
+					return err
+				}
+				continue
+			}
+			overrideCount++
+			var row model.HotelRatePlanPrice
+			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND hotel_id = ? AND room_type_id = ? AND rate_plan_id = ? AND stay_date = ?", tenantID, hotelID, roomTypeID, ratePlanID, input.date).First(&row).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				row = model.HotelRatePlanPrice{TenantID: tenantID, HotelID: hotelID, RoomTypeID: roomTypeID, RatePlanID: ratePlanID, StayDate: input.date, RetailPriceCents: input.retailPriceCents, SettlementPriceCents: input.settlementPriceCents}
+				if err := tx.Create(&row).Error; err != nil {
+					return err
+				}
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&row).Updates(map[string]interface{}{"retail_price_cents": input.retailPriceCents, "settlement_price_cents": input.settlementPriceCents}).Error; err != nil {
+				return err
+			}
+		}
+		return recordAuditTx(tx, operatorID, tenantID, "admin", "tenant", "hotel.rate_plan_calendar.update", "hotel_rate_plan", ratePlanID, "update hotel rate plan stay-date prices", "{}", fmt.Sprintf(`{"dates":%d,"overrides":%d}`, len(parsed), overrideCount))
+	})
+}
+
 func (s *HotelService) CreateRatePlan(tenantID, hotelID, roomTypeID, operatorID uint, input HotelRatePlanInput) (*model.HotelRatePlan, error) {
 	input, err := normalizeRatePlanInput(input)
 	if err != nil {
@@ -333,6 +465,9 @@ func (s *HotelService) DeleteRatePlan(tenantID, hotelID, roomTypeID, ratePlanID,
 		}
 		if count > 0 {
 			return errors.New("rate plan is used by a scenic hotel package; remove the package first")
+		}
+		if err := tx.Unscoped().Where("tenant_id = ? AND hotel_id = ? AND room_type_id = ? AND rate_plan_id = ?", tenantID, hotelID, roomTypeID, ratePlanID).Delete(&model.HotelRatePlanPrice{}).Error; err != nil {
+			return err
 		}
 		if err := tx.Delete(&row).Error; err != nil {
 			return err
@@ -435,16 +570,20 @@ func requireHotelRoomTypeTx(tx *gorm.DB, tenantID, hotelID, roomTypeID uint) err
 }
 
 func parseHotelInventoryRange(startDate, endDate string) (time.Time, time.Time, error) {
+	return parseHotelDateRange(startDate, endDate, "inventory")
+}
+
+func parseHotelDateRange(startDate, endDate, subject string) (time.Time, time.Time, error) {
 	start, err := time.Parse("2006-01-02", strings.TrimSpace(startDate))
 	if err != nil {
-		return time.Time{}, time.Time{}, errors.New("inventory start date must use YYYY-MM-DD")
+		return time.Time{}, time.Time{}, fmt.Errorf("%s start date must use YYYY-MM-DD", subject)
 	}
 	end, err := time.Parse("2006-01-02", strings.TrimSpace(endDate))
 	if err != nil {
-		return time.Time{}, time.Time{}, errors.New("inventory end date must use YYYY-MM-DD")
+		return time.Time{}, time.Time{}, fmt.Errorf("%s end date must use YYYY-MM-DD", subject)
 	}
 	if end.Before(start) || end.Sub(start) > 92*24*time.Hour {
-		return time.Time{}, time.Time{}, errors.New("inventory date range must be between 1 and 93 days")
+		return time.Time{}, time.Time{}, fmt.Errorf("%s date range must be between 1 and 93 days", subject)
 	}
 	return start, end, nil
 }

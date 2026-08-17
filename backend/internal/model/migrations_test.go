@@ -30,7 +30,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&SettlementStatement{}, &AfterSaleRequest{}, &ChannelReservation{}, &FinancialDocument{},
 		&TeamSettlementStatement{}, &ChannelReconciliation{}, &OrderVisitor{}, &BundleProduct{},
 		&CtripOrderLink{}, &CtripOrderItem{}, &XiaohongshuWebhookEvent{}, &SupplierBusinessType{},
-		&HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRoomInventory{},
+		&HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRatePlanPrice{}, &HotelRoomInventory{},
 		&ScenicHotelPackage{}, &ScenicHotelPackageEntitlement{}, &HotelReservation{},
 		&XiaohongshuBookingOperation{}, &XiaohongshuOrderOperation{},
 		&CatalogBatchChangePlan{}, &CatalogBatchChangeLine{},
@@ -54,6 +54,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		{&TourGroup{}, "idx_team_active_fulfillment_group"},
 		{&TourGroupMember{}, "idx_team_member_active_ticket"},
 		{&XiaohongshuWebhookEvent{}, "idx_xhs_webhook_payload"},
+		{&HotelRatePlanPrice{}, "idx_hotel_rate_plan_prices_scope"},
 	} {
 		if !db.Migrator().HasIndex(index.model, index.name) {
 			t.Fatalf("index %s is missing", index.name)
@@ -588,6 +589,27 @@ func TestPostgresSchema86BookingAndOrderOwnershipGuardsRejectInvalidFacts(t *tes
 	rate := HotelRatePlan{TenantID: first.ID, HotelID: hotel.ID, RoomTypeID: room.ID, Code: "BOOKING-GUARD-RATE", Name: "Booking Guard Rate", Status: "active"}
 	if err := db.Create(&rate).Error; err != nil {
 		t.Fatal(err)
+	}
+	calendarPrice := HotelRatePlanPrice{
+		TenantID: first.ID, HotelID: hotel.ID, RoomTypeID: room.ID, RatePlanID: rate.ID,
+		StayDate: now.AddDate(0, 0, 3), RetailPriceCents: 58800, SettlementPriceCents: 50000,
+	}
+	if err := db.Create(&calendarPrice).Error; err != nil {
+		t.Fatalf("valid hotel rate plan calendar price was rejected: %v", err)
+	}
+	badCalendarPrice := calendarPrice
+	badCalendarPrice.Base = Base{}
+	badCalendarPrice.StayDate = now.AddDate(0, 0, 4)
+	badCalendarPrice.TenantID = second.ID
+	if err := db.Create(&badCalendarPrice).Error; err == nil {
+		t.Fatal("cross-tenant hotel rate plan calendar price was accepted")
+	}
+	badCalendarPrice = calendarPrice
+	badCalendarPrice.Base = Base{}
+	badCalendarPrice.StayDate = now.AddDate(0, 0, 5)
+	badCalendarPrice.SettlementPriceCents = badCalendarPrice.RetailPriceCents + 1
+	if err := db.Create(&badCalendarPrice).Error; err == nil {
+		t.Fatal("hotel rate plan calendar price above retail was accepted")
 	}
 	packageRow := ScenicHotelPackage{
 		TenantID: first.ID, ProductID: product.ID, HotelID: hotel.ID, RoomTypeID: room.ID, RatePlanID: rate.ID,

@@ -68,6 +68,67 @@ func TestHotelCatalogAndInventoryLifecycle(t *testing.T) {
 	}
 }
 
+func TestHotelRatePlanCalendarUsesBasePricesAndSupportsOverrides(t *testing.T) {
+	resetBusinessData(t)
+	tenant := seedHotelSupplier(t, "HOTEL-CALENDAR")
+	service := &HotelService{}
+	hotel, err := service.CreateProperty(tenant.ID, 11, HotelPropertyInput{Code: "CAL", Name: "Calendar Hotel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	room, err := service.CreateRoomType(tenant.ID, hotel.ID, 11, HotelRoomTypeInput{Code: "ROOM", Name: "Calendar Room", MaxGuests: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rate, err := service.CreateRatePlan(tenant.ID, hotel.ID, room.ID, 11, HotelRatePlanInput{Code: "RATE", Name: "Calendar Rate", RetailPriceCents: 50000, SettlementPriceCents: 40000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseDate := time.Now().AddDate(0, 0, 7)
+	start := baseDate.Format("2006-01-02")
+	second := baseDate.AddDate(0, 0, 1).Format("2006-01-02")
+	end := baseDate.AddDate(0, 0, 2).Format("2006-01-02")
+	rows, err := service.ListRatePlanCalendar(tenant.ID, hotel.ID, room.ID, rate.ID, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 || rows[0].HasOverride || rows[0].RetailPriceCents != 50000 || rows[0].Source != "base" {
+		t.Fatalf("base calendar rows=%+v", rows)
+	}
+	if err := service.SetRatePlanCalendar(tenant.ID, hotel.ID, room.ID, rate.ID, 11, []HotelRatePlanPriceInput{
+		{StayDate: start, RetailPriceCents: 56000, SettlementPriceCents: 45000},
+		{StayDate: second, RetailPriceCents: 58000, SettlementPriceCents: 47000},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = service.ListRatePlanCalendar(tenant.ID, hotel.ID, room.ID, rate.ID, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rows[0].HasOverride || rows[0].RetailPriceCents != 56000 || !rows[1].HasOverride || rows[1].SettlementPriceCents != 47000 || rows[2].HasOverride {
+		t.Fatalf("overridden calendar rows=%+v", rows)
+	}
+	if err := service.SetRatePlanCalendar(tenant.ID, hotel.ID, room.ID, rate.ID, 11, []HotelRatePlanPriceInput{{StayDate: second, ClearOverride: true}}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = service.ListRatePlanCalendar(tenant.ID, hotel.ID, room.ID, rate.ID, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[1].HasOverride || rows[1].RetailPriceCents != 50000 || rows[1].Source != "base" {
+		t.Fatalf("cleared calendar override=%+v", rows[1])
+	}
+	if err := service.SetRatePlanCalendar(tenant.ID+1, hotel.ID, room.ID, rate.ID, 11, []HotelRatePlanPriceInput{{StayDate: start, RetailPriceCents: 56000, SettlementPriceCents: 45000}}); err == nil {
+		t.Fatal("cross-tenant rate plan calendar update was accepted")
+	}
+	if err := service.SetRatePlanCalendar(tenant.ID, hotel.ID, room.ID, rate.ID, 11, []HotelRatePlanPriceInput{
+		{StayDate: start, RetailPriceCents: 56000, SettlementPriceCents: 45000},
+		{StayDate: baseDate.AddDate(0, 0, 101).Format("2006-01-02"), RetailPriceCents: 56000, SettlementPriceCents: 45000},
+	}); err == nil {
+		t.Fatal("rate plan calendar range over 93 days was accepted")
+	}
+}
+
 func TestHotelCatalogRejectsCrossTenantOwnership(t *testing.T) {
 	resetBusinessData(t)
 	owner := seedHotelSupplier(t, "HOTEL-OWNER")

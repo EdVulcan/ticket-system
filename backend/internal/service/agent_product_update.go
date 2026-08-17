@@ -124,9 +124,6 @@ func resolveProductUpdateDraft(db *gorm.DB, tenantID uint, draft *agentProductUp
 		return nil, nil, agentInvalid(fmt.Sprintf("票种名称“%s”不唯一，请先使用查询工具确认准确名称", resolved.ProductName))
 	}
 	product := owned[0]
-	if product.Status != "offline" || product.IsDistributable {
-		return nil, nil, agentConflict("只有未上架且未分销的票种可以通过 AI 修改；请在管理端确认当前状态")
-	}
 	if product.CurrentRevisionID == 0 {
 		var revision model.ProductRevision
 		if err := db.Where("product_id = ? AND tenant_id = ?", product.ID, tenantID).Order("version DESC").First(&revision).Error; err != nil {
@@ -224,8 +221,8 @@ func loadAgentUpdateProduct(tx *gorm.DB, tenantID uint, draft *agentProductUpdat
 		}
 		return nil, err
 	}
-	if isDistributedListing(&product) || product.IsDistributable || product.Status != "offline" {
-		return nil, agentConflict("票种状态已变化；只有未上架且未分销的票种可以通过 AI 修改")
+	if isDistributedListing(&product) {
+		return nil, agentConflict("票种归属已变化；分销副本不能通过 AI 修改，请重新生成预览")
 	}
 	if product.CurrentRevisionID != draft.CurrentRevisionID {
 		return nil, agentConflict("票种版本已变化，请重新生成预览")
@@ -350,7 +347,7 @@ func productUpdatePreviewJSON(db *gorm.DB, tenantID uint, draft *agentProductUpd
 		ProductName:   product.Name, ScenicAreaName: area.Name,
 		Before: productPreviewProductFromModel(before), After: productPreviewProductFromModel(after),
 		Changes: productUpdateChangeLabels(draft.Changes),
-		Safety:  []string{"确认前不会写入产品或产品版本。", "仅修改仍未上架且未分销的票种；票种类型、所属景区、分销和渠道事实不会改变。", "确认后沿用现有产品事务并生成新 ProductRevision，已售票据的历史快照不会被改写。"},
+		Safety:  []string{"确认前不会写入产品或产品版本。", "只修改当前租户自有票种；票种类型、所属景区、分销授权事实和渠道事实不会改变，分销副本不能修改。", "确认后沿用现有产品事务并生成新 ProductRevision，已售票据的历史快照不会被改写。"},
 	}
 	encoded, err := json.Marshal(preview)
 	if err != nil {
@@ -494,7 +491,7 @@ func (s *AgentTaskService) confirmProductUpdateTask(tenantID, actorUserID uint, 
 			return err
 		}
 		if err := recordAuditTx(tx, actorUserID, tenantID, actorRole, "tenant", "agent.task.confirm", "agent_task", locked.ID,
-			"confirm AI planned unpublished ticket product update", locked.PreviewJSON, string(resultJSON)); err != nil {
+			"confirm AI planned ticket product update", locked.PreviewJSON, string(resultJSON)); err != nil {
 			return err
 		}
 		now := time.Now()

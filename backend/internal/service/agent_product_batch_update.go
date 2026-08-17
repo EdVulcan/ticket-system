@@ -39,15 +39,18 @@ func resolveProductBatchUpdateDraft(db *gorm.DB, tenantID uint, draft *agentProd
 	if len(resolved.Targets) == 0 {
 		options := make([]string, 0)
 		var products []model.Product
-		if err := db.Select("name").Where("tenant_id = ? AND deleted_at IS NULL AND status = ? AND is_distributable = ? AND source_product_id = 0 AND source_tenant_id = 0", tenantID, "offline", false).Order("name ASC").Limit(50).Find(&products).Error; err != nil {
+		if err := db.Select("id", "name", "source_product_id", "source_tenant_id", "fulfillment_product_id", "fulfillment_tenant_id").Where("tenant_id = ? AND deleted_at IS NULL", tenantID).Order("name ASC").Limit(100).Find(&products).Error; err != nil {
 			return nil, nil, err
 		}
 		for _, product := range products {
+			if isDistributedListing(&product) {
+				continue
+			}
 			if name := strings.TrimSpace(product.Name); name != "" {
 				options = append(options, name)
 			}
 		}
-		return resolved, []AgentMissingField{{Field: "product_names", Label: "票种", Question: "请提供至少两个准确的未上架、未分销票种名称。", Options: options}}, nil
+		return resolved, []AgentMissingField{{Field: "product_names", Label: "票种", Question: "请提供至少两个准确的当前租户自有票种名称。", Options: options}}, nil
 	}
 	if len(resolved.Targets) < 2 {
 		return nil, nil, agentInvalid("批量修改至少需要两个准确的票种名称")
@@ -94,9 +97,6 @@ func resolveProductBatchUpdateDraft(db *gorm.DB, tenantID uint, draft *agentProd
 			return nil, nil, agentInvalid(fmt.Sprintf("票种名称“%s”不唯一，请先使用查询工具确认准确名称", name))
 		}
 		product := owned[0]
-		if product.Status != "offline" || product.IsDistributable {
-			return nil, nil, agentConflict(fmt.Sprintf("票种“%s”不是未上架且未分销状态，批量修改已拒绝", name))
-		}
 		if product.CurrentRevisionID == 0 {
 			var revision model.ProductRevision
 			if err := db.Where("product_id = ? AND tenant_id = ?", product.ID, tenantID).Order("version DESC").First(&revision).Error; err != nil {
@@ -145,8 +145,8 @@ func loadAgentBatchUpdateProducts(tx *gorm.DB, tenantID uint, draft *agentProduc
 			}
 			return nil, err
 		}
-		if product.Name != target.ProductName || isDistributedListing(&product) || product.IsDistributable || product.Status != "offline" {
-			return nil, agentConflict(fmt.Sprintf("票种“%s”的状态已变化；只有未上架且未分销的票种可以批量修改", target.ProductName))
+		if product.Name != target.ProductName || isDistributedListing(&product) {
+			return nil, agentConflict(fmt.Sprintf("票种“%s”的归属已变化；分销副本不能批量修改，请重新生成预览", target.ProductName))
 		}
 		if product.CurrentRevisionID != target.CurrentRevisionID {
 			return nil, agentConflict(fmt.Sprintf("票种“%s”的版本已变化，请重新生成批量预览", target.ProductName))
@@ -194,7 +194,7 @@ func productBatchUpdatePreviewJSON(db *gorm.DB, tenantID uint, draft *agentProdu
 		ProductCount:  len(lines),
 		Changes:       productUpdateChangeLabels(draft.Changes),
 		Lines:         lines,
-		Safety:        []string{"确认前不会写入任何票种或产品版本。", "所有目标必须仍属于当前租户，且保持未上架、未分销；任一目标变化都会拒绝整批操作。", "确认后每个票种生成新 ProductRevision，已售票据历史快照不会被改写。"},
+		Safety:        []string{"确认前不会写入任何票种或产品版本。", "所有目标必须仍属于当前租户自有票种；分销副本、名称或版本变化会拒绝整批操作。", "确认后每个票种生成新 ProductRevision，已售票据历史快照不会被改写。"},
 	}
 	encoded, err := json.Marshal(preview)
 	if err != nil {
@@ -257,7 +257,7 @@ func (s *AgentTaskService) confirmProductBatchUpdateTask(tenantID, actorUserID u
 			return err
 		}
 		if err := recordAuditTx(tx, actorUserID, tenantID, actorRole, "tenant", "agent.task.confirm", "agent_task", locked.ID,
-			"confirm AI planned batch unpublished ticket product update", locked.PreviewJSON, string(resultJSON)); err != nil {
+			"confirm AI planned batch ticket product update", locked.PreviewJSON, string(resultJSON)); err != nil {
 			return err
 		}
 		now := time.Now()

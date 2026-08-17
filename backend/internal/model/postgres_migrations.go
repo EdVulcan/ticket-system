@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 98
+const CurrentPostgresSchemaVersion = 99
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -36,7 +36,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	models := []interface{}{
 		&SchemaMigration{},
-		&Tenant{}, &TenantCapability{}, &SupplierBusinessType{}, &ScenicArea{}, &HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRoomInventory{}, &ScenicHotelPackage{}, &ScenicHotelPackageEntitlement{}, &HotelReservation{}, &PlatformUser{}, &User{}, &Staff{},
+		&Tenant{}, &TenantCapability{}, &SupplierBusinessType{}, &ScenicArea{}, &HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRatePlanPrice{}, &HotelRoomInventory{}, &ScenicHotelPackage{}, &ScenicHotelPackageEntitlement{}, &HotelReservation{}, &PlatformUser{}, &User{}, &Staff{},
 		&CheckPoint{}, &Device{}, &TicketRule{}, &RuleGroup{}, &RuleItem{},
 		&Product{}, &ProductRevision{}, &ProductOffer{}, &SellerListing{}, &ProductInventory{},
 		&CatalogBatchChangePlan{}, &CatalogBatchChangeLine{},
@@ -225,6 +225,14 @@ func runPostgresMigrations(db *gorm.DB) error {
 			return fmt.Errorf("register compound AI preview task and business alias index: %w", err)
 		}
 	}
+	if previousSchemaVersion < 99 {
+		if err := db.Exec(`
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_hotel_rate_plan_prices_scope
+			ON hotel_rate_plan_prices (tenant_id, hotel_id, room_type_id, rate_plan_id, stay_date)
+		`).Error; err != nil {
+			return fmt.Errorf("register hotel rate plan stay-date price calendar: %w", err)
+		}
+	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
 		if err := db.Exec(`
 			INSERT INTO supplier_business_types
@@ -373,7 +381,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "compound AI preview tasks and tenant business aliases",
+		Name:      "hotel rate plan stay-date price calendar",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -642,6 +650,21 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 				SELECT 1 FROM hotel_room_types r JOIN hotel_properties h ON h.id = r.hotel_id
 				WHERE r.id = NEW.room_type_id AND r.hotel_id = NEW.hotel_id AND r.tenant_id = NEW.tenant_id AND h.tenant_id = NEW.tenant_id
 			) THEN RAISE EXCEPTION 'hotel rate plan ownership mismatch'; END IF;
+		WHEN 'hotel_rate_plan_prices' THEN
+			IF NEW.tenant_id = 0 OR NEW.hotel_id = 0 OR NEW.room_type_id = 0 OR NEW.rate_plan_id = 0
+			   OR NEW.retail_price_cents <= 0 OR NEW.settlement_price_cents < 0 OR NEW.settlement_price_cents > NEW.retail_price_cents
+			   OR NOT EXISTS (
+				SELECT 1
+				FROM hotel_rate_plans rp
+				JOIN hotel_room_types r ON r.id = rp.room_type_id
+				JOIN hotel_properties h ON h.id = rp.hotel_id
+				WHERE rp.id = NEW.rate_plan_id AND rp.tenant_id = NEW.tenant_id
+				  AND rp.hotel_id = NEW.hotel_id AND rp.room_type_id = NEW.room_type_id
+				  AND r.tenant_id = NEW.tenant_id AND r.hotel_id = NEW.hotel_id
+				  AND h.tenant_id = NEW.tenant_id
+			   ) THEN
+				RAISE EXCEPTION 'hotel rate plan price ownership mismatch';
+			END IF;
 		WHEN 'hotel_room_inventories' THEN
 			IF NEW.capacity < 0 OR NEW.reserved < 0 OR NEW.sold < 0 OR NEW.reserved + NEW.sold > NEW.capacity THEN
 				RAISE EXCEPTION 'hotel room inventory quantity is invalid';
@@ -829,7 +852,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_room_inventories", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
+	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_rate_plan_prices", "hotel_room_inventories", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

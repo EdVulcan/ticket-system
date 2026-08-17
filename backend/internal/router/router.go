@@ -251,6 +251,8 @@ func InitRouter(r *gin.Engine) {
 		hotelGroup.POST("/:hotelID/room-types/:roomTypeID/rate-plans", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.CreateRatePlan)
 		hotelGroup.PUT("/:hotelID/room-types/:roomTypeID/rate-plans/:ratePlanID", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.UpdateRatePlan)
 		hotelGroup.DELETE("/:hotelID/room-types/:roomTypeID/rate-plans/:ratePlanID", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.DeleteRatePlan)
+		hotelGroup.GET("/:hotelID/room-types/:roomTypeID/rate-plans/:ratePlanID/calendar", middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogRead), hotelController.ListRatePlanCalendar)
+		hotelGroup.PUT("/:hotelID/room-types/:roomTypeID/rate-plans/:ratePlanID/calendar", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.SetRatePlanCalendar)
 		hotelGroup.GET("/:hotelID/room-types/:roomTypeID/inventory", middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogRead), hotelController.ListInventory)
 		hotelGroup.PUT("/:hotelID/room-types/:roomTypeID/inventory", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.SetInventory)
 	}

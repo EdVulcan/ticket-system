@@ -47,6 +47,19 @@ type HotelRatePlan struct {
 	Status               string `gorm:"size:20;not null;default:'active';index;check:chk_hotel_rate_plans_status,status IN ('active','suspended')" json:"status"`
 }
 
+// HotelRatePlanPrice stores an optional stay-date override for a rate plan.
+// An absent row means the rate plan's base prices apply for that date.
+type HotelRatePlanPrice struct {
+	Base
+	TenantID             uint      `gorm:"uniqueIndex:idx_hotel_rate_plan_prices_scope,priority:1;not null;index" json:"tenant_id"`
+	HotelID              uint      `gorm:"uniqueIndex:idx_hotel_rate_plan_prices_scope,priority:2;not null;index" json:"hotel_id"`
+	RoomTypeID           uint      `gorm:"uniqueIndex:idx_hotel_rate_plan_prices_scope,priority:3;not null;index" json:"room_type_id"`
+	RatePlanID           uint      `gorm:"uniqueIndex:idx_hotel_rate_plan_prices_scope,priority:4;not null;index" json:"rate_plan_id"`
+	StayDate             time.Time `gorm:"type:date;uniqueIndex:idx_hotel_rate_plan_prices_scope,priority:5;not null;index" json:"stay_date"`
+	RetailPriceCents     int64     `gorm:"not null" json:"retail_price_cents"`
+	SettlementPriceCents int64     `gorm:"not null" json:"settlement_price_cents"`
+}
+
 // HotelRoomInventory stores availability for one room type and one stay date.
 // Reserved is held inventory; Sold is confirmed inventory.
 type HotelRoomInventory struct {

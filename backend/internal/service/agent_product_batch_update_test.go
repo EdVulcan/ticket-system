@@ -82,6 +82,49 @@ func TestAgentProductBatchUpdatePreviewsAndConfirmsAtomically(t *testing.T) {
 	}
 }
 
+func TestAgentProductBatchUpdateAllowsListedDistributableOwnedProducts(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	if err := model.DB.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", fixture.product.ID, fixture.tenant.ID).Updates(map[string]interface{}{"status": "online", "is_distributable": true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	child := seedBatchUpdateProduct(t, fixture, "Child Online Ticket")
+	if err := model.DB.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", child.ID, fixture.tenant.ID).Updates(map[string]interface{}{"status": "online", "is_distributable": true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	server, calls := toolProvider(t, func(messages []AIMessage) (map[string]interface{}, error) {
+		return toolCallPayload("call-product-batch-update-listed", "prepare_ticket_product_batch_update", `{"target_scope":{"version":1,"intent":"batch","product_type":"online"},"changes":{"refund_type":"free"}}`, 24), nil
+	})
+	if _, err := (&PlatformAIService{}).SaveConfig(toolConfig(server.URL), 77, "platform_admin"); err != nil {
+		t.Fatalf("save tool config: %v", err)
+	}
+	service := &AgentTaskService{}
+	view, err := service.Submit(t.Context(), fixture.tenant.ID, 11, "admin", AgentTaskRequest{
+		InputText: "把所有线上门票设置为未核销随时退", IdempotencyKey: "agent-product-batch-listed", TurnKey: "turn-1",
+	})
+	if err != nil {
+		t.Fatalf("listed batch product preview: %v", err)
+	}
+	if view.State != AgentTaskAwaitingConfirmation || !view.CanConfirm || calls.Load() != 1 {
+		t.Fatalf("unexpected listed batch product preview: %+v provider_calls=%d", view, calls.Load())
+	}
+	completed, err := service.Confirm(fixture.tenant.ID, 11, "admin", view.TaskID)
+	if err != nil {
+		t.Fatalf("confirm listed batch product update: %v", err)
+	}
+	if completed.State != AgentTaskCompleted || completed.CanConfirm {
+		t.Fatalf("listed batch product update did not complete: %+v", completed)
+	}
+	for _, id := range []uint{fixture.product.ID, child.ID} {
+		var updated model.Product
+		if err := model.DB.First(&updated, id).Error; err != nil {
+			t.Fatal(err)
+		}
+		if updated.Status != "online" || !updated.IsDistributable || updated.RefundType != "free" {
+			t.Fatalf("listed/distributable owned product was not updated: %+v", updated)
+		}
+	}
+}
+
 func TestAgentProductBatchUpdateRejectsPartialConflict(t *testing.T) {
 	fixture := seedCatalogBatchFixture(t)
 	if err := model.DB.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", fixture.product.ID, fixture.tenant.ID).Update("status", "offline").Error; err != nil {
@@ -101,7 +144,7 @@ func TestAgentProductBatchUpdateRejectsPartialConflict(t *testing.T) {
 	if err != nil {
 		t.Fatalf("batch preview: %v", err)
 	}
-	if err := model.DB.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", child.ID, fixture.tenant.ID).Update("status", "online").Error; err != nil {
+	if err := model.DB.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", child.ID, fixture.tenant.ID).Update("source_product_id", 999).Error; err != nil {
 		t.Fatal(err)
 	}
 	_, err = service.Confirm(fixture.tenant.ID, 11, "admin", view.TaskID)

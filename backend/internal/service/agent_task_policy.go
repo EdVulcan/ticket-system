@@ -59,7 +59,7 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 	if operationType == AgentOperationTicketProductUpdate && hasProductIntent && !hasProductUpdateIntent {
 		return agentInvalid("模型把新票种创建请求解释成了票种修改，请重新生成计划")
 	}
-	if operationType == AgentOperationTicketProductUpdate && hasCatalogIntent && !hasProductUpdateIntent && agentHasAny(normalizedInput, []string{"检票点", "核销", "规则组", "分组", "票规"}) {
+	if operationType == AgentOperationTicketProductUpdate && hasCatalogIntent && !hasProductUpdateIntent && agentHasCatalogRuleMutationIntent(normalizedInput) {
 		return agentInvalid("模型把票规调整请求解释成了票种基础信息修改，请重新生成计划")
 	}
 	switch operationType {
@@ -193,7 +193,7 @@ func validateAgentProductUpdateCandidate(input string, candidate *agentProductUp
 	if agentHasAny(normalized, agentProductCreateIntentWords) && !agentHasAny(normalized, agentProductUpdateIntentWords) {
 		return agentInvalid("票种修改请求不能创建新票种，请明确使用修改或更新")
 	}
-	if agentHasAny(normalized, []string{"检票点", "核销规则", "规则组", "票规"}) {
+	if agentHasCatalogRuleMutationIntent(normalized) {
 		return agentInvalid("检票点和核销规则请使用批量票规操作")
 	}
 	return nil
@@ -335,7 +335,7 @@ var agentProductCreateIntentWords = []string{
 }
 
 var agentProductUpdateIntentWords = []string{
-	"修改票种", "更新票种", "调整票种", "编辑票种", "改票种", "修改售价", "调整售价", "修改价格", "调整价格", "修改结算价", "调整结算价", "修改有效期", "调整有效期", "修改标签", "调整标签", "改名",
+	"修改票种", "更新票种", "调整票种", "编辑票种", "改票种", "修改售价", "调整售价", "修改价格", "调整价格", "修改结算价", "调整结算价", "修改有效期", "调整有效期", "修改标签", "调整标签", "改名", "退款类型", "退款规则", "退改规则", "随时退", "免费退", "无理由退", "未核销可退", "未核销随时退",
 }
 
 var agentProductBatchUpdateIntentWords = []string{
@@ -679,4 +679,18 @@ func agentHasAny(input string, values []string) bool {
 		}
 	}
 	return false
+}
+
+func agentHasCatalogRuleMutationIntent(input string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if agentHasAny(normalized, []string{"检票点", "核销规则", "规则组", "分组", "票规"}) {
+		return true
+	}
+	// “未核销随时退” contains the word 核销 but is a product refund policy,
+	// not a request to change checkpoint admission rules. Treat standalone
+	// 核销 as a rule marker only when the surrounding text is not refund-related.
+	if !strings.Contains(normalized, "核销") {
+		return false
+	}
+	return !agentHasAny(normalized, []string{"退款", "退票", "退改", "随时退", "免费退", "无理由退", "可退"})
 }

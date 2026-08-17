@@ -65,18 +65,52 @@ func TestAgentProductUpdatePreviewsAndConfirmsOnlyUnpublishedProduct(t *testing.
 	}
 }
 
-func TestAgentProductUpdateRejectsOnlineOrDistributedProduct(t *testing.T) {
+func TestAgentProductUpdateRejectsDistributedCopy(t *testing.T) {
 	fixture := seedCatalogBatchFixture(t)
 	price := 120.0
 	draft := &agentProductUpdateDraft{ProductName: fixture.product.Name, Changes: agentProductUpdateChanges{Price: &price}}
-	if _, _, err := resolveProductUpdateDraft(model.DB, fixture.tenant.ID, draft); err == nil {
-		t.Fatal("online product was accepted for AI update")
-	}
 	if err := model.DB.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", fixture.product.ID, fixture.tenant.ID).Updates(map[string]interface{}{"status": "offline", "source_product_id": 999}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := resolveProductUpdateDraft(model.DB, fixture.tenant.ID, draft); err == nil {
 		t.Fatal("distributed product was accepted for AI update")
+	}
+}
+
+func TestAgentProductUpdateAllowsListedDistributableOwnedProduct(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	if err := model.DB.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", fixture.product.ID, fixture.tenant.ID).Updates(map[string]interface{}{"status": "online", "is_distributable": true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	server, calls := toolProvider(t, func(messages []AIMessage) (map[string]interface{}, error) {
+		return toolCallPayload("call-product-update-listed", "prepare_ticket_product_update", `{"product_name":"Adult Ticket","changes":{"refund_type":"free"}}`, 18), nil
+	})
+	if _, err := (&PlatformAIService{}).SaveConfig(toolConfig(server.URL), 77, "platform_admin"); err != nil {
+		t.Fatalf("save tool config: %v", err)
+	}
+	service := &AgentTaskService{}
+	view, err := service.Submit(t.Context(), fixture.tenant.ID, 11, "admin", AgentTaskRequest{
+		InputText: "把 Adult Ticket 设置为未核销随时退", IdempotencyKey: "agent-product-update-listed", TurnKey: "turn-1",
+	})
+	if err != nil {
+		t.Fatalf("listed product update preview: %v", err)
+	}
+	if view.State != AgentTaskAwaitingConfirmation || !view.CanConfirm || calls.Load() != 1 {
+		t.Fatalf("unexpected listed product preview: %+v provider_calls=%d", view, calls.Load())
+	}
+	completed, err := service.Confirm(fixture.tenant.ID, 11, "admin", view.TaskID)
+	if err != nil {
+		t.Fatalf("confirm listed product update: %v", err)
+	}
+	if completed.State != AgentTaskCompleted || completed.CanConfirm {
+		t.Fatalf("listed product update did not complete: %+v", completed)
+	}
+	var updated model.Product
+	if err := model.DB.First(&updated, fixture.product.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != "online" || !updated.IsDistributable || updated.RefundType != "free" {
+		t.Fatalf("listed/distributable owned product was not updated: %+v", updated)
 	}
 }
 
@@ -87,6 +121,17 @@ func TestAgentProductUpdateEnvelopeRejectsRuleMutation(t *testing.T) {
 		ProductUpdate: &agentProductUpdateCandidate{ProductName: "Adult Ticket", Changes: agentProductUpdateChanges{Price: &price}},
 	}); err == nil {
 		t.Fatal("product update accepted a checkpoint-rule request")
+	}
+}
+
+func TestAgentProductUpdatePolicyAcceptsImmediateRefundPhrase(t *testing.T) {
+	refundType := "free"
+	err := validateAgentPlannerEnvelope("把 Adult Ticket 设置为未核销随时退", &agentAIEnvelope{
+		OperationType: AgentOperationTicketProductUpdate,
+		ProductUpdate: &agentProductUpdateCandidate{ProductName: "Adult Ticket", Changes: agentProductUpdateChanges{RefundType: &refundType}},
+	})
+	if err != nil {
+		t.Fatalf("refund phrase was rejected as a rule change: %v", err)
 	}
 }
 

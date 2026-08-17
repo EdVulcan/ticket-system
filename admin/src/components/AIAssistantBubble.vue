@@ -426,12 +426,12 @@ const identityLimitText = (product: any) => {
   const id = product.limit_per_id > 0 ? `证件 ${product.limit_per_id}` : '证件不限'
   return `${identity} · ${phone} · ${id}`
 }
-const refundText = (product: any) => product?.refund_type || '未设置'
+const refundText = (product: any) => ({ no_refund: '不可退', free: '未核销随时退', ladder: '阶梯退款' } as Record<string, string>)[product?.refund_type] || product?.refund_type || '未设置'
 const compoundOperationLabel = (operationType: string) => ({
   catalog_batch_change: '检票规则调整',
   ticket_product_create: '创建未上线票种',
-  ticket_product_update: '修改未上线票种',
-  ticket_product_batch_update: '批量修改未上线票种',
+  ticket_product_update: '修改票种基础信息',
+  ticket_product_batch_update: '批量修改票种基础信息',
 } as Record<string, string>)[operationType] || operationType
 const compoundStepSummary = (step: any) => {
   if (!step) return '预览内容不可用'
@@ -556,6 +556,9 @@ const confirmTask = async () => {
   try {
     const response = await request.post(`/agent/tasks/${task.value.task_id}/confirm`, undefined, { timeout: AI_TASK_TIMEOUT_MS, skipErrorToast: true } as any)
     task.value = response.data
+    if (response.data?.state === 'completed') {
+      window.dispatchEvent(new CustomEvent('agent-task-completed', { detail: response.data }))
+    }
     await loadStatus()
     ElMessage.success(isCompoundPreview.value ? '复合操作已按顺序执行' : '操作已完成')
   } catch (error: any) {

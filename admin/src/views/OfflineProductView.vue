@@ -242,7 +242,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { Plus, Minus, Refresh } from '@element-plus/icons-vue'
@@ -490,10 +490,17 @@ const isCheckPointDisabled = (cpId: number, currentVal: number | null) => {
   return false
 }
 
+const handleAgentTaskCompleted = () => {
+  void fetchData()
+}
+
 onMounted(() => {
   fetchData()
   fetchReferences()
+  window.addEventListener('agent-task-completed', handleAgentTaskCompleted)
 })
+
+onBeforeUnmount(() => window.removeEventListener('agent-task-completed', handleAgentTaskCompleted))
 </script>
 
 <style scoped>

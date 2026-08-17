@@ -235,6 +235,54 @@ func (c *HotelController) DeleteRatePlan(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"message": "hotel rate plan deleted"})
 }
 
+func (c *HotelController) ListRatePlanCalendar(ctx *gin.Context) {
+	hotelID, ok := pathID(ctx, "hotelID")
+	if !ok {
+		return
+	}
+	roomTypeID, ok := pathID(ctx, "roomTypeID")
+	if !ok {
+		return
+	}
+	ratePlanID, ok := pathID(ctx, "ratePlanID")
+	if !ok {
+		return
+	}
+	rows, err := c.Service.ListRatePlanCalendar(ctx.GetUint("tenant_id"), hotelID, roomTypeID, ratePlanID, ctx.Query("start_date"), ctx.Query("end_date"))
+	if err != nil {
+		hotelError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": rows})
+}
+
+func (c *HotelController) SetRatePlanCalendar(ctx *gin.Context) {
+	hotelID, ok := pathID(ctx, "hotelID")
+	if !ok {
+		return
+	}
+	roomTypeID, ok := pathID(ctx, "roomTypeID")
+	if !ok {
+		return
+	}
+	ratePlanID, ok := pathID(ctx, "ratePlanID")
+	if !ok {
+		return
+	}
+	var body struct {
+		Items []service.HotelRatePlanPriceInput `json:"items"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		hotelError(ctx, err)
+		return
+	}
+	if err := c.Service.SetRatePlanCalendar(ctx.GetUint("tenant_id"), hotelID, roomTypeID, ratePlanID, ctx.GetUint("user_id"), body.Items); err != nil {
+		hotelError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"message": "hotel rate plan calendar updated"})
+}
+
 func (c *HotelController) ListInventory(ctx *gin.Context) {
 	hotelID, ok := pathID(ctx, "hotelID")
 	if !ok {
