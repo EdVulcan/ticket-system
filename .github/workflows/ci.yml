@@ -320,12 +320,15 @@ jobs:
 
           # Create the target before extraction so the absolute symlink in the
           # release never falls back to a writable-looking release directory.
-          sudo install -d -m 2775 "$runtime_data" "$runtime_data/uploads" "$runtime_data/backups"
+          # The deployment account is intentionally restricted to the existing
+          # privileged activation helper, so this preflight must be writable by
+          # that account already.
+          install -d -m 2775 "$runtime_data" "$runtime_data/uploads" "$runtime_data/backups"
           if [ ! -e "$runtime_data/instance-key.json" ] && [ -d "$legacy_data" ]; then
             legacy_real="$(readlink -f "$legacy_data" 2>/dev/null || true)"
             runtime_real="$(readlink -f "$runtime_data" 2>/dev/null || true)"
             if [ -n "$legacy_real" ] && [ "$legacy_real" != "$runtime_real" ]; then
-              sudo cp -a "$legacy_data/." "$runtime_data/"
+              cp -a "$legacy_data/." "$runtime_data/"
             fi
           fi
 
@@ -334,15 +337,5 @@ jobs:
           rm -f "$archive"
           sudo /usr/local/sbin/ticket-system-deploy "$release_sha"
 
-          service_user="$(sudo systemctl show ticket-system --property=User --value 2>/dev/null || true)"
-          service_group="$(sudo systemctl show ticket-system --property=Group --value 2>/dev/null || true)"
-          if [ -z "$service_user" ]; then
-            service_user="$(stat -c '%U' '/opt/ticket-system/current/backend')"
-          fi
-          if [ -z "$service_group" ]; then
-            service_group="$(stat -c '%G' '/opt/ticket-system/current/backend')"
-          fi
-          sudo chown -R "$service_user:$service_group" "$runtime_data"
-          sudo chmod 2775 "$runtime_data"
-          sudo -u "$service_user" test -w "$runtime_data"
+          test -w "$runtime_data"
           REMOTE
