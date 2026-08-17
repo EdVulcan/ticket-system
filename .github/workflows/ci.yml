@@ -280,7 +280,7 @@ jobs:
           # The release tree is immutable after activation. Runtime state must
           # resolve outside the versioned tree so uploads, instance keys and
           # backups survive the next deployment.
-          ln -s /opt/ticket-system/data release/backend/data
+          ln -s /var/lib/ticket-system release/backend/data
           chmod 0755 release/backend/ticket-backend
           pos_sha256="$(sha256sum release/admin/dist/downloads/ticket-pos.exe | awk '{print $1}')"
           printf '{"version":"%s","download_url":"https://ymsq.edvulcan.top/downloads/ticket-pos.exe","sha256":"%s"}\n' "$GITHUB_SHA" "$pos_sha256" > release/admin/dist/downloads/pos-version.json
@@ -315,20 +315,22 @@ jobs:
           release_sha="$1"
           archive="$2"
           release_directory="/opt/ticket-system/releases/$release_sha"
-          runtime_data='/opt/ticket-system/data'
+          runtime_data='/var/lib/ticket-system'
           legacy_data='/opt/ticket-system/current/backend/data'
 
-          # Create the target before extraction so the absolute symlink in the
-          # release never falls back to a writable-looking release directory.
-          # The deployment account is intentionally restricted to the existing
-          # privileged activation helper, so this preflight must be writable by
-          # that account already.
-          install -d -m 2775 "$runtime_data" "$runtime_data/uploads" "$runtime_data/backups"
-          if [ ! -e "$runtime_data/instance-key.json" ] && [ -d "$legacy_data" ]; then
+          # Create only missing children. The server pre-provisions the runtime
+          # root with the service account's ownership; the deployment account is
+          # intentionally not allowed to chmod or chown that protected root.
+          test -d "$runtime_data"
+          test -w "$runtime_data"
+          mkdir -p "$runtime_data/uploads" "$runtime_data/backups"
+          test -w "$runtime_data/uploads"
+          test -w "$runtime_data/backups"
+          if [ -d "$legacy_data" ]; then
             legacy_real="$(readlink -f "$legacy_data" 2>/dev/null || true)"
             runtime_real="$(readlink -f "$runtime_data" 2>/dev/null || true)"
             if [ -n "$legacy_real" ] && [ "$legacy_real" != "$runtime_real" ]; then
-              cp -a "$legacy_data/." "$runtime_data/"
+              cp -a -n "$legacy_data/." "$runtime_data/"
             fi
           fi
 

@@ -6,7 +6,7 @@ server:
   # TICKET_SERVER_PUBLIC_BASE_URL for another deployment.
   public_base_url: "https://ymsq.edvulcan.top"
   # Relative runtime data paths are used for local development. Production
-  # releases include backend/data as a symlink to /opt/ticket-system/data so
+  # releases include backend/data as a symlink to /var/lib/ticket-system so
   # uploads, instance keys and backups survive immutable release replacement.
   upload_directory: "data/uploads"
   cors_allowed_origins: "http://127.0.0.1:5173,http://localhost:5173,http://wails.localhost,wails://wails.localhost"
