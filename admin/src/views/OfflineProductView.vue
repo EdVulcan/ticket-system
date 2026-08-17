@@ -324,6 +324,7 @@ const fetchData = async () => {
     const res = await request.get('/products', {
       params: {
         type: 'offline',
+        product_kind: 'ticket',
         page: currentPage.value,
         page_size: pageSize.value,
         status: filterStatus.value || undefined,

@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 99
+const CurrentPostgresSchemaVersion = 101
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -36,7 +36,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	models := []interface{}{
 		&SchemaMigration{},
-		&Tenant{}, &TenantCapability{}, &SupplierBusinessType{}, &ScenicArea{}, &HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRatePlanPrice{}, &HotelRoomInventory{}, &ScenicHotelPackage{}, &ScenicHotelPackageEntitlement{}, &HotelReservation{}, &PlatformUser{}, &User{}, &Staff{},
+		&Tenant{}, &TenantCapability{}, &SupplierBusinessType{}, &ScenicArea{}, &HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRatePlanPrice{}, &HotelRoomInventory{}, &HotelProduct{}, &HotelProductRevision{}, &HotelProductCalendarPrice{}, &HotelProductEntitlement{}, &HotelProductReservation{}, &ScenicHotelPackage{}, &ScenicHotelPackageEntitlement{}, &HotelReservation{}, &PlatformUser{}, &User{}, &Staff{},
 		&CheckPoint{}, &Device{}, &TicketRule{}, &RuleGroup{}, &RuleItem{},
 		&Product{}, &ProductRevision{}, &ProductOffer{}, &SellerListing{}, &ProductInventory{},
 		&CatalogBatchChangePlan{}, &CatalogBatchChangeLine{},
@@ -233,6 +233,32 @@ func runPostgresMigrations(db *gorm.DB) error {
 			return fmt.Errorf("register hotel rate plan stay-date price calendar: %w", err)
 		}
 	}
+	if previousSchemaVersion < 100 {
+		if err := db.Exec(`
+			ALTER TABLE products ADD COLUMN IF NOT EXISTS product_kind varchar(30) NOT NULL DEFAULT 'ticket';
+			UPDATE products
+			SET product_kind = 'scenic_hotel_package'
+			WHERE id IN (SELECT product_id FROM scenic_hotel_packages WHERE deleted_at IS NULL);
+			UPDATE products SET product_kind = 'ticket' WHERE product_kind IS NULL OR product_kind = '';
+			ALTER TABLE products DROP CONSTRAINT IF EXISTS chk_products_product_kind;
+			ALTER TABLE products ADD CONSTRAINT chk_products_product_kind
+				CHECK (product_kind IN ('ticket','scenic_hotel_package','hotel'));
+		`).Error; err != nil {
+			return fmt.Errorf("register hotel product catalog kind: %w", err)
+		}
+	}
+	if previousSchemaVersion < 101 {
+		// Agent task creation keys are scoped to the authenticated operator. The
+		// old index was globally unique, so a shared tenant key could block an
+		// unrelated user even though every task read/confirm path is actor-scoped.
+		if err := db.Exec(`
+			DROP INDEX IF EXISTS idx_agent_task_idempotency;
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_task_idempotency
+				ON agent_tasks (tenant_id, actor_user_id, idempotency_key);
+		`).Error; err != nil {
+			return fmt.Errorf("scope agent task idempotency index to tenant and actor: %w", err)
+		}
+	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
 		if err := db.Exec(`
 			INSERT INTO supplier_business_types
@@ -381,7 +407,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "hotel rate plan stay-date price calendar",
+		Name:      "hotel product catalog and sale calendar",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -518,6 +544,8 @@ func applyPostgresIndexes(db *gorm.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_hotel_property_active_code ON hotel_properties(tenant_id, code) WHERE deleted_at IS NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_hotel_room_type_active_code ON hotel_room_types(tenant_id, hotel_id, code) WHERE deleted_at IS NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_hotel_rate_plan_active_code ON hotel_rate_plans(tenant_id, hotel_id, room_type_id, code) WHERE deleted_at IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_hotel_products_active_product ON hotel_products(product_id) WHERE deleted_at IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_hotel_product_calendar_prices_scope ON hotel_product_calendar_prices(tenant_id, hotel_product_id, hotel_product_revision_id, stay_date) WHERE deleted_at IS NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_scenic_hotel_package_active_product ON scenic_hotel_packages(product_id) WHERE deleted_at IS NULL`,
 		`DROP INDEX IF EXISTS idx_agent_task_event_call`,
 		`CREATE INDEX IF NOT EXISTS idx_agent_task_event_call ON agent_task_events(task_id, tool_call_id) WHERE tool_call_id <> ''`,
@@ -547,7 +575,9 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 				RAISE EXCEPTION 'device ownership mismatch';
 			END IF;
 		WHEN 'products' THEN
-			IF NEW.source_product_id = 0 AND (NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM scenic_areas s WHERE s.id = NEW.scenic_area_id AND s.tenant_id = NEW.tenant_id)) THEN
+			IF NEW.product_kind NOT IN ('ticket','scenic_hotel_package','hotel')
+			   OR (NEW.product_kind = 'hotel' AND (NEW.source_product_id <> 0 OR NEW.scenic_area_id <> 0))
+			   OR (NEW.product_kind IN ('ticket','scenic_hotel_package') AND NEW.source_product_id = 0 AND (NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM scenic_areas s WHERE s.id = NEW.scenic_area_id AND s.tenant_id = NEW.tenant_id))) THEN
 				RAISE EXCEPTION 'product scenic area ownership mismatch';
 			END IF;
 		WHEN 'catalog_batch_change_plans' THEN
@@ -672,6 +702,132 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 			IF NEW.hotel_id = 0 OR NEW.room_type_id = 0 OR NOT EXISTS (
 				SELECT 1 FROM hotel_room_types r WHERE r.id = NEW.room_type_id AND r.hotel_id = NEW.hotel_id AND r.tenant_id = NEW.tenant_id
 			) THEN RAISE EXCEPTION 'hotel room inventory ownership mismatch'; END IF;
+		WHEN 'hotel_products' THEN
+			IF NEW.tenant_id = 0 OR NEW.product_id = 0 OR NEW.hotel_id = 0 OR NEW.room_type_id = 0 OR NEW.rate_plan_id = 0
+			   OR NEW.sale_mode NOT IN ('calendar_room','presale_room') OR NEW.status NOT IN ('online','offline')
+			   OR NEW.base_retail_price_cents <= 0 OR NEW.base_settlement_price_cents < 0 OR NEW.base_settlement_price_cents > NEW.base_retail_price_cents
+			   OR NEW.nights <= 0 OR NEW.rooms_per_package <= 0 OR NEW.voucher_validity_days < 0 OR NEW.min_advance_days < 0 OR NEW.max_reschedules < 0
+			   OR NOT EXISTS (
+				SELECT 1 FROM products p
+				WHERE p.id = NEW.product_id AND p.tenant_id = NEW.tenant_id AND p.product_kind = 'hotel' AND p.source_product_id = 0 AND p.scenic_area_id = 0
+			   )
+			   OR NOT EXISTS (
+				SELECT 1 FROM hotel_rate_plans rp
+				JOIN hotel_room_types rt ON rt.id = rp.room_type_id
+				JOIN hotel_properties h ON h.id = rp.hotel_id
+				WHERE rp.id = NEW.rate_plan_id AND rp.tenant_id = NEW.tenant_id
+				  AND rp.hotel_id = NEW.hotel_id AND rp.room_type_id = NEW.room_type_id
+				  AND rt.tenant_id = NEW.tenant_id AND rt.hotel_id = NEW.hotel_id
+				  AND h.tenant_id = NEW.tenant_id
+			   )
+			   OR (NEW.current_revision_id <> 0 AND NOT EXISTS (
+				SELECT 1 FROM hotel_product_revisions r
+				WHERE r.id = NEW.current_revision_id AND r.hotel_product_id = NEW.id AND r.tenant_id = NEW.tenant_id AND r.product_id = NEW.product_id
+			   ))
+			   OR (NEW.status = 'online' AND NEW.current_revision_id = 0) THEN
+				RAISE EXCEPTION 'hotel product ownership or sales facts are invalid';
+			END IF;
+		WHEN 'hotel_product_revisions' THEN
+			IF NEW.hotel_product_id = 0 OR NEW.tenant_id = 0 OR NEW.product_id = 0 OR NEW.version <= 0
+			   OR NEW.hotel_id = 0 OR NEW.room_type_id = 0 OR NEW.rate_plan_id = 0
+			   OR NEW.sale_mode NOT IN ('calendar_room','presale_room')
+			   OR NEW.base_retail_price_cents <= 0 OR NEW.base_settlement_price_cents < 0 OR NEW.base_settlement_price_cents > NEW.base_retail_price_cents
+			   OR NEW.nights <= 0 OR NEW.rooms_per_package <= 0 OR NEW.voucher_validity_days < 0 OR NEW.min_advance_days < 0 OR NEW.max_reschedules < 0
+			   OR (TG_OP = 'UPDATE' AND (
+				NEW.hotel_product_id IS DISTINCT FROM OLD.hotel_product_id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+				OR NEW.product_id IS DISTINCT FROM OLD.product_id OR NEW.version IS DISTINCT FROM OLD.version
+				OR NEW.hotel_id IS DISTINCT FROM OLD.hotel_id OR NEW.room_type_id IS DISTINCT FROM OLD.room_type_id OR NEW.rate_plan_id IS DISTINCT FROM OLD.rate_plan_id
+				OR NEW.sale_mode IS DISTINCT FROM OLD.sale_mode OR NEW.base_retail_price_cents IS DISTINCT FROM OLD.base_retail_price_cents
+				OR NEW.base_settlement_price_cents IS DISTINCT FROM OLD.base_settlement_price_cents OR NEW.nights IS DISTINCT FROM OLD.nights
+				OR NEW.rooms_per_package IS DISTINCT FROM OLD.rooms_per_package OR NEW.voucher_validity_days IS DISTINCT FROM OLD.voucher_validity_days
+				OR NEW.min_advance_days IS DISTINCT FROM OLD.min_advance_days OR NEW.max_reschedules IS DISTINCT FROM OLD.max_reschedules
+			   ))
+			   OR NOT EXISTS (
+				SELECT 1 FROM hotel_products hp
+				WHERE hp.id = NEW.hotel_product_id AND hp.tenant_id = NEW.tenant_id AND hp.product_id = NEW.product_id
+			   )
+			   OR NOT EXISTS (
+				SELECT 1 FROM hotel_rate_plans rp
+				JOIN hotel_room_types rt ON rt.id = rp.room_type_id
+				JOIN hotel_properties h ON h.id = rp.hotel_id
+				WHERE rp.id = NEW.rate_plan_id AND rp.tenant_id = NEW.tenant_id
+				  AND rp.hotel_id = NEW.hotel_id AND rp.room_type_id = NEW.room_type_id
+				  AND rt.tenant_id = NEW.tenant_id AND rt.hotel_id = NEW.hotel_id
+				  AND h.tenant_id = NEW.tenant_id
+			   ) THEN
+				RAISE EXCEPTION 'hotel product revision ownership or sales facts are invalid';
+			END IF;
+		WHEN 'hotel_product_calendar_prices' THEN
+			IF NEW.tenant_id = 0 OR NEW.hotel_product_id = 0 OR NEW.hotel_product_revision_id = 0
+			   OR NEW.retail_price_cents <= 0 OR NEW.settlement_price_cents < 0 OR NEW.settlement_price_cents > NEW.retail_price_cents
+			   OR (TG_OP = 'UPDATE' AND (
+				NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.hotel_product_id IS DISTINCT FROM OLD.hotel_product_id
+				OR NEW.hotel_product_revision_id IS DISTINCT FROM OLD.hotel_product_revision_id OR NEW.stay_date IS DISTINCT FROM OLD.stay_date
+				OR NEW.retail_price_cents IS DISTINCT FROM OLD.retail_price_cents OR NEW.settlement_price_cents IS DISTINCT FROM OLD.settlement_price_cents
+			   ))
+			   OR NOT EXISTS (
+				SELECT 1 FROM hotel_product_revisions r
+				WHERE r.id = NEW.hotel_product_revision_id AND r.hotel_product_id = NEW.hotel_product_id
+				  AND r.tenant_id = NEW.tenant_id AND r.sale_mode = 'calendar_room'
+			   ) THEN
+				RAISE EXCEPTION 'hotel product calendar price ownership or sales facts are invalid';
+			END IF;
+		WHEN 'hotel_product_entitlements' THEN
+			IF NEW.sales_tenant_id = 0 OR NEW.supplier_tenant_id = 0 OR NEW.order_id = 0 OR NEW.order_item_id = 0
+			   OR NEW.hotel_product_id = 0 OR NEW.hotel_product_revision_id = 0 OR NEW.valid_until < NEW.valid_from
+			   OR NEW.rooms <= 0 OR NEW.reschedule_count < 0
+			   OR NEW.retail_price_cents <= 0 OR NEW.settlement_price_cents < 0 OR NEW.settlement_price_cents > NEW.retail_price_cents
+			   OR NEW.price_source NOT IN ('base','calendar')
+			   OR ((NEW.check_in_date IS NULL) <> (NEW.check_out_date IS NULL))
+			   OR (NEW.check_in_date IS NOT NULL AND NEW.check_out_date <= NEW.check_in_date)
+			   OR NOT EXISTS (
+				SELECT 1
+				FROM orders o
+				JOIN order_items i ON i.id = NEW.order_item_id AND i.order_id = o.id
+				JOIN hotel_products hp ON hp.id = NEW.hotel_product_id
+				JOIN hotel_product_revisions r ON r.id = NEW.hotel_product_revision_id
+				WHERE o.id = NEW.order_id AND o.tenant_id = NEW.sales_tenant_id
+				  AND i.product_id = hp.product_id AND i.fulfillment_product_id = hp.product_id
+				  AND i.fulfillment_tenant_id = NEW.supplier_tenant_id AND i.fulfillment_scenic_area_id = 0
+				  AND hp.tenant_id = NEW.supplier_tenant_id
+				  AND r.hotel_product_id = hp.id AND r.tenant_id = NEW.supplier_tenant_id AND r.product_id = hp.product_id
+			   )
+			   OR (NEW.reservation_id <> 0 AND NOT EXISTS (
+				SELECT 1 FROM hotel_product_reservations r
+				WHERE r.id = NEW.reservation_id AND r.entitlement_id = NEW.id
+				  AND r.sales_tenant_id = NEW.sales_tenant_id AND r.supplier_tenant_id = NEW.supplier_tenant_id
+				  AND r.order_id = NEW.order_id AND r.order_item_id = NEW.order_item_id
+				  AND r.hotel_product_id = NEW.hotel_product_id AND r.hotel_product_revision_id = NEW.hotel_product_revision_id
+			   ))
+			   OR (NEW.status IN ('booking_pending','booked','cancel_pending') AND NEW.reservation_id = 0) THEN
+				RAISE EXCEPTION 'hotel product entitlement ownership or booking facts are invalid';
+			END IF;
+		WHEN 'hotel_product_reservations' THEN
+			IF NEW.sales_tenant_id = 0 OR NEW.supplier_tenant_id = 0 OR NEW.order_id = 0 OR NEW.order_item_id = 0 OR NEW.entitlement_id = 0
+			   OR NEW.hotel_product_id = 0 OR NEW.hotel_product_revision_id = 0 OR NEW.hotel_id = 0 OR NEW.room_type_id = 0 OR NEW.rate_plan_id = 0
+			   OR NEW.check_out_date <= NEW.check_in_date OR NEW.rooms <= 0
+			   OR NEW.retail_price_cents <= 0 OR NEW.settlement_price_cents < 0 OR NEW.settlement_price_cents > NEW.retail_price_cents
+			   OR NEW.price_source NOT IN ('base','calendar')
+			   OR NEW.status NOT IN ('reserved','confirmed','checked_in','checked_out','no_show','cancelled','refunded')
+			   OR NOT EXISTS (
+				SELECT 1
+				FROM hotel_product_entitlements e
+				WHERE e.id = NEW.entitlement_id AND e.sales_tenant_id = NEW.sales_tenant_id AND e.supplier_tenant_id = NEW.supplier_tenant_id
+				  AND e.order_id = NEW.order_id AND e.order_item_id = NEW.order_item_id
+				  AND e.hotel_product_id = NEW.hotel_product_id AND e.hotel_product_revision_id = NEW.hotel_product_revision_id
+			   )
+			   OR NOT EXISTS (
+				SELECT 1
+				FROM hotel_product_revisions r
+				JOIN hotel_rate_plans rp ON rp.id = r.rate_plan_id
+				JOIN hotel_room_types rt ON rt.id = rp.room_type_id
+				JOIN hotel_properties h ON h.id = rp.hotel_id
+				WHERE r.id = NEW.hotel_product_revision_id AND r.hotel_product_id = NEW.hotel_product_id AND r.tenant_id = NEW.supplier_tenant_id
+				  AND r.hotel_id = NEW.hotel_id AND r.room_type_id = NEW.room_type_id AND r.rate_plan_id = NEW.rate_plan_id
+				  AND rp.tenant_id = NEW.supplier_tenant_id AND rt.tenant_id = NEW.supplier_tenant_id AND h.tenant_id = NEW.supplier_tenant_id
+			   ) THEN
+				RAISE EXCEPTION 'hotel product reservation ownership or snapshot facts are invalid';
+			END IF;
 		WHEN 'scenic_hotel_packages' THEN
 			IF NOT EXISTS (SELECT 1 FROM products p WHERE p.id = NEW.product_id AND p.tenant_id = NEW.tenant_id AND p.type = 'online')
 			   OR NOT EXISTS (SELECT 1 FROM hotel_rate_plans rp JOIN hotel_room_types rt ON rt.id = rp.room_type_id JOIN hotel_properties h ON h.id = rp.hotel_id
@@ -727,7 +883,16 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 				RAISE EXCEPTION 'hotel reservation ownership mismatch';
 			END IF;
 		WHEN 'order_items' THEN
-			IF NEW.fulfillment_scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM products p WHERE p.id = NEW.fulfillment_product_id AND p.tenant_id = NEW.fulfillment_tenant_id AND p.scenic_area_id = NEW.fulfillment_scenic_area_id) THEN
+			IF NOT EXISTS (
+				SELECT 1 FROM products p
+				WHERE p.id = NEW.fulfillment_product_id AND p.tenant_id = NEW.fulfillment_tenant_id
+				  AND (
+					(p.product_kind = 'hotel' AND NEW.product_id = p.id AND NEW.fulfillment_scenic_area_id = 0
+					 AND EXISTS (SELECT 1 FROM hotel_products hp WHERE hp.product_id = p.id AND hp.tenant_id = NEW.fulfillment_tenant_id AND hp.deleted_at IS NULL))
+					OR
+					(p.product_kind IN ('ticket','scenic_hotel_package') AND NEW.fulfillment_scenic_area_id <> 0 AND p.scenic_area_id = NEW.fulfillment_scenic_area_id)
+				  )
+			) THEN
 				RAISE EXCEPTION 'order item fulfillment ownership mismatch';
 			END IF;
 		WHEN 'fulfillment_orders' THEN
@@ -852,7 +1017,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_rate_plan_prices", "hotel_room_inventories", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
+	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_rate_plan_prices", "hotel_room_inventories", "hotel_products", "hotel_product_revisions", "hotel_product_calendar_prices", "hotel_product_entitlements", "hotel_product_reservations", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

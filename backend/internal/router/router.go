@@ -237,6 +237,7 @@ func InitRouter(r *gin.Engine) {
 
 	// Hotel catalog and room inventory remain independent from scenic tickets.
 	hotelController := &api.HotelController{Service: service.HotelService{}}
+	hotelProductController := &api.HotelProductController{Service: service.HotelProductService{}}
 	hotelGroup := protected.Group("/hotels")
 	{
 		hotelGroup.GET("", middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogRead), hotelController.ListProperties)
@@ -255,6 +256,18 @@ func InitRouter(r *gin.Engine) {
 		hotelGroup.PUT("/:hotelID/room-types/:roomTypeID/rate-plans/:ratePlanID/calendar", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.SetRatePlanCalendar)
 		hotelGroup.GET("/:hotelID/room-types/:roomTypeID/inventory", middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogRead), hotelController.ListInventory)
 		hotelGroup.PUT("/:hotelID/room-types/:roomTypeID/inventory", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelController.SetInventory)
+	}
+
+	// Hotel products reuse the stable Product sales identity, but remain a
+	// separate accommodation catalog. They never enter scenic ticket routes.
+	hotelProductGroup := protected.Group("/hotel-products")
+	{
+		hotelProductGroup.GET("", middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogRead), hotelProductController.List)
+		hotelProductGroup.POST("", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelProductController.Create)
+		hotelProductGroup.PUT("/:hotelProductID", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelProductController.Update)
+		hotelProductGroup.DELETE("/:hotelProductID", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelProductController.Delete)
+		hotelProductGroup.GET("/:hotelProductID/calendar", middleware.RequireConfiguredSupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogRead), hotelProductController.ListCalendar)
+		hotelProductGroup.PUT("/:hotelProductID/calendar", middleware.RequireAnySupplierBusinessType("hotel"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite), hotelProductController.SetCalendar)
 	}
 
 	packageController := &api.ScenicHotelPackageController{Service: service.ScenicHotelPackageService{}, BookingSync: service.NewXiaohongshuBookingService()}

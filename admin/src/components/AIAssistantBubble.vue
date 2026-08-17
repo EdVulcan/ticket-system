@@ -99,6 +99,7 @@
           <div class="assistant-actions">
             <div class="action-meta">
               <span v-if="availability" class="quota-copy">本月剩余 {{ availability.requests_remaining }} 次请求</span>
+              <el-button v-if="loading && loadingSeconds >= 20" text size="small" @click="stopWaiting">停止等待</el-button>
               <el-button v-if="task || errorMessage" text size="small" :disabled="loading || confirming || taskLoading" @click="startNewTask">新建任务</el-button>
               <el-button v-if="inputText.trim()" text size="small" @click="clearInput">清空</el-button>
             </div>
@@ -240,7 +241,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ChatDotRound, CircleCheck, Close, Loading, Promotion, Refresh, Right, WarningFilled } from '@element-plus/icons-vue'
 import { useRouter } from 'vue-router'
@@ -248,16 +249,34 @@ import request from '@/utils/request'
 import { localizeErrorMessage } from '@/utils/localize'
 import { parseRuleSnapshot, ruleGroupMode } from '@/utils/ruleSnapshot'
 
-type ErrorKind = 'auth' | 'timeout' | 'provider' | 'conflict' | 'generic' | ''
+type ErrorKind = 'auth' | 'timeout' | 'provider' | 'conflict' | 'in_progress' | 'generic' | ''
 type AgentAction = 'submit' | 'confirm' | 'cancel' | ''
 
 const AI_STATUS_TIMEOUT_MS = 15_000
-// Keep a client-side buffer above the platform's 120-second provider timeout.
-const AI_TASK_TIMEOUT_MS = 180_000
+// Keep a small client-side buffer above the server's bounded 115-second
+// planning lifetime. The user can stop waiting earlier without confirming or
+// changing any domain record.
+const AI_TASK_TIMEOUT_MS = 135_000
+
+const agentSessionID = (() => {
+  const storageKey = 'ticket-agent-session-id'
+  try {
+    const existing = sessionStorage.getItem(storageKey)
+    if (existing) return existing
+    const created = newKey()
+    sessionStorage.setItem(storageKey, created)
+    return created
+  } catch {
+    return newKey()
+  }
+})()
+const taskStorageKey = `ticket-agent-task-id:${agentSessionID}`
+const legacyTaskStorageKey = 'ticket-agent-task-id'
 
 const open = ref(false)
 const inputText = ref('')
 const loading = ref(false)
+const loadingSeconds = ref(0)
 const confirming = ref(false)
 const statusLoading = ref(false)
 const taskLoading = ref(false)
@@ -267,10 +286,18 @@ const errorMessage = ref('')
 const errorKind = ref<ErrorKind>('')
 const lastAction = ref<AgentAction>('')
 const idempotencyKey = ref(newKey())
+const lastSubmittedInput = ref('')
+let loadingTimer: ReturnType<typeof setInterval> | undefined
+let activeRequestController: AbortController | undefined
+let stoppingRequest = false
 const router = useRouter()
 
 const statusLine = computed(() => {
-  if (loading.value) return '正在整理操作计划'
+  if (loading.value) {
+    if (loadingSeconds.value >= 45) return `模型响应较慢，已等待 ${loadingSeconds.value} 秒`
+    if (loadingSeconds.value >= 15) return `正在等待模型响应（${loadingSeconds.value} 秒）`
+    return '正在整理操作计划'
+  }
   if (confirming.value) return '正在执行已确认计划'
   if (statusLoading.value) return '正在读取平台额度'
   if (!availability.value) return '正在读取平台额度'
@@ -288,6 +315,7 @@ const errorTitle = computed(() => {
   if (errorKind.value === 'auth') return '登录状态已失效'
   if (errorKind.value === 'timeout') return '模型响应超时'
   if (errorKind.value === 'provider') return '模型服务暂时不可用'
+  if (errorKind.value === 'in_progress') return '任务正在处理中'
   if (errorKind.value === 'conflict') return '预览已失效'
   return '这次请求没有完成'
 })
@@ -331,7 +359,12 @@ const productUpdateRows = computed(() => {
   return labels.filter((row) => changed.has(row.label))
 })
 
-function newKey() { return `catalog-ai-${Date.now()}-${Math.random().toString(36).slice(2, 9)}` }
+function newKey() {
+  try {
+    if (globalThis.crypto?.randomUUID) return `catalog-ai-${globalThis.crypto.randomUUID()}`
+  } catch { /* older browsers may not expose crypto.randomUUID */ }
+  return `catalog-ai-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+}
 const queryToolLabel = (tool: unknown) => ({
   search_scenic_areas: '景区查询',
   search_checkpoints: '检票点查询',
@@ -349,6 +382,7 @@ const queryToolLabel = (tool: unknown) => ({
   query_team_groups: '团队计划查询',
   query_team_settlement_summary: '团队结算查询',
   query_team_account_summary: '团队账户查询',
+  query_compound_readonly: '复合只读查询',
 } as Record<string, string>)[String(tool || '')] || '业务查询'
 const queryFieldLabel = (key: string) => ({
   query: '关键词', search: '关键词', product_name: '票种', status: '状态', channel: '渠道',
@@ -463,13 +497,27 @@ const openAssistant = async () => {
   if (open.value) return
   open.value = true
   await loadStatus()
-  const savedTaskID = localStorage.getItem('ticket-agent-task-id')
+  let savedTaskID = sessionStorage.getItem(taskStorageKey)
+  // Migrate the pointer written by pre-sessionStorage releases once. The
+  // server still rechecks tenant and actor ownership before returning a task;
+  // after migration, each tab keeps its own current-task pointer.
+  if (!savedTaskID) {
+    try {
+      savedTaskID = localStorage.getItem(legacyTaskStorageKey)
+      if (savedTaskID) {
+        sessionStorage.setItem(taskStorageKey, savedTaskID)
+        localStorage.removeItem(legacyTaskStorageKey)
+      }
+    } catch {
+      savedTaskID = null
+    }
+  }
   if (savedTaskID && !task.value) {
     taskLoading.value = true
     try {
       task.value = (await request.get(`/agent/tasks/${savedTaskID}`, { timeout: AI_STATUS_TIMEOUT_MS, skipErrorToast: true } as any)).data
     } catch {
-      localStorage.removeItem('ticket-agent-task-id')
+      sessionStorage.removeItem(taskStorageKey)
     } finally {
       taskLoading.value = false
     }
@@ -483,6 +531,7 @@ const setError = (error: any, fallback: string, action: AgentAction) => {
   const isTimeout = status === 408 || status === 504 || /timeout|deadline exceeded|超时|ECONNABORTED/i.test(message)
   if (status === 401 || /unauthorized|invalid token|登录状态已失效/i.test(message)) errorKind.value = 'auth'
   else if (isTimeout) errorKind.value = 'timeout'
+  else if (code === 'task_in_progress') errorKind.value = 'in_progress'
   else if (status === 409 || code === 'task_conflict') {
     errorKind.value = 'conflict'
     if (action === 'confirm') {
@@ -518,25 +567,63 @@ const submitInput = async () => {
   if (loading.value || confirming.value) return
   const content = inputText.value.trim()
   if (!content) return
+  // A creation key is bound to the first request body. Reuse it for an
+  // unknown-outcome retry of the same input, but never attach a changed user
+  // request to the old server-side task.
+  if (!task.value && lastSubmittedInput.value && lastSubmittedInput.value !== content) {
+    idempotencyKey.value = newKey()
+  }
+  lastSubmittedInput.value = content
   loading.value = true
+  loadingSeconds.value = 0
+  const loadingStartedAt = Date.now()
+  loadingTimer = setInterval(() => {
+    loadingSeconds.value = Math.floor((Date.now() - loadingStartedAt) / 1000)
+  }, 1000)
   errorMessage.value = ''
   errorKind.value = ''
+  stoppingRequest = false
+  activeRequestController?.abort()
+  activeRequestController = new AbortController()
   try {
     const response = await request.post('/agent/tasks', {
       task_id: task.value?.task_id || undefined,
       input_text: content,
       idempotency_key: task.value ? undefined : idempotencyKey.value,
       turn_key: newKey(),
-    }, { timeout: AI_TASK_TIMEOUT_MS, skipErrorToast: true } as any)
+    }, { timeout: AI_TASK_TIMEOUT_MS, signal: activeRequestController.signal, skipErrorToast: true } as any)
     task.value = response.data
-    localStorage.setItem('ticket-agent-task-id', String(response.data.task_id))
+    sessionStorage.setItem(taskStorageKey, String(response.data.task_id))
     availability.value = response.data.availability || availability.value
     inputText.value = ''
     if (response.data.can_confirm) ElMessage.success('计划已生成，请核对后确认执行')
     else ElMessage.info('还需要补充信息')
   } catch (error: any) {
-    setError(error, 'AI 任务处理失败，请检查输入或稍后重试', 'submit')
-  } finally { loading.value = false }
+    if (stoppingRequest) {
+      errorKind.value = 'timeout'
+      errorMessage.value = '已停止等待；确认前不会修改业务数据，可以稍后用相同内容重试。'
+      lastAction.value = 'submit'
+    } else {
+      setError(error, 'AI 任务处理失败，请检查输入或稍后重试', 'submit')
+    }
+    // A deterministic rejection did not yield a usable task to this tab. Do
+    // not let the next explicit retry reuse its creation key; timeout/5xx
+    // keeps the key because the provider outcome may be unknown.
+    const status = error?.response?.status
+    if (!task.value && status >= 400 && status < 500) idempotencyKey.value = newKey()
+  } finally {
+    activeRequestController = undefined
+    stoppingRequest = false
+    loading.value = false
+    if (loadingTimer) clearInterval(loadingTimer)
+    loadingTimer = undefined
+  }
+}
+
+const stopWaiting = () => {
+  if (!loading.value || !activeRequestController) return
+  stoppingRequest = true
+  activeRequestController.abort()
 }
 
 const confirmTask = async () => {
@@ -566,28 +653,34 @@ const confirmTask = async () => {
   } finally { confirming.value = false }
 }
 
-const clearInput = () => { inputText.value = '' }
+const clearInput = () => {
+  inputText.value = ''
+  lastSubmittedInput.value = ''
+  if (!task.value) idempotencyKey.value = newKey()
+}
 
 const resetTask = () => {
   task.value = null
-  localStorage.removeItem('ticket-agent-task-id')
+  sessionStorage.removeItem(taskStorageKey)
   inputText.value = ''
   errorMessage.value = ''
   errorKind.value = ''
   lastAction.value = ''
   idempotencyKey.value = newKey()
+  lastSubmittedInput.value = ''
 }
 
 const restartPreviewAfterConflict = async () => {
   const currentTask = task.value
   const originalInput = inputText.value.trim() || String(currentTask?.input_text || '')
   task.value = null
-  localStorage.removeItem('ticket-agent-task-id')
+  sessionStorage.removeItem(taskStorageKey)
   inputText.value = originalInput
   errorMessage.value = ''
   errorKind.value = ''
   lastAction.value = ''
   idempotencyKey.value = newKey()
+  lastSubmittedInput.value = ''
   if (currentTask?.task_id) {
     try {
       await request.post(`/agent/tasks/${currentTask.task_id}/cancel`, undefined, { timeout: AI_STATUS_TIMEOUT_MS, skipErrorToast: true } as any)
@@ -598,6 +691,11 @@ const restartPreviewAfterConflict = async () => {
   }
   ElMessage.info('原预览已失效，请重新生成预览后再确认。')
 }
+
+onUnmounted(() => {
+  if (loadingTimer) clearInterval(loadingTimer)
+  activeRequestController?.abort()
+})
 
 const startNewTask = async () => {
   if (loading.value || confirming.value || taskLoading.value) return

@@ -54,6 +54,20 @@ func normalizeScenicHotelPackageInput(input ScenicHotelPackageInput) (ScenicHote
 	return input, nil
 }
 
+func markScenicHotelPackageProductTx(tx *gorm.DB, tenantID, productID uint) error {
+	var product model.Product
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", productID, tenantID).First(&product).Error; err != nil {
+		return errors.New("package ticket product is unavailable")
+	}
+	if product.ProductKind == "hotel" {
+		return errors.New("independent hotel products cannot be used as scenic hotel packages")
+	}
+	if product.ProductKind == "scenic_hotel_package" {
+		return nil
+	}
+	return tx.Model(&product).Update("product_kind", "scenic_hotel_package").Error
+}
+
 func (s *ScenicHotelPackageService) Create(tenantID, operatorID uint, input ScenicHotelPackageInput) (*ScenicHotelPackageView, error) {
 	input, err := normalizeScenicHotelPackageInput(input)
 	if err != nil {
@@ -65,6 +79,9 @@ func (s *ScenicHotelPackageService) Create(tenantID, operatorID uint, input Scen
 			return err
 		}
 		if err := requireActiveHotelSupplier(tx, tenantID); err != nil {
+			return err
+		}
+		if err := markScenicHotelPackageProductTx(tx, tenantID, row.ProductID); err != nil {
 			return err
 		}
 		if _, err := validateScenicHotelPackageFactsTx(tx, tenantID, &row, input.Status == "online"); err != nil {
@@ -101,6 +118,9 @@ func (s *ScenicHotelPackageService) Update(tenantID, packageID, operatorID uint,
 		candidate.ProductID, candidate.HotelID, candidate.RoomTypeID, candidate.RatePlanID = input.ProductID, input.HotelID, input.RoomTypeID, input.RatePlanID
 		candidate.Nights, candidate.RoomsPerPackage, candidate.HotelSettlementPriceCents, candidate.Status = input.Nights, input.RoomsPerPackage, input.HotelSettlementPriceCents, input.Status
 		candidate.BookingMode, candidate.VoucherValidityDays, candidate.MinAdvanceDays, candidate.MaxReschedules = input.BookingMode, input.VoucherValidityDays, input.MinAdvanceDays, input.MaxReschedules
+		if err := markScenicHotelPackageProductTx(tx, tenantID, candidate.ProductID); err != nil {
+			return err
+		}
 		var reservationCount int64
 		if err := tx.Model(&model.HotelReservation{}).Where("package_id = ?", row.ID).Count(&reservationCount).Error; err != nil {
 			return err

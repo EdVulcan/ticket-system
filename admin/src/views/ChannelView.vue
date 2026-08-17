@@ -555,7 +555,7 @@ const openMapping = async (row: any) => {
     request.get('/products', { params: { page: 1, page_size: 100 } }),
   ])
   mappings.value = mappingResponse.data.data || []
-  products.value = productResponse.data.data || []
+  products.value = (productResponse.data.data || []).filter((product: any) => product.product_kind !== 'hotel')
   ctripSyncTasks.value = []
   if (row.type === 'ctrip') await loadCtripSyncTasks()
   mappingDialog.value = true

@@ -146,6 +146,65 @@
         </div>
       </el-tab-pane>
 
+      <el-tab-pane label="酒店产品" name="products">
+        <div class="section-toolbar">
+          <div>
+            <h2>酒店产品</h2>
+            <p>将房型包装为统一销售产品。日历房下单时选择入住日期；预售房先付款，后续预约只锁定房态，不重新定价。</p>
+          </div>
+          <el-button v-if="canWrite && selectedHotel.status === 'active'" type="primary" @click="openHotelProductDialog()">
+            <el-icon><Plus /></el-icon>新增酒店产品
+          </el-button>
+        </div>
+        <el-alert type="info" :closable="false" show-icon title="价格计划描述房型销售属性和酒店结算，不是产品售价。日历房的游客售价只在本产品的“售价日历”维护；预售房没有售价日历，付款时按本产品当日有效售价锁价。" />
+        <div class="data-panel hotel-product-panel">
+          <el-table :data="currentHotelProducts" empty-text="当前酒店暂无产品">
+            <el-table-column prop="name" label="产品名称" min-width="190" show-overflow-tooltip>
+              <template #default="{ row }">
+                <div>{{ row.product?.name || row.name || '-' }}</div>
+                <small>{{ row.sale_mode === 'calendar_room' ? '日历房产品' : '预售房产品' }}</small>
+              </template>
+            </el-table-column>
+            <el-table-column label="销售模式" width="150">
+              <template #default="{ row }">
+                <el-tag :type="row.sale_mode === 'calendar_room' ? 'primary' : 'warning'">{{ hotelProductModeText(row.sale_mode) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="住宿内容" min-width="210">
+              <template #default="{ row }">{{ hotelProductRoomName(row) }} · {{ hotelProductRatePlanName(row) }} · {{ row.nights || 1 }}晚 × {{ row.rooms_per_package || 1 }}间</template>
+            </el-table-column>
+            <el-table-column label="售价规则" min-width="180">
+              <template #default="{ row }">
+                <template v-if="row.sale_mode === 'calendar_room'">
+                  <div>按入住日期定价</div>
+                  <small>使用产品售价日历</small>
+                </template>
+                <template v-else>
+                  <div>付款时锁定售价</div>
+                  <small>预约不重新定价</small>
+                </template>
+              </template>
+            </el-table-column>
+            <el-table-column label="入住安排" min-width="170">
+              <template #default="{ row }">
+                <template v-if="row.sale_mode === 'calendar_room'">下单时选择入住日期</template>
+                <template v-else>{{ row.voucher_validity_days || 0 }}天内预约</template>
+              </template>
+            </el-table-column>
+            <el-table-column label="状态" width="100">
+              <template #default="{ row }"><el-tag :type="(row.product?.status || row.status) === 'online' ? 'success' : 'info'">{{ (row.product?.status || row.status) === 'online' ? '在售' : '下架' }}</el-tag></template>
+            </el-table-column>
+            <el-table-column label="操作" width="190" fixed="right">
+              <template #default="{ row }">
+                <el-button v-if="row.sale_mode === 'calendar_room'" link type="primary" @click="openHotelProductCalendar(row)">售价日历</el-button>
+                <el-button v-if="canWrite" link type="primary" @click="openHotelProductDialog(row)">编辑</el-button>
+                <el-button v-if="canWrite" link type="danger" @click="removeHotelProduct(row)">删除</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </el-tab-pane>
+
       <el-tab-pane v-if="showPackages" label="酒景套餐" name="packages">
         <div class="section-toolbar">
           <div>
@@ -388,6 +447,50 @@
       <template #footer><el-button @click="packageDialogVisible = false">取消</el-button><el-button type="primary" @click="savePackage">保存</el-button></template>
     </el-dialog>
 
+    <el-dialog v-model="hotelProductDialogVisible" :title="hotelProductForm.id ? '编辑酒店产品' : '新增酒店产品'" width="700px">
+      <el-alert type="info" :closable="false" show-icon title="变更销售模式、房型、价格计划或价格会生成新的产品版本。已支付订单和已创建预约继续使用售出时的快照。" />
+      <el-form ref="hotelProductFormRef" :model="hotelProductForm" :rules="hotelProductRules" label-position="top" class="package-form">
+        <el-form-item label="产品名称" prop="name"><el-input v-model="hotelProductForm.name" placeholder="面向游客展示的酒店产品名称" /></el-form-item>
+        <el-form-item label="销售模式" prop="sale_mode">
+          <el-radio-group v-model="hotelProductForm.sale_mode">
+            <el-radio-button label="calendar_room">日历房：下单时选入住日期</el-radio-button>
+            <el-radio-button label="presale_room">预售房：先付款，后预约入住</el-radio-button>
+          </el-radio-group>
+          <small class="field-hint">保存后系统会建立统一销售产品以承接渠道映射和订单。日历房使用本产品的售价日历；预售房在付款时锁定售价，预约只占用房态。</small>
+        </el-form-item>
+        <div class="form-grid">
+          <el-form-item label="房型" prop="room_type_id"><el-select v-model="hotelProductForm.room_type_id" class="full-width" @change="hotelProductForm.rate_plan_id = null"><el-option v-for="room in activeRoomTypes" :key="room.id" :label="room.name" :value="room.id" /></el-select></el-form-item>
+          <el-form-item label="价格计划" prop="rate_plan_id"><el-select v-model="hotelProductForm.rate_plan_id" class="full-width"><el-option v-for="rate in hotelProductRatePlans" :key="rate.id" :label="rate.name" :value="rate.id" /></el-select><small class="field-hint">用于房型销售属性与结算，不作为游客产品售价。</small></el-form-item>
+          <el-form-item label="基础零售价（元）" prop="base_retail_price"><el-input-number v-model="hotelProductForm.base_retail_price" :min="0.01" :precision="2" :step="10" /></el-form-item>
+          <el-form-item label="基础结算价（元）" prop="base_settlement_price"><el-input-number v-model="hotelProductForm.base_settlement_price" :min="0" :precision="2" :step="10" /></el-form-item>
+          <el-form-item label="状态"><el-radio-group v-model="hotelProductForm.status"><el-radio-button label="offline">先保存下架</el-radio-button><el-radio-button label="online">立即在售</el-radio-button></el-radio-group></el-form-item>
+        </div>
+        <small class="field-hint product-quantity-hint">当前版本固定为每份 1 晚 × 1 间；多晚、多间组合会在后续产品能力完善后开放。</small>
+        <div v-if="hotelProductForm.sale_mode === 'presale_room'" class="form-grid">
+          <el-form-item label="预约有效期（天）" prop="voucher_validity_days"><el-input-number v-model="hotelProductForm.voucher_validity_days" :min="1" :max="730" /></el-form-item>
+          <el-form-item label="至少提前（天）" prop="min_advance_days"><el-input-number v-model="hotelProductForm.min_advance_days" :min="0" :max="365" /></el-form-item>
+          <el-form-item label="允许取消后重约次数" prop="max_reschedules"><el-input-number v-model="hotelProductForm.max_reschedules" :min="0" :max="20" /></el-form-item>
+        </div>
+      </el-form>
+      <template #footer><el-button @click="hotelProductDialogVisible = false">取消</el-button><el-button type="primary" @click="saveHotelProduct">保存</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="hotelProductCalendarVisible" :title="`${activeHotelProduct?.product?.name || activeHotelProduct?.name || ''} · 产品售价日历`" width="920px">
+      <el-alert type="info" :closable="false" show-icon title="仅日历房使用这里的售价。价格按游客下单选择的入住日期锁定；修改未来日期不会回写已支付订单。" />
+      <div class="dialog-toolbar hotel-product-calendar-toolbar">
+        <el-date-picker v-model="hotelProductCalendarRange" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" :clearable="false" :disabled-date="disablePastDate" @change="loadHotelProductCalendar" />
+        <el-button v-if="canWrite" type="primary" :disabled="!hotelProductCalendarRows.length" @click="saveHotelProductCalendar">保存售价</el-button>
+      </div>
+      <el-table :data="hotelProductCalendarRows" empty-text="请选择日期范围">
+        <el-table-column prop="stay_date" label="入住日期" width="150" />
+        <el-table-column label="星期" width="80"><template #default="{ row }">{{ weekday(row.stay_date) }}</template></el-table-column>
+        <el-table-column label="基础零售价" width="140"><template #default="{ row }">¥{{ money(row.base_retail_price_cents) }}</template></el-table-column>
+        <el-table-column label="入住日零售价" min-width="210"><template #default="{ row }"><el-input-number v-model="row.retail_price" :min="0.01" :precision="2" :step="10" :disabled="!canWrite" /></template></el-table-column>
+        <el-table-column label="入住日结算价" min-width="210"><template #default="{ row }"><el-input-number v-model="row.settlement_price" :min="0" :precision="2" :step="10" :disabled="!canWrite" /></template></el-table-column>
+        <el-table-column label="价格来源" min-width="130"><template #default="{ row }"><el-tag :type="row.has_override ? 'warning' : 'info'">{{ row.has_override ? '日期覆盖' : '基础售价' }}</el-tag></template></el-table-column>
+      </el-table>
+    </el-dialog>
+
     <el-dialog v-model="syncRetryVisible" title="继续重试小红书同步" width="560px" @closed="resetSyncRetry">
       <div v-if="selectedSyncFailure" class="sync-retry-detail">
         <el-descriptions :column="1" border>
@@ -432,12 +535,15 @@ const roomDialogVisible = ref(false)
 const rateDialogVisible = ref(false)
 const rateEditVisible = ref(false)
 const packageDialogVisible = ref(false)
+const hotelProductDialogVisible = ref(false)
+const hotelProductCalendarVisible = ref(false)
 const inventoryBatchVisible = ref(false)
 const calendarBatchVisible = ref(false)
 const hotelFormRef = ref()
 const roomFormRef = ref()
 const rateFormRef = ref()
 const packageFormRef = ref()
+const hotelProductFormRef = ref()
 const syncRetryVisible = ref(false)
 const syncRetrySubmitting = ref(false)
 const selectedSyncFailure = ref<any>(null)
@@ -461,17 +567,23 @@ const hotelForm = reactive<any>({ id: 0, code: '', name: '', address: '', contac
 const roomForm = reactive<any>({ id: 0, code: '', name: '', max_guests: 2, bed_type: '', description: '', status: 'active' })
 const rateForm = reactive<any>({ id: 0, code: '', name: '', retail_price: 0.01, settlement_price: 0, breakfast_count: 0, cancellation_policy: '', status: 'active' })
 const packageForm = reactive<any>({ id: 0, product_id: null, room_type_id: null, rate_plan_id: null, nights: 1, rooms_per_package: 1, hotel_settlement_price: 0, booking_mode: 'at_purchase', voucher_validity_days: 90, min_advance_days: 0, max_reschedules: 1, status: 'offline', locked: false })
+const hotelProductForm = reactive<any>({ id: 0, name: '', room_type_id: null, rate_plan_id: null, sale_mode: 'calendar_room', base_retail_price: 0.01, base_settlement_price: 0, voucher_validity_days: 90, min_advance_days: 0, max_reschedules: 1, status: 'offline' })
 const hotelRules = { code: [{ required: true, message: '请输入酒店编号', trigger: 'blur' }], name: [{ required: true, message: '请输入酒店名称', trigger: 'blur' }], check_in_time: [{ required: true, message: '请选择入住时间', trigger: 'change' }], check_out_time: [{ required: true, message: '请选择退房时间', trigger: 'change' }] }
 const roomRules = { code: [{ required: true, message: '请输入房型编号', trigger: 'blur' }], name: [{ required: true, message: '请输入房型名称', trigger: 'blur' }], max_guests: [{ required: true, type: 'number', min: 1, message: '入住人数至少为1人', trigger: 'change' }] }
 const rateRules = { code: [{ required: true, message: '请输入价格编号', trigger: 'blur' }], name: [{ required: true, message: '请输入价格名称', trigger: 'blur' }], retail_price: [{ required: true, type: 'number', min: 0.01, message: '零售价必须大于0', trigger: 'change' }] }
 const packageRules = { product_id: [{ required: true, type: 'number', min: 1, message: '请选择套餐门票', trigger: 'change' }], room_type_id: [{ required: true, type: 'number', min: 1, message: '请选择房型', trigger: 'change' }], rate_plan_id: [{ required: true, type: 'number', min: 1, message: '请选择价格计划', trigger: 'change' }], nights: [{ required: true, type: 'number', min: 1, message: '连住晚数至少为1', trigger: 'change' }], rooms_per_package: [{ required: true, type: 'number', min: 1, message: '房间数至少为1', trigger: 'change' }], booking_mode: [{ required: true, message: '请选择预约方式', trigger: 'change' }] }
+const hotelProductRules = { name: [{ required: true, message: '请输入产品名称', trigger: 'blur' }], room_type_id: [{ required: true, type: 'number', min: 1, message: '请选择房型', trigger: 'change' }], rate_plan_id: [{ required: true, type: 'number', min: 1, message: '请选择价格计划', trigger: 'change' }], sale_mode: [{ required: true, message: '请选择销售模式', trigger: 'change' }], base_retail_price: [{ required: true, type: 'number', min: 0.01, message: '基础零售价必须大于0', trigger: 'change' }] }
 
 const packageSection = ref('catalog')
 const packageTicketProducts = ref<any[]>([])
 const hotelPackages = ref<any[]>([])
+const hotelProducts = ref<any[]>([])
+const activeHotelProduct = ref<any>(null)
+const hotelProductCalendarRows = ref<any[]>([])
 const hotelReservations = ref<any[]>([])
 const packageEntitlements = ref<any[]>([])
 const currentHotelPackages = computed(() => hotelPackages.value.filter(row => row.hotel_id === selectedHotelId.value))
+const currentHotelProducts = computed(() => hotelProducts.value.filter(row => row.hotel_id === selectedHotelId.value))
 const currentHotelReservations = computed(() => hotelReservations.value)
 const reservationStatus = ref('')
 const entitlementStatus = ref('')
@@ -493,6 +605,7 @@ const reportEnd = new Date(); reportEnd.setHours(0, 0, 0, 0)
 const reportRange = ref<[Date, Date]>([reportStart, reportEnd])
 const activeRoomTypes = computed(() => roomTypes.value.filter(row => row.status === 'active'))
 const packageRatePlans = computed(() => (ratePlans.value[packageForm.room_type_id] || []).filter(row => row.status === 'active'))
+const hotelProductRatePlans = computed(() => (ratePlans.value[hotelProductForm.room_type_id] || []).filter(row => row.status === 'active'))
 
 const start = new Date(); start.setHours(0, 0, 0, 0)
 const end = new Date(start); end.setDate(end.getDate() + 13)
@@ -504,6 +617,7 @@ const calendarRatePlanId = ref<number | null>(null)
 const calendarRows = ref<any[]>([])
 const calendarStart = new Date(start); const calendarEnd = new Date(start); calendarEnd.setDate(calendarEnd.getDate() + 13)
 const calendarRange = ref<[Date, Date]>([calendarStart, calendarEnd])
+const hotelProductCalendarRange = ref<[Date, Date]>([new Date(calendarStart), new Date(calendarEnd)])
 const weekdayOptions = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 const inventoryBatch = reactive<any>({ weekdays: [0, 1, 2, 3, 4, 5, 6], capacity: null, closedMode: 'unchanged' })
 const calendarBatch = reactive<any>({ weekdays: [0, 1, 2, 3, 4, 5, 6], retailPrice: 0.01, settlementPrice: 0 })
@@ -516,6 +630,7 @@ const loadHotels = async () => {
     hotels.value = response.data.data || []
     if (!hotels.value.some(item => item.id === selectedHotelId.value)) selectedHotelId.value = hotels.value[0]?.id || null
     await loadHotelWorkspace()
+    await loadHotelProductWorkspace()
     if (showPackages.value) await loadPackageWorkspace()
   } finally { loading.value = false }
 }
@@ -638,9 +753,19 @@ const loadHotelWorkspace = async () => {
   if (activeTab.value === 'pricing') await loadRatePlanCalendar()
 }
 
+const loadHotelProductWorkspace = async () => {
+  if (!selectedHotelId.value) {
+    hotelProducts.value = []
+    return
+  }
+  const hotelProductsResponse = await request.get('/hotel-products', { params: { hotel_id: selectedHotelId.value } })
+  hotelProducts.value = hotelProductsResponse.data.data || []
+}
+
 const switchHotel = async () => {
   reservationPage.value = 1
   await loadHotelWorkspace()
+  await loadHotelProductWorkspace()
   if (showPackages.value) await loadPackageWorkspace()
 }
 const changeHotelTab = async (tab: string | number) => {
@@ -649,6 +774,7 @@ const changeHotelTab = async (tab: string | number) => {
     if (!calendarRatePlanId.value) calendarRatePlanId.value = calendarRatePlans.value[0]?.id || null
     await loadRatePlanCalendar()
   }
+  if (tab === 'products') await loadHotelProductWorkspace()
 }
 
 const openHotelDialog = (row?: any) => {
@@ -744,6 +870,110 @@ const saveInventory = async () => {
   ElMessage.success('每日房量已保存'); await loadInventory()
 }
 
+const openHotelProductDialog = (row?: any) => {
+  Object.assign(hotelProductForm, row ? {
+    id: row.id,
+    name: row.product?.name || row.name || '',
+    room_type_id: row.room_type_id,
+    rate_plan_id: row.rate_plan_id,
+    sale_mode: row.sale_mode || 'calendar_room',
+    base_retail_price: Number(row.base_retail_price_cents || 0) / 100,
+    base_settlement_price: Number(row.base_settlement_price_cents || 0) / 100,
+    voucher_validity_days: row.voucher_validity_days || 90,
+    min_advance_days: row.min_advance_days || 0,
+    max_reschedules: row.max_reschedules || 0,
+    status: row.status || 'offline',
+  } : {
+    id: 0,
+    name: '',
+    room_type_id: activeRoomTypes.value[0]?.id || null,
+    rate_plan_id: null,
+    sale_mode: 'calendar_room',
+    base_retail_price: 0.01,
+    base_settlement_price: 0,
+    voucher_validity_days: 90,
+    min_advance_days: 0,
+    max_reschedules: 1,
+    status: 'offline',
+  })
+  hotelProductDialogVisible.value = true
+}
+
+const saveHotelProduct = async () => {
+  await hotelProductFormRef.value?.validate()
+  const retail = Math.round(Number(hotelProductForm.base_retail_price || 0) * 100)
+  const settlement = Math.round(Number(hotelProductForm.base_settlement_price || 0) * 100)
+  if (retail <= 0 || settlement < 0 || settlement > retail) {
+    ElMessage.warning('基础结算价不能高于基础零售价，且零售价必须大于0')
+    return
+  }
+  const isPresale = hotelProductForm.sale_mode === 'presale_room'
+  const payload = {
+    name: hotelProductForm.name.trim(),
+    hotel_id: selectedHotelId.value,
+    room_type_id: hotelProductForm.room_type_id,
+    rate_plan_id: hotelProductForm.rate_plan_id,
+    sale_mode: hotelProductForm.sale_mode,
+    base_retail_price_cents: retail,
+    base_settlement_price_cents: settlement,
+    nights: 1,
+    rooms_per_package: 1,
+    voucher_validity_days: isPresale ? hotelProductForm.voucher_validity_days : 0,
+    min_advance_days: isPresale ? hotelProductForm.min_advance_days : 0,
+    max_reschedules: isPresale ? hotelProductForm.max_reschedules : 0,
+    status: hotelProductForm.status,
+  }
+  if (hotelProductForm.id) await request.put(`/hotel-products/${hotelProductForm.id}`, payload)
+  else await request.post('/hotel-products', payload)
+  hotelProductDialogVisible.value = false
+  ElMessage.success('酒店产品已保存')
+  await loadHotelProductWorkspace()
+}
+
+const removeHotelProduct = async (row: any) => {
+  await ElMessageBox.confirm('已有订单或预约的产品不能删除，只能下架。确认继续？', '删除酒店产品', { type: 'warning' })
+  await request.delete(`/hotel-products/${row.id}`)
+  ElMessage.success('酒店产品已删除')
+  await loadHotelProductWorkspace()
+}
+
+const openHotelProductCalendar = async (row: any) => {
+  activeHotelProduct.value = row
+  hotelProductCalendarVisible.value = true
+  await loadHotelProductCalendar()
+}
+
+const loadHotelProductCalendar = async () => {
+  if (!activeHotelProduct.value?.id || !hotelProductCalendarRange.value?.length) {
+    hotelProductCalendarRows.value = []
+    return
+  }
+  const response = await request.get(`/hotel-products/${activeHotelProduct.value.id}/calendar`, {
+    params: { start_date: formatDate(hotelProductCalendarRange.value[0]), end_date: formatDate(hotelProductCalendarRange.value[1]) },
+  })
+  hotelProductCalendarRows.value = (response.data.data || []).map((row: any) => ({
+    ...row,
+    retail_price: Number(row.retail_price_cents || row.base_retail_price_cents || 0) / 100,
+    settlement_price: Number(row.settlement_price_cents || row.base_settlement_price_cents || 0) / 100,
+  }))
+}
+
+const saveHotelProductCalendar = async () => {
+  if (!activeHotelProduct.value?.id || !hotelProductCalendarRows.value.length) return
+  const items: any[] = []
+  for (const row of hotelProductCalendarRows.value) {
+    const retail = Math.round(Number(row.retail_price || 0) * 100)
+    const settlement = Math.round(Number(row.settlement_price || 0) * 100)
+    const baseRetail = Number(row.base_retail_price_cents || 0)
+    const baseSettlement = Number(row.base_settlement_price_cents || 0)
+    if (retail <= 0 || settlement < 0 || settlement > retail) { ElMessage.warning(`${row.stay_date} 的价格无效，结算价不能高于零售价`); return }
+    items.push({ stay_date: row.stay_date, retail_price_cents: retail, settlement_price_cents: settlement, clear_override: retail === baseRetail && settlement === baseSettlement })
+  }
+  await request.put(`/hotel-products/${activeHotelProduct.value.id}/calendar`, { items })
+  ElMessage.success('产品售价日历已保存')
+  await loadHotelProductCalendar()
+}
+
 const openInventoryBatchDialog = () => {
   if (!inventoryRows.value.length) return
   inventoryBatch.weekdays = [0, 1, 2, 3, 4, 5, 6]
@@ -822,6 +1052,9 @@ const weekday = (value: string) => `周${'日一二三四五六'[new Date(`${val
 const disablePastDate = (value: Date) => value.getTime() < start.getTime()
 const money = (cents: number) => (Number(cents || 0) / 100).toFixed(2)
 const shortDate = (value: string) => String(value || '').slice(0, 10)
+const hotelProductModeText = (mode: string) => mode === 'calendar_room' ? '日历房' : mode === 'presale_room' ? '预售房' : mode || '-'
+const hotelProductRoomName = (row: any) => roomTypes.value.find(room => room.id === row.room_type_id)?.name || '-'
+const hotelProductRatePlanName = (row: any) => (ratePlans.value[row.room_type_id] || []).find(rate => rate.id === row.rate_plan_id)?.name || '-'
 const reservationStatusText = (status: string) => ({ reserved: '待支付', confirmed: '待入住', checked_in: '已入住', checked_out: '已离店', no_show: '未到店', cancelled: '已取消', refunded: '已退款' } as Record<string, string>)[status] || status
 const reservationStatusType = (status: string) => ({ reserved: 'warning', confirmed: 'primary', checked_in: 'success', checked_out: 'info', no_show: 'warning', cancelled: 'info', refunded: 'danger' } as Record<string, string>)[status] || 'info'
 const entitlementStatusText = (status: string) => ({ pending_booking: '待预约', booking_pending: '预约处理中', booked: '已预约', cancel_pending: '取消处理中', cancelled: '已关闭', refunded: '已退款', expired: '已过期' } as Record<string, string>)[status] || status
@@ -852,6 +1085,9 @@ onMounted(loadHotels)
 .inventory-filters { flex-wrap: wrap; justify-content: flex-end; }
 .inventory-filters .el-select { width: 180px; }
 .calendar-panel { margin-top: 14px; }
+.hotel-product-panel { margin-top: 14px; }
+.hotel-product-calendar-toolbar { margin-top: 14px; }
+.product-quantity-hint { margin-top: -4px; margin-bottom: 14px; }
 .batch-form { margin-top: 18px; }
 .dialog-toolbar { justify-content: space-between; margin-bottom: 14px; color: var(--ui-text-secondary); }
 .package-section { margin-bottom: 14px; }

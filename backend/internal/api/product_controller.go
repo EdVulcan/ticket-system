@@ -72,12 +72,14 @@ func (c *ProductController) List(ctx *gin.Context) {
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "10"))
 	productType := ctx.DefaultQuery("type", "")
+	productKind := ctx.DefaultQuery("product_kind", "")
 	status := ctx.DefaultQuery("status", "")
 	search := ctx.DefaultQuery("search", "")
 	scenicAreaID, _ := strconv.Atoi(ctx.DefaultQuery("scenic_area_id", "0"))
 
 	filter := service.ProductListFilter{
 		ProductType: productType,
+		ProductKind: productKind,
 		Status:      status,
 		Search:      search,
 	}

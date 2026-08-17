@@ -557,6 +557,9 @@ func settleOrderIfFullyPaidTx(tx *gorm.DB, order *model.Order) error {
 	if err := (PackageFulfillmentLifecycle{}).ConfirmOrderAt(tx, order.ID, paidAt); err != nil {
 		return err
 	}
+	if err := (HotelProductFulfillmentLifecycle{}).ConfirmOrderAt(tx, order.ID, paidAt); err != nil {
+		return err
+	}
 	return updateFulfillmentOrdersTx(tx, order.ID, "paid")
 }
 

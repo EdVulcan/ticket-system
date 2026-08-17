@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -121,8 +122,8 @@ func TestAgentToolTaskQueriesOnlyCurrentTenantAndPersistsAudit(t *testing.T) {
 	if err := model.DB.Model(&model.AgentTaskEvent{}).Where("task_id = ?", view.TaskID).Count(&eventCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if eventCount != 3 {
-		t.Fatalf("tool audit events=%d, want provider start/final and tool event (3)", eventCount)
+	if eventCount != 4 {
+		t.Fatalf("tool audit events=%d, want planning, provider start/final and tool event (4)", eventCount)
 	}
 }
 
@@ -187,11 +188,43 @@ func TestAgentProductCreateScopesPlannerToPrepareTool(t *testing.T) {
 	if view.State != AgentTaskAwaitingConfirmation || !view.CanConfirm || providerCalls.Load() != 1 {
 		t.Fatalf("product task did not converge to preview: view=%+v provider_calls=%d", view, providerCalls.Load())
 	}
-	if string(receivedToolChoice) != `"auto"` {
-		t.Fatalf("creation planner must use automatic tool choice for thinking-compatible providers: %s", string(receivedToolChoice))
+	var choice map[string]interface{}
+	if err := json.Unmarshal(receivedToolChoice, &choice); err != nil {
+		t.Fatalf("creation planner returned invalid tool choice: %s", string(receivedToolChoice))
+	}
+	if choice["type"] != "function" {
+		t.Fatalf("creation planner must force its sole visible tool: %s", string(receivedToolChoice))
+	}
+	function, _ := choice["function"].(map[string]interface{})
+	if function["name"] != "prepare_ticket_product_create" {
+		t.Fatalf("creation planner forced the wrong tool: %s", string(receivedToolChoice))
 	}
 	if len(receivedTools) != 1 || receivedTools[0].Function.Name != "prepare_ticket_product_create" {
 		t.Fatalf("creation planner exposed unrelated tools: %+v", receivedTools)
+	}
+}
+
+func TestAgentRejectsProviderToolOutsideTaskRegistry(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	server, _ := toolProvider(t, func(_ []AIMessage) (map[string]interface{}, error) {
+		return toolCallPayload("call-unexposed-rule", "prepare_catalog_rule_change", `{"operations":[{"kind":"add_checkpoints","product_names":["Adult Ticket"],"checkpoint_names":["Main Gate"]}]}`, 12), nil
+	})
+	if _, err := (&PlatformAIService{}).SaveConfig(toolConfig(server.URL), 77, "platform_admin"); err != nil {
+		t.Fatalf("save tool config: %v", err)
+	}
+	_, err := (&AgentTaskService{}).Submit(t.Context(), fixture.tenant.ID, 11, "admin", AgentTaskRequest{
+		InputText: "创建一个线上 Child Ticket，售价 55 元，结算价 30 元", IdempotencyKey: "tool-registry-guard", TurnKey: "turn-1",
+	})
+	var invalid *AgentTaskError
+	if !errors.As(err, &invalid) || invalid.HTTPStatus != http.StatusBadRequest || !strings.Contains(invalid.Message, "未开放的工具") {
+		t.Fatalf("provider tool outside the task registry was not rejected: %v", err)
+	}
+	var products int64
+	if err := model.DB.Model(&model.Product{}).Where("tenant_id = ? AND name = ?", fixture.tenant.ID, "Child Ticket").Count(&products).Error; err != nil {
+		t.Fatal(err)
+	}
+	if products != 0 {
+		t.Fatalf("unexposed provider tool changed the catalog: %d products", products)
 	}
 }
 
@@ -249,6 +282,72 @@ func TestAgentToolTaskRejectsProviderTextWithoutSupportedToolCall(t *testing.T) 
 	})
 	if err == nil || !strings.Contains(err.Error(), "未调用受支持的查询或预览工具") {
 		t.Fatalf("provider text without a tool call was accepted: %v", err)
+	}
+}
+
+func TestAgentReadOnlyToolRouteKeepsSingleTopicDeterministic(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"查询最近订单", "search_orders"},
+		{"查询成人票的库存", "query_ticket_inventory"},
+		{"查询水上乐园的检票点", "search_checkpoints"},
+		{"查看分销关系", "query_distribution_partners"},
+		{"查询分销授权状态", "query_distribution_products"},
+		{"查看授权商品", "query_distribution_products"},
+		{"查看团队合同", "query_team_contracts"},
+		{"查询团队入园情况", "query_team_groups"},
+		{"查看票种规则", "get_ticket_product_rules"},
+	}
+	for _, tc := range cases {
+		route := agentReadOnlyToolRoute(tc.input)
+		if len(route) != 1 || route[0] != tc.want {
+			t.Fatalf("input %q routed to %v, want %s", tc.input, route, tc.want)
+		}
+	}
+	if agentReadOnlyCompoundIntent("查询水上乐园的景区检票点") {
+		t.Fatal("a scenic-area qualifier plus checkpoint noun must not become a compound query")
+	}
+	if !agentReadOnlyCompoundIntent("依次查询订单、库存和销售汇总") {
+		t.Fatal("explicit multi-topic query was not recognized as compound")
+	}
+}
+
+func TestAgentRejectsUnsupportedCapabilityBeforeTaskCreation(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	var before int64
+	if err := model.DB.Model(&model.AgentTask{}).Where("tenant_id = ?", fixture.tenant.ID).Count(&before).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, err := (&AgentTaskService{}).Submit(t.Context(), fixture.tenant.ID, 11, "admin", AgentTaskRequest{
+		InputText: "查询最近订单并直接退款", IdempotencyKey: "unsupported-before-task", TurnKey: "turn-1",
+	})
+	var taskErr *AgentTaskError
+	if !errors.As(err, &taskErr) || taskErr.Code != "invalid_request" || !strings.Contains(taskErr.Message, "未开放") {
+		t.Fatalf("unsupported capability returned the wrong error: %v", err)
+	}
+	var after int64
+	if err := model.DB.Model(&model.AgentTask{}).Where("tenant_id = ?", fixture.tenant.ID).Count(&after).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("unsupported request created an agent task: before=%d after=%d", before, after)
+	}
+}
+
+func TestAgentAllowsTicketRefundPolicyButRejectsScriptInput(t *testing.T) {
+	if err := rejectUnsupportedAgentCapability("把成人票设置为未核销随时退"); err != nil {
+		t.Fatalf("ticket refund policy was rejected as payment refund: %v", err)
+	}
+	if err := rejectUnsupportedAgentCapability("查询分销授权状态"); err != nil {
+		t.Fatalf("read-only authorization status was rejected: %v", err)
+	}
+	if err := rejectUnsupportedAgentCapability("查询支付配置"); err == nil {
+		t.Fatal("payment configuration query was accepted without a supported tool")
+	}
+	if err := rejectUnsupportedAgentCapability("查询订单 <script>alert(1)</script>"); err == nil || !strings.Contains(err.Error(), "SQL") {
+		t.Fatalf("script input was not rejected: %v", err)
 	}
 }
 

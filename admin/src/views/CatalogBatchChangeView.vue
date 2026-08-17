@@ -261,7 +261,7 @@ const resetWorkspace = () => {
 
 const loadOptions = async () => {
   const [productResponse, checkpointResponse] = await Promise.all([
-    request.get('/products', { params: { page: 1, page_size: 100, type: 'online' } }),
+    request.get('/products', { params: { page: 1, page_size: 100, type: 'online', product_kind: 'ticket' } }),
     request.get('/checkpoints', { params: { page: 1, page_size: 100 } }),
   ])
   products.value = productResponse.data.data || []

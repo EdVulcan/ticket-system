@@ -21,6 +21,8 @@ const staleDigitalRefundTaskAfter = 5 * time.Minute
 
 var ErrDigitalRefundNotConfigured = errors.New("digital provider refund integration is not configured")
 
+var errStandaloneHotelProductRefund = errors.New("standalone hotel product refund is not available; only ticket orders are supported")
+
 const defaultDigitalRefundMaxAttempts = 8
 
 type RefundProviderResult struct {
@@ -63,6 +65,18 @@ func refundOrderTenantID(actor RefundActor) uint {
 func ensureRefundableEnvironment(order *model.Order) error {
 	if order != nil && order.Environment == "sandbox" {
 		return errors.New("sandbox orders must be cancelled through the channel workflow")
+	}
+	return nil
+}
+
+func ensureTicketRefundOrder(order *model.Order) error {
+	if order == nil {
+		return errors.New("order is required")
+	}
+	for _, item := range order.Items {
+		if item.Product.ProductKind == "hotel" {
+			return errStandaloneHotelProductRefund
+		}
 	}
 	return nil
 }
@@ -147,15 +161,6 @@ func (s *RefundService) CreateCashRefundAs(actor RefundActor, orderNo, idempoten
 			return err
 		}
 
-		var payment model.Payment
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
-			"tenant_id = ? AND order_no = ? AND method = ? AND status IN ?", tenantID, orderNo, "cash", []string{"paid", "partial_refunded"},
-		).Order("created_at asc").First(&payment).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return errors.New("paid cash payment not found")
-			}
-			return err
-		}
 		var order model.Order
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Product").Preload("Items.Tickets").
 			Where("order_no = ? AND tenant_id = ?", orderNo, tenantID).First(&order).Error; err != nil {
@@ -164,8 +169,20 @@ func (s *RefundService) CreateCashRefundAs(actor RefundActor, orderNo, idempoten
 		if err := ensureRefundableEnvironment(&order); err != nil {
 			return err
 		}
+		if err := ensureTicketRefundOrder(&order); err != nil {
+			return err
+		}
 		if order.Status != "paid" && order.Status != "partial_refunded" && order.Status != "completed" {
 			return fmt.Errorf("order cannot be refunded from status %s", order.Status)
+		}
+		var payment model.Payment
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+			"tenant_id = ? AND order_no = ? AND method = ? AND status IN ?", tenantID, orderNo, "cash", []string{"paid", "partial_refunded"},
+		).Order("created_at asc").First(&payment).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("paid cash payment not found")
+			}
+			return err
 		}
 
 		allowUsed, err := authorizeUsedTicketRefundTx(tx, actor, &order, cleanCodes)
@@ -295,6 +312,9 @@ func (s *RefundService) CreateDigitalRefundAs(actor RefundActor, orderNo, idempo
 		if err := ensureRefundableEnvironment(&order); err != nil {
 			return err
 		}
+		if err := ensureTicketRefundOrder(&order); err != nil {
+			return err
+		}
 		if order.Status != "paid" && order.Status != "partial_refunded" && order.Status != "completed" {
 			return fmt.Errorf("order cannot be refunded from status %s", order.Status)
 		}
@@ -387,6 +407,9 @@ func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempote
 			return err
 		}
 		if err := ensureRefundableEnvironment(&order); err != nil {
+			return err
+		}
+		if err := ensureTicketRefundOrder(&order); err != nil {
 			return err
 		}
 		if order.Status != "paid" && order.Status != "partial_refunded" && order.Status != "completed" {
@@ -1083,6 +1106,9 @@ func applySuccessfulRefundTx(tx *gorm.DB, order *model.Order, payment *model.Pay
 
 func applyRefundBusinessFactsTx(tx *gorm.DB, order *model.Order, refund *model.Refund, selected map[string]*model.Ticket) error {
 	if err := ensureRefundableEnvironment(order); err != nil {
+		return err
+	}
+	if err := ensureTicketRefundOrder(order); err != nil {
 		return err
 	}
 	for itemIndex := range order.Items {

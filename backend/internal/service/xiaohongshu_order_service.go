@@ -289,6 +289,12 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 	if err := model.DB.Where("id = ? AND tenant_id = ? AND status = ?", mapping.ProductID, customer.TenantID, "online").First(&product).Error; err != nil {
 		return nil, errors.New("票种当前不可购买")
 	}
+	if product.ProductKind == "hotel" {
+		// Hotel products have no scenic ticket or voucher entitlement. Keep the
+		// existing ticket order/Saga path fail-closed until a dedicated hotel
+		// order and reservation protocol is enabled for this channel.
+		return nil, errors.New("酒店产品暂未开放小红书交易，请先完成住宿订单协议联调")
+	}
 	if err := model.DB.Where("channel_product_mapping_id = ? AND tenant_id = ? AND channel_account_id = ? AND sync_status = ?", mapping.ID, customer.TenantID, account.ID, "synced").First(&config).Error; err != nil {
 		return nil, errors.New("票种尚未完成小红书商品同步")
 	}

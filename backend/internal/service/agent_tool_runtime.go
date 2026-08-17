@@ -57,6 +57,7 @@ var agentToolSpecs = []agentToolSpec{
 	{Name: "query_team_groups", Description: "查询当前旅行社或供应商有关系的团队计划、人数状态、入园批次和确认汇总；不返回名单、票码、设备或操作员信息", ModuleID: agentModuleTeams, ActionKind: "query", Permission: authz.PermissionTeamsRead, CapabilityAny: []string{"supplier", "travel_agency"}, ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"search":{"type":"string","maxLength":100},"status":{"type":"string","enum":["draft","confirmed","partial_entry","entered","cancelled"]},"start_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"end_date":{"type":"string","pattern":"^\\d{4}-\\d{2}-\\d{2}$"},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
 	{Name: "query_team_settlement_summary", Description: "查询当前旅行社或供应商参与的团队结算摘要，仅返回状态、金额、到期和完成时间；不返回付款凭证、争议原因或调整明细，不能确认或付款", ModuleID: agentModuleTeams, ActionKind: "query", Permission: authz.PermissionSettlementsRead, CapabilityAny: []string{"supplier", "travel_agency"}, ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","enum":["draft","supplier_confirmed","confirmed","payment_submitted","disputed","paid"]},"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
 	{Name: "query_team_account_summary", Description: "查询当前旅行社或供应商的团队合作账户汇总，只返回授信使用、待结算、已结算和争议计数；不执行充值、付款、结算确认或调整", ModuleID: agentModuleTeams, ActionKind: "query", Permission: authz.PermissionFinanceRead, CapabilityAny: []string{"supplier", "travel_agency"}, ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","properties":{"limit":{"type":"integer","minimum":1,"maximum":50}},"additionalProperties":false}`)},
+	{Name: "query_compound_readonly", Description: "按顺序执行 2 到 5 个已注册的只读查询工具并返回服务器事实，不执行任何写入、支付、库存预占或外部调用", ModuleID: agentModuleSystem, ActionKind: "query", Permission: authz.PermissionOrdersRead, CapabilityAny: []string{"supplier", "distributor", "travel_agency"}, ReadOnly: true, Parameters: json.RawMessage(`{"type":"object","required":["steps"],"properties":{"steps":{"type":"array","minItems":2,"maxItems":5,"items":{"type":"object","required":["tool_name","arguments"],"properties":{"tool_name":{"type":"string","minLength":1,"maxLength":80},"arguments":{"type":"object","additionalProperties":true}},"additionalProperties":false}}},"additionalProperties":false}`)},
 	{Name: "prepare_ticket_product_create", Description: "准备创建一个尚未上线的票种预览，不执行创建和分发。创建请求应直接调用此工具；服务端会按当前租户精确解析景区和检票点，并返回缺失字段或候选项", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string"},"product_type":{"type":"string","enum":["online","offline"]},"scenic_area_name":{"type":"string"},"price":{"type":["number","null"]},"settlement_price":{"type":["number","null"]},"validity_type":{"type":"string"},"validity_days":{"type":["integer","null"]},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"rule_name":{"type":"string"},"groups":{"type":"array","items":{"type":"object","properties":{"group_name":{"type":"string"},"max_total_check_in":{"type":"integer"},"items":{"type":"array","items":{"type":"object","properties":{"checkpoint_name":{"type":"string"},"max_per_check_in":{"type":"integer"}},"additionalProperties":false}}},"additionalProperties":false}},"code_mode":{"type":"string"},"stock_type":{"type":"string"},"daily_stock":{"type":["integer","null"]},"real_name_required":{"type":["boolean","null"]},"refund_type":{"type":"string"},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":["integer","null"]},"limit_per_id":{"type":["integer","null"]}},"additionalProperties":false}`)},
 	{Name: "prepare_ticket_product_update", Description: "准备修改当前租户自有票种的基础信息预览，不执行修改。已上架或允许分销的自有票种也可修改；分销副本不能修改。不能修改票种类型、所属景区、上架状态、分销授权或检票规则", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","required":["product_name","changes"],"properties":{"product_name":{"type":"string","minLength":1,"maxLength":100},"changes":{"type":"object","properties":{"name":{"type":"string","maxLength":100},"price":{"type":"number","minimum":0},"settlement_price":{"type":"number","minimum":0},"validity_type":{"type":"string","enum":["date","days"]},"validity_days":{"type":"integer","minimum":0},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"code_mode":{"type":"string","enum":["order","ticket"]},"stock_type":{"type":"string","enum":["unlimited","daily","total"]},"daily_stock":{"type":"integer","minimum":0},"real_name_required":{"type":"boolean"},"refund_type":{"type":"string","enum":["no_refund","free","ladder"]},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":"integer","minimum":0},"limit_per_id":{"type":"integer","minimum":0}},"additionalProperties":false}},"additionalProperties":false}`)},
 	{Name: "prepare_ticket_product_batch_update", Description: "准备批量修改当前租户自有票种的共同基础信息预览，不执行修改。已上架或允许分销的自有票种也可修改；必须提供至少两个准确票种名称；分销副本不能修改。不能修改统一名称、票种类型、所属景区、上架状态、分销授权或检票规则", ModuleID: agentModuleCatalog, ActionKind: "preview", Permission: authz.PermissionCatalogWrite, Capability: "supplier", BusinessType: "scenic", PreviewOnly: true, RequiresConfirmation: true, Parameters: json.RawMessage(`{"type":"object","required":["product_names","changes"],"properties":{"product_names":{"type":"array","minItems":2,"maxItems":50,"items":{"type":"string","minLength":1,"maxLength":100}},"changes":{"type":"object","properties":{"price":{"type":"number","minimum":0},"settlement_price":{"type":"number","minimum":0},"validity_type":{"type":"string","enum":["date","days"]},"validity_days":{"type":"integer","minimum":0},"validity_start_date":{"type":"string"},"validity_end_date":{"type":"string"},"code_mode":{"type":"string","enum":["order","ticket"]},"stock_type":{"type":"string","enum":["unlimited","daily","total"]},"daily_stock":{"type":"integer","minimum":0},"real_name_required":{"type":"boolean"},"refund_type":{"type":"string","enum":["no_refund","free","ladder"]},"refund_rule":{"type":"string"},"tags":{"type":"string"},"gate_voice_code":{"type":"string"},"limit_per_phone":{"type":"integer","minimum":0},"limit_per_id":{"type":"integer","minimum":0}},"additionalProperties":false}},"additionalProperties":false}`)},
@@ -88,6 +89,35 @@ func agentToolProtocolConfigured() bool {
 	return resolveAgentTaskProtocol(config) == agentProtocolToolV1
 }
 
+// agentToolChoiceForVisible keeps the provider from answering in prose when a
+// task has already been narrowed to one server-owned tool. DeepSeek reasoning
+// models do not accept a forced function choice in thinking mode, so those
+// models retain the provider-compatible automatic choice and the registry
+// guard below still rejects any tool outside the visible set.
+func agentToolChoiceForVisible(config model.PlatformAIConfig, visible []agentToolSpec) interface{} {
+	if len(visible) != 1 {
+		return "auto"
+	}
+	modelName := strings.ToLower(strings.TrimSpace(config.Model))
+	if strings.Contains(modelName, "reasoner") || strings.Contains(modelName, "thinking") {
+		return "auto"
+	}
+	return map[string]interface{}{
+		"type":     "function",
+		"function": map[string]string{"name": visible[0].Name},
+	}
+}
+
+func agentVisibleTool(specs []agentToolSpec, name string) bool {
+	name = strings.TrimSpace(name)
+	for _, spec := range specs {
+		if spec.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUserID uint, actorRole string, task model.AgentTask, input string) (*agentPlanningResult, error) {
 	if err := validateAgentToolIntent(input, task); err != nil {
 		return nil, err
@@ -101,8 +131,20 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 	if len(visible) == 0 {
 		return nil, agentInvalid("当前账号没有可用的 AI 工具")
 	}
+	readCompoundIntent := task.OperationType == AgentOperationPending && agentReadOnlyCompoundIntent(input)
 	compoundIntent := task.OperationType == AgentOperationCompound || (task.OperationType == AgentOperationPending && agentCompoundIntent(input))
-	if compoundIntent {
+	if readCompoundIntent {
+		queryTools := make([]agentToolSpec, 0, 1)
+		for _, spec := range visible {
+			if spec.Name == "query_compound_readonly" {
+				queryTools = append(queryTools, spec)
+			}
+		}
+		visible = queryTools
+		if len(visible) == 0 {
+			return nil, agentInvalid("当前账号没有复合只读查询权限")
+		}
+	} else if compoundIntent {
 		compoundTools := make([]agentToolSpec, 0, 1)
 		for _, spec := range visible {
 			if spec.Name == "prepare_compound_preview" {
@@ -114,8 +156,29 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 			return nil, agentInvalid("当前账号没有复合操作预览权限")
 		}
 	} else {
-		creationIntent := (task.OperationType != AgentOperationCatalogBatchChange && agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentProductCreateIntentWords)) || task.OperationType == AgentOperationTicketProductCreate
-		if creationIntent {
+		normalizedInput := strings.ToLower(strings.TrimSpace(input))
+		priorInput := strings.ToLower(strings.TrimSpace(task.InputText))
+		creationIntent := task.OperationType == AgentOperationTicketProductCreate ||
+			agentExplicitTicketProductCreateIntent(normalizedInput) ||
+			(task.OperationType == AgentOperationCatalogBatchChange && agentExplicitTicketProductCreateIntent(priorInput))
+		// A short continuation such as a rule-group name has no mutation verb.
+		// The durable task operation must keep it on the rule tool; otherwise the
+		// provider sees every visible tool and may reinterpret the answer as a
+		// product request.
+		ruleIntent := !creationIntent && (task.OperationType == AgentOperationCatalogBatchChange ||
+			agentHasCatalogRuleMutationIntent(normalizedInput) && task.OperationType != AgentOperationTicketProductCreate)
+		if ruleIntent {
+			ruleTools := make([]agentToolSpec, 0, 1)
+			for _, spec := range visible {
+				if spec.Name == "prepare_catalog_rule_change" {
+					ruleTools = append(ruleTools, spec)
+				}
+			}
+			visible = ruleTools
+			if len(visible) == 0 {
+				return nil, agentInvalid("当前账号没有票规预览权限")
+			}
+		} else if creationIntent {
 			// DeepSeek thinking mode accepts automatic tool selection but rejects a
 			// named tool_choice. Limit the registry for creation requests so the
 			// provider can still choose automatically without wandering through
@@ -130,7 +193,9 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 			if len(visible) == 0 {
 				return nil, agentInvalid("当前账号没有创建票种预览权限")
 			}
-		} else if task.OperationType == AgentOperationTicketProductBatchUpdate || (agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentProductBatchUpdateIntentWords) && !agentHasCatalogRuleMutationIntent(input)) {
+		} else if task.OperationType == AgentOperationTicketProductBatchUpdate ||
+			(agentExplicitBatchIntent(normalizedInput) && !agentHasCatalogRuleMutationIntent(input)) ||
+			(agentHasAny(normalizedInput, agentProductBatchUpdateIntentWords) && !agentHasCatalogRuleMutationIntent(input)) {
 			batchTools := make([]agentToolSpec, 0, 1)
 			for _, spec := range visible {
 				if spec.Name == "prepare_ticket_product_batch_update" {
@@ -151,6 +216,22 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 			visible = updateTools
 			if len(visible) == 0 {
 				return nil, agentInvalid("当前账号没有票种修改预览权限")
+			}
+		} else if task.OperationType == AgentOperationPending {
+			// A single-topic read is deterministic enough to route without
+			// asking the provider to choose among the whole registry. Explicit
+			// multi-topic queries were handled by query_compound_readonly above.
+			if route := agentReadOnlyToolRoute(input); len(route) == 1 {
+				routed := make([]agentToolSpec, 0, 1)
+				for _, spec := range visible {
+					if spec.Name == route[0] {
+						routed = append(routed, spec)
+					}
+				}
+				if len(routed) == 0 {
+					return nil, agentInvalid("当前账号没有该查询能力或对应业务权限")
+				}
+				visible = routed
 			}
 		}
 	}
@@ -189,7 +270,9 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 		<task_context>` + providerContextJSON + `</task_context>
 租户业务别名只是当前租户维护的输入词汇；可以使用别名，但不得把别名当成新的业务对象，也不能跨租户推断。服务端会再次解析别名目标，目标不存在或发生歧义时会拒绝预览。
 <domain_skill>` + domainSkill + `</domain_skill>
-对于创建新票种的请求，必须直接调用 prepare_ticket_product_create 生成预览；不要先反复调用景区、检票点或票种搜索工具来猜测名称。服务端会按当前租户精确解析名称，并在信息不足或名称不明确时返回缺失字段和候选项。只有用户明确要求查询时才调用只读搜索工具。`
+	对于创建新票种的请求，必须直接调用 prepare_ticket_product_create 生成预览；不要先反复调用景区、检票点或票种搜索工具来猜测名称。服务端会按当前租户精确解析名称，并在信息不足或名称不明确时返回缺失字段和候选项。只有用户明确要求查询时才调用只读搜索工具。`
+	systemPrompt += `
+	对于明确写出“只读复合查询/多步查询/按步骤查询”的请求，必须调用 query_compound_readonly，并在 steps 中按用户顺序填写 2 到 5 个已注册只读工具及其参数；不得把只读查询包装成变更预览，也不得在步骤中加入退款、支付、授权、上架、设备或外部渠道操作。`
 	// Keep the tool prompt explicit about the new preview seam so a provider
 	// cannot mistake a product update for a rule deployment.
 	systemPrompt += `
@@ -201,6 +284,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 
 	messages := []AIMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: input}}
 	definitions := agentToolDefinitions(visible)
+	toolChoice := agentToolChoiceForVisible(config, visible)
 	toolCalls := 0
 	successfulToolCalls := 0
 	queryResults := make([]json.RawMessage, 0)
@@ -210,7 +294,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 		if err := ai.ReserveUsage(tenantID, config, reservedTokens); err != nil {
 			return nil, err
 		}
-		completion, callErr := ai.chatWithToolsChoice(ctx, config, apiKey, messages, definitions, config.MaxOutputTokens, "auto")
+		completion, callErr := ai.chatWithToolsChoice(ctx, config, apiKey, messages, definitions, config.MaxOutputTokens, toolChoice)
 		if callErr != nil {
 			if auditErr := recordAgentProviderEvent(task, actorUserID, actorRole, config, providerCalls+1, "failed", callErr.Error(), 0, ""); auditErr != nil {
 				return nil, auditErr
@@ -228,7 +312,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 				return nil, agentInvalid("AI 未返回可展示的说明或工具调用")
 			}
 			if successfulToolCalls == 0 {
-				return nil, agentInvalid("AI 未调用受支持的查询或预览工具，无法生成可信结果")
+				return nil, agentInvalid(agentUnsupportedToolMessage(input))
 			}
 			var prior agentTaskContext
 			_ = json.Unmarshal([]byte(contextJSON), &prior)
@@ -250,6 +334,9 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 			if toolCalls > maxAgentToolCalls {
 				return nil, agentInvalid("本次 AI 任务调用工具次数过多，请缩小目标范围")
 			}
+			if !agentVisibleTool(visible, call.Function.Name) {
+				return nil, agentInvalid("AI 请求了当前任务未开放的工具，请重新生成计划")
+			}
 			execution, invokeErr := s.invokeAgentTool(tenantID, actorUserID, actorRole, task, input, config, completion.ProviderRequestID, completion.UsageTokens, call)
 			if invokeErr != nil {
 				var argumentErr *agentToolArgumentError
@@ -265,7 +352,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 			}
 			successfulToolCalls++
 			if isAgentQueryResultJSON(execution.ResultJSON) {
-				queryResults = append(queryResults, json.RawMessage(execution.ResultJSON))
+				queryResults = append(queryResults, agentQueryResultMessages(execution.ResultJSON)...)
 			}
 			if execution.Planning != nil {
 				execution.Planning.QueryResults = queryResults
@@ -273,6 +360,10 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 			}
 			messages = append(messages, AIMessage{Role: "tool", ToolCallID: call.ID, Content: execution.ResultJSON})
 		}
+		// A forced choice is useful only for the first turn. Once the server has
+		// returned a read-only fact, the provider must be allowed to produce its
+		// final summary instead of being forced into a second identical query.
+		toolChoice = "auto"
 	}
 	return nil, agentInvalid("AI 任务需要的工具调用次数过多，请拆分请求")
 }
@@ -283,6 +374,39 @@ func isAgentQueryResultJSON(value string) bool {
 		return false
 	}
 	return result.SchemaVersion == agentQuerySchemaVersion && strings.TrimSpace(result.Module) != "" && strings.TrimSpace(result.Tool) != ""
+}
+
+// agentQueryResultMessages flattens the stable envelope returned by the
+// compound read-only adapter so the task result and UI retain one card per
+// underlying server query rather than a generic nested object card.
+func agentQueryResultMessages(value string) []json.RawMessage {
+	var result agentQueryResult
+	if err := json.Unmarshal([]byte(value), &result); err != nil {
+		return nil
+	}
+	if result.Tool != "query_compound_readonly" {
+		return []json.RawMessage{json.RawMessage(value)}
+	}
+	encoded, err := json.Marshal(result.Data)
+	if err != nil {
+		return []json.RawMessage{json.RawMessage(value)}
+	}
+	var nested []json.RawMessage
+	if err := json.Unmarshal(encoded, &nested); err != nil || len(nested) == 0 {
+		return []json.RawMessage{json.RawMessage(value)}
+	}
+	return nested
+}
+
+func agentUnsupportedToolMessage(input string) string {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if err := rejectUnsupportedAgentCapability(normalized); err != nil {
+		return err.Error()
+	}
+	if agentReadOnlyCompoundIntent(normalized) {
+		return "复合只读查询没有生成可信结果，请拆成单项查询后重试"
+	}
+	return "AI 未调用受支持的查询或预览工具，无法生成可信结果；请明确票种、票规或只读查询目标"
 }
 
 func recordAgentProviderEvent(task model.AgentTask, actorUserID uint, actorRole string, config model.PlatformAIConfig, attempt int, status, message string, tokenCount int64, providerRequestID string) error {
@@ -304,7 +428,15 @@ func recordAgentProviderEvent(task model.AgentTask, actorUserID uint, actorRole 
 }
 
 func validateAgentToolIntent(input string, task model.AgentTask) error {
+	if err := rejectUnsupportedAgentCapability(input); err != nil {
+		return err
+	}
 	if err := validateAgentTaskInputIntent(input, task); err == nil {
+		return nil
+	} else if task.OperationType == AgentOperationCatalogBatchChange && agentExplicitTicketProductCreateIntent(task.InputText) {
+		// A malformed first provider response may have persisted the task as a
+		// catalog change. The prior user turn is still stored on the task and is
+		// authoritative for a continuation that supplies product fields.
 		return nil
 	} else if task.OperationType == AgentOperationPending && agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentReadIntentWords) {
 		return nil

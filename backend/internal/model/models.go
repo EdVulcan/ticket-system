@@ -119,14 +119,18 @@ type RuleItem struct {
 // Product 票务产品
 type Product struct {
 	Base
-	Name         string     `gorm:"size:100;not null" json:"name"`
-	Price        float64    `gorm:"type:decimal(10,2)" json:"price"`
-	TenantID     uint       `json:"tenant_id"`
-	ScenicAreaID uint       `gorm:"index" json:"scenic_area_id"`
-	RuleID       uint       `json:"rule_id"`
-	Rule         TicketRule `gorm:"foreignKey:RuleID" json:"rule,omitempty"`
-	Type         string     `gorm:"size:20;default:'online'" json:"type"`   // online, offline
-	Status       string     `gorm:"size:20;default:'online'" json:"status"` // online, offline (下架)
+	Name         string  `gorm:"size:100;not null" json:"name"`
+	Price        float64 `gorm:"type:decimal(10,2)" json:"price"`
+	TenantID     uint    `json:"tenant_id"`
+	ScenicAreaID uint    `gorm:"index" json:"scenic_area_id"`
+	// ProductKind is server-controlled catalog semantics. Hotel products reuse
+	// the stable Product sales identity for channels, but must never enter the
+	// ticket fulfillment path.
+	ProductKind string     `gorm:"size:30;not null;default:'ticket';index;check:chk_products_product_kind,product_kind IN ('ticket','scenic_hotel_package','hotel')" json:"product_kind"`
+	RuleID      uint       `json:"rule_id"`
+	Rule        TicketRule `gorm:"foreignKey:RuleID" json:"rule,omitempty"`
+	Type        string     `gorm:"size:20;default:'online'" json:"type"`   // online, offline
+	Status      string     `gorm:"size:20;default:'online'" json:"status"` // online, offline (下架)
 
 	// --- B2B Distribution Fields ---
 	IsDistributable bool `json:"is_distributable" gorm:"default:false"` // 是否允许分销(供应商设置)

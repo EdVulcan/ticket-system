@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -66,6 +68,14 @@ func agentNotFound(message string) error {
 
 func agentConflict(message string) error {
 	return &AgentTaskError{Code: "task_conflict", Message: message, HTTPStatus: 409}
+}
+
+func agentInProgress(message string) error {
+	return &AgentTaskError{Code: "task_in_progress", Message: message, HTTPStatus: 409}
+}
+
+func agentTimeout(message string) error {
+	return &AgentTaskError{Code: "ai_timeout", Message: message, HTTPStatus: 504}
 }
 
 type AgentTaskRequest struct {
@@ -317,6 +327,87 @@ type AgentTaskService struct {
 	AI *PlatformAIService
 }
 
+const agentPlanningLease = 5 * time.Minute
+
+// A task may issue more than one provider/tool request, but it must still
+// have one bounded request lifetime. Without a planning deadline, a provider
+// that keeps returning tool calls can leave the browser spinner active long
+// after the gateway would have stopped waiting.
+const agentPlanningTimeout = 115 * time.Second
+
+// acquireAgentPlanningAttempt reserves one durable planning turn before any
+// provider call. AgentTaskEvent already has a task-scoped unique idempotency
+// key and an ownership trigger, so this avoids adding another coordination
+// table while still working across multiple application processes.
+func (s *AgentTaskService) acquireAgentPlanningAttempt(tenantID, actorUserID, taskID uint, actorRole, turnKey string) (uint, error) {
+	var attemptID uint
+	err := model.Write(func(tx *gorm.DB) error {
+		var task model.AgentTask
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND actor_user_id = ?", taskID, tenantID, actorUserID).First(&task).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return agentNotFound("agent task not found")
+			}
+			return err
+		}
+		if task.LastTurnKey == turnKey && strings.TrimSpace(task.LastResponseJSON) != "" {
+			return agentConflict("agent task response is already available; refresh the task")
+		}
+		if task.State != AgentTaskCollecting && task.State != AgentTaskReadyForPreview {
+			return agentConflict("agent task is already awaiting confirmation or has completed")
+		}
+
+		var running model.AgentTaskEvent
+		runningErr := tx.Where("task_id = ? AND tenant_id = ? AND actor_user_id = ? AND event_type = ? AND status = ?", task.ID, tenantID, actorUserID, "planning", "running").Order("id DESC").First(&running).Error
+		if runningErr == nil {
+			if running.CreatedAt.After(time.Now().Add(-agentPlanningLease)) {
+				return agentInProgress("当前任务正在处理中，请稍后重试")
+			}
+			if err := tx.Model(&running).Updates(map[string]interface{}{
+				"status": "failed", "error_code": "planning_lease_expired", "result_json": `{"error":"planning lease expired"}`,
+			}).Error; err != nil {
+				return err
+			}
+		} else if !errors.Is(runningErr, gorm.ErrRecordNotFound) {
+			return runningErr
+		}
+
+		var sequence int
+		if err := tx.Model(&model.AgentTaskEvent{}).Where("task_id = ?", task.ID).Select("COALESCE(MAX(sequence), 0)").Scan(&sequence).Error; err != nil {
+			return err
+		}
+		attempt := model.AgentTaskEvent{
+			TenantID: tenantID, TaskID: task.ID, ActorUserID: actorUserID, ActorRole: actorRole,
+			Sequence: sequence + 1, EventType: "planning", ToolVersion: agentToolVersion,
+			IdempotencyKey: agentPlanningAttemptKey(turnKey), Status: "running",
+		}
+		if err := tx.Create(&attempt).Error; err != nil {
+			return err
+		}
+		attemptID = attempt.ID
+		return nil
+	})
+	return attemptID, err
+}
+
+func (s *AgentTaskService) finishAgentPlanningAttempt(attemptID uint, status, message string) error {
+	if attemptID == 0 {
+		return nil
+	}
+	updates := map[string]interface{}{"status": status}
+	if strings.TrimSpace(message) != "" {
+		updates["error_code"] = "planning_failed"
+		updates["result_json"] = scrubAgentToolJSON(fmt.Sprintf(`{"error":%q}`, strings.TrimSpace(message)))
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&model.AgentTaskEvent{}).Where("id = ? AND status = ?", attemptID, "running").Updates(updates).Error
+	})
+}
+
+func agentPlanningAttemptKey(turnKey string) string {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(turnKey)))
+	return "agent-plan-v1-" + hex.EncodeToString(digest[:24])
+}
+
 func (s *AgentTaskService) aiService() *PlatformAIService {
 	if s != nil && s.AI != nil {
 		return s.AI
@@ -325,6 +416,9 @@ func (s *AgentTaskService) aiService() *PlatformAIService {
 }
 
 func (s *AgentTaskService) Submit(ctx context.Context, tenantID, actorUserID uint, actorRole string, req AgentTaskRequest) (*AgentTaskView, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	input := strings.TrimSpace(req.InputText)
 	if tenantID == 0 {
 		return nil, agentInvalid("tenant is required")
@@ -334,6 +428,15 @@ func (s *AgentTaskService) Submit(ctx context.Context, tenantID, actorUserID uin
 	}
 	if len([]rune(input)) > 2000 {
 		return nil, agentInvalid("input_text cannot exceed 2000 characters")
+	}
+	if err := rejectUnsupportedAgentCapability(input); err != nil {
+		return nil, err
+	}
+	// Tenant scope is derived from authentication. Reject an explicit foreign
+	// tenant qualifier before creating a task or sending any text to a provider;
+	// the current-tenant catalog must never become a silent fallback.
+	if err := rejectExplicitForeignTenantTarget(tenantID, input); err != nil {
+		return nil, err
 	}
 	if actorRole == "" {
 		actorRole = "admin"
@@ -373,9 +476,19 @@ func (s *AgentTaskService) Submit(ctx context.Context, tenantID, actorUserID uin
 	if task.State != AgentTaskCollecting && task.State != AgentTaskReadyForPreview {
 		return nil, agentConflict("agent task is already awaiting confirmation or has completed")
 	}
-
-	planning, err := s.plan(ctx, tenantID, actorUserID, actorRole, task, input)
+	attemptID, err := s.acquireAgentPlanningAttempt(tenantID, actorUserID, task.ID, actorRole, turnKey)
 	if err != nil {
+		return nil, err
+	}
+
+	planningCtx, cancelPlanning := context.WithTimeout(ctx, agentPlanningTimeout)
+	defer cancelPlanning()
+	planning, err := s.plan(planningCtx, tenantID, actorUserID, actorRole, task, input)
+	if err != nil && errors.Is(err, context.DeadlineExceeded) {
+		err = agentTimeout("AI 规划超过等待时限，未执行任何业务写入；可以稍后使用相同内容重试")
+	}
+	if err != nil {
+		_ = s.finishAgentPlanningAttempt(attemptID, "failed", err.Error())
 		return nil, err
 	}
 	var response *AgentTaskView
@@ -433,6 +546,11 @@ func (s *AgentTaskService) Submit(ctx context.Context, tenantID, actorUserID uin
 		if err := tx.Save(&locked).Error; err != nil {
 			return err
 		}
+		if err := tx.Model(&model.AgentTaskEvent{}).
+			Where("id = ? AND task_id = ? AND status = ?", attemptID, locked.ID, "running").
+			Updates(map[string]interface{}{"status": "succeeded"}).Error; err != nil {
+			return err
+		}
 		view := agentTaskViewFromModel(locked)
 		view.Provider = planning.Provider
 		view.Model = planning.Model
@@ -445,6 +563,7 @@ func (s *AgentTaskService) Submit(ctx context.Context, tenantID, actorUserID uin
 		return tx.Model(&locked).Update("last_response_json", string(stored)).Error
 	})
 	if err != nil {
+		_ = s.finishAgentPlanningAttempt(attemptID, "failed", err.Error())
 		return nil, err
 	}
 	return response, nil
@@ -761,16 +880,20 @@ func (s *AgentTaskService) loadOrCreateTask(tenantID, actorUserID uint, actorRol
 	}
 	var task model.AgentTask
 	err := model.Write(func(tx *gorm.DB) error {
-		if err := tx.Where("tenant_id = ? AND idempotency_key = ?", tenantID, key).First(&task).Error; err == nil {
-			if task.ActorUserID != actorUserID || task.InputText != input {
-				return agentConflict("idempotency key already belongs to another agent task")
+		// The database constraint is scoped to the authenticated tenant and
+		// operator. Keep the lookup on the same scope; a key reused by another
+		// operator must create an independent auditable task instead of being
+		// mistaken for an idempotency conflict.
+		if err := tx.Where("tenant_id = ? AND actor_user_id = ? AND idempotency_key = ?", tenantID, actorUserID, key).First(&task).Error; err == nil {
+			if task.InputText != input {
+				return agentConflict("幂等键已用于其他请求，请开始新任务")
 			}
 			return nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 		expiresAt := time.Now().Add(30 * time.Minute)
-		task = model.AgentTask{
+		candidate := model.AgentTask{
 			TenantID: tenantID, ActorUserID: actorUserID, ActorRole: actorRole,
 			OperationType: AgentOperationPending, State: AgentTaskCollecting,
 			InputText: input, ContextJSON: `{"operation_type":"pending"}`,
@@ -779,9 +902,29 @@ func (s *AgentTaskService) loadOrCreateTask(tenantID, actorUserID uint, actorRol
 		}
 		var configured model.PlatformAIConfig
 		if configErr := tx.Where("config_key = ?", platformAIConfigKey).First(&configured).Error; configErr == nil {
-			task.ProtocolMode = resolveAgentTaskProtocol(configured)
+			candidate.ProtocolMode = resolveAgentTaskProtocol(configured)
 		}
-		return tx.Create(&task).Error
+		result := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "actor_user_id"}, {Name: "idempotency_key"}},
+			DoNothing: true,
+		}).Create(&candidate)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 1 {
+			task = candidate
+			return nil
+		}
+		// A concurrent request won the scoped key. Re-read it under the same
+		// transaction and apply the input binding check instead of exposing a
+		// raw unique-constraint error to the client.
+		if err := tx.Where("tenant_id = ? AND actor_user_id = ? AND idempotency_key = ?", tenantID, actorUserID, key).First(&task).Error; err != nil {
+			return err
+		}
+		if task.InputText != input {
+			return agentConflict("幂等键已用于其他请求，请开始新任务")
+		}
+		return nil
 	})
 	return task, err
 }

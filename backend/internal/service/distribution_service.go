@@ -252,7 +252,7 @@ func (s *DistributionService) ListDistributableProducts(agentTenantID, supplierT
 	now := time.Now()
 	err := model.DB.Model(&model.Product{}).
 		Joins("JOIN product_offers ON product_offers.source_product_id = products.id AND product_offers.deleted_at IS NULL").
-		Where("products.tenant_id = ? AND products.is_distributable = ? AND products.status = ?", supplierTenantID, true, "online").
+		Where("products.tenant_id = ? AND products.is_distributable = ? AND products.status = ? AND products.product_kind = ?", supplierTenantID, true, "online", "ticket").
 		Where("NOT EXISTS (SELECT 1 FROM scenic_hotel_packages WHERE scenic_hotel_packages.product_id = products.id AND scenic_hotel_packages.deleted_at IS NULL)").
 		Where("product_offers.distributor_tenant_id = ? AND product_offers.status = ?", agentTenantID, "active").
 		Where("product_offers.sales_start_at IS NULL OR product_offers.sales_start_at <= ?", now).

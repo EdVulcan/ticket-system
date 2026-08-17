@@ -58,7 +58,7 @@ func (c *OTAController) ListProducts(ctx *gin.Context) {
 			products = []model.Product{}
 		}
 	} else {
-		products, total, err = c.ProductService.List(page, pageSize, tenantID, "online")
+		products, total, err = c.ProductService.ListFiltered(page, pageSize, tenantID, service.ProductListFilter{ProductType: "online", ProductKind: "ticket"})
 	}
 
 	if err != nil {

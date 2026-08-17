@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/url"
 	"strings"
@@ -76,9 +77,6 @@ func (s XiaohongshuProductService) EnsureMappingAccess(tenantID, accountID, mapp
 
 func (s XiaohongshuProductService) SaveConfig(tenantID, accountID, mappingID, actorUserID uint, actorRole string, input XiaohongshuProductConfigInput) (*XiaohongshuProductConfigView, error) {
 	normalizeXiaohongshuProductInput(&input)
-	if err := validateXiaohongshuProductInput(input); err != nil {
-		return nil, err
-	}
 	poiJSON, _ := json.Marshal(input.POIIDs)
 	var stored model.XiaohongshuProductConfig
 	err := model.Write(func(tx *gorm.DB) error {
@@ -87,6 +85,24 @@ func (s XiaohongshuProductService) SaveConfig(tenantID, accountID, mappingID, ac
 		}
 		var mapping model.ChannelProductMapping
 		if err := tx.Where("id = ? AND channel_account_id = ?", mappingID, accountID).First(&mapping).Error; err != nil {
+			return err
+		}
+		var hotelProduct model.HotelProduct
+		hotelProductErr := tx.Where("tenant_id = ? AND product_id = ?", tenantID, mapping.ProductID).First(&hotelProduct).Error
+		if hotelProductErr != nil && !errors.Is(hotelProductErr, gorm.ErrRecordNotFound) {
+			return hotelProductErr
+		}
+		if hotelProductErr == nil {
+			expectedType := xiaohongshu.ProductTypePresaleVoucher
+			if hotelProduct.SaleMode == "calendar_room" {
+				expectedType = xiaohongshu.ProductTypeCalendar
+			}
+			if input.ProductType != 0 && input.ProductType != expectedType {
+				return fmt.Errorf("hotel product sale mode requires Xiaohongshu product type %d", expectedType)
+			}
+			input.ProductType = expectedType
+		}
+		if err := validateXiaohongshuProductInput(input); err != nil {
 			return err
 		}
 		var hotelPackage model.ScenicHotelPackage
@@ -132,7 +148,12 @@ func (s XiaohongshuProductService) Sync(ctx context.Context, tenantID, accountID
 	if err := loadXiaohongshuMappingTx(model.DB, tenantID, accountID, mappingID, &mapping, &product); err != nil {
 		return err
 	}
-	if err := requireActiveScenicSupplier(model.DB, productFulfillmentTenantID(&product)); err != nil {
+	if product.ProductKind == "hotel" {
+		// Independent hotel orders have no verified Xiaohongshu accommodation
+		// protocol yet. Do not publish a remote product that the local order and
+		// catalog paths intentionally refuse to sell.
+		return errors.New("Xiaohongshu hotel product publishing is not enabled until the accommodation protocol is verified")
+	} else if err := requireActiveScenicSupplier(model.DB, productFulfillmentTenantID(&product)); err != nil {
 		return errors.New("scenic supplier business is unavailable")
 	}
 	var config model.XiaohongshuProductConfig
@@ -144,8 +165,12 @@ func (s XiaohongshuProductService) Sync(ctx context.Context, tenantID, accountID
 		name = product.Name
 	}
 	originPrice := int64(math.Round(product.Price * 100))
-	if originPrice < mapping.ChannelSaleCents {
-		originPrice = mapping.ChannelSaleCents
+	salePrice := mapping.ChannelSaleCents
+	if salePrice <= 0 {
+		return errors.New("Xiaohongshu product price is not configured")
+	}
+	if originPrice < salePrice {
+		originPrice = salePrice
 	}
 	now := s.now()
 	request := xiaohongshu.LocalLifeProductRequest{
@@ -153,7 +178,7 @@ func (s XiaohongshuProductService) Sync(ctx context.Context, tenantID, accountID
 		Description: config.Description, Path: config.ProductPath, TopImage: config.ImageURL,
 		CategoryID: config.CategoryID, CreatedAt: product.CreatedAt.Unix(), UpdatedAt: now.Unix(),
 		POIIDs: parseXiaohongshuPOIIDs(config.POIIDsJSON), ProductType: config.ProductType, SettleType: config.SettleType,
-		SKUs: []xiaohongshu.ProductSKU{{ExternalSKUID: config.ExternalSKUID, Name: name, Image: config.ImageURL, OriginPrice: originPrice, SalePrice: mapping.ChannelSaleCents, Status: 1}},
+		SKUs: []xiaohongshu.ProductSKU{{ExternalSKUID: config.ExternalSKUID, Name: name, Image: config.ImageURL, OriginPrice: originPrice, SalePrice: salePrice, Status: 1}},
 	}
 	err = client.UpsertLocalLifeProduct(ctx, request)
 	if err != nil {
@@ -201,7 +226,7 @@ func loadXiaohongshuMappingTx(tx *gorm.DB, tenantID, accountID, mappingID uint, 
 	if err := tx.Where("id = ? AND tenant_id = ? AND status = ?", current.ProductID, tenantID, "online").First(&currentProduct).Error; err != nil {
 		return errors.New("映射的本地产品不可售")
 	}
-	if current.Status != "active" || current.ChannelSaleCents <= 0 {
+	if current.Status != "active" || (current.ChannelSaleCents <= 0 && currentProduct.ProductKind != "hotel") {
 		return errors.New("小红书商品映射未启用或售价无效")
 	}
 	if mapping != nil {

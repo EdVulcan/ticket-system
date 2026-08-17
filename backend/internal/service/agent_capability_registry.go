@@ -40,6 +40,7 @@ var agentModuleManifests = []agentModuleManifest{
 		Summary:        "平台实体关系、操作等级和 AI 安全边界",
 		KnowledgeFiles: []string{"skills/agent_system.md", "skills/agent_core.md", "skills/agent_product_create.md", "skills/agent_catalog_batch_change.md"},
 		OperationTypes: []string{AgentOperationPending},
+		ToolNames:      []string{"query_compound_readonly"},
 	},
 	{
 		ID:             agentModuleCatalog,

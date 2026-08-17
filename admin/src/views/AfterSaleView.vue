@@ -190,7 +190,7 @@ const differenceChange = computed(() => ((Math.max(0, differenceForm.cash_tender
 const load = async () => { loading.value = true; try { const res = await request.get('/after-sales', { params: { page: page.value, page_size: pageSize.value, status: status.value, order_no: orderNo.value.trim() } }); rows.value = res.data.data || []; total.value = res.data.total || 0 } finally { loading.value = false } }
 const applyFilters = () => { page.value = 1; load() }
 const loadOperationOptions = async () => {
-	const [productResult] = await Promise.allSettled([request.get('/products', { params: { page: 1, page_size: 100 } })])
+	const [productResult] = await Promise.allSettled([request.get('/products', { params: { page: 1, page_size: 100, product_kind: 'ticket' } })])
 	availableProducts.value = productResult.status === 'fulfilled' ? (productResult.value.data.data || []).filter((product: any) => product.status === 'online') : []
 	if (!isSupplier.value) { devices.value = []; openShifts.value = []; return }
 	const [deviceResult, shiftResult] = await Promise.allSettled([

@@ -10,6 +10,25 @@ import (
 
 var agentScopedProductPattern = regexp.MustCompile(`(?:所有|全部)([^,，。；;\n]+?)(?:增加|添加|新增|加上|加入|删除|移除|去掉|去除|取消|设置|设为|调整|修改|开放|支持)`)
 var agentNewRuleGroupPattern = regexp.MustCompile(`(?:新增|添加|新建|创建|增加)[^,，。；;\n]{0,24}规则组`)
+var agentExplicitTenantPattern = regexp.MustCompile(`(?i)(?:供应商租户|租户编号|商户编号|企业码|系统编号|tenant[_ ]?id|tenant[_ ]?code|租户|商户)\s*(?:为|是)?\s*[:：=#]?\s*([a-z][a-z0-9_-]{2,63}|[0-9]{1,20})`)
+var agentReverseTenantPattern = regexp.MustCompile(`(?i)([a-z][a-z0-9_-]{2,63}|[0-9]{1,20})\s*(?:供应商租户|租户|商户)`)
+var agentNumericTenantTokenPattern = regexp.MustCompile(`^[0-9]+$`)
+var agentTicketProductCreatePattern = regexp.MustCompile(`(?:创建|新建|生成|建一个|做一个|需要一个|要一个)[^,，。；;\n]{0,40}(?:票种|门票|线上票|窗口票|现场票|网售|成人票|儿童票|pos)`)
+
+// These operations deliberately have no Agent write tool. Keep the check
+// lexical and before provider invocation so an unsupported request cannot be
+// reinterpreted as a harmless query by a model. Product refund policy is a
+// catalog field and remains allowed when the user explicitly says to change a
+// ticket/product policy; an order/payment refund is a separate operation.
+var agentUnsupportedCapabilityMarkers = []string{
+	"支付", "退款", "退票", "资金退款", "设备控制", "下发设备", "开闸", "硬件", "凭据", "密钥", "api key", "appid", "secret",
+	"分销授权", "渠道授权", "授权分销", "上架", "下架", "权限变更", "赋权", "充值", "付款", "结算确认", "确认结算", "入园",
+}
+
+var agentUnsafeInputMarkers = []string{
+	"<script", "</script", "javascript:", "data:text/html", "```sql", "select * from", "drop table", "delete from", "insert into",
+	"ignore previous", "ignore all rules", "忽略之前的规则", "忽略所有规则", "执行 sql", "执行shell", "powershell", "curl http", "wget http",
+}
 
 // validateAgentPlannerEnvelope treats the model response as an untrusted
 // proposal. The domain services remain authoritative, but this extra policy
@@ -262,6 +281,200 @@ func validateAgentInputIntent(input, existingOperationType string) error {
 	return agentInvalid("AI 助手只处理票规调整或新票种创建，请先描述明确的业务操作")
 }
 
+// rejectExplicitForeignTenantTarget is intentionally lexical and server-side.
+// A bare number or an ordinary business name is not a tenant selector; only a
+// clear tenant/company qualifier is rejected. Unknown qualified values use the
+// same message as known foreign values so tenant existence cannot be probed.
+func rejectExplicitForeignTenantTarget(tenantID uint, input string) error {
+	input = strings.TrimSpace(input)
+	if tenantID == 0 || input == "" {
+		return nil
+	}
+	values := make([]string, 0, 2)
+	for _, pattern := range []*regexp.Regexp{agentExplicitTenantPattern, agentReverseTenantPattern} {
+		matches := pattern.FindAllStringSubmatch(input, -1)
+		for _, match := range matches {
+			if len(match) == 2 && strings.TrimSpace(match[1]) != "" {
+				values = append(values, strings.TrimSpace(match[1]))
+			}
+		}
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	var tenant model.Tenant
+	if err := model.DB.Select("id, system_code").First(&tenant, tenantID).Error; err != nil {
+		return err
+	}
+	for _, value := range values {
+		if strings.EqualFold(value, strings.TrimSpace(tenant.SystemCode)) {
+			continue
+		}
+		if agentNumericTenantTokenPattern.MatchString(value) {
+			return agentInvalid("普通租户助手不能指定租户编号；请在当前租户内操作")
+		}
+		return agentInvalid("当前租户助手不能操作指定的其他租户")
+	}
+	return nil
+}
+
+// agentExplicitTicketProductCreateIntent distinguishes a product request from
+// phrases such as “创建规则组/检票点”. Product creation may still mention its
+// checkpoint requirements; the ticket noun and create verb keep that request
+// on the product preview tool.
+func agentExplicitTicketProductCreateIntent(input string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if !agentHasAny(normalized, agentProductCreateIntentWords) {
+		return false
+	}
+	if agentTicketProductCreatePattern.MatchString(normalized) {
+		return true
+	}
+	return !agentHasCatalogRuleMutationIntent(normalized)
+}
+
+func agentCatalogRefundPolicyIntent(input string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if !agentHasAny(normalized, []string{"票种", "门票", "产品"}) {
+		return false
+	}
+	if !agentHasAny(normalized, []string{"退款规则", "退款类型", "退改规则", "未核销随时退", "随时退", "免费退", "无理由退", "未核销可退"}) {
+		return false
+	}
+	return agentHasAny(normalized, agentProductCreateIntentWords) || agentHasAny(normalized, agentProductUpdateIntentWords)
+}
+
+// rejectUnsupportedAgentCapability returns a stable, user-facing boundary
+// before a task row or provider request is created. It is intentionally not a
+// prompt instruction: the server, rather than the model, owns this decision.
+func rejectUnsupportedAgentCapability(input string) error {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if normalized == "" || agentCatalogRefundPolicyIntent(normalized) {
+		return nil
+	}
+	for _, marker := range agentUnsafeInputMarkers {
+		if strings.Contains(normalized, marker) {
+			return agentInvalid("AI 助手不执行 SQL、脚本、代码或提示词注入内容；请直接描述受支持的票务业务操作")
+		}
+	}
+	// Existing authorization, listing and team-entry facts are legitimate
+	// read-only subjects. Only their mutations are outside the Agent boundary.
+	if agentPureReadRequest(normalized) && agentHasAny(normalized, []string{"分销授权", "渠道授权", "授权分销", "上架", "下架", "入园"}) {
+		return nil
+	}
+	for _, marker := range agentUnsupportedCapabilityMarkers {
+		if strings.Contains(normalized, marker) {
+			return agentInvalid(agentUnsupportedCapabilityMessage(normalized))
+		}
+	}
+	return nil
+}
+
+func agentPureReadRequest(input string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if !agentHasAny(normalized, agentReadIntentWords) {
+		return false
+	}
+	mutationWords := append([]string{}, agentCatalogIntentWords...)
+	mutationWords = append(mutationWords, agentProductCreateIntentWords...)
+	mutationWords = append(mutationWords, agentProductUpdateIntentWords...)
+	mutationWords = append(mutationWords, agentProductBatchUpdateIntentWords...)
+	mutationWords = append(mutationWords, []string{"支付", "退款", "退票", "设备控制", "下发设备", "硬件", "凭据", "密钥", "api key", "appid", "secret", "付款", "充值", "结算确认", "确认结算", "权限变更", "赋权", "写入", "执行", "确认"}...)
+	return !agentHasAny(normalized, mutationWords)
+}
+
+func agentUnsupportedCapabilityMessage(input string) string {
+	if agentHasAny(input, []string{"设备控制", "下发设备", "开闸", "硬件"}) {
+		return "当前 AI 助手未开放设备或闸机控制；请使用现场设备管理页面完成操作"
+	}
+	if agentHasAny(input, []string{"凭据", "密钥", "api key", "appid", "secret"}) {
+		return "当前 AI 助手未开放渠道凭据、密钥或 AppID 管理；请使用平台配置页面完成操作"
+	}
+	if agentHasAny(input, []string{"分销授权", "渠道授权", "授权分销", "上架", "下架"}) {
+		return "当前 AI 助手未开放上架、下架、分销授权或渠道授权；请使用对应业务页面完成操作"
+	}
+	if agentHasAny(input, []string{"权限变更", "赋权"}) {
+		return "当前 AI 助手未开放用户权限或管理员变更；请使用用户与权限页面完成操作"
+	}
+	if agentHasAny(input, []string{"结算确认", "确认结算", "充值", "付款", "入园"}) {
+		return "当前 AI 助手未开放付款、充值、结算确认或入园操作；请使用对应业务页面完成操作"
+	}
+	return "当前 AI 助手未开放支付、订单退款或退票；请使用售后与支付页面完成操作"
+}
+
+func agentReadOnlyCompoundIntent(input string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if !agentHasAny(normalized, []string{"只读", "查询", "查看", "统计", "报表"}) {
+		return false
+	}
+	sequenced := agentHasAny(normalized, []string{"复合", "多步", "步骤", "依次", "分别", "先", "再", "1)", "1、", "第一步", "第二步", "然后", "接着", "随后", "同时"})
+	queryTopics := []string{"订单", "库存", "销售汇总", "核销汇总", "分销关系", "授权商品", "供应商履约", "分销结算", "团队合同", "团队计划", "团队结算", "团队账户", "票种规则", "检票点", "景区"}
+	topicCount := 0
+	for _, topic := range queryTopics {
+		if strings.Contains(normalized, topic) {
+			topicCount++
+		}
+	}
+	if !sequenced && (topicCount < 2 || !agentHasAny(normalized, []string{"、", "，", ",", "和", "以及", "及", "并"})) {
+		return false
+	}
+	// A sequencing word alone must not turn a mixed query/write request into a
+	// read-only plan. Mutation vocabulary always stays on the write policy path;
+	// the provider cannot use the read adapter to smuggle a second operation.
+	mutationWords := append([]string{}, agentCatalogIntentWords...)
+	mutationWords = append(mutationWords, agentProductCreateIntentWords...)
+	mutationWords = append(mutationWords, agentProductUpdateIntentWords...)
+	mutationWords = append(mutationWords, agentProductBatchUpdateIntentWords...)
+	mutationWords = append(mutationWords, "支付", "退款", "退票", "设备控制", "凭据", "密钥", "分销授权", "渠道授权", "上架", "下架", "写入", "执行", "确认", "充值", "结算", "入园")
+	return !agentHasAny(normalized, mutationWords)
+}
+
+// agentReadOnlyToolRoute narrows an unambiguous single-topic query to one
+// server-owned adapter. This keeps ordinary questions deterministic while
+// leaving explicit multi-topic requests to query_compound_readonly.
+func agentReadOnlyToolRoute(input string) []string {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if normalized == "" || agentReadOnlyCompoundIntent(normalized) || agentHasAny(normalized, agentCatalogIntentWords) ||
+		agentHasAny(normalized, agentProductCreateIntentWords) || agentHasAny(normalized, agentProductUpdateIntentWords) ||
+		agentHasAny(normalized, agentProductBatchUpdateIntentWords) {
+		return nil
+	}
+	if !agentHasAny(normalized, agentReadIntentWords) {
+		return nil
+	}
+	// Match the most specific business noun first. For example, “景区下的
+	// 检票点” is a checkpoint query, not a compound scenic-area query.
+	routes := []struct {
+		tool  string
+		words []string
+	}{
+		{"query_distribution_products", []string{"分销授权"}},
+		{"query_distribution_products", []string{"授权商品", "授权产品", "铺货商品"}},
+		{"query_distribution_fulfillments", []string{"供应商履约", "履约进度", "履约单"}},
+		{"query_distribution_settlements", []string{"分销结算", "分销对账"}},
+		{"query_distribution_partners", []string{"分销关系", "合作供应商", "合作关系", "分销合作"}},
+		{"query_team_settlement_summary", []string{"团队结算", "团队对账"}},
+		{"query_team_account_summary", []string{"团队账户", "团队授信", "团队余额"}},
+		{"query_team_groups", []string{"团队计划", "团队团期", "团队入园", "入园情况"}},
+		{"query_team_contracts", []string{"团队合同", "合同摘要"}},
+		{"query_verification_summary", []string{"核销汇总", "核销报表", "核销统计"}},
+		{"query_sales_summary", []string{"销售汇总", "销售报表", "销售统计"}},
+		{"query_ticket_inventory", []string{"库存", "房量", "余票"}},
+		{"get_ticket_product_rules", []string{"票种规则", "检票规则", "核销规则"}},
+		{"search_checkpoints", []string{"检票点", "闸机点"}},
+		{"search_scenic_areas", []string{"景区"}},
+		{"search_orders", []string{"订单", "订单号"}},
+		{"search_ticket_products", []string{"票种", "门票", "商品"}},
+		{"search_ticket_products", []string{"上架状态", "下架状态", "上下架"}},
+	}
+	for _, route := range routes {
+		if agentHasAny(normalized, route.words) {
+			return []string{route.tool}
+		}
+	}
+	return nil
+}
+
 func validateAgentTaskInputIntent(input string, task model.AgentTask) error {
 	if err := validateAgentInputIntent(input, task.OperationType); err == nil {
 		return nil
@@ -292,7 +505,23 @@ func validateAgentPlannerEnvelopeForTask(input string, task model.AgentTask, env
 	if task.OperationType == AgentOperationCompound && envelope != nil && envelope.Compound == nil && envelope.Product == nil && envelope.ProductUpdate == nil && envelope.ProductBatchUpdate == nil && len(envelope.Operations) == 0 && (envelopeOperationType == "" || envelopeOperationType == AgentOperationCompound) {
 		return nil
 	}
-	if err := validateAgentPlannerEnvelope(input, envelope); err == nil {
+	// Continuation turns often contain only a value such as “北门、每点最多
+	// 1 次”. Those words can look like a rule mutation to the generic intent
+	// guard even though the durable task is a product-create/update task. Keep
+	// the original operation as the authoritative intent for this validation.
+	validationInput := input
+	switch task.OperationType {
+	case AgentOperationTicketProductCreate:
+		validationInput += " 创建票种"
+	case AgentOperationTicketProductUpdate:
+		validationInput += " 修改票种"
+	case AgentOperationTicketProductBatchUpdate:
+		validationInput += " 批量修改票种"
+	}
+	if task.OperationType == AgentOperationCatalogBatchChange && envelopeOperationType == AgentOperationTicketProductCreate && agentExplicitTicketProductCreateIntent(task.InputText) {
+		validationInput += " 创建票种"
+	}
+	if err := validateAgentPlannerEnvelope(validationInput, envelope); err == nil {
 		return nil
 	} else if task.OperationType != AgentOperationCatalogBatchChange || (!agentTaskMissingField(task, "group_name") && !agentTaskMissingField(task, "target_scope")) {
 		return err

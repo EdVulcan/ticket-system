@@ -42,6 +42,7 @@ type MiniappCatalogProduct struct {
 	Description         string   `json:"description,omitempty"`
 	ProductType         int      `json:"product_type"`
 	ProductKind         string   `json:"product_kind"`
+	SaleMode            string   `json:"sale_mode,omitempty"`
 	PriceCents          int64    `json:"price_cents"`
 	Tags                []string `json:"tags"`
 	ValidityType        string   `json:"validity_type"`
@@ -264,46 +265,55 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 		return nil, ErrMiniappUnavailable
 	}
 	type catalogRow struct {
-		MappingID           uint
-		DisplayName         string
-		ProductName         string
-		ScenicAreaName      string
-		ChannelSaleCents    int64
-		ProductPrice        float64
-		Tags                string
-		ValidityType        string
-		ValidityDays        int
-		ImageURL            string
-		Description         string
-		ProductType         int
-		StockType           string
-		PackageID           uint
-		HotelName           string
-		RoomTypeName        string
-		RatePlanName        string
-		Nights              int
-		RoomsPerPackage     int
-		BookingMode         string
-		VoucherValidityDays int
-		MinAdvanceDays      int
-		MaxReschedules      int
+		MappingID               uint
+		DisplayName             string
+		ProductName             string
+		ProductKind             string
+		ScenicAreaName          string
+		ChannelSaleCents        int64
+		ProductPrice            float64
+		Tags                    string
+		ValidityType            string
+		ValidityDays            int
+		ImageURL                string
+		Description             string
+		ProductType             int
+		StockType               string
+		PackageID               uint
+		HotelProductID          uint
+		HotelProductNights      int
+		HotelProductRooms       int
+		HotelProductRetailPrice int64
+		HotelName               string
+		RoomTypeName            string
+		RatePlanName            string
+		Nights                  int
+		RoomsPerPackage         int
+		BookingMode             string
+		SaleMode                string
+		VoucherValidityDays     int
+		MinAdvanceDays          int
+		MaxReschedules          int
 	}
 	var rows []catalogRow
 	err := model.DB.Table("channel_product_mappings AS mapping").
-		Select(`mapping.id AS mapping_id, mapping.display_name, product.name AS product_name,
+		Select(`mapping.id AS mapping_id, mapping.display_name, product.name AS product_name, product.product_kind,
 			scenic.name AS scenic_area_name, mapping.channel_sale_cents, product.price AS product_price,
 			product.tags, product.validity_type, product.validity_days, product.stock_type,
 			xhs_config.image_url, xhs_config.description, xhs_config.product_type,
 			hotel_package.id AS package_id, hotel.name AS hotel_name, room.name AS room_type_name,
 			rate.name AS rate_plan_name, hotel_package.nights, hotel_package.rooms_per_package,
 			hotel_package.booking_mode, hotel_package.voucher_validity_days,
-			hotel_package.min_advance_days, hotel_package.max_reschedules`).
+			hotel_package.min_advance_days, hotel_package.max_reschedules,
+			hotel_product.id AS hotel_product_id, hotel_product.sale_mode,
+			hotel_product.nights AS hotel_product_nights, hotel_product.rooms_per_package AS hotel_product_rooms,
+			hotel_product.base_retail_price_cents AS hotel_product_retail_price`).
 		Joins("JOIN products AS product ON product.id = mapping.product_id AND product.tenant_id = ? AND product.deleted_at IS NULL", customer.TenantID).
 		Joins(`JOIN tenants AS fulfillment_tenant ON fulfillment_tenant.id = COALESCE(NULLIF(product.fulfillment_tenant_id, 0), NULLIF(product.source_tenant_id, 0), product.tenant_id)
 			AND fulfillment_tenant.status = 'active' AND fulfillment_tenant.deleted_at IS NULL`).
 		Joins(`JOIN tenant_capabilities AS supplier_capability ON supplier_capability.tenant_id = fulfillment_tenant.id
 			AND supplier_capability.capability = 'supplier' AND supplier_capability.status = 'active' AND supplier_capability.deleted_at IS NULL`).
-		Joins(`JOIN supplier_business_types AS supplier_business ON supplier_business.tenant_id = fulfillment_tenant.id
+		Joins(`LEFT JOIN supplier_business_types AS supplier_business ON supplier_business.tenant_id = fulfillment_tenant.id
 			AND supplier_business.business_type = 'scenic' AND supplier_business.status = 'active' AND supplier_business.deleted_at IS NULL`).
 		Joins("JOIN xiaohongshu_product_configs AS xhs_config ON xhs_config.channel_product_mapping_id = mapping.id AND xhs_config.tenant_id = ? AND xhs_config.sync_status = ? AND xhs_config.deleted_at IS NULL", customer.TenantID, "synced").
 		Joins(`LEFT JOIN scenic_areas AS scenic ON scenic.id = CASE
@@ -311,13 +321,18 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 			AND scenic.tenant_id = CASE WHEN product.fulfillment_tenant_id != 0 THEN product.fulfillment_tenant_id ELSE product.tenant_id END
 			AND scenic.deleted_at IS NULL`).
 		Joins("LEFT JOIN scenic_hotel_packages AS hotel_package ON hotel_package.product_id = product.id AND hotel_package.tenant_id = product.tenant_id AND hotel_package.deleted_at IS NULL").
-		Joins("LEFT JOIN hotel_properties AS hotel ON hotel.id = hotel_package.hotel_id AND hotel.tenant_id = hotel_package.tenant_id AND hotel.deleted_at IS NULL").
-		Joins("LEFT JOIN hotel_room_types AS room ON room.id = hotel_package.room_type_id AND room.hotel_id = hotel_package.hotel_id AND room.tenant_id = hotel_package.tenant_id AND room.deleted_at IS NULL").
-		Joins("LEFT JOIN hotel_rate_plans AS rate ON rate.id = hotel_package.rate_plan_id AND rate.room_type_id = hotel_package.room_type_id AND rate.tenant_id = hotel_package.tenant_id AND rate.deleted_at IS NULL").
+		Joins("LEFT JOIN hotel_products AS hotel_product ON hotel_product.product_id = product.id AND hotel_product.tenant_id = product.tenant_id AND hotel_product.deleted_at IS NULL").
+		Joins("LEFT JOIN hotel_properties AS hotel ON hotel.id = COALESCE(hotel_product.hotel_id, hotel_package.hotel_id) AND hotel.tenant_id = product.tenant_id AND hotel.deleted_at IS NULL").
+		Joins("LEFT JOIN hotel_room_types AS room ON room.id = COALESCE(hotel_product.room_type_id, hotel_package.room_type_id) AND room.hotel_id = hotel.id AND room.tenant_id = product.tenant_id AND room.deleted_at IS NULL").
+		Joins("LEFT JOIN hotel_rate_plans AS rate ON rate.id = COALESCE(hotel_product.rate_plan_id, hotel_package.rate_plan_id) AND rate.room_type_id = room.id AND rate.tenant_id = product.tenant_id AND rate.deleted_at IS NULL").
 		Joins(`LEFT JOIN supplier_business_types AS hotel_business ON hotel_business.tenant_id = fulfillment_tenant.id
 			AND hotel_business.business_type = 'hotel' AND hotel_business.status = 'active' AND hotel_business.deleted_at IS NULL`).
-		Where("mapping.channel_account_id = ? AND mapping.status = ? AND mapping.deleted_at IS NULL AND product.status = ?", customer.ChannelAccountID, "active", "online").
-		Where("hotel_package.id IS NULL OR (hotel_package.status = ? AND hotel.status = ? AND room.status = ? AND rate.status = ? AND hotel_business.id IS NOT NULL)", "online", "active", "active", "active").
+		Where("mapping.channel_account_id = ? AND mapping.status = ? AND mapping.deleted_at IS NULL AND product.status = ? AND product.product_kind <> ?", customer.ChannelAccountID, "active", "online", "hotel").
+		Where(`(
+			(product.product_kind = 'hotel' AND hotel_product.status = 'online' AND hotel.status = 'active' AND room.status = 'active' AND rate.status = 'active' AND hotel_business.id IS NOT NULL)
+			OR
+			(product.product_kind <> 'hotel' AND supplier_business.id IS NOT NULL AND (hotel_package.id IS NULL OR (hotel_package.status = 'online' AND hotel.status = 'active' AND room.status = 'active' AND rate.status = 'active' AND hotel_business.id IS NOT NULL)))
+		)`).
 		Where("supplier_capability.expires_at IS NULL OR supplier_capability.expires_at > ?", s.now()).
 		Order("mapping.created_at ASC, mapping.id ASC").Scan(&rows).Error
 	if err != nil {
@@ -330,21 +345,29 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 			name = row.ProductName
 		}
 		priceCents := row.ChannelSaleCents
-		if priceCents <= 0 {
+		kind := strings.TrimSpace(row.ProductKind)
+		if kind == "" {
+			kind = "ticket"
+		}
+		if kind == "hotel" {
+			// Hotel product prices belong to the product layer. A channel mapping
+			// must not flatten a stay-date price into one static ticket price.
+			priceCents = row.HotelProductRetailPrice
+		} else if priceCents <= 0 {
 			priceCents = int64(math.Round(row.ProductPrice * 100))
 		}
-		kind := "ticket"
-		if row.PackageID != 0 {
-			kind = "scenic_hotel_package"
+		nights, rooms := row.Nights, row.RoomsPerPackage
+		if kind == "hotel" {
+			nights, rooms = row.HotelProductNights, row.HotelProductRooms
 		}
 		products = append(products, MiniappCatalogProduct{
 			ID: row.MappingID, Name: name, ScenicAreaName: row.ScenicAreaName,
 			ImageURL: row.ImageURL, Description: row.Description, ProductType: row.ProductType,
-			ProductKind: kind, PriceCents: priceCents, Tags: parseProductTags(row.Tags),
+			ProductKind: kind, SaleMode: row.SaleMode, PriceCents: priceCents, Tags: parseProductTags(row.Tags),
 			ValidityType: row.ValidityType, ValidityDays: row.ValidityDays,
-			RequiresUseDate: (row.PackageID != 0 && row.BookingMode != "after_purchase") || (row.PackageID == 0 && row.StockType == "daily"),
+			RequiresUseDate: (row.PackageID != 0 && row.BookingMode != "after_purchase") || (row.PackageID == 0 && row.StockType == "daily") || (kind == "hotel" && row.SaleMode == "calendar_room"),
 			HotelName:       row.HotelName, RoomTypeName: row.RoomTypeName, RatePlanName: row.RatePlanName,
-			Nights: row.Nights, RoomsPerPackage: row.RoomsPerPackage, BookingMode: row.BookingMode,
+			Nights: nights, RoomsPerPackage: rooms, BookingMode: row.BookingMode,
 			VoucherValidityDays: row.VoucherValidityDays, MinAdvanceDays: row.MinAdvanceDays,
 			MaxReschedules: row.MaxReschedules,
 		})

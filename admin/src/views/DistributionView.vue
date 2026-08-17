@@ -802,7 +802,7 @@ const loadOffers = async () => {
 
 const loadSourceProducts = async () => {
     try {
-        const productsResponse = await request.get('/products', { params: { page: 1, page_size: 100 } })
+        const productsResponse = await request.get('/products', { params: { page: 1, page_size: 100, product_kind: 'ticket' } })
         if (configuredBusinessTypes.has('hotel')) {
             const packagesResponse = await request.get('/scenic-hotel-packages')
             packageProductIds.value = new Set((packagesResponse.data.data || []).map((item: any) => Number(item.product_id)))

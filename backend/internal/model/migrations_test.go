@@ -31,6 +31,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&TeamSettlementStatement{}, &ChannelReconciliation{}, &OrderVisitor{}, &BundleProduct{},
 		&CtripOrderLink{}, &CtripOrderItem{}, &XiaohongshuWebhookEvent{}, &SupplierBusinessType{},
 		&HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRatePlanPrice{}, &HotelRoomInventory{},
+		&HotelProduct{}, &HotelProductRevision{}, &HotelProductCalendarPrice{}, &HotelProductEntitlement{}, &HotelProductReservation{},
 		&ScenicHotelPackage{}, &ScenicHotelPackageEntitlement{}, &HotelReservation{},
 		&XiaohongshuBookingOperation{}, &XiaohongshuOrderOperation{},
 		&CatalogBatchChangePlan{}, &CatalogBatchChangeLine{},
@@ -55,6 +56,9 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		{&TourGroupMember{}, "idx_team_member_active_ticket"},
 		{&XiaohongshuWebhookEvent{}, "idx_xhs_webhook_payload"},
 		{&HotelRatePlanPrice{}, "idx_hotel_rate_plan_prices_scope"},
+		{&HotelProduct{}, "idx_hotel_products_active_product"},
+		{&HotelProductCalendarPrice{}, "idx_hotel_product_calendar_prices_scope"},
+		{&AgentTask{}, "idx_agent_task_idempotency"},
 	} {
 		if !db.Migrator().HasIndex(index.model, index.name) {
 			t.Fatalf("index %s is missing", index.name)
@@ -66,6 +70,15 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	}
 	if !strings.Contains(channelRequestIndex, "channel_account_id") || !strings.Contains(channelRequestIndex, "endpoint") || !strings.Contains(channelRequestIndex, "request_id") {
 		t.Fatalf("channel request idempotency index has wrong scope: %s", channelRequestIndex)
+	}
+	var agentTaskIndex string
+	if err := db.Raw(`SELECT indexdef FROM pg_indexes WHERE schemaname = CURRENT_SCHEMA() AND indexname = 'idx_agent_task_idempotency'`).Scan(&agentTaskIndex).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range []string{"tenant_id", "actor_user_id", "idempotency_key"} {
+		if !strings.Contains(agentTaskIndex, column) {
+			t.Fatalf("agent task idempotency index omitted %s: %s", column, agentTaskIndex)
+		}
 	}
 	defaultStatusTenant := Tenant{Name: "Default Status Tenant", SystemCode: "SUPPLIER-BUSINESS-DEFAULT", Status: "active"}
 	if err := db.Create(&defaultStatusTenant).Error; err != nil {

@@ -16,6 +16,8 @@ var validAfterSaleTypes = map[string]bool{
 	"refund": true, "reschedule": true, "exchange": true, "void": true, "reissue": true,
 }
 
+var errStandaloneHotelProductAfterSale = errors.New("standalone hotel product after-sale is not available; only ticket orders are supported")
+
 type AfterSaleService struct {
 	RefundService *RefundService
 }
@@ -55,8 +57,13 @@ func (s *AfterSaleService) Create(req *model.AfterSaleRequest, ticketCodes []str
 			return err
 		}
 		var order model.Order
-		if err := tx.Preload("Items.Tickets").Where("order_no = ? AND tenant_id = ?", req.OrderNo, req.TenantID).First(&order).Error; err != nil {
+		if err := tx.Preload("Items.Product").Preload("Items.Tickets").Where("order_no = ? AND tenant_id = ?", req.OrderNo, req.TenantID).First(&order).Error; err != nil {
 			return err
+		}
+		for _, item := range order.Items {
+			if item.Product.ProductKind == "hotel" {
+				return errStandaloneHotelProductAfterSale
+			}
 		}
 		if order.Status == "cancelled" || order.Status == "refunded" {
 			return fmt.Errorf("order cannot enter after-sale from status %s", order.Status)

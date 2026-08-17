@@ -138,6 +138,7 @@ func (s *OrderService) Create(req *model.Order) error {
 		policyContext := newSalePolicyContext()
 		hotelPackageFacts := make(map[int]*scenicHotelPackageFacts)
 		deferredHotelPackageFacts := make(map[int]*scenicHotelPackageFacts)
+		hotelProductFacts := make(map[int]*hotelProductSaleFacts)
 
 		for i := range req.Items {
 			item := &req.Items[i]
@@ -153,6 +154,38 @@ func (s *OrderService) Create(req *model.Order) error {
 				Where("id = ? AND tenant_id = ? AND status = ?", item.ProductID, req.TenantID, "online").
 				First(&listing).Error; err != nil {
 				return fmt.Errorf("product %d is unavailable", item.ProductID)
+			}
+			if listing.ProductKind == "hotel" {
+				// Independent accommodation products do not yet have a verified
+				// channel order/fulfillment protocol. Keep them available for the
+				// tenant's internal online workflow, but reject OTA/channel account
+				// requests before they can enter the ticket-oriented path.
+				if channelAccount != nil || req.Channel == "ota" {
+					return errors.New("standalone hotel products are not available through external channels until the accommodation protocol is enabled")
+				}
+				if len(req.Items) != 1 {
+					return errors.New("hotel product orders support one accommodation product per order")
+				}
+				facts, err := loadHotelProductSaleFactsTx(tx, req.TenantID, listing.ID, item.UseDate, time.Now())
+				if err != nil {
+					return fmt.Errorf("product %s: %w", listing.Name, err)
+				}
+				item.ProductName = listing.Name
+				item.Price = centsMoney(facts.RetailCents)
+				item.SettlementPrice = centsMoney(facts.SettleCents)
+				item.ReservedStockType = "hotel"
+				item.FulfillmentProductID = listing.ID
+				item.FulfillmentTenantID = facts.Product.TenantID
+				item.FulfillmentScenicAreaID = 0
+				item.ProductOfferID = 0
+				item.ProductRevisionID = 0
+				item.ValidityType = "date"
+				req.TotalAmount = roundMoney(req.TotalAmount + item.Price*float64(item.Quantity))
+				hotelProductFacts[i] = facts
+				continue
+			}
+			if len(hotelProductFacts) > 0 {
+				return errors.New("hotel products cannot be mixed with scenic ticket products in one order")
 			}
 			packageFacts, err := loadSellableScenicHotelPackageTx(tx, req.TenantID, listing.ID, item.UseDate)
 			if err != nil {
@@ -306,6 +339,17 @@ func (s *OrderService) Create(req *model.Order) error {
 
 		if err := tx.Create(req).Error; err != nil {
 			return err
+		}
+		if len(hotelProductFacts) > 0 {
+			for itemIndex, facts := range hotelProductFacts {
+				if err := createHotelProductEntitlementsTx(tx, req, &req.Items[itemIndex], facts); err != nil {
+					return err
+				}
+			}
+			if err := persistOrderVisitorsTx(tx, req); err != nil {
+				return err
+			}
+			return nil
 		}
 		// Entitlement ownership guards require the denormalized ticket order ID.
 		// GORM fills OrderItemID for nested ticket associations but leaves OrderID
@@ -1282,6 +1326,12 @@ func cancelOrderTxMode(tx *gorm.DB, order *model.Order, allowPaidChannel bool) e
 			if err := tx.Unscoped().Where("id = ? AND tenant_id = ?", item.ProductID, order.TenantID).First(&listing).Error; err != nil {
 				return err
 			}
+			if listing.ProductKind == "hotel" {
+				// Accommodation reservations own their separate room inventory;
+				// the ticket stock release path must not reinterpret them as a
+				// scenic fulfillment product.
+				continue
+			}
 			stockProduct, distributed, err := loadStoredFulfillmentProduct(tx, &listing, item, order.TenantID)
 			if err != nil {
 				return err
@@ -1320,6 +1370,9 @@ func cancelOrderTxMode(tx *gorm.DB, order *model.Order, allowPaidChannel bool) e
 		}
 	}
 	if err := (PackageFulfillmentLifecycle{}).CancelOrder(tx, order.ID, paidChannelCancellation); err != nil {
+		return err
+	}
+	if err := (HotelProductFulfillmentLifecycle{}).CancelOrder(tx, order.ID, paidChannelCancellation); err != nil {
 		return err
 	}
 	return updateFulfillmentOrdersTx(tx, order.ID, "cancelled")
@@ -1384,6 +1437,9 @@ func markOrderAsPaidTx(tx *gorm.DB, order *model.Order) error {
 	}
 	order.Status = "paid"
 	if err := (PackageFulfillmentLifecycle{}).ConfirmOrder(tx, order.ID); err != nil {
+		return err
+	}
+	if err := (HotelProductFulfillmentLifecycle{}).ConfirmOrderAt(tx, order.ID, time.Now()); err != nil {
 		return err
 	}
 	return updateFulfillmentOrdersTx(tx, order.ID, "paid")

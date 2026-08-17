@@ -25,6 +25,13 @@ func (s *ProductService) Create(product *model.Product, rule *model.TicketRule) 
 // controller. Agent approvals use it inside their task transaction so the
 // durable task state and the newly-created product commit together.
 func (s *ProductService) createTx(tx *gorm.DB, product *model.Product, rule *model.TicketRule) error {
+	product.ProductKind = strings.TrimSpace(product.ProductKind)
+	if product.ProductKind == "" {
+		product.ProductKind = "ticket"
+	}
+	if product.ProductKind != "ticket" {
+		return errors.New("only ticket products can be created through the ticket product service")
+	}
 	if err := requireActiveScenicSupplier(tx, product.TenantID); err != nil {
 		return err
 	}
@@ -81,6 +88,15 @@ func (s *ProductService) updateTx(tx *gorm.DB, id, tenantID uint, product *model
 	var existingProduct model.Product
 	if err := tx.Where("id = ? AND tenant_id = ?", id, tenantID).First(&existingProduct).Error; err != nil {
 		return err
+	}
+	if existingProduct.ProductKind == "hotel" {
+		return errors.New("independent hotel products must be managed through the hotel product service")
+	}
+	if strings.TrimSpace(product.ProductKind) == "" {
+		product.ProductKind = existingProduct.ProductKind
+	}
+	if product.ProductKind != existingProduct.ProductKind {
+		return errors.New("product kind cannot be changed after creation")
 	}
 	if isDistributedListing(&existingProduct) {
 		if err := requireActiveTenantCapability(tx, tenantID, "distributor"); err != nil {
@@ -257,6 +273,7 @@ func createProductRevisionTx(tx *gorm.DB, product *model.Product) (*model.Produc
 // the optional filters keep the public service API backwards compatible.
 type ProductListFilter struct {
 	ProductType  string
+	ProductKind  string
 	Status       string
 	Search       string
 	ScenicAreaID uint
@@ -288,6 +305,9 @@ func (s *ProductService) ListFiltered(page, pageSize int, tenantID uint, filter 
 	query = query.Where("tenant_id = ?", tenantID)
 	if productType := strings.TrimSpace(filter.ProductType); productType != "" {
 		query = query.Where("type = ?", productType)
+	}
+	if productKind := strings.TrimSpace(filter.ProductKind); productKind != "" {
+		query = query.Where("product_kind = ?", productKind)
 	}
 	if status := strings.TrimSpace(filter.Status); status != "" {
 		query = query.Where("status = ?", status)
@@ -335,7 +355,7 @@ func (s *ProductService) ListChannelProducts(page, pageSize int, tenantID uint, 
 		Joins("JOIN tenants AS fulfillment_tenant ON fulfillment_tenant.id = "+fulfillmentTenant+" AND fulfillment_tenant.deleted_at IS NULL").
 		Joins("JOIN tenant_capabilities AS supplier_capability ON supplier_capability.tenant_id = "+fulfillmentTenant+" AND supplier_capability.capability = ? AND supplier_capability.status = ? AND supplier_capability.deleted_at IS NULL", "supplier", "active").
 		Joins("JOIN supplier_business_types AS supplier_business ON supplier_business.tenant_id = "+fulfillmentTenant+" AND supplier_business.business_type = ? AND supplier_business.status = ? AND supplier_business.deleted_at IS NULL", "scenic", "active").
-		Where("products.tenant_id = ? AND products.status = ? AND products.id IN ?", tenantID, "online", productIDs).
+		Where("products.tenant_id = ? AND products.status = ? AND products.product_kind <> ? AND products.id IN ?", tenantID, "online", "hotel", productIDs).
 		Where("fulfillment_tenant.status = ?", "active").
 		Where("supplier_capability.expires_at IS NULL OR supplier_capability.expires_at > ?", now)
 	var total int64

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"ticket-backend/internal/model"
@@ -37,6 +38,7 @@ var agentToolHandlers = map[string]agentToolHandler{
 	"query_team_groups":             executeAgentTeamGroupQuery,
 	"query_team_settlement_summary": executeAgentTeamSettlementQuery,
 	"query_team_account_summary":    executeAgentTeamAccountQuery,
+	"query_compound_readonly":       executeAgentCompoundReadonlyQuery,
 }
 
 func agentToolHandlerFor(name string) (agentToolHandler, bool) {
@@ -59,6 +61,104 @@ type agentQueryResult struct {
 	Returned      int         `json:"returned"`
 	Total         int64       `json:"total"`
 	HasMore       bool        `json:"has_more"`
+}
+
+type agentCompoundReadonlyStep struct {
+	ToolName  string          `json:"tool_name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+type agentCompoundReadonlyArgs struct {
+	Steps []agentCompoundReadonlyStep `json:"steps"`
+}
+
+// executeAgentCompoundReadonlyQuery is a server-owned composition boundary.
+// The provider can choose the order and arguments, but every step is checked
+// against the registered read-only tool and current actor capabilities before
+// its module adapter is invoked. No nested compound tool is permitted.
+func executeAgentCompoundReadonlyQuery(_ *AgentTaskService, request agentToolRequest) (agentToolExecution, error) {
+	var args agentCompoundReadonlyArgs
+	if err := decodeAgentToolArguments(request.RawArgs, &args); err != nil {
+		return agentToolExecution{}, err
+	}
+	if len(args.Steps) < 2 || len(args.Steps) > 5 {
+		return agentToolExecution{}, agentInvalid("复合只读查询必须包含 2 到 5 个查询步骤")
+	}
+	steps := make([]json.RawMessage, 0, len(args.Steps))
+	stepNames := make([]string, 0, len(args.Steps))
+	for index, step := range args.Steps {
+		name := strings.TrimSpace(step.ToolName)
+		spec, ok := findAgentTool(name)
+		if !ok || !spec.ReadOnly || name == "query_compound_readonly" {
+			return agentToolExecution{}, agentInvalid(fmt.Sprintf("复合查询第 %d 步不是受支持的只读查询", index+1))
+		}
+		if !agentToolAllowed(request.TenantID, request.ActorRole, spec) {
+			return agentToolExecution{}, agentInvalid(fmt.Sprintf("当前账号不能执行复合查询第 %d 步", index+1))
+		}
+		if len(step.Arguments) == 0 {
+			step.Arguments = json.RawMessage(`{}`)
+		}
+		handler, ok := agentCompoundReadonlyHandler(name)
+		if !ok {
+			return agentToolExecution{}, agentInvalid(fmt.Sprintf("复合查询第 %d 步缺少服务器查询适配器", index+1))
+		}
+		execution, err := handler(nil, agentToolRequest{
+			TenantID: request.TenantID, ActorID: request.ActorID, ActorRole: request.ActorRole,
+			Task: request.Task, Input: request.Input, Config: request.Config, RawArgs: string(step.Arguments),
+		})
+		if err != nil {
+			return agentToolExecution{}, fmt.Errorf("复合查询第 %d 步失败：%w", index+1, err)
+		}
+		var nested agentQueryResult
+		if err := json.Unmarshal([]byte(execution.ResultJSON), &nested); err != nil || nested.SchemaVersion != agentQuerySchemaVersion {
+			return agentToolExecution{}, agentInvalid(fmt.Sprintf("复合查询第 %d 步没有返回可信服务器事实", index+1))
+		}
+		steps = append(steps, json.RawMessage(execution.ResultJSON))
+		stepNames = append(stepNames, name)
+	}
+	return agentQueryExecution("system", "query_compound_readonly", map[string]interface{}{"steps": stepNames}, steps, len(steps), int64(len(steps)), len(steps))
+}
+
+// Keep this switch separate from agentToolHandlers: the latter is initialized
+// with function values, so having a registered handler call back into that map
+// would create a Go package initialization cycle.
+func agentCompoundReadonlyHandler(name string) (agentToolHandler, bool) {
+	switch name {
+	case "search_scenic_areas":
+		return executeAgentScenicAreaQuery, true
+	case "search_checkpoints":
+		return executeAgentCheckpointQuery, true
+	case "search_ticket_products":
+		return executeAgentProductQuery, true
+	case "get_ticket_product_rules":
+		return executeAgentProductRuleQuery, true
+	case "search_orders":
+		return executeAgentOrderQuery, true
+	case "query_ticket_inventory":
+		return executeAgentTicketInventoryQuery, true
+	case "query_sales_summary":
+		return executeAgentSalesSummaryQuery, true
+	case "query_verification_summary":
+		return executeAgentVerificationSummaryQuery, true
+	case "query_distribution_partners":
+		return executeAgentDistributionPartnersQuery, true
+	case "query_distribution_products":
+		return executeAgentDistributionProductsQuery, true
+	case "query_distribution_fulfillments":
+		return executeAgentDistributionFulfillmentsQuery, true
+	case "query_distribution_settlements":
+		return executeAgentDistributionSettlementsQuery, true
+	case "query_team_contracts":
+		return executeAgentTeamContractQuery, true
+	case "query_team_groups":
+		return executeAgentTeamGroupQuery, true
+	case "query_team_settlement_summary":
+		return executeAgentTeamSettlementQuery, true
+	case "query_team_account_summary":
+		return executeAgentTeamAccountQuery, true
+	default:
+		return nil, false
+	}
 }
 
 func agentQueryExecution(module, tool string, filters interface{}, data interface{}, returned int, total int64, limit int) (agentToolExecution, error) {
