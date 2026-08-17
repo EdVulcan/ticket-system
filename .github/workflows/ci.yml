@@ -337,5 +337,12 @@ jobs:
           rm -f "$archive"
           sudo /usr/local/sbin/ticket-system-deploy "$release_sha"
 
+          echo '--- ticket-system runtime path diagnostics ---'
+          id
+          pwd
+          systemctl show ticket-system --property=User,Group,WorkingDirectory,ProtectSystem,ReadWritePaths --no-pager 2>/dev/null || true
+          ls -ld /opt/ticket-system /opt/ticket-system/current /opt/ticket-system/current/data /opt/ticket-system/current/backend /opt/ticket-system/current/backend/data /opt/ticket-system/data 2>&1 || true
+          readlink -f /opt/ticket-system/current/data 2>/dev/null || true
+          readlink -f /opt/ticket-system/current/backend/data 2>/dev/null || true
           test -w "$runtime_data"
           REMOTE
