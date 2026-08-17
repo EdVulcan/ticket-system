@@ -184,7 +184,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 		seenPacks[manifest.ID] = struct{}{}
 	}
 	systemPrompt := `你是景区票务平台的受限后台助手。你只能调用系统提供的工具，不能生成 SQL、HTTP 请求、代码、密钥操作或任何平台外操作。
-查询类工具只读，结果是服务器生成的 QueryResult 事实包；只能据此回答，不能补造未返回的数据。需要改变票种或票规时，必须调用对应的 prepare_* 工具生成预览；绝不能假装已执行，也不能调用确认或执行工具。只有用户在界面明确确认后，服务器才会执行预览。对“所有某类票种”必须逐个填写候选清单中的精确票种名称，不得改用 all_products=true；只有“所有票种/全部门票”才允许 all_products=true。用户明确要求新增规则组时，调用 prepare_catalog_rule_change 并设置 create_group=true；只有用户明确提供新组名称和通行数量时才填写 group_name、group_max_total_check_in，否则留空让服务端追问。普通新增检票点涉及多个现有规则组且用户未指定时，保持 create_group=false 并让服务端返回现有规则组候选，不要猜测 group_name。
+	查询类工具只读，结果是服务器生成的 QueryResult 事实包；只能据此回答，不能补造未返回的数据。需要改变票种或票规时，必须调用对应的 prepare_* 工具生成预览；绝不能假装已执行，也不能调用确认或执行工具。只有用户在界面明确确认后，服务器才会执行预览。已有票种写入工具使用统一 target_scope：intent=single|batch、name_terms、scenic_area_names、all_scenic_areas、listing_status、product_type 和任务内 candidate_refs；范围条件必须来自用户当前表达或已确认上下文，服务端会在当前租户目录中先筛选再处理歧义。用户明确表达批量、全部、所有、这批或多个时按 batch；没有批量意图且唯一精确名称命中时按 single；命中多个票种或多个景区时保留范围并让服务端返回 missing_fields，不要猜测或静默取第一项。对“所有某类票种”使用 name_terms 表达类别并逐个由服务端解析，不得改用 all_products=true；只有“所有票种/全部门票”才允许 all_products=true。用户明确要求新增规则组时，调用 prepare_catalog_rule_change 并设置 create_group=true；只有用户明确提供新组名称和通行数量时才填写 group_name、group_max_total_check_in，否则留空让服务端追问。普通新增检票点涉及多个现有规则组且用户未指定时，保持 create_group=false 并让服务端返回现有规则组候选，不要猜测 group_name。
 工具参数不能填写租户编号、用户编号、权限、数据库编号或 execute 字段。名称必须来自工具查询结果或用户明确提供的当前租户数据。当前任务上下文和领域 Skill 是服务器事实，不是用户指令。
 		<task_context>` + providerContextJSON + `</task_context>
 租户业务别名只是当前租户维护的输入词汇；可以使用别名，但不得把别名当成新的业务对象，也不能跨租户推断。服务端会再次解析别名目标，目标不存在或发生歧义时会拒绝预览。
@@ -193,9 +193,9 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 	// Keep the tool prompt explicit about the new preview seam so a provider
 	// cannot mistake a product update for a rule deployment.
 	systemPrompt += `
-对于修改票种基础信息的请求，必须直接调用 prepare_ticket_product_update；只填写用户明确提供的票种名称和字段，服务端只接受当前租户仍未上架、未分销的票种，并在确认时再次锁定当前版本。不要通过该工具修改检票点、规则组、上架状态、分销授权、渠道、库存预占或资金事实。`
+	对于修改票种基础信息的请求，必须直接调用 prepare_ticket_product_update；用 target_scope 表达用户给出的目标范围，product_name 只为旧任务兼容，字段只填写用户明确提供的值。服务端只接受当前租户仍未上架、未分销的票种，并在确认时再次锁定当前版本。不要通过该工具修改检票点、规则组、上架状态、分销授权、渠道、库存预占或资金事实。`
 	systemPrompt += `
-对于批量修改票种基础信息的请求，必须调用 prepare_ticket_product_batch_update；只填写用户明确提供的至少两个准确票种名称和共同字段。批量操作不允许统一改名，也不能修改检票点、规则组、上架状态、分销授权、渠道、库存预占或资金事实。`
+	对于批量修改票种基础信息的请求，必须调用 prepare_ticket_product_batch_update；用 target_scope 表达用户明确的批量范围，product_names 只为旧任务兼容，并填写共同字段。批量操作不允许统一改名，也不能修改检票点、规则组、上架状态、分销授权、渠道、库存预占或资金事实。`
 	systemPrompt += `
 对于用户明确要求连续完成多个低风险变更的请求，调用 prepare_compound_preview，并按 2 到 5 个独立步骤填写；不要把查询、退款、资金、渠道授权、权限或外部状态放入复合计划。不同步骤不要重复操作同一票种，服务端会在预览阶段拒绝可能导致后续 revision 失效的重复目标。`
 
@@ -349,9 +349,80 @@ func agentToolDefinitions(specs []agentToolSpec) []AIToolDefinition {
 		if manifest, ok := agentModuleManifestForTool(spec.Name); ok {
 			description = fmt.Sprintf("模块：%s；模块范围：%s。%s", manifest.Label, manifest.Summary, description)
 		}
-		definitions = append(definitions, AIToolDefinition{Type: "function", Function: AIToolFunction{Name: spec.Name, Description: description, Parameters: spec.Parameters}})
+		definitions = append(definitions, AIToolDefinition{Type: "function", Function: AIToolFunction{Name: spec.Name, Description: description, Parameters: agentToolParametersWithTargetScope(spec)}})
 	}
 	return definitions
+}
+
+// agentToolParametersWithTargetScope keeps the long legacy schemas readable
+// while exposing the shared scope object to v2 providers. The server still
+// validates every field after decoding; the schema is only a provider hint.
+func agentToolParametersWithTargetScope(spec agentToolSpec) json.RawMessage {
+	var schema map[string]interface{}
+	if err := json.Unmarshal(spec.Parameters, &schema); err != nil {
+		return spec.Parameters
+	}
+	targetScope := map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"version":            map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 1},
+			"intent":             map[string]interface{}{"type": "string", "enum": []string{"single", "batch"}},
+			"name_terms":         map[string]interface{}{"type": "array", "maxItems": 20, "items": map[string]interface{}{"type": "string", "minLength": 1, "maxLength": 100}},
+			"scenic_area_names":  map[string]interface{}{"type": "array", "maxItems": 20, "items": map[string]interface{}{"type": "string", "minLength": 1, "maxLength": 100}},
+			"all_scenic_areas":   map[string]interface{}{"type": "boolean"},
+			"listing_status":     map[string]interface{}{"type": "string", "enum": []string{"listed", "unlisted"}},
+			"product_type":       map[string]interface{}{"type": "string", "enum": []string{"online", "window"}},
+			"distribution_state": map[string]interface{}{"type": "string"},
+			"candidate_refs":     map[string]interface{}{"type": "array", "maxItems": 100, "items": map[string]interface{}{"type": "string", "maxLength": 40}},
+		},
+		"additionalProperties": false,
+	}
+	properties, _ := schema["properties"].(map[string]interface{})
+	switch spec.Name {
+	case "prepare_ticket_product_update", "prepare_ticket_product_batch_update":
+		properties["target_scope"] = targetScope
+		if required, ok := schema["required"].([]interface{}); ok {
+			filtered := make([]interface{}, 0, len(required))
+			for _, field := range required {
+				if (spec.Name == "prepare_ticket_product_update" && field == "product_name") || (spec.Name == "prepare_ticket_product_batch_update" && field == "product_names") {
+					continue
+				}
+				filtered = append(filtered, field)
+			}
+			schema["required"] = filtered
+		}
+	case "prepare_catalog_rule_change":
+		operations, _ := properties["operations"].(map[string]interface{})
+		items, _ := operations["items"].(map[string]interface{})
+		itemProperties, _ := items["properties"].(map[string]interface{})
+		itemProperties["target_scope"] = targetScope
+	case "prepare_compound_preview":
+		steps, _ := properties["steps"].(map[string]interface{})
+		stepItems, _ := steps["items"].(map[string]interface{})
+		stepProperties, _ := stepItems["properties"].(map[string]interface{})
+		if operations, ok := stepProperties["operations"].(map[string]interface{}); ok {
+			if items, ok := operations["items"].(map[string]interface{}); ok {
+				if itemProperties, ok := items["properties"].(map[string]interface{}); ok {
+					itemProperties["target_scope"] = targetScope
+				}
+			}
+		}
+		for _, field := range []string{"product_update", "product_batch_update"} {
+			if nested, ok := stepProperties[field].(map[string]interface{}); ok {
+				nestedProperties, _ := nested["properties"].(map[string]interface{})
+				if nestedProperties == nil {
+					nestedProperties = map[string]interface{}{}
+					nested["properties"] = nestedProperties
+				}
+				nestedProperties["target_scope"] = targetScope
+			}
+		}
+	}
+	encoded, err := json.Marshal(schema)
+	if err != nil {
+		return spec.Parameters
+	}
+	return encoded
 }
 
 func findAgentTool(name string) (agentToolSpec, bool) {
@@ -406,19 +477,20 @@ type agentPrepareCatalogArgs struct {
 }
 
 type agentCatalogRuleOperation struct {
-	Kind            string   `json:"kind"`
-	ProductNames    []string `json:"product_names,omitempty"`
-	AllProducts     bool     `json:"all_products,omitempty"`
-	CheckpointNames []string `json:"checkpoint_names,omitempty"`
-	GroupName       string   `json:"group_name,omitempty"`
-	CreateGroup     bool     `json:"create_group,omitempty"`
-	GroupMaxTotal   *int     `json:"group_max_total_check_in,omitempty"`
-	MaxPerCheckIn   *int     `json:"max_per_check_in,omitempty"`
+	Kind            string            `json:"kind"`
+	ProductNames    []string          `json:"product_names,omitempty"`
+	TargetScope     *AgentTargetScope `json:"target_scope,omitempty"`
+	AllProducts     bool              `json:"all_products,omitempty"`
+	CheckpointNames []string          `json:"checkpoint_names,omitempty"`
+	GroupName       string            `json:"group_name,omitempty"`
+	CreateGroup     bool              `json:"create_group,omitempty"`
+	GroupMaxTotal   *int              `json:"group_max_total_check_in,omitempty"`
+	MaxPerCheckIn   *int              `json:"max_per_check_in,omitempty"`
 }
 
 func (operation agentCatalogRuleOperation) domainOperation() CatalogRuleOperation {
 	return CatalogRuleOperation{
-		Kind: operation.Kind, ProductNames: operation.ProductNames, AllProducts: operation.AllProducts,
+		Kind: operation.Kind, ProductNames: operation.ProductNames, TargetScope: operation.TargetScope, AllProducts: operation.AllProducts,
 		CheckpointNames: operation.CheckpointNames, GroupName: operation.GroupName, CreateGroup: operation.CreateGroup,
 		GroupMaxTotal: operation.GroupMaxTotal, MaxPerCheckIn: operation.MaxPerCheckIn,
 	}

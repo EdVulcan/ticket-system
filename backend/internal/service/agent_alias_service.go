@@ -202,6 +202,24 @@ func canonicalizeAgentCatalogAliases(tx *gorm.DB, tenantID uint, operations []Ca
 			}
 			result[index].CheckpointNames[nameIndex] = canonical
 		}
+		if result[index].TargetScope != nil {
+			copyScope := cloneAgentTargetScope(*result[index].TargetScope)
+			for nameIndex, name := range copyScope.NameTerms {
+				canonical, err := resolveAgentAlias(tx, tenantID, agentAliasProduct, name)
+				if err != nil {
+					return nil, err
+				}
+				copyScope.NameTerms[nameIndex] = canonical
+			}
+			for nameIndex, name := range copyScope.ScenicAreaNames {
+				canonical, err := resolveAgentAlias(tx, tenantID, agentAliasScenicArea, name)
+				if err != nil {
+					return nil, err
+				}
+				copyScope.ScenicAreaNames[nameIndex] = canonical
+			}
+			result[index].TargetScope = &copyScope
+		}
 	}
 	return result, nil
 }
@@ -239,6 +257,24 @@ func canonicalizeAgentProductUpdateCandidateAliases(tx *gorm.DB, tenantID uint, 
 	if err != nil {
 		return nil, err
 	}
+	if candidate.TargetScope != nil {
+		copyScope := cloneAgentTargetScope(*candidate.TargetScope)
+		for index, name := range copyScope.NameTerms {
+			canonical, aliasErr := resolveAgentAlias(tx, tenantID, agentAliasProduct, name)
+			if aliasErr != nil {
+				return nil, aliasErr
+			}
+			copyScope.NameTerms[index] = canonical
+		}
+		for index, name := range copyScope.ScenicAreaNames {
+			canonical, aliasErr := resolveAgentAlias(tx, tenantID, agentAliasScenicArea, name)
+			if aliasErr != nil {
+				return nil, aliasErr
+			}
+			copyScope.ScenicAreaNames[index] = canonical
+		}
+		result.TargetScope = &copyScope
+	}
 	return &result, nil
 }
 
@@ -254,6 +290,24 @@ func canonicalizeAgentProductBatchUpdateCandidateAliases(tx *gorm.DB, tenantID u
 			return nil, err
 		}
 		result.ProductNames[index] = canonical
+	}
+	if candidate.TargetScope != nil {
+		copyScope := cloneAgentTargetScope(*candidate.TargetScope)
+		for index, name := range copyScope.NameTerms {
+			canonical, aliasErr := resolveAgentAlias(tx, tenantID, agentAliasProduct, name)
+			if aliasErr != nil {
+				return nil, aliasErr
+			}
+			copyScope.NameTerms[index] = canonical
+		}
+		for index, name := range copyScope.ScenicAreaNames {
+			canonical, aliasErr := resolveAgentAlias(tx, tenantID, agentAliasScenicArea, name)
+			if aliasErr != nil {
+				return nil, aliasErr
+			}
+			copyScope.ScenicAreaNames[index] = canonical
+		}
+		result.TargetScope = &copyScope
 	}
 	return &result, nil
 }

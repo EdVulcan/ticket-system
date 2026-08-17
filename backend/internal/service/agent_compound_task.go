@@ -167,6 +167,25 @@ func compoundStepTargetKeys(context agentTaskContext) []string {
 		for _, productID := range operation.ProductIDs {
 			add(fmt.Sprintf("product:%d", productID))
 		}
+		for _, productName := range operation.ProductNames {
+			add("name:" + strings.ToLower(strings.TrimSpace(productName)))
+		}
+	}
+	addScopeTargets := func(state *agentTargetScopeState) {
+		if state == nil {
+			return
+		}
+		for _, target := range state.SelectedTargets {
+			if target.ProductID != 0 {
+				add(fmt.Sprintf("product:%d", target.ProductID))
+			} else {
+				add("name:" + strings.ToLower(strings.TrimSpace(target.Name)))
+			}
+		}
+	}
+	addScopeTargets(context.TargetScope)
+	for _, state := range context.TargetScopes {
+		addScopeTargets(state)
 	}
 	if context.Product != nil {
 		add("name:" + strings.ToLower(strings.TrimSpace(context.Product.Name)))

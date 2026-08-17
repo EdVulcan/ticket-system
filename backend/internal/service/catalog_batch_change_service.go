@@ -33,16 +33,17 @@ var batchLimitPattern = regexp.MustCompile(`(?:(?:每(?:个|处)?(?:检票点|�
 // CatalogRuleOperation is the restricted, server-executable operation DSL.
 // The API accepts names for convenience, but Preview always persists IDs.
 type CatalogRuleOperation struct {
-	Kind            string   `json:"kind"`
-	ProductIDs      []uint   `json:"product_ids,omitempty"`
-	ProductNames    []string `json:"product_names,omitempty"`
-	AllProducts     bool     `json:"all_products,omitempty"`
-	CheckpointIDs   []uint   `json:"checkpoint_ids,omitempty"`
-	CheckpointNames []string `json:"checkpoint_names,omitempty"`
-	GroupName       string   `json:"group_name,omitempty"`
-	CreateGroup     bool     `json:"create_group,omitempty"`
-	GroupMaxTotal   *int     `json:"group_max_total_check_in,omitempty"`
-	MaxPerCheckIn   *int     `json:"max_per_check_in,omitempty"`
+	Kind            string            `json:"kind"`
+	ProductIDs      []uint            `json:"product_ids,omitempty"`
+	ProductNames    []string          `json:"product_names,omitempty"`
+	TargetScope     *AgentTargetScope `json:"target_scope,omitempty"`
+	AllProducts     bool              `json:"all_products,omitempty"`
+	CheckpointIDs   []uint            `json:"checkpoint_ids,omitempty"`
+	CheckpointNames []string          `json:"checkpoint_names,omitempty"`
+	GroupName       string            `json:"group_name,omitempty"`
+	CreateGroup     bool              `json:"create_group,omitempty"`
+	GroupMaxTotal   *int              `json:"group_max_total_check_in,omitempty"`
+	MaxPerCheckIn   *int              `json:"max_per_check_in,omitempty"`
 }
 
 type CatalogBatchChangePreviewRequest struct {

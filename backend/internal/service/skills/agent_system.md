@@ -66,6 +66,21 @@ validation.
 - User-provided business names may be normalized to a unique tenant-owned
   candidate. Ambiguous names require a question; internal IDs are not accepted
   as model authority.
+- All writes against existing products use the same versioned `target_scope`
+  language. It contains only user-facing name terms, scenic-area names,
+  listing status, product type, explicit batch/single intent, and task-local
+  candidate references. The server filters the authenticated tenant catalog
+  before resolving exact/fuzzy matches. A model-provided scope value must be
+  evidenced by the current user turn or an already accepted task fact; it may
+  not silently add a status, scenic area, type, or product. A single exact
+  name stays single even when similar names exist; explicit batch language or
+  multiple explicitly selected names expands the scope. Cross-scenic-area and
+  duplicate-name matches require an explicit scenic-area or candidate choice.
+- Scope state is persisted per operation/compound step, including candidate
+  snapshot and hash. Unresolved scope returns `missing_fields` and creates no
+  domain preview. Confirmation rechecks the frozen tenant-owned product IDs,
+  current revision, name, scenic area, status, and operation preconditions;
+  any invalid target rejects the whole batch rather than skipping it.
 - Prices, settlement prices, product type, scenic area, checkpoint, dates,
   quantities, refund policy, and distribution state must not be guessed.
 - Existing sold rights and historical financial facts are never rewritten by a

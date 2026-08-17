@@ -203,7 +203,7 @@ func validateAgentProductBatchUpdateCandidate(input string, candidate *agentProd
 	if candidate == nil {
 		return agentInvalid("AI 未返回批量票种修改内容")
 	}
-	if len(candidate.ProductNames) < 2 {
+	if len(candidate.ProductNames) < 2 && candidate.TargetScope == nil {
 		return agentInvalid("批量修改至少需要两个准确的票种名称")
 	}
 	if len(candidate.ProductNames) > 50 {
@@ -223,7 +223,11 @@ func validateAgentProductBatchUpdateCandidate(input string, candidate *agentProd
 	if candidate.Changes.Name != nil {
 		return agentInvalid("批量修改不支持统一改名，请对单个票种单独生成预览")
 	}
-	return validateAgentProductUpdateCandidate(input, &agentProductUpdateCandidate{ProductName: candidate.ProductNames[0], Changes: candidate.Changes})
+	productName := ""
+	if len(candidate.ProductNames) > 0 {
+		productName = candidate.ProductNames[0]
+	}
+	return validateAgentProductUpdateCandidate(input, &agentProductUpdateCandidate{ProductName: productName, TargetScope: candidate.TargetScope, Changes: candidate.Changes})
 }
 
 // validateAgentInputIntent is deliberately conservative for a new task. A
@@ -261,7 +265,7 @@ func validateAgentInputIntent(input, existingOperationType string) error {
 func validateAgentTaskInputIntent(input string, task model.AgentTask) error {
 	if err := validateAgentInputIntent(input, task.OperationType); err == nil {
 		return nil
-	} else if task.OperationType != AgentOperationCatalogBatchChange || !agentTaskMissingField(task, "group_name") {
+	} else if task.OperationType != AgentOperationCatalogBatchChange || (!agentTaskMissingField(task, "group_name") && !agentTaskMissingField(task, "target_scope")) {
 		return err
 	}
 	return nil
@@ -272,17 +276,17 @@ func validateAgentPlannerEnvelopeForTask(input string, task model.AgentTask, env
 	if envelope != nil {
 		envelopeOperationType = strings.TrimSpace(envelope.OperationType)
 	}
-	if task.OperationType == AgentOperationCatalogBatchChange && agentTaskMissingField(task, "group_name") && envelope != nil && envelope.Product == nil && len(envelope.Operations) == 0 && (envelopeOperationType == "" || envelopeOperationType == AgentOperationCatalogBatchChange) {
+	if task.OperationType == AgentOperationCatalogBatchChange && (agentTaskMissingField(task, "group_name") || agentTaskMissingField(task, "target_scope")) && envelope != nil && envelope.Product == nil && len(envelope.Operations) == 0 && (envelopeOperationType == "" || envelopeOperationType == AgentOperationCatalogBatchChange) {
 		// A provider may return no structured operation for a one-token answer
 		// such as "水上乐园". The durable previous operation is authoritative;
 		// the planner will reconstruct it below instead of returning a 500 or
 		// discarding the user's answer.
 		return nil
 	}
-	if task.OperationType == AgentOperationTicketProductUpdate && envelope != nil && envelope.Product == nil && envelope.ProductUpdate == nil && len(envelope.Operations) == 0 && (envelopeOperationType == "" || envelopeOperationType == AgentOperationTicketProductUpdate) {
+	if task.OperationType == AgentOperationTicketProductUpdate && (agentTaskMissingField(task, "target_scope") || agentTaskMissingField(task, "product_name")) && envelope != nil && envelope.Product == nil && envelope.ProductUpdate == nil && len(envelope.Operations) == 0 && (envelopeOperationType == "" || envelopeOperationType == AgentOperationTicketProductUpdate) {
 		return nil
 	}
-	if task.OperationType == AgentOperationTicketProductBatchUpdate && envelope != nil && envelope.Product == nil && envelope.ProductUpdate == nil && envelope.ProductBatchUpdate == nil && len(envelope.Operations) == 0 && (envelopeOperationType == "" || envelopeOperationType == AgentOperationTicketProductBatchUpdate) {
+	if task.OperationType == AgentOperationTicketProductBatchUpdate && (agentTaskMissingField(task, "target_scope") || agentTaskMissingField(task, "product_names")) && envelope != nil && envelope.Product == nil && envelope.ProductUpdate == nil && envelope.ProductBatchUpdate == nil && len(envelope.Operations) == 0 && (envelopeOperationType == "" || envelopeOperationType == AgentOperationTicketProductBatchUpdate) {
 		return nil
 	}
 	if task.OperationType == AgentOperationCompound && envelope != nil && envelope.Compound == nil && envelope.Product == nil && envelope.ProductUpdate == nil && envelope.ProductBatchUpdate == nil && len(envelope.Operations) == 0 && (envelopeOperationType == "" || envelopeOperationType == AgentOperationCompound) {
@@ -290,7 +294,7 @@ func validateAgentPlannerEnvelopeForTask(input string, task model.AgentTask, env
 	}
 	if err := validateAgentPlannerEnvelope(input, envelope); err == nil {
 		return nil
-	} else if task.OperationType != AgentOperationCatalogBatchChange || !agentTaskMissingField(task, "group_name") {
+	} else if task.OperationType != AgentOperationCatalogBatchChange || (!agentTaskMissingField(task, "group_name") && !agentTaskMissingField(task, "target_scope")) {
 		return err
 	}
 	var previous agentTaskContext

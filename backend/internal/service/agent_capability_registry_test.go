@@ -67,4 +67,21 @@ func TestAgentToolDefinitionsExposeModuleContext(t *testing.T) {
 			t.Fatalf("tool %q is missing module context: %q", definition.Function.Name, definition.Function.Description)
 		}
 	}
+	for _, name := range []string{"prepare_catalog_rule_change", "prepare_compound_preview", "prepare_ticket_product_update", "prepare_ticket_product_batch_update"} {
+		var definition AIToolDefinition
+		for _, candidate := range definitions {
+			if candidate.Function.Name == name {
+				definition = candidate
+				break
+			}
+		}
+		var schema map[string]interface{}
+		if err := json.Unmarshal(definition.Function.Parameters, &schema); err != nil {
+			t.Fatalf("tool %q has invalid generated schema: %v", name, err)
+		}
+		encoded, _ := json.Marshal(schema)
+		if !strings.Contains(string(encoded), "target_scope") {
+			t.Fatalf("tool %q does not expose target_scope in its schema: %s", name, string(encoded))
+		}
+	}
 }
