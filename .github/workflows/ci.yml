@@ -330,7 +330,7 @@ jobs:
             legacy_real="$(readlink -f "$legacy_data" 2>/dev/null || true)"
             runtime_real="$(readlink -f "$runtime_data" 2>/dev/null || true)"
             if [ -n "$legacy_real" ] && [ "$legacy_real" != "$runtime_real" ]; then
-              cp -a -n "$legacy_data/." "$runtime_data/"
+              cp -R -n "$legacy_data/." "$runtime_data/"
             fi
           fi
 
