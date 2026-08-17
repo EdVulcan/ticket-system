@@ -318,12 +318,14 @@ jobs:
           runtime_data='/var/lib/ticket-system'
           legacy_data='/opt/ticket-system/current/backend/data'
 
-          # Create the target before extraction so the absolute symlink in the
-          # release never falls back to a writable-looking release directory.
-          # The deployment account is intentionally restricted to the existing
-          # privileged activation helper, so this preflight must be writable by
-          # that account already.
-          install -d -m 2775 "$runtime_data" "$runtime_data/uploads" "$runtime_data/backups"
+          # Create only missing children. The server pre-provisions the runtime
+          # root with the service account's ownership; the deployment account is
+          # intentionally not allowed to chmod or chown that protected root.
+          test -d "$runtime_data"
+          test -w "$runtime_data"
+          mkdir -p "$runtime_data/uploads" "$runtime_data/backups"
+          test -w "$runtime_data/uploads"
+          test -w "$runtime_data/backups"
           if [ -d "$legacy_data" ]; then
             legacy_real="$(readlink -f "$legacy_data" 2>/dev/null || true)"
             runtime_real="$(readlink -f "$runtime_data" 2>/dev/null || true)"
