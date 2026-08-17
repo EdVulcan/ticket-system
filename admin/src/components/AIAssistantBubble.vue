@@ -448,7 +448,10 @@ const ruleItems = (group: any) => {
 const loadStatus = async () => {
   statusLoading.value = true
   try {
-    availability.value = (await request.get('/agent/availability', { timeout: AI_STATUS_TIMEOUT_MS, skipErrorToast: true } as any)).data
+    // Availability is scoped under the durable agent task resource. Keep the
+    // UI endpoint aligned with the protected backend route so a healthy
+    // tenant session does not look unavailable because of a 404.
+    availability.value = (await request.get('/agent/tasks/availability', { timeout: AI_STATUS_TIMEOUT_MS, skipErrorToast: true } as any)).data
   } catch {
     availability.value = { enabled: false, reason: '无法读取平台 AI 状态，请稍后重试' }
   } finally {
