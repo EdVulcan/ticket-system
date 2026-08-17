@@ -277,6 +277,10 @@ jobs:
         run: |
           install -d release/backend/config
           install -m 0644 backend/config/config.yaml release/backend/config/config.yaml
+          # The release tree is immutable after activation. Runtime state must
+          # resolve outside the versioned tree so uploads, instance keys and
+          # backups survive the next deployment.
+          ln -s /opt/ticket-system/data release/backend/data
           chmod 0755 release/backend/ticket-backend
           pos_sha256="$(sha256sum release/admin/dist/downloads/ticket-pos.exe | awk '{print $1}')"
           printf '{"version":"%s","download_url":"https://ymsq.edvulcan.top/downloads/ticket-pos.exe","sha256":"%s"}\n' "$GITHUB_SHA" "$pos_sha256" > release/admin/dist/downloads/pos-version.json
@@ -306,5 +310,39 @@ jobs:
           port="${DEPLOY_PORT:-22}"
           archive="ticket-system-${GITHUB_SHA}.tar.gz"
           scp -P "$port" -i ~/.ssh/ticket-system-deploy "$archive" "$DEPLOY_USER@$DEPLOY_HOST:$archive"
-          ssh -p "$port" -i ~/.ssh/ticket-system-deploy "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; install -d -m 2775 '/opt/ticket-system/releases/${GITHUB_SHA}'; tar -xzf '$archive' -C '/opt/ticket-system/releases/${GITHUB_SHA}'; rm -f '$archive'; sudo /usr/local/sbin/ticket-system-deploy '${GITHUB_SHA}'"
+          ssh -p "$port" -i ~/.ssh/ticket-system-deploy "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$GITHUB_SHA" "$archive" <<'REMOTE'
+          set -eu
+          release_sha="$1"
+          archive="$2"
+          release_directory="/opt/ticket-system/releases/$release_sha"
+          runtime_data='/opt/ticket-system/data'
+          legacy_data='/opt/ticket-system/current/backend/data'
+
+          # Create the target before extraction so the absolute symlink in the
+          # release never falls back to a writable-looking release directory.
+          sudo install -d -m 2775 "$runtime_data" "$runtime_data/uploads" "$runtime_data/backups"
+          if [ ! -e "$runtime_data/instance-key.json" ] && [ -d "$legacy_data" ]; then
+            legacy_real="$(readlink -f "$legacy_data" 2>/dev/null || true)"
+            runtime_real="$(readlink -f "$runtime_data" 2>/dev/null || true)"
+            if [ -n "$legacy_real" ] && [ "$legacy_real" != "$runtime_real" ]; then
+              sudo cp -a "$legacy_data/." "$runtime_data/"
+            fi
+          fi
+
+          install -d -m 2775 "$release_directory"
+          tar -xzf "$archive" -C "$release_directory"
+          rm -f "$archive"
+          sudo /usr/local/sbin/ticket-system-deploy "$release_sha"
+
+          service_user="$(sudo systemctl show ticket-system --property=User --value 2>/dev/null || true)"
+          service_group="$(sudo systemctl show ticket-system --property=Group --value 2>/dev/null || true)"
+          if [ -z "$service_user" ]; then
+            service_user="$(stat -c '%U' '/opt/ticket-system/current/backend')"
+          fi
+          if [ -z "$service_group" ]; then
+            service_group="$(stat -c '%G' '/opt/ticket-system/current/backend')"
+          fi
+          sudo chown -R "$service_user:$service_group" "$runtime_data"
+          sudo chmod 2775 "$runtime_data"
+          sudo -u "$service_user" test -w "$runtime_data"
+          REMOTE
