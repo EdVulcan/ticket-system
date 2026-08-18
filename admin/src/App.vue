@@ -202,6 +202,7 @@ const navGroups = computed<NavGroup[]>(() => {
       platformItems.push({ path: '/tenant', label: '商户开户管理', icon: OfficeBuilding })
       platformItems.push({ path: '/platform-users', label: '平台账号', icon: UserFilled })
       platformItems.push({ path: '/platform-ai', label: 'AI 助手配置', icon: Setting })
+      platformItems.push({ path: '/platform-ai/quotas', label: 'AI 租户额度', icon: Operation })
     }
     platformItems.push({ path: '/platform-operations', label: '平台运营工作台', icon: Monitor })
     return [overview, { label: '平台管理', items: platformItems }]

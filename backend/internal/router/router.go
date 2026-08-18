@@ -68,6 +68,10 @@ func InitRouter(r *gin.Engine) {
 	platformAIGroup.GET("", platformAIController.GetConfig)
 	platformAIGroup.PUT("", platformAIController.SaveConfig)
 	platformAIGroup.POST("/test", platformAIController.TestConfig)
+	platformAIQuotaGroup := protected.Group("/platform/ai-quotas")
+	platformAIQuotaGroup.Use(middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"))
+	platformAIQuotaGroup.GET("", platformAIController.ListTenantQuotas)
+	platformAIQuotaGroup.PUT("/:tenantID", platformAIController.UpdateTenantQuota)
 
 	// Tenant Routes
 	tenantController := &api.TenantController{}

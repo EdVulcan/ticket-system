@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 101
+const CurrentPostgresSchemaVersion = 102
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -40,7 +40,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&CheckPoint{}, &Device{}, &TicketRule{}, &RuleGroup{}, &RuleItem{},
 		&Product{}, &ProductRevision{}, &ProductOffer{}, &SellerListing{}, &ProductInventory{},
 		&CatalogBatchChangePlan{}, &CatalogBatchChangeLine{},
-		&PlatformAIConfig{}, &AIUsageMonth{},
+		&PlatformAIConfig{}, &AITenantQuotaPolicy{}, &AIUsageMonth{},
 		&AgentTask{}, &AgentTaskEvent{},
 		&AgentBusinessAlias{},
 		&BundleProduct{}, &BundleVersion{}, &BundleComponent{},
@@ -259,6 +259,21 @@ func runPostgresMigrations(db *gorm.DB) error {
 			return fmt.Errorf("scope agent task idempotency index to tenant and actor: %w", err)
 		}
 	}
+	if previousSchemaVersion < 102 {
+		if err := db.Exec(`
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_tenant_quota_policy
+				ON ai_tenant_quota_policies (tenant_id);
+			ALTER TABLE ai_tenant_quota_policies
+				DROP CONSTRAINT IF EXISTS chk_ai_tenant_quota_policy_limits;
+			ALTER TABLE ai_tenant_quota_policies
+				ADD CONSTRAINT chk_ai_tenant_quota_policy_limits CHECK (
+					(monthly_request_limit IS NULL OR monthly_request_limit BETWEEN 1 AND 1000000)
+					AND (monthly_token_limit IS NULL OR monthly_token_limit BETWEEN 1000 AND 1000000000)
+				);
+		`).Error; err != nil {
+			return fmt.Errorf("register tenant AI quota policies: %w", err)
+		}
+	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
 		if err := db.Exec(`
 			INSERT INTO supplier_business_types
@@ -407,7 +422,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "hotel product catalog and sale calendar",
+		Name:      "tenant AI quota policies",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -616,6 +631,13 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 			   OR NEW.request_count < 0 OR NEW.token_count < 0
 			   OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = NEW.tenant_id AND t.deleted_at IS NULL) THEN
 				RAISE EXCEPTION 'AI usage tenant or accounting facts are invalid';
+			END IF;
+		WHEN 'ai_tenant_quota_policies' THEN
+			IF NEW.tenant_id = 0
+			   OR (NEW.monthly_request_limit IS NOT NULL AND (NEW.monthly_request_limit < 1 OR NEW.monthly_request_limit > 1000000))
+			   OR (NEW.monthly_token_limit IS NOT NULL AND (NEW.monthly_token_limit < 1000 OR NEW.monthly_token_limit > 1000000000))
+			   OR NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = NEW.tenant_id AND t.deleted_at IS NULL) THEN
+				RAISE EXCEPTION 'AI tenant quota policy ownership or limits are invalid';
 			END IF;
 		WHEN 'agent_business_aliases' THEN
 			IF NEW.tenant_id = 0
@@ -1017,7 +1039,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_rate_plan_prices", "hotel_room_inventories", "hotel_products", "hotel_product_revisions", "hotel_product_calendar_prices", "hotel_product_entitlements", "hotel_product_reservations", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
+	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "ai_tenant_quota_policies", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_rate_plan_prices", "hotel_room_inventories", "hotel_products", "hotel_product_revisions", "hotel_product_calendar_prices", "hotel_product_entitlements", "hotel_product_reservations", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

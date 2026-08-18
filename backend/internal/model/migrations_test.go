@@ -35,7 +35,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&ScenicHotelPackage{}, &ScenicHotelPackageEntitlement{}, &HotelReservation{},
 		&XiaohongshuBookingOperation{}, &XiaohongshuOrderOperation{},
 		&CatalogBatchChangePlan{}, &CatalogBatchChangeLine{},
-		&PlatformAIConfig{}, &AIUsageMonth{},
+		&PlatformAIConfig{}, &AITenantQuotaPolicy{}, &AIUsageMonth{},
 		&AgentTask{}, &AgentTaskEvent{},
 	} {
 		if !db.Migrator().HasTable(table) {
@@ -59,6 +59,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		{&HotelProduct{}, "idx_hotel_products_active_product"},
 		{&HotelProductCalendarPrice{}, "idx_hotel_product_calendar_prices_scope"},
 		{&AgentTask{}, "idx_agent_task_idempotency"},
+		{&AITenantQuotaPolicy{}, "idx_ai_tenant_quota_policy"},
 	} {
 		if !db.Migrator().HasIndex(index.model, index.name) {
 			t.Fatalf("index %s is missing", index.name)
@@ -474,6 +475,70 @@ func TestPostgresSchema88AIUsageOwnershipGuard(t *testing.T) {
 	negativeUsage.RequestCount = -1
 	if err := db.Create(&negativeUsage).Error; err == nil {
 		t.Fatal("AI usage row with negative request count was accepted")
+	}
+}
+
+func TestPostgresSchema102AITenantQuotaOwnershipGuard(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if CurrentPostgresSchemaVersion < 102 {
+		t.Fatalf("current schema version=%d, want at least 102", CurrentPostgresSchemaVersion)
+	}
+	tenant := Tenant{Name: "AI Quota Guard", SystemCode: "AI-QUOTA-GUARD", SecretKey: "quota", Status: "active"}
+	if err := db.Create(&tenant).Error; err != nil {
+		t.Fatal(err)
+	}
+	requestLimit := 25
+	valid := AITenantQuotaPolicy{TenantID: tenant.ID, MonthlyRequestLimit: &requestLimit, Enabled: true, LastUpdatedReason: "test"}
+	if err := db.Create(&valid).Error; err != nil {
+		t.Fatal(err)
+	}
+	unknownTenant := valid
+	unknownTenant.ID = 0
+	unknownTenant.TenantID = tenant.ID + 999
+	if err := db.Create(&unknownTenant).Error; err == nil {
+		t.Fatal("AI tenant quota policy for an unknown tenant was accepted")
+	}
+	invalidRequest := valid
+	invalidRequest.ID = 0
+	invalidRequest.TenantID = tenant.ID
+	tooMany := 1000001
+	invalidRequest.MonthlyRequestLimit = &tooMany
+	if err := db.Create(&invalidRequest).Error; err == nil {
+		t.Fatal("AI tenant quota policy with an invalid request limit was accepted")
+	}
+	invalidToken := valid
+	invalidToken.ID = 0
+	invalidToken.TenantID = tenant.ID
+	tooFew := int64(999)
+	invalidToken.MonthlyRequestLimit = nil
+	invalidToken.MonthlyTokenLimit = &tooFew
+	if err := db.Create(&invalidToken).Error; err == nil {
+		t.Fatal("AI tenant quota policy with an invalid token limit was accepted")
+	}
+}
+
+func TestPostgresSchema102AddsTenantQuotaPolicyToSchema101Database(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrator().DropTable(&AITenantQuotaPolicy{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("version = ?", CurrentPostgresSchemaVersion).Delete(&SchemaMigration{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&SchemaMigration{Version: 101, Name: "schema 101 fixture", AppliedAt: time.Now()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if !db.Migrator().HasTable(&AITenantQuotaPolicy{}) || !db.Migrator().HasIndex(&AITenantQuotaPolicy{}, "idx_ai_tenant_quota_policy") {
+		t.Fatal("schema 102 did not recreate tenant AI quota policy table and index")
 	}
 }
 
