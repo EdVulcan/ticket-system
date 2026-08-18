@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -365,6 +366,20 @@ func TestAgentReadOnlyToolRouteKeepsSingleTopicDeterministic(t *testing.T) {
 	}
 	if !agentReadOnlyCompoundIntent("依次查询订单、库存和销售汇总") {
 		t.Fatal("explicit multi-topic query was not recognized as compound")
+	}
+}
+
+func TestAgentReadOnlyCompoundToolRoutesPreserveUserOrder(t *testing.T) {
+	routes := agentReadOnlyCompoundToolRoutes("依次查询最近订单、线上库存、销售汇总和核销汇总")
+	want := []string{"search_orders", "query_ticket_inventory", "query_sales_summary", "query_verification_summary"}
+	if !reflect.DeepEqual(routes, want) {
+		t.Fatalf("compound topics routed to %v, want %v", routes, want)
+	}
+	if got := agentReadOnlyCompoundToolRoutes("查询最近订单，然后查询线上库存，再查看销售汇总，再查核销汇总并退款"); got != nil {
+		t.Fatalf("mixed read/write request was routed as compound read: %v", got)
+	}
+	if got := agentReadOnlyCompoundToolRoutes("依次查询票种规则和授权商品"); !reflect.DeepEqual(got, []string{"get_ticket_product_rules", "query_distribution_products"}) {
+		t.Fatalf("specific compound topics were split by generic nouns: %v", got)
 	}
 }
 
