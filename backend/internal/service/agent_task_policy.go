@@ -371,7 +371,7 @@ func rejectUnsupportedAgentCapability(input string) error {
 		// Only suppress the lexical guard for a negated marker on an explicit
 		// product-creation request; an affirmative existing-product mutation
 		// must continue to fail closed.
-		if creationIntent && agentUnsupportedMarkerNegated(normalized, marker) {
+		if (creationIntent || agentHasAny(normalized, agentReadIntentWords)) && agentUnsupportedMarkerNegated(normalized, marker) {
 			continue
 		}
 		if strings.Contains(normalized, marker) {
@@ -396,10 +396,18 @@ func agentUnsupportedMarkerNegated(input, marker string) bool {
 		}
 		found = true
 		index := start + relative
-		prefix := strings.TrimSpace(input[max(0, index-8):index])
+		prefix := strings.TrimSpace(input[max(0, index-32):index])
+		// Keep a negation attached to its current clause. This handles common
+		// safety wording such as “不执行任何修改、支付或外部调用” while not
+		// treating a later positive clause after a comma as negated.
+		for _, separator := range []string{"，", ",", "。", "；", ";", "\n"} {
+			if cut := strings.LastIndex(prefix, separator); cut >= 0 {
+				prefix = strings.TrimSpace(prefix[cut+len(separator):])
+			}
+		}
 		negated := false
-		for _, negation := range []string{"不需要", "无需", "不要", "禁止", "不能", "不", "未"} {
-			if strings.HasSuffix(prefix, negation) {
+		for _, negation := range []string{"不执行", "无需执行", "不要执行", "不进行", "不调用", "不需要", "无需", "不要", "禁止", "不能", "不允许", "不应", "不可", "不", "未"} {
+			if strings.Contains(prefix, negation) {
 				negated = true
 				break
 			}
@@ -412,6 +420,17 @@ func agentUnsupportedMarkerNegated(input, marker string) bool {
 	}
 }
 
+func agentHasAffirmativeAgentWord(input string, values []string) bool {
+	input = strings.ToLower(strings.TrimSpace(input))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value != "" && strings.Contains(input, value) && !agentUnsupportedMarkerNegated(input, value) {
+			return true
+		}
+	}
+	return false
+}
+
 func agentPureReadRequest(input string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(input))
 	if !agentHasAny(normalized, agentReadIntentWords) {
@@ -422,7 +441,7 @@ func agentPureReadRequest(input string) bool {
 	mutationWords = append(mutationWords, agentProductUpdateIntentWords...)
 	mutationWords = append(mutationWords, agentProductBatchUpdateIntentWords...)
 	mutationWords = append(mutationWords, []string{"支付", "退款", "退票", "设备控制", "下发设备", "硬件", "凭据", "密钥", "api key", "appid", "secret", "付款", "充值", "结算确认", "确认结算", "权限变更", "赋权", "写入", "执行", "确认"}...)
-	return !agentHasAny(normalized, mutationWords)
+	return !agentHasAffirmativeAgentWord(normalized, mutationWords)
 }
 
 func agentUnsupportedCapabilityMessage(input string) string {
@@ -471,7 +490,7 @@ func agentReadOnlyCompoundIntent(input string) bool {
 	mutationWords = append(mutationWords, agentProductUpdateIntentWords...)
 	mutationWords = append(mutationWords, agentProductBatchUpdateIntentWords...)
 	mutationWords = append(mutationWords, "支付", "退款", "退票", "设备控制", "凭据", "密钥", "分销授权", "渠道授权", "上架", "下架", "写入", "执行", "确认", "充值", "结算", "入园")
-	return !agentHasAny(normalized, mutationWords)
+	return !agentHasAffirmativeAgentWord(normalized, mutationWords)
 }
 
 // agentReadOnlyToolRoute narrows an unambiguous single-topic query to one
@@ -479,9 +498,9 @@ func agentReadOnlyCompoundIntent(input string) bool {
 // leaving explicit multi-topic requests to query_compound_readonly.
 func agentReadOnlyToolRoute(input string) []string {
 	normalized := strings.ToLower(strings.TrimSpace(input))
-	if normalized == "" || agentReadOnlyCompoundIntent(normalized) || agentHasAny(normalized, agentCatalogIntentWords) ||
-		agentHasAny(normalized, agentProductCreateIntentWords) || agentHasAny(normalized, agentProductUpdateIntentWords) ||
-		agentHasAny(normalized, agentProductBatchUpdateIntentWords) {
+	if normalized == "" || agentReadOnlyCompoundIntent(normalized) || agentHasAffirmativeAgentWord(normalized, agentCatalogIntentWords) ||
+		agentHasAffirmativeAgentWord(normalized, agentProductCreateIntentWords) || agentHasAffirmativeAgentWord(normalized, agentProductUpdateIntentWords) ||
+		agentHasAffirmativeAgentWord(normalized, agentProductBatchUpdateIntentWords) {
 		return nil
 	}
 	if !agentHasAny(normalized, agentReadIntentWords) {
