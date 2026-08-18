@@ -358,8 +358,46 @@ func TestAgentReadOnlyToolRouteKeepsSingleTopicDeterministic(t *testing.T) {
 	if agentReadOnlyCompoundIntent("查询水上乐园的景区检票点") {
 		t.Fatal("a scenic-area qualifier plus checkpoint noun must not become a compound query")
 	}
+	for _, input := range []string{"查询最近30天的核销汇总", "查看水上乐园的检票点", "查询票种的核销规则"} {
+		if agentHasCatalogRuleMutationIntent(input) {
+			t.Fatalf("read-only request was classified as a catalog mutation: %q", input)
+		}
+	}
 	if !agentReadOnlyCompoundIntent("依次查询订单、库存和销售汇总") {
 		t.Fatal("explicit multi-topic query was not recognized as compound")
+	}
+}
+
+func TestAgentSingleTopicReadUsesServerAdapterWithoutProvider(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	server, calls := toolProvider(t, func(_ []AIMessage) (map[string]interface{}, error) {
+		return nil, fmt.Errorf("provider must not be called for a deterministic single-topic read")
+	})
+	if _, err := (&PlatformAIService{}).SaveConfig(toolConfig(server.URL), 77, "platform_admin"); err != nil {
+		t.Fatalf("save tool config: %v", err)
+	}
+	view, err := (&AgentTaskService{}).Submit(t.Context(), fixture.tenant.ID, 11, "admin", AgentTaskRequest{
+		InputText: "查询最近30天的核销汇总", IdempotencyKey: "direct-verification-summary", TurnKey: "turn-1",
+	})
+	if err != nil {
+		t.Fatalf("deterministic verification query: %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("single-topic query called provider %d times", calls.Load())
+	}
+	if !strings.Contains(view.Message, "核销汇总查询") {
+		t.Fatalf("direct query response omitted tool label: %q", view.Message)
+	}
+	var resultSet agentQueryResultSet
+	if len(view.Result) == 0 || json.Unmarshal(view.Result, &resultSet) != nil || len(resultSet.QueryResults) != 1 {
+		t.Fatalf("direct query result was not persisted: %s", string(view.Result))
+	}
+	var result agentQueryResult
+	if err := json.Unmarshal(resultSet.QueryResults[0], &result); err != nil || result.Tool != "query_verification_summary" {
+		t.Fatalf("unexpected direct query result: %s", string(resultSet.QueryResults[0]))
+	}
+	if args := directAgentQueryArguments("查询核销汇总，日期 2026-08-01 至 2026-08-17"); !strings.Contains(args, `"start_date":"2026-08-01"`) || !strings.Contains(args, `"end_date":"2026-08-17"`) {
+		t.Fatalf("explicit report dates were not preserved: %s", args)
 	}
 }
 

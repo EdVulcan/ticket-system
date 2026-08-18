@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"ticket-backend/internal/authz"
 	"ticket-backend/internal/model"
@@ -137,6 +138,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 	if len(visible) == 0 {
 		return nil, agentInvalid("当前账号没有可用的 AI 工具")
 	}
+	directReadOnlyTool := ""
 	readCompoundIntent := task.OperationType == AgentOperationPending && agentReadOnlyCompoundIntent(input)
 	compoundIntent := task.OperationType == AgentOperationCompound || (task.OperationType == AgentOperationPending && agentCompoundIntent(input))
 	if readCompoundIntent {
@@ -238,8 +240,20 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 					return nil, agentInvalid("当前账号没有该查询能力或对应业务权限")
 				}
 				visible = routed
+				if route[0] == "query_sales_summary" || route[0] == "query_verification_summary" {
+					directReadOnlyTool = route[0]
+				}
 			}
 		}
+	}
+	// A single-topic report read has already been resolved by the server-owned
+	// route above. Execute that adapter directly instead of asking the provider
+	// to repeat a choice it cannot change. This keeps report queries reliable
+	// even when a thinking model returns prose despite a named tool choice.
+	// Catalog, order, inventory, compound and all preview/write tasks still use
+	// the provider tool protocol.
+	if directReadOnlyTool != "" {
+		return s.planDirectReadOnlyQuery(tenantID, actorUserID, actorRole, task, input, config, directReadOnlyTool)
 	}
 	contextJSON := strings.TrimSpace(task.ContextJSON)
 	if contextJSON == "" {
@@ -372,6 +386,85 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 		toolChoice = "auto"
 	}
 	return nil, agentInvalid("AI 任务需要的工具调用次数过多，请拆分请求")
+}
+
+var directAgentQueryDatePattern = regexp.MustCompile(`\d{4}-\d{2}-\d{2}`)
+
+func (s *AgentTaskService) planDirectReadOnlyQuery(tenantID, actorUserID uint, actorRole string, task model.AgentTask, input string, config model.PlatformAIConfig, toolName string) (*agentPlanningResult, error) {
+	args := directAgentQueryArguments(input)
+	digest := sha256.Sum256([]byte(strings.TrimSpace(input)))
+	call := AIToolCall{
+		ID:       "direct-" + toolName + "-" + hex.EncodeToString(digest[:8]),
+		Function: AIToolCallFunction{Name: toolName, Arguments: args},
+	}
+	execution, err := s.invokeAgentTool(tenantID, actorUserID, actorRole, task, input, config, "", 0, call)
+	if err != nil {
+		return nil, err
+	}
+	if !isAgentQueryResultJSON(execution.ResultJSON) {
+		return nil, agentInvalid("只读查询没有返回可信服务器事实")
+	}
+	var prior agentTaskContext
+	if strings.TrimSpace(task.ContextJSON) != "" {
+		_ = json.Unmarshal([]byte(task.ContextJSON), &prior)
+	}
+	if prior.OperationType == "" {
+		prior.OperationType = AgentOperationPending
+	}
+	var result agentQueryResult
+	if err := json.Unmarshal([]byte(execution.ResultJSON), &result); err != nil {
+		return nil, agentInvalid("只读查询结果无法恢复")
+	}
+	availability, _ := s.aiService().Availability(tenantID)
+	return &agentPlanningResult{
+		OperationType: AgentOperationPending,
+		Context:       prior,
+		Provider:      config.Provider,
+		Model:         config.Model,
+		Availability:  availability,
+		ResponseText:  directAgentQueryResponse(toolName, result.Returned),
+		QueryResults:  []json.RawMessage{json.RawMessage(execution.ResultJSON)},
+	}, nil
+}
+
+func directAgentQueryArguments(input string) string {
+	dates := directAgentQueryDatePattern.FindAllString(input, -1)
+	switch len(dates) {
+	case 0:
+		return `{}`
+	case 1:
+		encoded, _ := json.Marshal(map[string]string{"start_date": dates[0], "end_date": dates[0]})
+		return string(encoded)
+	default:
+		encoded, _ := json.Marshal(map[string]string{"start_date": dates[0], "end_date": dates[1]})
+		return string(encoded)
+	}
+}
+
+func directAgentQueryResponse(toolName string, returned int) string {
+	labels := map[string]string{
+		"search_scenic_areas":             "景区查询",
+		"search_checkpoints":              "检票点查询",
+		"search_ticket_products":          "票种查询",
+		"get_ticket_product_rules":        "票种规则查询",
+		"search_orders":                   "订单查询",
+		"query_ticket_inventory":          "票种库存查询",
+		"query_sales_summary":             "销售汇总查询",
+		"query_verification_summary":      "核销汇总查询",
+		"query_distribution_partners":     "分销关系查询",
+		"query_distribution_products":     "授权商品查询",
+		"query_distribution_fulfillments": "供应商履约查询",
+		"query_distribution_settlements":  "分销结算查询",
+		"query_team_contracts":            "团队合同查询",
+		"query_team_groups":               "团队计划查询",
+		"query_team_settlement_summary":   "团队结算查询",
+		"query_team_account_summary":      "团队账户查询",
+	}
+	label := labels[toolName]
+	if label == "" {
+		label = "业务查询"
+	}
+	return fmt.Sprintf("已完成%s，共返回 %d 条。结果由服务器生成，本次仅查询当前租户事实，不修改业务数据。", label, returned)
 }
 
 func isAgentQueryResultJSON(value string) bool {
