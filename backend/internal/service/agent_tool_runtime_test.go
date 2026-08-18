@@ -320,6 +320,20 @@ func TestAgentToolTaskRejectsProviderTextWithoutSupportedToolCall(t *testing.T) 
 	}
 }
 
+func TestAgentCreationAllowsNegatedListingConstraints(t *testing.T) {
+	for _, input := range []string{
+		"创建一个线上票，售价 10 元，结算价 5 元，不上架、不分销",
+		"新建一个窗口票，先不上架，也不要分销",
+	} {
+		if err := rejectUnsupportedAgentCapability(input); err != nil {
+			t.Fatalf("creation constraint %q was rejected: %v", input, err)
+		}
+	}
+	if err := rejectUnsupportedAgentCapability("把现有成人票上架"); err == nil {
+		t.Fatal("affirmative listing mutation was accepted")
+	}
+}
+
 func TestAgentReadOnlyToolRouteKeepsSingleTopicDeterministic(t *testing.T) {
 	cases := []struct {
 		input string

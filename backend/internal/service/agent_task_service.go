@@ -446,7 +446,7 @@ func (s *AgentTaskService) Submit(ctx context.Context, tenantID, actorUserID uin
 	}
 	if req.TaskID == 0 {
 		if err := validateAgentInputIntent(input, AgentOperationPending); err != nil {
-			if !agentToolProtocolConfigured() || !agentHasAny(strings.ToLower(input), agentReadIntentWords) {
+			if !agentReadOnlyToolProtocolConfigured() || !agentHasAny(strings.ToLower(input), agentReadIntentWords) {
 				return nil, err
 			}
 		}
@@ -903,6 +903,14 @@ func (s *AgentTaskService) loadOrCreateTask(tenantID, actorUserID uint, actorRol
 		var configured model.PlatformAIConfig
 		if configErr := tx.Where("config_key = ?", platformAIConfigKey).First(&configured).Error; configErr == nil {
 			candidate.ProtocolMode = resolveAgentTaskProtocol(configured)
+			// DeepSeek legacy configurations predate the read-only tool registry.
+			// Keep old mutation tasks compatible, but route new single/compound
+			// queries through the server-owned adapters so reports do not fall
+			// into the legacy JSON planner and fail with an empty plan.
+			if candidate.ProtocolMode == agentProtocolLegacyJSON && normalizeAIProvider(configured.Provider) == defaultAIProvider &&
+				(agentReadOnlyCompoundIntent(input) || len(agentReadOnlyToolRoute(input)) == 1) {
+				candidate.ProtocolMode = agentProtocolToolV1
+			}
 		}
 		result := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "actor_user_id"}, {Name: "idempotency_key"}},
@@ -968,7 +976,7 @@ func (s *AgentTaskService) plan(ctx context.Context, tenantID, actorUserID uint,
 	输出格式必须是：{"operation_type":"catalog_batch_change|ticket_product_create|ticket_product_update|ticket_product_batch_update|compound_preview","operations":[...],"product":{...},"product_update":{"target_scope":{...},"product_name":"...","changes":{...}},"product_batch_update":{"target_scope":{...},"product_names":[...],"changes":{...}},"compound":{"steps":[{"operation_type":"...","operations":[...],"product":{...},"product_update":{...},"product_batch_update":{...}}]}}。已有票种写入操作优先提交 target_scope，不要自行提交数据库编号。
 	target_scope 只能使用 version=1、intent=single|batch、name_terms、scenic_area_names、all_scenic_areas、listing_status=listed|unlisted、product_type=online|window、candidate_refs；这些字段必须能在用户当前输入或任务已确认上下文中找到依据。intent=batch 只有用户明确说批量、多个、这批、所有、全部，或明确列出多个票名时才可使用；用户明确说一个/单个时必须使用 single。上架状态、票种类型和景区是筛选条件，服务端按当前租户先筛选再判断歧义。缺范围信息时保持操作内容，服务端会返回 missing_fields，不要猜测或静默缩小范围。
 	catalog_batch_change 只能使用 add_checkpoints、remove_checkpoints、set_checkpoint_limit；增加检票点时，如果用户明确要求“新增/新建/添加规则组”，可以设置 create_group=true，但 group_name 必须来自用户明确提供的名称，未提供时留空，让服务端追问；group_max_total_check_in 只有用户明确提供新组通行数量时才填写，不要猜测。普通增加检票点在票种有多个规则组且用户未指定组时，保留 create_group=false、group_name 为空，让服务端追问，不要猜测规则组。检票点只能填写候选清单中的精确名称，不要输出 product_ids 或 checkpoint_ids。用户说“所有某类票种”时，使用 target_scope.name_terms 表达类别并让服务端匹配包含精确项和模糊项；不要把它扩大为 all_products=true；只有用户明确说“所有票种/全部门票”才能使用 all_products=true。无法确定时输出空 operations。
-ticket_product_create 的 product 必须使用 product_type 字段表达票种类别：online 表示线上票，offline 表示窗口/POS 票。product_type 未明确时保持为空，让服务端提出追问；不要使用 type 代替 product_type。product 只填写用户明确提供的字段，价格缺失必须输出 null，不能猜测价格；分销字段、status、product_id、tenant_id 都不能输出。groups 的每个 item 只填写 checkpoint_name 和可选 max_per_check_in。
+	ticket_product_create 的 product 必须使用 product_type 字段表达票种类别：online 表示线上票，offline 表示窗口/POS 票。product_type 未明确时保持为空，让服务端提出追问；不要使用 type 代替 product_type。product 只填写用户明确提供的字段，价格缺失必须输出 null，不能猜测价格；分销字段、status、product_id、tenant_id 都不能输出。“不上架/不分销/未上架”是新票种的默认初始状态，不是受保护的变更请求，不要因此拒绝创建。groups 的每个 item 只填写 checkpoint_name 和可选 max_per_check_in。
 	ticket_product_update 可修改当前租户自有票种的基础字段，包括已上架或允许分销的自有票种。product_update 使用 target_scope 选择一个目标；保留 product_name 仅用于旧任务兼容，changes 只填写用户明确要求修改的字段；允许修改 name、price、settlement_price、validity_type、validity_days、validity_start_date、validity_end_date、code_mode、stock_type、daily_stock、real_name_required、refund_type、refund_rule、tags、gate_voice_code、limit_per_phone、limit_per_id。不能修改 product_type、所属景区、status、is_distributable、渠道、库存预占或检票规则；分销副本不能修改，检票规则请使用 catalog_batch_change。未提供范围或 changes 时保持为空，让服务端追问，不能猜测票种或数值。
 	ticket_product_batch_update 使用 target_scope 选择至少两个目标，product_names 仅用于旧任务兼容；与共同 changes 一起提交。可修改当前租户自有票种的共同基础字段，包括已上架或允许分销的自有票种；分销副本不能修改。不允许统一改名、修改检票规则、status、is_distributable、渠道、库存预占或资金事实。任一票种名称、归属或版本变化时，整批预览或确认都会失败。
 	compound_preview 只能组合 2 到 5 个低风险的 catalog_batch_change、ticket_product_create、ticket_product_update 或 ticket_product_batch_update 步骤；每一步必须完整提供对应字段，不能包含查询、退款、资金、分销授权或外部渠道操作。服务端会分别预览并在用户确认后按顺序执行；步骤之间不是原子事务。
@@ -1324,17 +1332,25 @@ func inheritAgentCatalogGroupIntent(input string, task model.AgentTask, contextJ
 		if strings.TrimSpace(operation.GroupName) == "" && answer != "" {
 			operation.GroupName = answer
 		}
-		if len(operation.ProductNames) == 0 {
-			operation.ProductNames = append([]string(nil), previousOperation.ProductNames...)
-		}
-		if len(operation.CheckpointNames) == 0 {
-			operation.CheckpointNames = append([]string(nil), previousOperation.CheckpointNames...)
-		}
+		// The question is specifically collecting the new group name. The
+		// previous operation is therefore authoritative for its ticket and
+		// checkpoint targets; never let a continuation response widen or
+		// replace them with a model-generated shorthand.
+		operation.ProductNames = append([]string(nil), previousOperation.ProductNames...)
+		operation.CheckpointNames = append([]string(nil), previousOperation.CheckpointNames...)
 		if len(operation.ProductIDs) == 0 {
 			operation.ProductIDs = append([]uint(nil), previousOperation.ProductIDs...)
 		}
 		if len(operation.CheckpointIDs) == 0 {
 			operation.CheckpointIDs = append([]uint(nil), previousOperation.CheckpointIDs...)
+		}
+		if operation.MaxPerCheckIn == nil && previousOperation.MaxPerCheckIn != nil {
+			value := *previousOperation.MaxPerCheckIn
+			operation.MaxPerCheckIn = &value
+		}
+		if operation.GroupMaxTotal == nil && previousOperation.GroupMaxTotal != nil {
+			value := *previousOperation.GroupMaxTotal
+			operation.GroupMaxTotal = &value
 		}
 		result[index] = operation
 	}
