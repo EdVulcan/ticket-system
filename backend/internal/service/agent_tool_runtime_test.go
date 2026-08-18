@@ -359,7 +359,12 @@ func TestAgentReadOnlyToolRouteKeepsSingleTopicDeterministic(t *testing.T) {
 	if agentReadOnlyCompoundIntent("查询水上乐园的景区检票点") {
 		t.Fatal("a scenic-area qualifier plus checkpoint noun must not become a compound query")
 	}
-	for _, input := range []string{"查询最近30天的核销汇总", "查看水上乐园的检票点", "查询票种的核销规则"} {
+	for _, input := range []string{
+		"查询最近30天的核销汇总",
+		"查询最近30天的核销汇总；只读查询，不执行任何修改。",
+		"查看水上乐园的检票点",
+		"查询票种的核销规则",
+	} {
 		if agentHasCatalogRuleMutationIntent(input) {
 			t.Fatalf("read-only request was classified as a catalog mutation: %q", input)
 		}

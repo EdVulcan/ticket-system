@@ -1179,8 +1179,8 @@ func agentHasCatalogRuleMutationIntent(input string) bool {
 	// subject contains words such as "检票点" or "核销规则". This guard must
 	// run before the noun checks below so report and catalog lookups do not get
 	// routed to a preview tool.
-	if agentHasAny(normalized, agentReadIntentWords) && !agentHasAny(normalized, agentCatalogIntentWords) &&
-		!agentHasAny(normalized, agentProductCreateIntentWords) && !agentHasAny(normalized, agentProductUpdateIntentWords) {
+	if agentHasAny(normalized, agentReadIntentWords) && !agentHasAffirmativeAgentWord(normalized, agentCatalogIntentWords) &&
+		!agentHasAffirmativeAgentWord(normalized, agentProductCreateIntentWords) && !agentHasAffirmativeAgentWord(normalized, agentProductUpdateIntentWords) {
 		return false
 	}
 	if agentHasAny(normalized, []string{"检票点", "核销规则", "规则组", "分组", "票规"}) {
