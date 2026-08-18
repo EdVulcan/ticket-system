@@ -1067,6 +1067,14 @@ func agentHasAny(input string, values []string) bool {
 
 func agentHasCatalogRuleMutationIntent(input string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(input))
+	// A read verb with no catalog mutation verb is a lookup, even when the
+	// subject contains words such as "检票点" or "核销规则". This guard must
+	// run before the noun checks below so report and catalog lookups do not get
+	// routed to a preview tool.
+	if agentHasAny(normalized, agentReadIntentWords) && !agentHasAny(normalized, agentCatalogIntentWords) &&
+		!agentHasAny(normalized, agentProductCreateIntentWords) && !agentHasAny(normalized, agentProductUpdateIntentWords) {
+		return false
+	}
 	if agentHasAny(normalized, []string{"检票点", "核销规则", "规则组", "分组", "票规"}) {
 		return true
 	}
