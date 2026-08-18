@@ -24,7 +24,9 @@ var agentTicketProductCreatePattern = regexp.MustCompile(`(?:创建|新建|生�
 var agentUnsupportedCapabilityMarkers = []string{
 	"支付", "退款", "退票", "资金退款", "设备控制", "下发设备", "开闸", "硬件", "凭据", "密钥", "api key", "appid", "secret",
 	"分销授权", "渠道授权", "授权分销", "上架", "下架", "权限变更", "赋权", "充值", "付款", "结算确认", "确认结算", "入园",
-	"酒店", "住宿", "房型", "房量", "价格日历", "预约入住",
+	"创建预约", "预约创建", "取消预约", "预约取消", "改期预约", "预约改期", "修改预约", "预约入住",
+	"创建酒店", "删除酒店", "修改酒店", "创建房型", "删除房型", "修改房型", "创建价格计划", "删除价格计划", "修改价格计划",
+	"发布渠道", "渠道发布", "同步渠道", "pms", "webhook", "小红书", "携程", "ota",
 }
 
 var agentUnsafeInputMarkers = []string{
@@ -499,8 +501,14 @@ func agentPureReadRequest(input string) bool {
 }
 
 func agentUnsupportedCapabilityMessage(input string) string {
-	if agentHasAny(input, []string{"酒店", "住宿", "房型", "房量", "价格日历", "预约入住"}) {
-		return "当前 AI 助手未开放酒店产品、房型房量、价格日历或住宿预约操作；请使用酒店业务页面完成操作"
+	if agentHasAny(input, []string{"创建预约", "预约创建", "取消预约", "预约取消", "改期预约", "预约改期", "修改预约", "预约入住"}) {
+		return "当前 AI 助手未开放酒店预约创建、取消或改期；请使用酒店预约页面完成操作"
+	}
+	if agentHasAny(input, []string{"创建酒店", "删除酒店", "修改酒店", "创建房型", "删除房型", "修改房型", "创建价格计划", "删除价格计划", "修改价格计划"}) {
+		return "当前 AI 助手未开放酒店结构配置；请使用酒店基础资料页面完成操作"
+	}
+	if agentHasAny(input, []string{"发布渠道", "渠道发布", "同步渠道", "pms", "webhook", "小红书", "携程", "ota"}) {
+		return "当前 AI 助手未开放酒店渠道、PMS、Webhook 或外部平台状态操作；请使用对应业务页面完成操作"
 	}
 	if agentHasAny(input, []string{"设备控制", "下发设备", "开闸", "硬件"}) {
 		return "当前 AI 助手未开放设备或闸机控制；请使用现场设备管理页面完成操作"
@@ -611,6 +619,12 @@ func agentReadOnlyToolRoute(input string) []string {
 func agentReadOnlyCompoundToolRoutes(input string) []string {
 	normalized := strings.ToLower(strings.TrimSpace(input))
 	if normalized == "" || !agentReadOnlyCompoundIntent(normalized) {
+		return nil
+	}
+	// Hotel compound reads require typed hotel/date/name arguments that the
+	// lexical adapter cannot safely infer. Let the provider use the typed
+	// compound query tool instead of issuing an empty ticket-inventory query.
+	if agentHasAny(normalized, agentHotelIntentWords) {
 		return nil
 	}
 	type route struct {
