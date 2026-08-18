@@ -30,16 +30,17 @@ validation.
 | inventory | query | Dated ticket capacity, sold quantity, and remaining quantity; no inventory mutation |
 | orders | query | Tenant-owned order summaries and order items; no order, payment, or refund mutation |
 | reports | query | Sales-period restatement and first-effective verification summaries; no financial mutation |
-| hotel | knowledge only | Scenic hotel packages, entitlements, reservations, and stay fulfillment; no AI tool is registered yet |
+| hotel | query and preview | Hotel, room type, rate-plan, inventory, two price calendars, independent hotel products, scenic-hotel reservations/entitlements, and business summaries; low-risk inventory/calendar/status previews require confirmation |
 | distribution | query | Distributor-owned partner, authorized listing, fulfillment, and settlement summaries; no offer, channel, inventory, or settlement mutation |
 | teams | query | Relationship-scoped travel-team contracts, group/admission/confirmation aggregates, settlement summaries, and account summaries; no roster, admission, payment, or settlement mutation |
 | channels | knowledge only | Ctrip/Xiaohongshu integration state; no external status mutation tool is registered |
 | finance | knowledge only | Payments, refunds, ledgers, and settlements; no AI tool is registered |
 
-"Knowledge only" means the assistant may explain a supported concept after a
-  future read-only tool is added, but it must not claim to query or change the
-  module today. Never invent an endpoint, database identifier, financial fact,
-  or external platform result.
+"Knowledge only" means the assistant may explain a supported concept but has
+  no server-backed query or preview tool for that module. For modules with
+  query/preview access, the assistant may only use the registered server
+  adapters and must not invent an endpoint, database identifier, financial
+  fact, or external platform result.
 
 ## Operation levels
 

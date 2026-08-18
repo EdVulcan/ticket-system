@@ -163,79 +163,87 @@ type scenicHotelPackageFacts struct {
 func (s *ScenicHotelPackageService) SetReservationStatus(tenantID, reservationID, operatorID uint, target, reason string) error {
 	target, reason = strings.TrimSpace(target), strings.TrimSpace(reason)
 	return model.Write(func(tx *gorm.DB) error {
-		if err := requireConfiguredHotelSupplier(tx, tenantID); err != nil {
-			return err
-		}
-		var reservation model.HotelReservation
-		if err := tx.Where("id = ? AND supplier_tenant_id = ?", reservationID, tenantID).First(&reservation).Error; err != nil {
-			return err
-		}
-		var order model.Order
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", reservation.OrderID, reservation.SalesTenantID).First(&order).Error; err != nil {
-			return err
-		}
-		var entitlement model.ScenicHotelPackageEntitlement
-		entitlementErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("ticket_id = ?", reservation.TicketID).First(&entitlement).Error
-		if entitlementErr != nil && !errors.Is(entitlementErr, gorm.ErrRecordNotFound) {
-			return entitlementErr
-		}
-		if entitlementErr == nil && (entitlement.Status == "booking_pending" || entitlement.Status == "cancel_pending") {
-			return errors.New("hotel reservation cannot change while its package booking operation is in progress")
-		}
-		var ticket model.Ticket
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", reservation.TicketID).First(&ticket).Error; err != nil {
-			return err
-		}
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND supplier_tenant_id = ?", reservationID, tenantID).First(&reservation).Error; err != nil {
-			return err
-		}
-		if ticket.PendingRefundID > 0 {
-			return errors.New("hotel reservation cannot change while its ticket has a pending refund")
-		}
-		allowed := map[string]map[string]bool{
-			"confirmed":   {"checked_in": true, "no_show": true},
-			"checked_in":  {"checked_out": true, "confirmed": true},
-			"checked_out": {"checked_in": true},
-			"no_show":     {"confirmed": true},
-		}
-		if !allowed[reservation.Status][target] {
-			return fmt.Errorf("hotel reservation cannot change from %s to %s", reservation.Status, target)
-		}
-		correction := (reservation.Status == "checked_in" && target == "confirmed") ||
-			(reservation.Status == "checked_out" && target == "checked_in") ||
-			(reservation.Status == "no_show" && target == "confirmed")
-		if (target == "no_show" || correction) && reason == "" {
-			return errors.New("a reason is required for no-show or fulfillment correction")
-		}
-		now := time.Now()
-		updates := map[string]interface{}{"status": target}
-		switch target {
-		case "checked_in":
-			if reservation.CheckedInAt == nil {
-				updates["checked_in_at"] = now
-			}
-			updates["checked_out_at"] = nil
-		case "checked_out":
-			updates["checked_out_at"] = now
-		case "no_show":
-			updates["no_show_at"] = now
-		case "confirmed":
-			if reservation.Status == "checked_in" {
-				updates["checked_in_at"] = nil
-			}
-			if reservation.Status == "no_show" {
-				updates["no_show_at"] = nil
-			}
-		}
-		if err := tx.Model(&reservation).Updates(updates).Error; err != nil {
-			return err
-		}
-		auditReason := reason
-		if auditReason == "" {
-			auditReason = map[string]string{"checked_in": "登记酒店已入住", "checked_out": "登记酒店已离店"}[target]
-		}
-		return recordAuditTx(tx, operatorID, tenantID, auditRoleTx(tx, operatorID), "tenant", "hotel.reservation.status", "hotel_reservation", reservation.ID, auditReason, fmt.Sprintf(`{"status":%q}`, reservation.Status), fmt.Sprintf(`{"status":%q}`, target))
+		return setReservationStatusTx(tx, tenantID, reservationID, operatorID, target, reason)
 	})
+}
+
+// setReservationStatusTx is shared with the Agent confirmation path. The
+// reservation state machine, package Saga guards, ticket refund guard and
+// audit all remain in this single transaction-owned implementation.
+func setReservationStatusTx(tx *gorm.DB, tenantID, reservationID, operatorID uint, target, reason string) error {
+	if err := requireConfiguredHotelSupplier(tx, tenantID); err != nil {
+		return err
+	}
+	target, reason = strings.TrimSpace(target), strings.TrimSpace(reason)
+	var reservation model.HotelReservation
+	if err := tx.Where("id = ? AND supplier_tenant_id = ?", reservationID, tenantID).First(&reservation).Error; err != nil {
+		return err
+	}
+	var order model.Order
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", reservation.OrderID, reservation.SalesTenantID).First(&order).Error; err != nil {
+		return err
+	}
+	var entitlement model.ScenicHotelPackageEntitlement
+	entitlementErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("ticket_id = ?", reservation.TicketID).First(&entitlement).Error
+	if entitlementErr != nil && !errors.Is(entitlementErr, gorm.ErrRecordNotFound) {
+		return entitlementErr
+	}
+	if entitlementErr == nil && (entitlement.Status == "booking_pending" || entitlement.Status == "cancel_pending") {
+		return errors.New("hotel reservation cannot change while its package booking operation is in progress")
+	}
+	var ticket model.Ticket
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", reservation.TicketID).First(&ticket).Error; err != nil {
+		return err
+	}
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND supplier_tenant_id = ?", reservationID, tenantID).First(&reservation).Error; err != nil {
+		return err
+	}
+	if ticket.PendingRefundID > 0 {
+		return errors.New("hotel reservation cannot change while its ticket has a pending refund")
+	}
+	allowed := map[string]map[string]bool{
+		"confirmed":   {"checked_in": true, "no_show": true},
+		"checked_in":  {"checked_out": true, "confirmed": true},
+		"checked_out": {"checked_in": true},
+		"no_show":     {"confirmed": true},
+	}
+	if !allowed[reservation.Status][target] {
+		return fmt.Errorf("hotel reservation cannot change from %s to %s", reservation.Status, target)
+	}
+	correction := (reservation.Status == "checked_in" && target == "confirmed") ||
+		(reservation.Status == "checked_out" && target == "checked_in") ||
+		(reservation.Status == "no_show" && target == "confirmed")
+	if (target == "no_show" || correction) && reason == "" {
+		return errors.New("a reason is required for no-show or fulfillment correction")
+	}
+	now := time.Now()
+	updates := map[string]interface{}{"status": target}
+	switch target {
+	case "checked_in":
+		if reservation.CheckedInAt == nil {
+			updates["checked_in_at"] = now
+		}
+		updates["checked_out_at"] = nil
+	case "checked_out":
+		updates["checked_out_at"] = now
+	case "no_show":
+		updates["no_show_at"] = now
+	case "confirmed":
+		if reservation.Status == "checked_in" {
+			updates["checked_in_at"] = nil
+		}
+		if reservation.Status == "no_show" {
+			updates["no_show_at"] = nil
+		}
+	}
+	if err := tx.Model(&reservation).Updates(updates).Error; err != nil {
+		return err
+	}
+	auditReason := reason
+	if auditReason == "" {
+		auditReason = map[string]string{"checked_in": "登记酒店已入住", "checked_out": "登记酒店已离店"}[target]
+	}
+	return recordAuditTx(tx, operatorID, tenantID, auditRoleTx(tx, operatorID), "tenant", "hotel.reservation.status", "hotel_reservation", reservation.ID, auditReason, fmt.Sprintf(`{"status":%q}`, reservation.Status), fmt.Sprintf(`{"status":%q}`, target))
 }
 
 func packageViewTx(tx *gorm.DB, tenantID uint, row *model.ScenicHotelPackage) (*ScenicHotelPackageView, error) {

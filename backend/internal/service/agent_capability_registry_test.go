@@ -11,7 +11,7 @@ func TestAgentCapabilityRegistryIsVersionedAndToolSafe(t *testing.T) {
 	if err := validateAgentCapabilityRegistry(); err != nil {
 		t.Fatalf("invalid agent capability registry: %v", err)
 	}
-	for _, operationType := range []string{AgentOperationPending, AgentOperationCatalogBatchChange, AgentOperationTicketProductCreate, AgentOperationTicketProductUpdate, AgentOperationTicketProductBatchUpdate, AgentOperationCompound} {
+	for _, operationType := range []string{AgentOperationPending, AgentOperationCatalogBatchChange, AgentOperationTicketProductCreate, AgentOperationTicketProductUpdate, AgentOperationTicketProductBatchUpdate, AgentOperationCompound, AgentOperationHotelInventoryChange, AgentOperationHotelRateCalendarChange, AgentOperationHotelProductCalendarChange, AgentOperationHotelReservationStatusChange} {
 		pack, err := agentKnowledgePackForOperation(operationType)
 		if err != nil {
 			t.Fatalf("load knowledge pack for %q: %v", operationType, err)
@@ -23,7 +23,7 @@ func TestAgentCapabilityRegistryIsVersionedAndToolSafe(t *testing.T) {
 			t.Fatalf("knowledge pack for %q does not contain the system contract", operationType)
 		}
 	}
-	for _, moduleID := range []string{agentModuleOrders, agentModuleInventory, agentModuleReports, agentModuleDistribution, agentModuleTeams} {
+	for _, moduleID := range []string{agentModuleOrders, agentModuleInventory, agentModuleReports, agentModuleDistribution, agentModuleTeams, agentModuleHotel} {
 		pack, err := agentKnowledgePackForModule(moduleID)
 		if err != nil {
 			t.Fatalf("load read-only module pack %q: %v", moduleID, err)

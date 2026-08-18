@@ -156,6 +156,20 @@ func agentCompoundReadonlyHandler(name string) (agentToolHandler, bool) {
 		return executeAgentTeamSettlementQuery, true
 	case "query_team_account_summary":
 		return executeAgentTeamAccountQuery, true
+	case "search_hotel_catalog":
+		return executeAgentHotelCatalogQuery, true
+	case "query_hotel_inventory":
+		return executeAgentHotelInventoryQuery, true
+	case "query_hotel_rate_calendar":
+		return executeAgentHotelRateCalendarQuery, true
+	case "query_hotel_product_calendar":
+		return executeAgentHotelProductCalendarQuery, true
+	case "query_hotel_reservations":
+		return executeAgentHotelReservationQuery, true
+	case "query_hotel_booking_entitlements":
+		return executeAgentHotelEntitlementQuery, true
+	case "query_hotel_business_summary":
+		return executeAgentHotelBusinessSummaryQuery, true
 	default:
 		return nil, false
 	}

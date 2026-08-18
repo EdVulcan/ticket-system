@@ -33,6 +33,7 @@ type agentToolSpec struct {
 	Permission           string
 	Capability           string
 	CapabilityAny        []string
+	BusinessTypesAll     []string
 	BusinessType         string
 	ReadOnly             bool
 	PreviewOnly          bool
@@ -174,82 +175,111 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 	} else {
 		normalizedInput := strings.ToLower(strings.TrimSpace(input))
 		priorInput := strings.ToLower(strings.TrimSpace(task.InputText))
-		creationIntent := task.OperationType == AgentOperationTicketProductCreate ||
-			agentExplicitTicketProductCreateIntent(normalizedInput) ||
-			(task.OperationType == AgentOperationCatalogBatchChange && agentExplicitTicketProductCreateIntent(priorInput))
-		// A short continuation such as a rule-group name has no mutation verb.
-		// The durable task operation must keep it on the rule tool; otherwise the
-		// provider sees every visible tool and may reinterpret the answer as a
-		// product request.
-		ruleIntent := !creationIntent && (task.OperationType == AgentOperationCatalogBatchChange ||
-			agentHasCatalogRuleMutationIntent(normalizedInput) && task.OperationType != AgentOperationTicketProductCreate)
-		if ruleIntent {
-			ruleTools := make([]agentToolSpec, 0, 1)
+		hotelOperation := task.OperationType == AgentOperationHotelInventoryChange || task.OperationType == AgentOperationHotelRateCalendarChange || task.OperationType == AgentOperationHotelProductCalendarChange || task.OperationType == AgentOperationHotelReservationStatusChange
+		hotelIntent := hotelOperation || agentHasAffirmativeAgentWord(normalizedInput, agentHotelMutationIntentWords) || agentHasAffirmativeAgentWord(priorInput, agentHotelMutationIntentWords)
+		if hotelIntent {
+			toolName := ""
+			switch {
+			case task.OperationType == AgentOperationHotelInventoryChange || agentHasAny(normalizedInput, []string{"房量", "房态", "关房", "开房"}):
+				toolName = "prepare_hotel_inventory_change"
+			case task.OperationType == AgentOperationHotelProductCalendarChange || agentHasAny(normalizedInput, []string{"酒店产品价格", "酒店产品售价", "日历房售价"}):
+				toolName = "prepare_hotel_product_calendar_change"
+			case task.OperationType == AgentOperationHotelRateCalendarChange || agentHasAny(normalizedInput, []string{"价格计划日历", "房型价格日历", "入住日价格"}):
+				toolName = "prepare_hotel_rate_calendar_change"
+			case task.OperationType == AgentOperationHotelReservationStatusChange || agentHasAny(normalizedInput, []string{"登记入住", "登记离店", "登记未到店", "已入住", "已离店", "未到店"}):
+				toolName = "prepare_hotel_reservation_status_change"
+			}
+			if toolName == "" {
+				return nil, agentInvalid("请明确酒店操作是房量、价格计划日历、日历房销售价日历，还是住宿履约状态登记")
+			}
+			filtered := make([]agentToolSpec, 0, 1)
 			for _, spec := range visible {
-				if spec.Name == "prepare_catalog_rule_change" {
-					ruleTools = append(ruleTools, spec)
+				if spec.Name == toolName {
+					filtered = append(filtered, spec)
 				}
 			}
-			visible = ruleTools
+			visible = filtered
 			if len(visible) == 0 {
-				return nil, agentInvalid("当前账号没有票规预览权限")
+				return nil, agentInvalid("当前账号或租户没有该酒店 AI 操作权限")
 			}
-		} else if creationIntent {
-			// DeepSeek thinking mode accepts automatic tool selection but rejects a
-			// named tool_choice. Limit the registry for creation requests so the
-			// provider can still choose automatically without wandering through
-			// unrelated read-only searches.
-			creationTools := make([]agentToolSpec, 0, 1)
-			for _, spec := range visible {
-				if spec.Name == "prepare_ticket_product_create" {
-					creationTools = append(creationTools, spec)
-				}
-			}
-			visible = creationTools
-			if len(visible) == 0 {
-				return nil, agentInvalid("当前账号没有创建票种预览权限")
-			}
-		} else if task.OperationType == AgentOperationTicketProductBatchUpdate ||
-			(agentExplicitBatchIntent(normalizedInput) && !agentHasCatalogRuleMutationIntent(input)) ||
-			(agentHasAny(normalizedInput, agentProductBatchUpdateIntentWords) && !agentHasCatalogRuleMutationIntent(input)) {
-			batchTools := make([]agentToolSpec, 0, 1)
-			for _, spec := range visible {
-				if spec.Name == "prepare_ticket_product_batch_update" {
-					batchTools = append(batchTools, spec)
-				}
-			}
-			visible = batchTools
-			if len(visible) == 0 {
-				return nil, agentInvalid("当前账号没有批量票种修改预览权限")
-			}
-		} else if task.OperationType == AgentOperationTicketProductUpdate || (agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentProductUpdateIntentWords) && !agentHasCatalogRuleMutationIntent(input)) {
-			updateTools := make([]agentToolSpec, 0, 1)
-			for _, spec := range visible {
-				if spec.Name == "prepare_ticket_product_update" {
-					updateTools = append(updateTools, spec)
-				}
-			}
-			visible = updateTools
-			if len(visible) == 0 {
-				return nil, agentInvalid("当前账号没有票种修改预览权限")
-			}
-		} else if task.OperationType == AgentOperationPending {
-			// A single-topic read is deterministic enough to route without
-			// asking the provider to choose among the whole registry. Explicit
-			// multi-topic queries were handled by query_compound_readonly above.
-			if route := agentReadOnlyToolRoute(input); len(route) == 1 {
-				routed := make([]agentToolSpec, 0, 1)
+		} else {
+			creationIntent := task.OperationType == AgentOperationTicketProductCreate ||
+				agentExplicitTicketProductCreateIntent(normalizedInput) ||
+				(task.OperationType == AgentOperationCatalogBatchChange && agentExplicitTicketProductCreateIntent(priorInput))
+			// A short continuation such as a rule-group name has no mutation verb.
+			// The durable task operation must keep it on the rule tool; otherwise the
+			// provider sees every visible tool and may reinterpret the answer as a
+			// product request.
+			ruleIntent := !creationIntent && (task.OperationType == AgentOperationCatalogBatchChange ||
+				agentHasCatalogRuleMutationIntent(normalizedInput) && task.OperationType != AgentOperationTicketProductCreate)
+			if ruleIntent {
+				ruleTools := make([]agentToolSpec, 0, 1)
 				for _, spec := range visible {
-					if spec.Name == route[0] {
-						routed = append(routed, spec)
+					if spec.Name == "prepare_catalog_rule_change" {
+						ruleTools = append(ruleTools, spec)
 					}
 				}
-				if len(routed) == 0 {
-					return nil, agentInvalid("当前账号没有该查询能力或对应业务权限")
+				visible = ruleTools
+				if len(visible) == 0 {
+					return nil, agentInvalid("当前账号没有票规预览权限")
 				}
-				visible = routed
-				if route[0] == "query_sales_summary" || route[0] == "query_verification_summary" {
-					directReadOnlyTool = route[0]
+			} else if creationIntent {
+				// DeepSeek thinking mode accepts automatic tool selection but rejects a
+				// named tool_choice. Limit the registry for creation requests so the
+				// provider can still choose automatically without wandering through
+				// unrelated read-only searches.
+				creationTools := make([]agentToolSpec, 0, 1)
+				for _, spec := range visible {
+					if spec.Name == "prepare_ticket_product_create" {
+						creationTools = append(creationTools, spec)
+					}
+				}
+				visible = creationTools
+				if len(visible) == 0 {
+					return nil, agentInvalid("当前账号没有创建票种预览权限")
+				}
+			} else if task.OperationType == AgentOperationTicketProductBatchUpdate ||
+				(agentExplicitBatchIntent(normalizedInput) && !agentHasCatalogRuleMutationIntent(input)) ||
+				(agentHasAny(normalizedInput, agentProductBatchUpdateIntentWords) && !agentHasCatalogRuleMutationIntent(input)) {
+				batchTools := make([]agentToolSpec, 0, 1)
+				for _, spec := range visible {
+					if spec.Name == "prepare_ticket_product_batch_update" {
+						batchTools = append(batchTools, spec)
+					}
+				}
+				visible = batchTools
+				if len(visible) == 0 {
+					return nil, agentInvalid("当前账号没有批量票种修改预览权限")
+				}
+			} else if task.OperationType == AgentOperationTicketProductUpdate || (agentHasAny(strings.ToLower(strings.TrimSpace(input)), agentProductUpdateIntentWords) && !agentHasCatalogRuleMutationIntent(input)) {
+				updateTools := make([]agentToolSpec, 0, 1)
+				for _, spec := range visible {
+					if spec.Name == "prepare_ticket_product_update" {
+						updateTools = append(updateTools, spec)
+					}
+				}
+				visible = updateTools
+				if len(visible) == 0 {
+					return nil, agentInvalid("当前账号没有票种修改预览权限")
+				}
+			} else if task.OperationType == AgentOperationPending {
+				// A single-topic read is deterministic enough to route without
+				// asking the provider to choose among the whole registry. Explicit
+				// multi-topic queries were handled by query_compound_readonly above.
+				if route := agentReadOnlyToolRoute(input); len(route) == 1 {
+					routed := make([]agentToolSpec, 0, 1)
+					for _, spec := range visible {
+						if spec.Name == route[0] {
+							routed = append(routed, spec)
+						}
+					}
+					if len(routed) == 0 {
+						return nil, agentInvalid("当前账号没有该查询能力或对应业务权限")
+					}
+					visible = routed
+					if route[0] == "query_sales_summary" || route[0] == "query_verification_summary" {
+						directReadOnlyTool = route[0]
+					}
 				}
 			}
 		}
@@ -309,6 +339,8 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 	对于批量修改票种基础信息的请求，必须调用 prepare_ticket_product_batch_update；用 target_scope 表达用户明确的批量范围，product_names 只为旧任务兼容，并填写共同字段。服务端允许修改当前租户自有票种，包括已上架或允许分销的自有票种；分销副本仍会拒绝。批量操作不允许统一改名，也不能修改检票点、规则组、上架状态、分销授权、渠道、库存预占或资金事实。`
 	systemPrompt += `
 对于用户明确要求连续完成多个低风险变更的请求，调用 prepare_compound_preview，并按 2 到 5 个独立步骤填写；不要把查询、退款、资金、渠道授权、权限或外部状态放入复合计划。不同步骤不要重复操作同一票种，服务端会在预览阶段拒绝可能导致后续 revision 失效的重复目标。`
+	systemPrompt += `
+酒店操作必须使用酒店模块工具。房型价格计划入住日覆盖价与独立酒店产品销售价日历是两套不同事实，不能混用；日历房才能维护酒店产品销售价日历，预售房必须拒绝。房量、价格和住宿状态都必须提供明确酒店/房型/产品/预订号及日期或状态，不得猜测价格、日期或结算价。酒店写入只能调用 prepare_hotel_* 生成逐日或逐预订预览，确认前不写入；不开放酒店结构 CRUD、上线下线、预约创建/取消/改期/退款、外部渠道/PMS、支付或结算。`
 
 	messages := []AIMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: input}}
 	definitions := agentToolDefinitions(visible)
@@ -644,6 +676,11 @@ func agentToolAllowed(tenantID uint, actorRole string, spec agentToolSpec) bool 
 	}
 	if spec.BusinessType != "" && requireActiveSupplierBusinessType(model.DB, tenantID, spec.BusinessType) != nil {
 		return false
+	}
+	for _, businessType := range spec.BusinessTypesAll {
+		if requireActiveSupplierBusinessType(model.DB, tenantID, businessType) != nil {
+			return false
+		}
 	}
 	return true
 }

@@ -276,6 +276,14 @@ func validateAgentCapabilityRegistry() error {
 		if spec.Capability != "" && len(spec.CapabilityAny) > 0 {
 			return fmt.Errorf("tool %q cannot declare both one capability and any-capability access", spec.Name)
 		}
+		if spec.BusinessType != "" && len(spec.BusinessTypesAll) > 0 {
+			return fmt.Errorf("tool %q cannot declare both one business type and all-business-type access", spec.Name)
+		}
+		for _, businessType := range spec.BusinessTypesAll {
+			if strings.TrimSpace(businessType) == "" {
+				return fmt.Errorf("tool %q has an empty required business type", spec.Name)
+			}
+		}
 		if spec.ReadOnly {
 			if _, ok := agentToolHandlerFor(spec.Name); !ok {
 				return fmt.Errorf("read-only tool %q has no handler adapter", spec.Name)

@@ -382,6 +382,15 @@ func (s *HotelProductService) ListCalendar(tenantID, hotelProductID uint, startD
 }
 
 func (s *HotelProductService) SetCalendar(tenantID, hotelProductID, operatorID uint, inputs []HotelProductCalendarPriceInput) error {
+	return model.Write(func(tx *gorm.DB) error {
+		return s.setCalendarTx(tx, tenantID, hotelProductID, operatorID, inputs)
+	})
+}
+
+// setCalendarTx is the transaction-owned mutation seam shared by the admin
+// API and Agent confirmation. It keeps current-revision locking and the
+// presale-room rejection in one authoritative implementation.
+func (s *HotelProductService) setCalendarTx(tx *gorm.DB, tenantID, hotelProductID, operatorID uint, inputs []HotelProductCalendarPriceInput) error {
 	if len(inputs) == 0 || len(inputs) > 93 {
 		return errors.New("hotel product calendar update must contain between 1 and 93 dates")
 	}
@@ -416,46 +425,44 @@ func (s *HotelProductService) SetCalendar(tenantID, hotelProductID, operatorID u
 	if maxDate.Sub(minDate) > 92*24*time.Hour {
 		return errors.New("hotel product calendar date range must be between 1 and 93 days")
 	}
-	return model.Write(func(tx *gorm.DB) error {
-		if err := requireActiveHotelSupplier(tx, tenantID); err != nil {
-			return err
-		}
-		var hotelProduct model.HotelProduct
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", hotelProductID, tenantID).First(&hotelProduct).Error; err != nil {
-			return err
-		}
-		if hotelProduct.SaleMode != "calendar_room" {
-			return errors.New("presale room products do not support a price calendar")
-		}
-		if err := requireHotelProductResourcesTx(tx, tenantID, hotelProduct.HotelID, hotelProduct.RoomTypeID, hotelProduct.RatePlanID); err != nil {
-			return err
-		}
-		if hotelProduct.CurrentRevisionID == 0 {
-			return errors.New("hotel product has no current revision")
-		}
-		for _, input := range parsed {
-			if input.clearOverride {
-				if err := tx.Unscoped().Where("tenant_id = ? AND hotel_product_id = ? AND hotel_product_revision_id = ? AND stay_date = ?", tenantID, hotelProduct.ID, hotelProduct.CurrentRevisionID, input.date).Delete(&model.HotelProductCalendarPrice{}).Error; err != nil {
-					return err
-				}
-				continue
-			}
-			var row model.HotelProductCalendarPrice
-			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND hotel_product_id = ? AND hotel_product_revision_id = ? AND stay_date = ?", tenantID, hotelProduct.ID, hotelProduct.CurrentRevisionID, input.date).First(&row).Error
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				row = model.HotelProductCalendarPrice{TenantID: tenantID, HotelProductID: hotelProduct.ID, HotelProductRevisionID: hotelProduct.CurrentRevisionID, StayDate: input.date, RetailPriceCents: input.retailPriceCents, SettlementPriceCents: input.settlementPriceCents}
-				if err := tx.Create(&row).Error; err != nil {
-					return err
-				}
-				continue
-			}
-			if err != nil {
+	if err := requireActiveHotelSupplier(tx, tenantID); err != nil {
+		return err
+	}
+	var hotelProduct model.HotelProduct
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", hotelProductID, tenantID).First(&hotelProduct).Error; err != nil {
+		return err
+	}
+	if hotelProduct.SaleMode != "calendar_room" {
+		return errors.New("presale room products do not support a price calendar")
+	}
+	if err := requireHotelProductResourcesTx(tx, tenantID, hotelProduct.HotelID, hotelProduct.RoomTypeID, hotelProduct.RatePlanID); err != nil {
+		return err
+	}
+	if hotelProduct.CurrentRevisionID == 0 {
+		return errors.New("hotel product has no current revision")
+	}
+	for _, input := range parsed {
+		if input.clearOverride {
+			if err := tx.Unscoped().Where("tenant_id = ? AND hotel_product_id = ? AND hotel_product_revision_id = ? AND stay_date = ?", tenantID, hotelProduct.ID, hotelProduct.CurrentRevisionID, input.date).Delete(&model.HotelProductCalendarPrice{}).Error; err != nil {
 				return err
 			}
-			if err := tx.Model(&row).Updates(map[string]interface{}{"retail_price_cents": input.retailPriceCents, "settlement_price_cents": input.settlementPriceCents}).Error; err != nil {
+			continue
+		}
+		var row model.HotelProductCalendarPrice
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND hotel_product_id = ? AND hotel_product_revision_id = ? AND stay_date = ?", tenantID, hotelProduct.ID, hotelProduct.CurrentRevisionID, input.date).First(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			row = model.HotelProductCalendarPrice{TenantID: tenantID, HotelProductID: hotelProduct.ID, HotelProductRevisionID: hotelProduct.CurrentRevisionID, StayDate: input.date, RetailPriceCents: input.retailPriceCents, SettlementPriceCents: input.settlementPriceCents}
+			if err := tx.Create(&row).Error; err != nil {
 				return err
 			}
+			continue
 		}
-		return recordAuditTx(tx, operatorID, tenantID, "admin", "tenant", "hotel.product_calendar.update", "hotel_product", hotelProduct.ID, "update hotel product stay-date prices", "{}", fmt.Sprintf(`{"dates":%d}`, len(parsed)))
-	})
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&row).Updates(map[string]interface{}{"retail_price_cents": input.retailPriceCents, "settlement_price_cents": input.settlementPriceCents}).Error; err != nil {
+			return err
+		}
+	}
+	return recordAuditTx(tx, operatorID, tenantID, "admin", "tenant", "hotel.product_calendar.update", "hotel_product", hotelProduct.ID, "update hotel product stay-date prices", "{}", fmt.Sprintf(`{"dates":%d}`, len(parsed)))
 }

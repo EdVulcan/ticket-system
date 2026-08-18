@@ -334,6 +334,16 @@ func (s *HotelService) ListRatePlanCalendar(tenantID, hotelID, roomTypeID, rateP
 }
 
 func (s *HotelService) SetRatePlanCalendar(tenantID, hotelID, roomTypeID, ratePlanID, operatorID uint, inputs []HotelRatePlanPriceInput) error {
+	return model.Write(func(tx *gorm.DB) error {
+		return s.setRatePlanCalendarTx(tx, tenantID, hotelID, roomTypeID, ratePlanID, operatorID, inputs)
+	})
+}
+
+// setRatePlanCalendarTx is the transaction-owned mutation seam shared by the
+// admin API and the Agent confirmation path. Keeping validation, ownership,
+// locking and audit in one function prevents the assistant from developing a
+// second price-calendar implementation.
+func (s *HotelService) setRatePlanCalendarTx(tx *gorm.DB, tenantID, hotelID, roomTypeID, ratePlanID, operatorID uint, inputs []HotelRatePlanPriceInput) error {
 	if len(inputs) == 0 || len(inputs) > 93 {
 		return errors.New("hotel rate plan calendar update must contain between 1 and 93 dates")
 	}
@@ -372,41 +382,39 @@ func (s *HotelService) SetRatePlanCalendar(tenantID, hotelID, roomTypeID, ratePl
 	if maxDate.Sub(minDate) > 92*24*time.Hour {
 		return errors.New("hotel rate plan calendar date range must be between 1 and 93 days")
 	}
-	return model.Write(func(tx *gorm.DB) error {
-		if err := requireActiveHotelSupplier(tx, tenantID); err != nil {
-			return err
-		}
-		var rate model.HotelRatePlan
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND hotel_id = ? AND room_type_id = ?", ratePlanID, tenantID, hotelID, roomTypeID).First(&rate).Error; err != nil {
-			return err
-		}
-		overrideCount := 0
-		for _, input := range parsed {
-			if input.clearOverride {
-				if err := tx.Unscoped().Where("tenant_id = ? AND hotel_id = ? AND room_type_id = ? AND rate_plan_id = ? AND stay_date = ?", tenantID, hotelID, roomTypeID, ratePlanID, input.date).Delete(&model.HotelRatePlanPrice{}).Error; err != nil {
-					return err
-				}
-				continue
-			}
-			overrideCount++
-			var row model.HotelRatePlanPrice
-			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND hotel_id = ? AND room_type_id = ? AND rate_plan_id = ? AND stay_date = ?", tenantID, hotelID, roomTypeID, ratePlanID, input.date).First(&row).Error
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				row = model.HotelRatePlanPrice{TenantID: tenantID, HotelID: hotelID, RoomTypeID: roomTypeID, RatePlanID: ratePlanID, StayDate: input.date, RetailPriceCents: input.retailPriceCents, SettlementPriceCents: input.settlementPriceCents}
-				if err := tx.Create(&row).Error; err != nil {
-					return err
-				}
-				continue
-			}
-			if err != nil {
+	if err := requireActiveHotelSupplier(tx, tenantID); err != nil {
+		return err
+	}
+	var rate model.HotelRatePlan
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND hotel_id = ? AND room_type_id = ?", ratePlanID, tenantID, hotelID, roomTypeID).First(&rate).Error; err != nil {
+		return err
+	}
+	overrideCount := 0
+	for _, input := range parsed {
+		if input.clearOverride {
+			if err := tx.Unscoped().Where("tenant_id = ? AND hotel_id = ? AND room_type_id = ? AND rate_plan_id = ? AND stay_date = ?", tenantID, hotelID, roomTypeID, ratePlanID, input.date).Delete(&model.HotelRatePlanPrice{}).Error; err != nil {
 				return err
 			}
-			if err := tx.Model(&row).Updates(map[string]interface{}{"retail_price_cents": input.retailPriceCents, "settlement_price_cents": input.settlementPriceCents}).Error; err != nil {
+			continue
+		}
+		overrideCount++
+		var row model.HotelRatePlanPrice
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND hotel_id = ? AND room_type_id = ? AND rate_plan_id = ? AND stay_date = ?", tenantID, hotelID, roomTypeID, ratePlanID, input.date).First(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			row = model.HotelRatePlanPrice{TenantID: tenantID, HotelID: hotelID, RoomTypeID: roomTypeID, RatePlanID: ratePlanID, StayDate: input.date, RetailPriceCents: input.retailPriceCents, SettlementPriceCents: input.settlementPriceCents}
+			if err := tx.Create(&row).Error; err != nil {
 				return err
 			}
+			continue
 		}
-		return recordAuditTx(tx, operatorID, tenantID, "admin", "tenant", "hotel.rate_plan_calendar.update", "hotel_rate_plan", ratePlanID, "update hotel rate plan stay-date prices", "{}", fmt.Sprintf(`{"dates":%d,"overrides":%d}`, len(parsed), overrideCount))
-	})
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&row).Updates(map[string]interface{}{"retail_price_cents": input.retailPriceCents, "settlement_price_cents": input.settlementPriceCents}).Error; err != nil {
+			return err
+		}
+	}
+	return recordAuditTx(tx, operatorID, tenantID, "admin", "tenant", "hotel.rate_plan_calendar.update", "hotel_rate_plan", ratePlanID, "update hotel rate plan stay-date prices", "{}", fmt.Sprintf(`{"dates":%d,"overrides":%d}`, len(parsed), overrideCount))
 }
 
 func (s *HotelService) CreateRatePlan(tenantID, hotelID, roomTypeID, operatorID uint, input HotelRatePlanInput) (*model.HotelRatePlan, error) {
@@ -487,6 +495,14 @@ func (s *HotelService) ListInventory(tenantID, hotelID, roomTypeID uint, startDa
 }
 
 func (s *HotelService) SetInventory(tenantID, hotelID, roomTypeID, operatorID uint, inputs []HotelInventoryInput) error {
+	return model.Write(func(tx *gorm.DB) error {
+		return s.setInventoryTx(tx, tenantID, hotelID, roomTypeID, operatorID, inputs)
+	})
+}
+
+// setInventoryTx is shared with Agent confirmations so the capacity guard and
+// room-type ownership check cannot diverge from the admin API.
+func (s *HotelService) setInventoryTx(tx *gorm.DB, tenantID, hotelID, roomTypeID, operatorID uint, inputs []HotelInventoryInput) error {
 	if len(inputs) == 0 || len(inputs) > 93 {
 		return errors.New("hotel inventory update must contain between 1 and 93 dates")
 	}
@@ -513,35 +529,40 @@ func (s *HotelService) SetInventory(tenantID, hotelID, roomTypeID, operatorID ui
 			closed   bool
 		}{date, input.Capacity, input.Closed}
 	}
-	return model.Write(func(tx *gorm.DB) error {
-		if err := requireActiveHotelSupplier(tx, tenantID); err != nil {
-			return err
-		}
-		if err := requireHotelRoomTypeTx(tx, tenantID, hotelID, roomTypeID); err != nil {
-			return err
-		}
-		for _, input := range parsed {
-			var row model.HotelRoomInventory
-			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND hotel_id = ? AND room_type_id = ? AND stay_date = ?", tenantID, hotelID, roomTypeID, input.date).First(&row).Error
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				row = model.HotelRoomInventory{TenantID: tenantID, HotelID: hotelID, RoomTypeID: roomTypeID, StayDate: input.date, Capacity: input.capacity, Closed: input.closed}
-				if err := tx.Create(&row).Error; err != nil {
-					return err
-				}
-				continue
-			}
-			if err != nil {
+	if err := requireActiveHotelSupplier(tx, tenantID); err != nil {
+		return err
+	}
+	if err := requireHotelRoomTypeTx(tx, tenantID, hotelID, roomTypeID); err != nil {
+		return err
+	}
+	// Serialize inventory updates for the room type, including dates whose row
+	// does not exist yet. Without the parent lock, two writers could both see a
+	// missing date and race into an insert/update with stale capacity facts.
+	var roomType model.HotelRoomType
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND hotel_id = ?", roomTypeID, tenantID, hotelID).First(&roomType).Error; err != nil {
+		return err
+	}
+	for _, input := range parsed {
+		var row model.HotelRoomInventory
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND hotel_id = ? AND room_type_id = ? AND stay_date = ?", tenantID, hotelID, roomTypeID, input.date).First(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			row = model.HotelRoomInventory{TenantID: tenantID, HotelID: hotelID, RoomTypeID: roomTypeID, StayDate: input.date, Capacity: input.capacity, Closed: input.closed}
+			if err := tx.Create(&row).Error; err != nil {
 				return err
 			}
-			if input.capacity < row.Reserved+row.Sold {
-				return fmt.Errorf("hotel inventory for %s cannot be lower than reserved and sold rooms", input.date.Format("2006-01-02"))
-			}
-			if err := tx.Model(&row).Updates(map[string]interface{}{"capacity": input.capacity, "closed": input.closed}).Error; err != nil {
-				return err
-			}
+			continue
 		}
-		return recordAuditTx(tx, operatorID, tenantID, "admin", "tenant", "hotel.inventory.update", "hotel_room_type", roomTypeID, "update hotel room inventory", "{}", fmt.Sprintf(`{"dates":%d}`, len(parsed)))
-	})
+		if err != nil {
+			return err
+		}
+		if input.capacity < row.Reserved+row.Sold {
+			return fmt.Errorf("hotel inventory for %s cannot be lower than reserved and sold rooms", input.date.Format("2006-01-02"))
+		}
+		if err := tx.Model(&row).Updates(map[string]interface{}{"capacity": input.capacity, "closed": input.closed}).Error; err != nil {
+			return err
+		}
+	}
+	return recordAuditTx(tx, operatorID, tenantID, "admin", "tenant", "hotel.inventory.update", "hotel_room_type", roomTypeID, "update hotel room inventory", "{}", fmt.Sprintf(`{"dates":%d}`, len(parsed)))
 }
 
 func requireHotelPropertyTx(tx *gorm.DB, tenantID, hotelID uint) error {

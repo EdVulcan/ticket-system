@@ -24,7 +24,9 @@ var agentTicketProductCreatePattern = regexp.MustCompile(`(?:创建|新建|生�
 var agentUnsupportedCapabilityMarkers = []string{
 	"支付", "退款", "退票", "资金退款", "设备控制", "下发设备", "开闸", "硬件", "凭据", "密钥", "api key", "appid", "secret",
 	"分销授权", "渠道授权", "授权分销", "上架", "下架", "权限变更", "赋权", "充值", "付款", "结算确认", "确认结算", "入园",
-	"酒店", "住宿", "房型", "房量", "价格日历", "预约入住",
+	"创建预约", "预约创建", "取消预约", "预约取消", "改期预约", "预约改期", "修改预约", "预约入住",
+	"创建酒店", "删除酒店", "修改酒店", "创建房型", "删除房型", "修改房型", "创建价格计划", "删除价格计划", "修改价格计划",
+	"发布渠道", "渠道发布", "同步渠道", "pms", "webhook", "小红书", "携程", "ota",
 }
 
 var agentUnsafeInputMarkers = []string{
@@ -40,17 +42,36 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 	if envelope == nil {
 		return agentInvalid("AI 未返回任务计划")
 	}
-	if envelope.Compound != nil && (envelope.Product != nil || envelope.ProductUpdate != nil || envelope.ProductBatchUpdate != nil || len(envelope.Operations) > 0) {
+	if envelope.Compound != nil && (envelope.Product != nil || envelope.ProductUpdate != nil || envelope.ProductBatchUpdate != nil || envelope.HotelInventory != nil || envelope.HotelRateCalendar != nil || envelope.HotelProductCalendar != nil || envelope.HotelReservationStatus != nil || len(envelope.Operations) > 0) {
 		return agentInvalid("AI 复合计划不能同时包含顶层票种或票规操作")
 	}
-	if envelope.Product != nil && (envelope.ProductUpdate != nil || envelope.ProductBatchUpdate != nil || len(envelope.Operations) > 0) {
+	if envelope.Product != nil && (envelope.ProductUpdate != nil || envelope.ProductBatchUpdate != nil || envelope.HotelInventory != nil || envelope.HotelRateCalendar != nil || envelope.HotelProductCalendar != nil || envelope.HotelReservationStatus != nil || len(envelope.Operations) > 0) {
 		return agentInvalid("AI 计划同时包含票种目录操作，请一次只描述一种操作")
 	}
-	if envelope.ProductUpdate != nil && (envelope.ProductBatchUpdate != nil || len(envelope.Operations) > 0) {
+	if envelope.ProductUpdate != nil && (envelope.ProductBatchUpdate != nil || envelope.HotelInventory != nil || envelope.HotelRateCalendar != nil || envelope.HotelProductCalendar != nil || envelope.HotelReservationStatus != nil || len(envelope.Operations) > 0) {
 		return agentInvalid("AI 计划同时包含票种修改和票规调整，请一次只描述一种操作")
 	}
-	if envelope.ProductBatchUpdate != nil && len(envelope.Operations) > 0 {
+	if envelope.ProductBatchUpdate != nil && (envelope.HotelInventory != nil || envelope.HotelRateCalendar != nil || envelope.HotelProductCalendar != nil || envelope.HotelReservationStatus != nil || len(envelope.Operations) > 0) {
 		return agentInvalid("AI 计划同时包含批量票种修改和票规调整，请一次只描述一种操作")
+	}
+	hotelFields := 0
+	if envelope.HotelInventory != nil {
+		hotelFields++
+	}
+	if envelope.HotelRateCalendar != nil {
+		hotelFields++
+	}
+	if envelope.HotelProductCalendar != nil {
+		hotelFields++
+	}
+	if envelope.HotelReservationStatus != nil {
+		hotelFields++
+	}
+	if hotelFields > 1 {
+		return agentInvalid("AI 计划同时包含多个酒店操作，请一次只描述一种操作")
+	}
+	if hotelFields > 0 && (len(envelope.Operations) > 0 || envelope.Product != nil || envelope.ProductUpdate != nil || envelope.ProductBatchUpdate != nil) {
+		return agentInvalid("AI 计划不能混合酒店与票务写入操作")
 	}
 	operationType := strings.TrimSpace(envelope.OperationType)
 	if operationType == "" {
@@ -61,6 +82,14 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 			operationType = AgentOperationTicketProductUpdate
 		case envelope.ProductBatchUpdate != nil:
 			operationType = AgentOperationTicketProductBatchUpdate
+		case envelope.HotelInventory != nil:
+			operationType = AgentOperationHotelInventoryChange
+		case envelope.HotelRateCalendar != nil:
+			operationType = AgentOperationHotelRateCalendarChange
+		case envelope.HotelProductCalendar != nil:
+			operationType = AgentOperationHotelProductCalendarChange
+		case envelope.HotelReservationStatus != nil:
+			operationType = AgentOperationHotelReservationStatusChange
 		case envelope.Compound != nil:
 			operationType = AgentOperationCompound
 		case len(envelope.Operations) > 0:
@@ -122,6 +151,14 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 			return agentInvalid("AI 未返回批量票种修改内容")
 		}
 		return validateAgentProductBatchUpdateCandidate(input, envelope.ProductBatchUpdate)
+	case AgentOperationHotelInventoryChange:
+		return validateAgentHotelInventoryCandidate(input, envelope.HotelInventory)
+	case AgentOperationHotelRateCalendarChange:
+		return validateAgentHotelRateCalendarCandidate(input, envelope.HotelRateCalendar)
+	case AgentOperationHotelProductCalendarChange:
+		return validateAgentHotelProductCalendarCandidate(input, envelope.HotelProductCalendar)
+	case AgentOperationHotelReservationStatusChange:
+		return validateAgentHotelReservationStatusCandidate(input, envelope.HotelReservationStatus)
 	case AgentOperationPending, "":
 		if envelope.Product != nil {
 			return validateAgentProductCandidate(input, envelope.Product)
@@ -131,6 +168,18 @@ func validateAgentPlannerEnvelope(input string, envelope *agentAIEnvelope) error
 		}
 		if envelope.ProductBatchUpdate != nil {
 			return validateAgentProductBatchUpdateCandidate(input, envelope.ProductBatchUpdate)
+		}
+		if envelope.HotelInventory != nil {
+			return validateAgentHotelInventoryCandidate(input, envelope.HotelInventory)
+		}
+		if envelope.HotelRateCalendar != nil {
+			return validateAgentHotelRateCalendarCandidate(input, envelope.HotelRateCalendar)
+		}
+		if envelope.HotelProductCalendar != nil {
+			return validateAgentHotelProductCalendarCandidate(input, envelope.HotelProductCalendar)
+		}
+		if envelope.HotelReservationStatus != nil {
+			return validateAgentHotelReservationStatusCandidate(input, envelope.HotelReservationStatus)
 		}
 		if envelope.Compound != nil {
 			return validateAgentPlannerEnvelope(input, &agentAIEnvelope{OperationType: AgentOperationCompound, Compound: envelope.Compound})
@@ -275,6 +324,12 @@ func validateAgentInputIntent(input, existingOperationType string) error {
 		return nil
 	}
 	if existingOperationType == AgentOperationCompound {
+		return nil
+	}
+	if existingOperationType == AgentOperationHotelInventoryChange || existingOperationType == AgentOperationHotelRateCalendarChange || existingOperationType == AgentOperationHotelProductCalendarChange || existingOperationType == AgentOperationHotelReservationStatusChange {
+		return nil
+	}
+	if agentHasAny(normalized, agentHotelIntentWords) {
 		return nil
 	}
 	if agentHasAny(normalized, agentCatalogIntentWords) || agentHasAny(normalized, agentProductCreateIntentWords) || agentHasAny(normalized, agentProductUpdateIntentWords) || agentHasAny(normalized, agentProductBatchUpdateIntentWords) {
@@ -440,13 +495,20 @@ func agentPureReadRequest(input string) bool {
 	mutationWords = append(mutationWords, agentProductCreateIntentWords...)
 	mutationWords = append(mutationWords, agentProductUpdateIntentWords...)
 	mutationWords = append(mutationWords, agentProductBatchUpdateIntentWords...)
+	mutationWords = append(mutationWords, agentHotelMutationIntentWords...)
 	mutationWords = append(mutationWords, []string{"支付", "退款", "退票", "设备控制", "下发设备", "硬件", "凭据", "密钥", "api key", "appid", "secret", "付款", "充值", "结算确认", "确认结算", "权限变更", "赋权", "写入", "执行", "确认"}...)
 	return !agentHasAffirmativeAgentWord(normalized, mutationWords)
 }
 
 func agentUnsupportedCapabilityMessage(input string) string {
-	if agentHasAny(input, []string{"酒店", "住宿", "房型", "房量", "价格日历", "预约入住"}) {
-		return "当前 AI 助手未开放酒店产品、房型房量、价格日历或住宿预约操作；请使用酒店业务页面完成操作"
+	if agentHasAny(input, []string{"创建预约", "预约创建", "取消预约", "预约取消", "改期预约", "预约改期", "修改预约", "预约入住"}) {
+		return "当前 AI 助手未开放酒店预约创建、取消或改期；请使用酒店预约页面完成操作"
+	}
+	if agentHasAny(input, []string{"创建酒店", "删除酒店", "修改酒店", "创建房型", "删除房型", "修改房型", "创建价格计划", "删除价格计划", "修改价格计划"}) {
+		return "当前 AI 助手未开放酒店结构配置；请使用酒店基础资料页面完成操作"
+	}
+	if agentHasAny(input, []string{"发布渠道", "渠道发布", "同步渠道", "pms", "webhook", "小红书", "携程", "ota"}) {
+		return "当前 AI 助手未开放酒店渠道、PMS、Webhook 或外部平台状态操作；请使用对应业务页面完成操作"
 	}
 	if agentHasAny(input, []string{"设备控制", "下发设备", "开闸", "硬件"}) {
 		return "当前 AI 助手未开放设备或闸机控制；请使用现场设备管理页面完成操作"
@@ -473,6 +535,7 @@ func agentReadOnlyCompoundIntent(input string) bool {
 	}
 	sequenced := agentHasAny(normalized, []string{"复合", "多步", "步骤", "依次", "分别", "先", "再", "1)", "1、", "第一步", "第二步", "然后", "接着", "随后", "同时"})
 	queryTopics := []string{"订单", "库存", "销售汇总", "核销汇总", "分销关系", "授权商品", "供应商履约", "分销结算", "团队合同", "团队计划", "团队结算", "团队账户", "票种规则", "检票点", "景区"}
+	queryTopics = append(queryTopics, "酒店", "住宿预订", "房量", "价格计划", "价格日历", "入住", "离店")
 	topicCount := 0
 	for _, topic := range queryTopics {
 		if strings.Contains(normalized, topic) {
@@ -489,6 +552,7 @@ func agentReadOnlyCompoundIntent(input string) bool {
 	mutationWords = append(mutationWords, agentProductCreateIntentWords...)
 	mutationWords = append(mutationWords, agentProductUpdateIntentWords...)
 	mutationWords = append(mutationWords, agentProductBatchUpdateIntentWords...)
+	mutationWords = append(mutationWords, agentHotelMutationIntentWords...)
 	mutationWords = append(mutationWords, "支付", "退款", "退票", "设备控制", "凭据", "密钥", "分销授权", "渠道授权", "上架", "下架", "写入", "执行", "确认", "充值", "结算", "入园")
 	return !agentHasAffirmativeAgentWord(normalized, mutationWords)
 }
@@ -523,6 +587,13 @@ func agentReadOnlyToolRoute(input string) []string {
 		{"query_team_contracts", []string{"团队合同", "合同摘要"}},
 		{"query_verification_summary", []string{"核销汇总", "核销报表", "核销统计"}},
 		{"query_sales_summary", []string{"销售汇总", "销售报表", "销售统计"}},
+		{"query_hotel_business_summary", []string{"酒店经营汇总", "住宿经营汇总", "酒店业务汇总"}},
+		{"query_hotel_reservations", []string{"住宿预订", "酒店预订", "入住名单"}},
+		{"query_hotel_booking_entitlements", []string{"预约权益", "住宿权益", "待预约住宿"}},
+		{"query_hotel_product_calendar", []string{"酒店产品价格日历", "酒店产品售价日历", "日历房售价"}},
+		{"query_hotel_rate_calendar", []string{"价格计划日历", "房型价格日历", "入住日价格"}},
+		{"query_hotel_inventory", []string{"酒店库存", "酒店房量", "房态", "房量"}},
+		{"search_hotel_catalog", []string{"酒店目录", "酒店", "房型", "价格计划", "日历房", "预售房"}},
 		{"query_ticket_inventory", []string{"库存", "房量", "余票"}},
 		{"get_ticket_product_rules", []string{"票种规则", "检票规则", "核销规则"}},
 		{"search_checkpoints", []string{"检票点", "闸机点"}},
@@ -548,6 +619,13 @@ func agentReadOnlyToolRoute(input string) []string {
 func agentReadOnlyCompoundToolRoutes(input string) []string {
 	normalized := strings.ToLower(strings.TrimSpace(input))
 	if normalized == "" || !agentReadOnlyCompoundIntent(normalized) {
+		return nil
+	}
+	// Hotel compound reads need required hotel/date/name arguments that cannot
+	// be safely inferred by the small lexical adapter below. Leave those
+	// requests to the provider's typed query_compound_readonly tool so it can
+	// collect the full arguments instead of issuing empty hotel queries.
+	if agentHasAny(normalized, agentHotelIntentWords) {
 		return nil
 	}
 	type route struct {
@@ -723,6 +801,14 @@ var agentProductBatchUpdateIntentWords = []string{
 	"批量修改", "批量更新", "批量调整", "多个票种", "这些票种", "这几个票种", "一批票种",
 }
 
+var agentHotelIntentWords = []string{
+	"酒店", "住宿", "房型", "房量", "价格计划", "价格日历", "日历房", "预售房", "住宿预订", "入住", "离店", "未到店", "关房",
+}
+
+var agentHotelMutationIntentWords = []string{
+	"设置房量", "调整房量", "增加房量", "减少房量", "关房", "开房", "设置价格", "调整价格", "清除覆盖价", "设置入住", "登记入住", "登记离店", "登记未到店",
+}
+
 var agentCompoundIntentWords = []string{"然后", "接着", "随后", "同时", "并且", "分别", "再", "第一步", "第二步", "步骤"}
 
 func agentCompoundIntent(input string) bool {
@@ -730,11 +816,11 @@ func agentCompoundIntent(input string) bool {
 	if !agentHasAny(normalized, agentCompoundIntentWords) {
 		return false
 	}
-	return agentHasAny(normalized, agentCatalogIntentWords) || agentHasAny(normalized, agentProductCreateIntentWords) || agentHasAny(normalized, agentProductUpdateIntentWords) || agentHasAny(normalized, agentProductBatchUpdateIntentWords)
+	return agentHasAny(normalized, agentCatalogIntentWords) || agentHasAny(normalized, agentProductCreateIntentWords) || agentHasAny(normalized, agentProductUpdateIntentWords) || agentHasAny(normalized, agentProductBatchUpdateIntentWords) || agentHasAny(normalized, agentHotelMutationIntentWords)
 }
 
 var agentReadIntentWords = []string{
-	"查询", "查看", "列出", "有哪些", "统计", "报表", "库存", "订单", "票种", "检票点", "景区", "规则",
+	"查询", "查看", "列出", "有哪些", "统计", "报表", "库存", "订单", "票种", "检票点", "景区", "规则", "酒店", "住宿", "房型", "房量", "价格计划", "价格日历", "住宿预订",
 }
 
 func validateAgentCatalogOperations(input string, operations []CatalogRuleOperation) error {

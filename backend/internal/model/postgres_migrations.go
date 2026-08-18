@@ -652,7 +652,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 			IF NEW.tenant_id = 0
 			   OR NEW.actor_role = ''
 			   OR COALESCE(NEW.protocol_mode, 'legacy_json') NOT IN ('legacy_json','tool_v1')
-			   OR NEW.operation_type NOT IN ('pending','catalog_batch_change','ticket_product_create','ticket_product_update','ticket_product_batch_update','compound_preview')
+			   OR NEW.operation_type NOT IN ('pending','catalog_batch_change','ticket_product_create','ticket_product_update','ticket_product_batch_update','compound_preview','hotel_inventory_change','hotel_rate_calendar_change','hotel_product_calendar_change','hotel_reservation_status_change')
 			   OR NEW.state NOT IN ('collecting','ready_for_preview','awaiting_confirmation','executing','completed','failed','expired','cancelled')
 			   OR COALESCE(NEW.input_text, '') = ''
 			   OR COALESCE(NEW.context_json, '') = ''
