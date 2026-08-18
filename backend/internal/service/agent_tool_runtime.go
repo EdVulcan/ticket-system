@@ -89,17 +89,23 @@ func agentToolProtocolConfigured() bool {
 	return resolveAgentTaskProtocol(config) == agentProtocolToolV1
 }
 
+// DeepSeek legacy configurations are upgraded only for new read-only tasks;
+// existing mutation tasks keep their recorded protocol for compatibility.
+func agentReadOnlyToolProtocolConfigured() bool {
+	var config model.PlatformAIConfig
+	if err := model.DB.Where("config_key = ? AND enabled = ?", platformAIConfigKey, true).First(&config).Error; err != nil {
+		return false
+	}
+	return resolveAgentTaskProtocol(config) == agentProtocolToolV1 || normalizeAIProvider(config.Provider) == defaultAIProvider
+}
+
 // agentToolChoiceForVisible keeps the provider from answering in prose when a
-// task has already been narrowed to one server-owned tool. DeepSeek reasoning
-// models do not accept a forced function choice in thinking mode, so those
-// models retain the provider-compatible automatic choice and the registry
-// guard below still rejects any tool outside the visible set.
+// task has already been narrowed to one server-owned tool. DeepSeek thinking
+// mode may reject a named choice; chatWithToolsChoice handles only that
+// explicit 400 by retrying once with auto, while every other provider error
+// remains fail-closed.
 func agentToolChoiceForVisible(config model.PlatformAIConfig, visible []agentToolSpec) interface{} {
 	if len(visible) != 1 {
-		return "auto"
-	}
-	modelName := strings.ToLower(strings.TrimSpace(config.Model))
-	if strings.Contains(modelName, "reasoner") || strings.Contains(modelName, "thinking") {
 		return "auto"
 	}
 	return map[string]interface{}{
@@ -270,7 +276,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 		<task_context>` + providerContextJSON + `</task_context>
 租户业务别名只是当前租户维护的输入词汇；可以使用别名，但不得把别名当成新的业务对象，也不能跨租户推断。服务端会再次解析别名目标，目标不存在或发生歧义时会拒绝预览。
 <domain_skill>` + domainSkill + `</domain_skill>
-	对于创建新票种的请求，必须直接调用 prepare_ticket_product_create 生成预览；不要先反复调用景区、检票点或票种搜索工具来猜测名称。服务端会按当前租户精确解析名称，并在信息不足或名称不明确时返回缺失字段和候选项。只有用户明确要求查询时才调用只读搜索工具。`
+	对于创建新票种的请求，必须直接调用 prepare_ticket_product_create 生成预览；不要先反复调用景区、检票点或票种搜索工具来猜测名称。服务端会按当前租户精确解析名称，并在信息不足或名称不明确时返回缺失字段和候选项。用户说“不上架/不分销/未上架”时，这是新票种的默认初始状态，不是受保护的变更请求，不要因此拒绝创建。只有用户明确要求查询时才调用只读搜索工具。`
 	systemPrompt += `
 	对于明确写出“只读复合查询/多步查询/按步骤查询”的请求，必须调用 query_compound_readonly，并在 steps 中按用户顺序填写 2 到 5 个已注册只读工具及其参数；不得把只读查询包装成变更预览，也不得在步骤中加入退款、支付、授权、上架、设备或外部渠道操作。`
 	// Keep the tool prompt explicit about the new preview seam so a provider

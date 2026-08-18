@@ -178,6 +178,40 @@ func TestAgentNaturalReadOnlyCompoundRequestRoutesThroughServerAdapter(t *testin
 	}
 }
 
+func TestAgentLegacyDeepSeekConfigRoutesReadOnlyReportsToToolProtocol(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	server, _ := toolProvider(t, func(messages []AIMessage) (map[string]interface{}, error) {
+		for _, message := range messages {
+			if message.Role == "tool" {
+				return toolTextPayload("销售汇总已返回。", 12), nil
+			}
+		}
+		return toolCallPayload("legacy-report-route", "query_sales_summary", `{"start_date":"2000-01-01","end_date":"2000-01-02"}`, 16), nil
+	})
+	config := toolConfig(server.URL)
+	config.AgentProtocolMode = agentProtocolLegacyJSON
+	if _, err := (&PlatformAIService{}).SaveConfig(config, 77, "platform_admin"); err != nil {
+		t.Fatalf("save legacy config: %v", err)
+	}
+	view, err := (&AgentTaskService{}).Submit(t.Context(), fixture.tenant.ID, 11, "admin", AgentTaskRequest{
+		InputText: "查询最近30天销售汇总", IdempotencyKey: "legacy-report-route", TurnKey: "turn-1",
+	})
+	if err != nil {
+		t.Fatalf("legacy DeepSeek report query: %v", err)
+	}
+	if view.ProtocolMode != agentProtocolToolV1 || len(view.Result) == 0 {
+		t.Fatalf("legacy report query did not use tool protocol: %+v", view)
+	}
+	var resultSet agentQueryResultSet
+	if err := json.Unmarshal(view.Result, &resultSet); err != nil || len(resultSet.QueryResults) != 1 {
+		t.Fatalf("legacy report query result missing: %s err=%v", string(view.Result), err)
+	}
+	var result agentQueryResult
+	if err := json.Unmarshal(resultSet.QueryResults[0], &result); err != nil || result.Tool != "query_sales_summary" {
+		t.Fatalf("unexpected legacy report query result: %s err=%v", string(resultSet.QueryResults[0]), err)
+	}
+}
+
 func TestAgentQueryDateRangeRejectsUnsafeWindows(t *testing.T) {
 	if _, _, err := agentQueryDateRange("2020-01-01", "2021-01-01", 366, 30); err == nil {
 		t.Fatal("oversized query date range was accepted")

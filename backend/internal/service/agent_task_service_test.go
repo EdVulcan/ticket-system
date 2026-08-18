@@ -350,11 +350,14 @@ func TestCanonicalizeAgentCatalogProductNamesUsesExplicitAndBoundedCatalogScope(
 
 	explicit := canonicalizeAgentCatalogProductNames(
 		"线上门票【成人票】飞车套票增加检票点水上乐园，可检票1次",
-		[]CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"成人票"}}},
+		[]CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"成人票"}, TargetScope: &AgentTargetScope{Version: 1, Intent: "batch", NameTerms: []string{"成人票"}}}},
 		products,
 	)
 	if len(explicit) != 1 || len(explicit[0].ProductNames) != 1 || explicit[0].ProductNames[0] != "【成人票】飞车套票" {
 		t.Fatalf("explicit full product name was not canonicalized: %+v", explicit)
+	}
+	if explicit[0].TargetScope == nil || explicit[0].TargetScope.Intent != "single" || len(explicit[0].TargetScope.NameTerms) != 1 || explicit[0].TargetScope.NameTerms[0] != "【成人票】飞车套票" {
+		t.Fatalf("explicit full product name did not narrow target scope: %+v", explicit[0].TargetScope)
 	}
 
 	bounded := canonicalizeAgentCatalogProductNames(
@@ -431,7 +434,7 @@ func TestAgentNewRuleGroupIntentCollectsExplicitGroupName(t *testing.T) {
 		"水上乐园",
 		model.AgentTask{OperationType: AgentOperationCatalogBatchChange, MissingJSON: `[{"field":"operations[0].group_name"}]`},
 		`{"operations":[{"kind":"add_checkpoints","product_names":["Adult Ticket"],"checkpoint_names":["North Gate"],"create_group":true}]}`,
-		[]CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, GroupName: "Water Park"}},
+		[]CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"Adult Ticket (model shorthand)"}, CheckpointNames: []string{"Other Gate"}, GroupName: "Water Park"}},
 	)
 	if len(continued) != 1 || !continued[0].CreateGroup || len(continued[0].ProductNames) != 1 || continued[0].ProductNames[0] != "Adult Ticket" {
 		t.Fatalf("continuation did not retain durable create-group intent: %+v", continued)

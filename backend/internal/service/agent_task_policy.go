@@ -23,6 +23,7 @@ var agentTicketProductCreatePattern = regexp.MustCompile(`(?:创建|新建|生�
 var agentUnsupportedCapabilityMarkers = []string{
 	"支付", "退款", "退票", "资金退款", "设备控制", "下发设备", "开闸", "硬件", "凭据", "密钥", "api key", "appid", "secret",
 	"分销授权", "渠道授权", "授权分销", "上架", "下架", "权限变更", "赋权", "充值", "付款", "结算确认", "确认结算", "入园",
+	"酒店", "住宿", "房型", "房量", "价格日历", "预约入住",
 }
 
 var agentUnsafeInputMarkers = []string{
@@ -362,12 +363,52 @@ func rejectUnsupportedAgentCapability(input string) error {
 	if agentPureReadRequest(normalized) && agentHasAny(normalized, []string{"分销授权", "渠道授权", "授权分销", "上架", "下架", "入园"}) {
 		return nil
 	}
+	creationIntent := agentExplicitTicketProductCreateIntent(normalized)
 	for _, marker := range agentUnsupportedCapabilityMarkers {
+		// “创建一个线上票，不上架、不分销” describes the initial state of
+		// the draft. It is not a request to mutate a protected listing fact.
+		// Only suppress the lexical guard for a negated marker on an explicit
+		// product-creation request; an affirmative existing-product mutation
+		// must continue to fail closed.
+		if creationIntent && agentUnsupportedMarkerNegated(normalized, marker) {
+			continue
+		}
 		if strings.Contains(normalized, marker) {
 			return agentInvalid(agentUnsupportedCapabilityMessage(normalized))
 		}
 	}
 	return nil
+}
+
+func agentUnsupportedMarkerNegated(input, marker string) bool {
+	input = strings.ToLower(strings.TrimSpace(input))
+	marker = strings.ToLower(strings.TrimSpace(marker))
+	if input == "" || marker == "" {
+		return false
+	}
+	found := false
+	allNegated := true
+	for start := 0; ; {
+		relative := strings.Index(input[start:], marker)
+		if relative < 0 {
+			return found && allNegated
+		}
+		found = true
+		index := start + relative
+		prefix := strings.TrimSpace(input[max(0, index-8):index])
+		negated := false
+		for _, negation := range []string{"不需要", "无需", "不要", "禁止", "不能", "不", "未"} {
+			if strings.HasSuffix(prefix, negation) {
+				negated = true
+				break
+			}
+		}
+		allNegated = allNegated && negated
+		start = index + len(marker)
+		if start >= len(input) {
+			return found && allNegated
+		}
+	}
 }
 
 func agentPureReadRequest(input string) bool {
@@ -384,6 +425,9 @@ func agentPureReadRequest(input string) bool {
 }
 
 func agentUnsupportedCapabilityMessage(input string) string {
+	if agentHasAny(input, []string{"酒店", "住宿", "房型", "房量", "价格日历", "预约入住"}) {
+		return "当前 AI 助手未开放酒店产品、房型房量、价格日历或住宿预约操作；请使用酒店业务页面完成操作"
+	}
 	if agentHasAny(input, []string{"设备控制", "下发设备", "开闸", "硬件"}) {
 		return "当前 AI 助手未开放设备或闸机控制；请使用现场设备管理页面完成操作"
 	}
@@ -754,6 +798,46 @@ func canonicalizeAgentCatalogProductNames(input string, operations []CatalogRule
 	result := make([]CatalogRuleOperation, len(operations))
 	copy(result, operations)
 	for index, operation := range result {
+		// A full catalog name in the current turn is stronger than a model's
+		// shortened target_scope. Without this normalization, “【成人票】飞车
+		// 套票” can be widened to every product containing “成人票” and the
+		// normal resolver correctly (but inconveniently) asks for a range.
+		// Explicit batch language keeps the category semantics intact.
+		if !agentExplicitBatchIntent(input) {
+			operationNames := explicitAgentCatalogNamesForOperation(operation, explicitNames)
+			if len(operationNames) > 0 {
+				// Multiple full names are an explicit multi-target request even if
+				// the user omitted the word “批量”.
+				operation.ProductNames = operationNames
+				if operation.TargetScope != nil {
+					scope := cloneAgentTargetScope(*operation.TargetScope)
+					if len(operationNames) == 1 {
+						scope.Intent = "single"
+					} else {
+						scope.Intent = "batch"
+					}
+					scope.NameTerms = append([]string(nil), operationNames...)
+					scope.CandidateRefs = nil
+					operation.TargetScope = &scope
+				}
+				result[index] = operation
+				continue
+			}
+		}
+		if len(explicitNames) > 1 && len(operation.ProductNames) == 0 && !agentExplicitBatchIntent(input) {
+			// No provider target was returned. The full names in the user turn
+			// are still safe to carry forward as one explicit batch operation.
+			operation.ProductNames = append([]string(nil), explicitNames...)
+			if operation.TargetScope != nil {
+				scope := cloneAgentTargetScope(*operation.TargetScope)
+				scope.Intent = "batch"
+				scope.NameTerms = append([]string(nil), explicitNames...)
+				scope.CandidateRefs = nil
+				operation.TargetScope = &scope
+			}
+			result[index] = operation
+			continue
+		}
 		if operation.AllProducts || len(operation.ProductNames) == 0 {
 			if !operation.AllProducts && len(operation.ProductNames) == 0 {
 				switch {
@@ -825,6 +909,35 @@ func canonicalizeAgentCatalogProductNames(input string, operations []CatalogRule
 		result[index] = operation
 	}
 	return result
+}
+
+func explicitAgentCatalogNamesForOperation(operation CatalogRuleOperation, explicitNames []string) []string {
+	if len(explicitNames) == 0 {
+		return nil
+	}
+	if len(operation.ProductNames) == 0 {
+		if len(explicitNames) == 1 {
+			return append([]string(nil), explicitNames...)
+		}
+		return nil
+	}
+	selected := make([]string, 0, len(explicitNames))
+	for _, requested := range operation.ProductNames {
+		for _, explicit := range explicitNames {
+			if agentCatalogNameCompatible(requested, explicit) {
+				selected = appendUniqueAgentCatalogNames(selected, explicit)
+			}
+		}
+	}
+	if len(selected) > 0 {
+		return selected
+	}
+	if len(explicitNames) == 1 {
+		// A model may return an unrelated shorthand even though the user gave
+		// exactly one full catalog name. The full name remains authoritative.
+		return append([]string(nil), explicitNames...)
+	}
+	return nil
 }
 
 func agentCatalogNameCompatible(requested, candidate string) bool {
