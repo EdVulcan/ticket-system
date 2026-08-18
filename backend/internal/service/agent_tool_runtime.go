@@ -281,6 +281,10 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 						directReadOnlyTool = route[0]
 					}
 				}
+				visible = routed
+				if route[0] == "query_sales_summary" || route[0] == "query_verification_summary" {
+					directReadOnlyTool = route[0]
+				}
 			}
 		}
 	}
