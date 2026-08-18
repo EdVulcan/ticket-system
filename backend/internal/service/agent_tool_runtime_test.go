@@ -381,6 +381,16 @@ func TestAgentReadOnlyCompoundToolRoutesPreserveUserOrder(t *testing.T) {
 	if got := agentReadOnlyCompoundToolRoutes("依次查询票种规则和授权商品"); !reflect.DeepEqual(got, []string{"get_ticket_product_rules", "query_distribution_products"}) {
 		t.Fatalf("specific compound topics were split by generic nouns: %v", got)
 	}
+	safetyDisclaimer := "依次查询最近订单、线上库存、销售汇总和核销汇总；只读查询，不执行任何修改、支付、库存预占或外部调用。"
+	if got := agentReadOnlyCompoundToolRoutes(safetyDisclaimer); !reflect.DeepEqual(got, want) {
+		t.Fatalf("negated safety disclaimer changed compound routing: %v", got)
+	}
+	if err := rejectUnsupportedAgentCapability(safetyDisclaimer); err != nil {
+		t.Fatalf("negated safety disclaimer was rejected: %v", err)
+	}
+	if err := rejectUnsupportedAgentCapability("查询最近订单并退款"); err == nil {
+		t.Fatal("affirmative refund was accepted as read-only")
+	}
 }
 
 func TestAgentSingleTopicReadUsesServerAdapterWithoutProvider(t *testing.T) {
