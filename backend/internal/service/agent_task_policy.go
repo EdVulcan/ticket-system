@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"ticket-backend/internal/model"
 )
@@ -517,6 +518,94 @@ func agentReadOnlyToolRoute(input string) []string {
 		}
 	}
 	return nil
+}
+
+// agentReadOnlyCompoundToolRoutes resolves an explicit multi-topic read in
+// the same way the UI's report shortcuts are resolved: the server owns the
+// tool names and preserves the order in which the user mentioned each topic.
+// This is intentionally lexical and conservative. It never invents filters
+// or turns a write request into a query; callers must first pass
+// agentReadOnlyCompoundIntent.
+func agentReadOnlyCompoundToolRoutes(input string) []string {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if normalized == "" || !agentReadOnlyCompoundIntent(normalized) {
+		return nil
+	}
+	type route struct {
+		tool  string
+		words []string
+	}
+	routes := []route{
+		{"search_orders", []string{"订单", "订单号"}},
+		{"query_ticket_inventory", []string{"线上库存", "库存", "房量", "余票"}},
+		{"query_sales_summary", []string{"销售汇总", "销售报表", "销售统计"}},
+		{"query_verification_summary", []string{"核销汇总", "核销报表", "核销统计"}},
+		{"query_distribution_partners", []string{"分销关系", "合作供应商", "分销合作"}},
+		{"query_distribution_products", []string{"分销授权", "授权商品", "授权产品", "铺货商品"}},
+		{"query_distribution_fulfillments", []string{"供应商履约", "履约进度", "履约单"}},
+		{"query_distribution_settlements", []string{"分销结算", "分销对账"}},
+		{"query_team_contracts", []string{"团队合同", "合同摘要"}},
+		{"query_team_groups", []string{"团队计划", "团队团期", "团队入园", "入园情况"}},
+		{"query_team_settlement_summary", []string{"团队结算", "团队对账"}},
+		{"query_team_account_summary", []string{"团队账户", "团队授信", "团队余额"}},
+		{"get_ticket_product_rules", []string{"票种规则", "检票规则", "核销规则"}},
+		{"search_checkpoints", []string{"检票点", "闸机点"}},
+		{"search_scenic_areas", []string{"景区"}},
+		{"search_ticket_products", []string{"票种", "门票", "商品"}},
+	}
+	type locatedRoute struct {
+		tool string
+		pos  int
+		len  int
+	}
+	located := make([]locatedRoute, 0, len(routes))
+	for _, candidate := range routes {
+		bestPos := -1
+		bestLen := 0
+		for _, word := range candidate.words {
+			if pos := strings.Index(normalized, word); pos >= 0 && (bestPos < 0 || pos < bestPos || (pos == bestPos && len(word) > bestLen)) {
+				bestPos = pos
+				bestLen = len(word)
+			}
+		}
+		if bestPos >= 0 {
+			located = append(located, locatedRoute{tool: candidate.tool, pos: bestPos, len: bestLen})
+		}
+	}
+	sort.SliceStable(located, func(i, j int) bool {
+		if located[i].pos == located[j].pos {
+			return located[i].len > located[j].len
+		}
+		return located[i].pos < located[j].pos
+	})
+	result := make([]string, 0, len(located))
+	seen := make(map[string]struct{}, len(located))
+	for _, item := range located {
+		// Generic nouns such as “票种” or “商品” are often contained in a
+		// more specific topic (“票种规则”, “授权商品”). Do not turn one user
+		// topic into two server queries merely because of that substring.
+		if item.tool == "search_ticket_products" {
+			overlapped := false
+			for _, specific := range located {
+				if specific.tool == item.tool || specific.pos > item.pos || specific.pos+specific.len <= item.pos {
+					continue
+				}
+				if item.pos < specific.pos+specific.len {
+					overlapped = true
+					break
+				}
+			}
+			if overlapped {
+				continue
+			}
+		}
+		if _, ok := seen[item.tool]; ok {
+			continue
+		}
+		seen[item.tool] = struct{}{}
+		result = append(result, item.tool)
+	}
+	return result
 }
 
 func validateAgentTaskInputIntent(input string, task model.AgentTask) error {

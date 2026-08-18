@@ -170,11 +170,11 @@ func TestAgentNaturalReadOnlyCompoundRequestRoutesThroughServerAdapter(t *testin
 		t.Fatalf("natural read-only compound request: %v", err)
 	}
 	var result agentQueryResultSet
-	if len(view.Result) == 0 || json.Unmarshal(view.Result, &result) != nil || len(result.QueryResults) != 2 {
+	if len(view.Result) == 0 || json.Unmarshal(view.Result, &result) != nil || len(result.QueryResults) != 3 {
 		t.Fatalf("compound query results were not persisted: %s", string(view.Result))
 	}
-	if calls.Load() != 2 {
-		t.Fatalf("compound request should use one tool call and one final response, got %d", calls.Load())
+	if calls.Load() != 0 {
+		t.Fatalf("deterministic compound request called provider %d times", calls.Load())
 	}
 }
 

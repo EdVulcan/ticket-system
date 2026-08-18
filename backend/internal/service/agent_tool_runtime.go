@@ -142,6 +142,14 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 	readCompoundIntent := task.OperationType == AgentOperationPending && agentReadOnlyCompoundIntent(input)
 	compoundIntent := task.OperationType == AgentOperationCompound || (task.OperationType == AgentOperationPending && agentCompoundIntent(input))
 	if readCompoundIntent {
+		// Explicit multi-topic reads are deterministic: resolve the requested
+		// topics on the server and invoke the same tenant-scoped adapters that
+		// back the compound tool. The provider is still used for ordinary
+		// natural-language planning, but it must not be the authority for which
+		// read-only modules a clearly ordered request means.
+		if routes := agentReadOnlyCompoundToolRoutes(input); len(routes) >= 2 && len(routes) <= 5 {
+			return s.planDirectCompoundReadonlyQuery(tenantID, actorUserID, actorRole, task, input, config, routes)
+		}
 		queryTools := make([]agentToolSpec, 0, 1)
 		for _, spec := range visible {
 			if spec.Name == "query_compound_readonly" {
@@ -425,6 +433,73 @@ func (s *AgentTaskService) planDirectReadOnlyQuery(tenantID, actorUserID uint, a
 		ResponseText:  directAgentQueryResponse(toolName, result.Returned),
 		QueryResults:  []json.RawMessage{json.RawMessage(execution.ResultJSON)},
 	}, nil
+}
+
+// planDirectCompoundReadonlyQuery is the server-owned counterpart of
+// planDirectReadOnlyQuery. It is used only after the lexical policy has
+// identified at least two ordered read topics. The nested handlers still
+// perform their normal capability, permission, tenant and argument checks.
+func (s *AgentTaskService) planDirectCompoundReadonlyQuery(tenantID, actorUserID uint, actorRole string, task model.AgentTask, input string, config model.PlatformAIConfig, toolNames []string) (*agentPlanningResult, error) {
+	if len(toolNames) < 2 || len(toolNames) > 5 {
+		return nil, agentInvalid("复合只读查询必须包含 2 到 5 个查询步骤")
+	}
+	steps := make([]map[string]interface{}, 0, len(toolNames))
+	for _, toolName := range toolNames {
+		if _, ok := findAgentTool(toolName); !ok {
+			return nil, agentInvalid("复合只读查询包含未注册的查询工具")
+		}
+		steps = append(steps, map[string]interface{}{
+			"tool_name": toolName,
+			"arguments": directAgentCompoundQueryArguments(toolName, input),
+		})
+	}
+	rawArgs, err := json.Marshal(map[string]interface{}{"steps": steps})
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256([]byte(strings.TrimSpace(input)))
+	call := AIToolCall{
+		ID:       "direct-compound-" + hex.EncodeToString(digest[:8]),
+		Function: AIToolCallFunction{Name: "query_compound_readonly", Arguments: string(rawArgs)},
+	}
+	execution, err := s.invokeAgentTool(tenantID, actorUserID, actorRole, task, input, config, "", 0, call)
+	if err != nil {
+		return nil, err
+	}
+	if !isAgentQueryResultJSON(execution.ResultJSON) {
+		return nil, agentInvalid("复合只读查询没有返回可信服务器事实")
+	}
+	queryResults := agentQueryResultMessages(execution.ResultJSON)
+	var prior agentTaskContext
+	if strings.TrimSpace(task.ContextJSON) != "" {
+		_ = json.Unmarshal([]byte(task.ContextJSON), &prior)
+	}
+	if prior.OperationType == "" {
+		prior.OperationType = AgentOperationPending
+	}
+	availability, _ := s.aiService().Availability(tenantID)
+	return &agentPlanningResult{
+		OperationType: AgentOperationPending,
+		Context:       prior,
+		Provider:      config.Provider,
+		Model:         config.Model,
+		Availability:  availability,
+		ResponseText:  fmt.Sprintf("已按顺序完成 %d 项只读查询。结果由服务器生成，本次仅查询当前租户事实，不修改业务数据。", len(queryResults)),
+		QueryResults:  queryResults,
+	}, nil
+}
+
+func directAgentCompoundQueryArguments(toolName, input string) map[string]string {
+	switch toolName {
+	case "search_orders", "query_ticket_inventory", "query_sales_summary", "query_verification_summary", "query_distribution_fulfillments", "query_distribution_settlements", "query_team_groups":
+		var args map[string]string
+		if raw := directAgentQueryArguments(input); raw != "{}" {
+			if json.Unmarshal([]byte(raw), &args) == nil {
+				return args
+			}
+		}
+	}
+	return map[string]string{}
 }
 
 func directAgentQueryArguments(input string) string {
