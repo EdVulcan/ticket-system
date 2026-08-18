@@ -645,7 +645,16 @@ func validateAgentTargetScopeEvidence(db *gorm.DB, tenantID uint, scope AgentTar
 		return agentInvalid("票种类型筛选未在当前请求或已确认上下文中出现")
 	}
 	for _, ref := range scope.CandidateRefs {
-		if previous == nil || !agentStringInList(previous.Requested.CandidateRefs, ref) && !agentTextContains(input, ref) {
+		selectedInContext := false
+		if previous != nil && previous.ResolutionState == "resolved" {
+			for _, target := range previous.SelectedTargets {
+				if strings.EqualFold(strings.TrimSpace(target.Ref), strings.TrimSpace(ref)) {
+					selectedInContext = true
+					break
+				}
+			}
+		}
+		if previous == nil || (!agentStringInList(previous.Requested.CandidateRefs, ref) && !selectedInContext && !agentTextContains(input, ref)) {
 			return agentInvalid(fmt.Sprintf("候选引用“%s”未在当前任务中被选择", strings.TrimSpace(ref)))
 		}
 	}

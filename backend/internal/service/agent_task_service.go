@@ -1066,6 +1066,7 @@ func (s *AgentTaskService) planFromEnvelope(tenantID, actorUserID uint, actorRol
 		}
 		envelope.Operations = inheritAgentCatalogGroupIntent(input, task, contextJSON, envelope.Operations)
 		envelope.Operations = canonicalizeAgentCatalogProductNames(input, envelope.Operations, products)
+		envelope.Operations = canonicalizeAgentCatalogCheckpointNames(envelope.Operations, checkpoints)
 		envelope.Operations = normalizeAgentCatalogGroupIntent(input, envelope.Operations)
 		envelope.Operations, err = canonicalizeAgentCatalogAliases(model.DB, tenantID, envelope.Operations)
 		if err != nil {

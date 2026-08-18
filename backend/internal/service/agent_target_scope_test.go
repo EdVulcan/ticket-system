@@ -122,3 +122,39 @@ func TestAgentTargetScopeCandidateReferenceCannotCrossTask(t *testing.T) {
 		t.Fatal("candidate reference from another task was accepted")
 	}
 }
+
+func TestAgentTargetScopeAllowsProviderRepeatOfResolvedTarget(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	products := []model.Product{{Base: model.Base{ID: 402}, TenantID: fixture.tenant.ID, ScenicAreaID: fixture.area.ID, Name: "Adult Ticket", Type: "online", Status: "online"}}
+
+	initial, err := resolveAgentTargetScope(model.DB, fixture.tenant.ID, &AgentTargetScope{NameTerms: []string{"Adult Ticket"}}, nil, "调整 Adult Ticket 的检票点", products, nil)
+	if err != nil || len(initial.Targets) != 1 || initial.State == nil || initial.State.ResolutionState != "resolved" {
+		t.Fatalf("initial target was not resolved: resolution=%+v err=%v", initial, err)
+	}
+
+	continued, err := resolveAgentTargetScope(model.DB, fixture.tenant.ID, &AgentTargetScope{CandidateRefs: []string{"候选1"}}, nil, "放入云上飞车二选一规则组", products, initial.State)
+	if err != nil {
+		t.Fatalf("provider repeat of the already resolved candidate was rejected: %v", err)
+	}
+	if len(continued.Targets) != 1 || continued.Targets[0].ID != products[0].ID {
+		t.Fatalf("continuation selected the wrong target: %+v", continued.Targets)
+	}
+}
+
+func TestAgentTargetScopeRejectsUnselectedCandidateOnResolvedContinuation(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	products := []model.Product{
+		{Base: model.Base{ID: 403}, TenantID: fixture.tenant.ID, ScenicAreaID: fixture.area.ID, Name: "Adult Ticket", Type: "online", Status: "online"},
+		{Base: model.Base{ID: 404}, TenantID: fixture.tenant.ID, ScenicAreaID: fixture.area.ID, Name: "Adult Ticket Package", Type: "online", Status: "online"},
+	}
+	previous := &agentTargetScopeState{
+		Requested:       AgentTargetScope{Version: agentTargetScopeVersion, Intent: "single", NameTerms: []string{"Adult Ticket"}},
+		ResolutionState: "resolved",
+		Candidates:      []agentTargetCandidate{{Ref: "候选1", ProductID: 403, Name: "Adult Ticket"}, {Ref: "候选2", ProductID: 404, Name: "Adult Ticket Package"}},
+		SelectedTargets: []agentTargetCandidate{{Ref: "候选1", ProductID: 403, Name: "Adult Ticket"}},
+	}
+
+	if _, err := resolveAgentTargetScope(model.DB, fixture.tenant.ID, &AgentTargetScope{CandidateRefs: []string{"候选2"}}, nil, "继续设置规则组", products, previous); err == nil || !strings.Contains(err.Error(), "候选引用") {
+		t.Fatalf("unselected candidate was accepted: %v", err)
+	}
+}

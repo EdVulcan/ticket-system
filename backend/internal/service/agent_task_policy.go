@@ -704,14 +704,14 @@ func validateAgentCatalogTargets(input string, operations []CatalogRuleOperation
 	for _, operation := range operations {
 		if !operation.AllProducts {
 			for _, productName := range operation.ProductNames {
-				if !agentTextContains(input, productName) && !agentProductNameCoveredByExplicitScope(input, productName) &&
+				if !agentCatalogTextContains(input, productName) && !agentProductNameCoveredByExplicitScope(input, productName) &&
 					!(agentHasBoundedProductScope(input) && agentCanBeBoundedProductFragment(productName)) {
 					return agentInvalid(fmt.Sprintf("票种 %q 未在当前请求中明确指定，请使用当前租户的准确名称", productName))
 				}
 			}
 		}
 		for _, checkpointName := range operation.CheckpointNames {
-			if !agentTextContains(input, checkpointName) {
+			if !agentCatalogTextContains(input, checkpointName) {
 				return agentInvalid(fmt.Sprintf("检票点 %q 未在当前请求中明确指定，请使用当前租户的准确名称", checkpointName))
 			}
 		}
@@ -835,10 +835,52 @@ func agentCatalogNameCompatible(requested, candidate string) bool {
 
 func normalizeAgentCatalogName(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
-	for _, separator := range []string{" ", "\t", "\r", "\n", "【", "】", "[", "]", "（", "）", "(", ")"} {
+	for _, separator := range []string{" ", "\t", "\r", "\n", "【", "】", "[", "]", "（", "）", "(", ")", "“", "”", "‘", "’", "「", "」", "『", "』", "《", "》", "〈", "〉", "\"", "'", "＂", "＇"} {
 		value = strings.ReplaceAll(value, separator, "")
 	}
 	return value
+}
+
+// agentCatalogTextContains treats decorative quotes and whitespace as
+// presentation around a catalog name. It does not broaden matching beyond
+// the normalized name, so the tenant catalog resolver remains authoritative.
+func agentCatalogTextContains(input, value string) bool {
+	if agentTextContains(input, value) {
+		return true
+	}
+	normalizedInput := normalizeAgentCatalogName(input)
+	normalizedValue := normalizeAgentCatalogName(value)
+	return normalizedValue != "" && strings.Contains(normalizedInput, normalizedValue)
+}
+
+// canonicalizeAgentCatalogCheckpointNames converts a provider's quoted or
+// whitespace-variant checkpoint name to the one exact name in the current
+// tenant catalog. Ambiguous normalized names are left untouched and will be
+// rejected by the ordinary resolver instead of being guessed.
+func canonicalizeAgentCatalogCheckpointNames(operations []CatalogRuleOperation, checkpoints []model.CheckPoint) []CatalogRuleOperation {
+	byNormalizedName := make(map[string][]string, len(checkpoints))
+	for _, checkpoint := range checkpoints {
+		name := strings.TrimSpace(checkpoint.Name)
+		if name == "" {
+			continue
+		}
+		key := normalizeAgentCatalogName(name)
+		if key != "" {
+			byNormalizedName[key] = append(byNormalizedName[key], name)
+		}
+	}
+	result := make([]CatalogRuleOperation, len(operations))
+	copy(result, operations)
+	for operationIndex := range result {
+		for nameIndex, requested := range result[operationIndex].CheckpointNames {
+			key := normalizeAgentCatalogName(requested)
+			matches := byNormalizedName[key]
+			if len(matches) == 1 {
+				result[operationIndex].CheckpointNames[nameIndex] = matches[0]
+			}
+		}
+	}
+	return result
 }
 
 func appendUniqueAgentCatalogNames(values []string, name string) []string {

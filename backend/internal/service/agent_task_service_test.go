@@ -367,6 +367,24 @@ func TestCanonicalizeAgentCatalogProductNamesUsesExplicitAndBoundedCatalogScope(
 	}
 }
 
+func TestCanonicalizeAgentCatalogCheckpointNamesStripsDecorativeQuotes(t *testing.T) {
+	checkpoints := []model.CheckPoint{{Name: "水上乐园"}}
+	operations := canonicalizeAgentCatalogCheckpointNames([]CatalogRuleOperation{{
+		Kind:            CatalogBatchOpAddCheckpoint,
+		ProductNames:    []string{"Adult Ticket"},
+		CheckpointNames: []string{"“水上乐园”"},
+	}}, checkpoints)
+	if len(operations) != 1 || len(operations[0].CheckpointNames) != 1 || operations[0].CheckpointNames[0] != "水上乐园" {
+		t.Fatalf("decorative checkpoint quotes were not canonicalized: %+v", operations)
+	}
+	if err := validateAgentPlannerEnvelope("给 Adult Ticket 增加水上乐园", &agentAIEnvelope{
+		OperationType: AgentOperationCatalogBatchChange,
+		Operations:    []CatalogRuleOperation{{Kind: CatalogBatchOpAddCheckpoint, ProductNames: []string{"Adult Ticket"}, CheckpointNames: []string{"“水上乐园”"}}},
+	}); err != nil {
+		t.Fatalf("quoted checkpoint name was rejected despite matching user input: %v", err)
+	}
+}
+
 func TestAgentCatalogGroupMissingFieldPreservesExactCandidates(t *testing.T) {
 	products := []model.Product{{
 		Base: model.Base{ID: 7}, Name: "Adult Ticket", Rule: model.TicketRule{Groups: []model.RuleGroup{

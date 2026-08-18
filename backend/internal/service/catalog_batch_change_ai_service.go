@@ -130,6 +130,8 @@ func (s *CatalogBatchChangeService) PreviewWithAI(ctx context.Context, tenantID,
 	if err != nil {
 		return nil, err
 	}
+	operations = canonicalizeAgentCatalogProductNames(inputText, operations, products)
+	operations = canonicalizeAgentCatalogCheckpointNames(operations, checkpoints)
 	operations = normalizeAgentCatalogGroupIntent(inputText, operations)
 	if err := validateAgentCatalogOperations(inputText, operations); err != nil {
 		var agentErr *AgentTaskError
