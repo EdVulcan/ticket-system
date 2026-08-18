@@ -71,7 +71,7 @@ func resetBusinessData(t *testing.T) {
 	err := model.Write(func(tx *gorm.DB) error {
 		for _, table := range []interface{}{
 			&model.AgentTaskEvent{}, &model.AgentTask{}, &model.CatalogBatchChangeLine{}, &model.CatalogBatchChangePlan{},
-			&model.AIUsageMonth{}, &model.PlatformAIConfig{},
+			&model.AIUsageMonth{}, &model.AITenantQuotaPolicy{}, &model.PlatformAIConfig{},
 			&model.XiaohongshuOrderOperation{}, &model.XiaohongshuBookingOperation{}, &model.HotelProductReservation{}, &model.HotelProductEntitlement{}, &model.HotelProductCalendarPrice{}, &model.HotelProductRevision{}, &model.ScenicHotelPackageEntitlement{}, &model.HotelReservation{}, &model.ScenicHotelPackage{}, &model.HotelProduct{}, &model.HotelRatePlanPrice{}, &model.HotelRoomInventory{}, &model.HotelRatePlan{}, &model.HotelRoomType{}, &model.HotelProperty{},
 			&model.StaffResourceScope{}, &model.User{}, &model.Staff{},
 			&model.Policy{}, &model.Payment{}, &model.Refund{}, &model.PaymentConfig{}, &model.PaymentReconciliationTask{}, &model.AuditLog{}, &model.LedgerEntry{}, &model.DigitalRefundTask{},

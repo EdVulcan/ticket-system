@@ -10,6 +10,7 @@
         <el-tag :type="form.enabled && form.api_key_configured ? 'success' : 'info'" effect="plain">
           {{ form.enabled && form.api_key_configured ? '已启用' : '未启用' }}
         </el-tag>
+        <el-button type="primary" plain @click="router.push('/platform-ai/quotas')">管理租户额度</el-button>
         <el-button :icon="Refresh" circle title="刷新配置" :loading="loading" @click="load" />
       </div>
     </header>
@@ -87,6 +88,7 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { Connection, Refresh, Select } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
@@ -94,6 +96,7 @@ import request from '@/utils/request'
 const loading = ref(false)
 const saving = ref(false)
 const testing = ref(false)
+const router = useRouter()
 const testResult = ref('')
 const testSuccess = ref(false)
 const form = reactive<any>({

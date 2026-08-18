@@ -36,9 +36,14 @@ const (
 )
 
 var (
-	ErrAIUnavailable    = errors.New("AI 助手当前不可用")
-	ErrAIBudgetExceeded = errors.New("本租户本月 AI 用量已达到平台额度")
+	ErrAIUnavailable        = errors.New("AI 助手当前不可用")
+	ErrAIBudgetExceeded     = errors.New("本租户本月 AI 用量已达到平台额度")
+	ErrAIQuotaInvalidPeriod = errors.New("period must use YYYY-MM format")
 )
+
+type AIQuotaValidationError struct{ Message string }
+
+func (e *AIQuotaValidationError) Error() string { return e.Message }
 
 // AIProviderError marks a response or transport failure after the request
 // reached the configured provider. Controllers expose provider failures as
@@ -176,6 +181,52 @@ type AIUsageView struct {
 	TokenCount   int64 `json:"token_count"`
 }
 
+// AITenantQuotaPolicyInput replaces one tenant's effective policy. A nil
+// limit means that dimension inherits the platform default. The usage ledger
+// is intentionally not part of this input and can never be reset here.
+type AITenantQuotaPolicyInput struct {
+	MonthlyRequestLimit *int   `json:"monthly_request_limit"`
+	MonthlyTokenLimit   *int64 `json:"monthly_token_limit"`
+	Enabled             bool   `json:"enabled"`
+	Reason              string `json:"reason"`
+}
+
+type AITenantQuotaPolicyView struct {
+	TenantID              uint       `json:"tenant_id"`
+	SystemCode            string     `json:"system_code"`
+	TenantName            string     `json:"tenant_name"`
+	TenantStatus          string     `json:"tenant_status"`
+	Period                string     `json:"period"`
+	Enabled               bool       `json:"enabled"`
+	MonthlyRequestLimit   int        `json:"monthly_request_limit"`
+	MonthlyTokenLimit     int64      `json:"monthly_token_limit"`
+	RequestLimitInherited bool       `json:"request_limit_inherited"`
+	TokenLimitInherited   bool       `json:"token_limit_inherited"`
+	RequestCount          int        `json:"request_count"`
+	TokenCount            int64      `json:"token_count"`
+	RequestsRemaining     int        `json:"requests_remaining"`
+	TokensRemaining       int64      `json:"tokens_remaining"`
+	PolicyConfigured      bool       `json:"policy_configured"`
+	UpdatedAt             *time.Time `json:"updated_at,omitempty"`
+	LastUpdatedReason     string     `json:"last_updated_reason,omitempty"`
+}
+
+type AITenantQuotaPolicyPage struct {
+	Data     []AITenantQuotaPolicyView `json:"data"`
+	Total    int64                     `json:"total"`
+	Page     int                       `json:"page"`
+	PageSize int                       `json:"page_size"`
+	Period   string                    `json:"period"`
+}
+
+type aiTenantQuotaLimits struct {
+	Enabled               bool
+	MonthlyRequestLimit   int
+	MonthlyTokenLimit     int64
+	RequestLimitInherited bool
+	TokenLimitInherited   bool
+}
+
 type PlatformAIService struct {
 	HTTPClient *http.Client
 }
@@ -207,6 +258,245 @@ func platformAIConfigView(config model.PlatformAIConfig) PlatformAIConfigView {
 		LastTestedAt:      config.LastTestedAt, LastTestStatus: config.LastTestStatus, LastTestError: config.LastTestError,
 		UpdatedAt: config.UpdatedAt,
 	}
+}
+
+func loadAIConfigDefaults(db *gorm.DB) (model.PlatformAIConfig, error) {
+	config := defaultPlatformAIConfig()
+	err := db.Where("config_key = ?", platformAIConfigKey).First(&config).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return config, nil
+	}
+	return config, err
+}
+
+func resolveAITenantQuota(db *gorm.DB, tenantID uint, config model.PlatformAIConfig) (aiTenantQuotaLimits, *model.AITenantQuotaPolicy, error) {
+	var policy model.AITenantQuotaPolicy
+	err := db.Where("tenant_id = ?", tenantID).First(&policy).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return aiTenantQuotaLimitsForPolicy(config, nil), nil, nil
+	}
+	if err != nil {
+		return aiTenantQuotaLimits{}, nil, err
+	}
+	return aiTenantQuotaLimitsForPolicy(config, &policy), &policy, nil
+}
+
+func aiTenantQuotaLimitsForPolicy(config model.PlatformAIConfig, policy *model.AITenantQuotaPolicy) aiTenantQuotaLimits {
+	limits := aiTenantQuotaLimits{
+		Enabled:               true,
+		MonthlyRequestLimit:   config.DefaultMonthlyRequestLimit,
+		MonthlyTokenLimit:     config.DefaultMonthlyTokenLimit,
+		RequestLimitInherited: true,
+		TokenLimitInherited:   true,
+	}
+	if policy == nil {
+		return limits
+	}
+	limits.Enabled = policy.Enabled
+	if policy.MonthlyRequestLimit != nil {
+		limits.MonthlyRequestLimit = *policy.MonthlyRequestLimit
+		limits.RequestLimitInherited = false
+	}
+	if policy.MonthlyTokenLimit != nil {
+		limits.MonthlyTokenLimit = *policy.MonthlyTokenLimit
+		limits.TokenLimitInherited = false
+	}
+	return limits
+}
+
+func aiTenantQuotaView(tenant model.Tenant, period string, limits aiTenantQuotaLimits, policy *model.AITenantQuotaPolicy, usage AIUsageView) AITenantQuotaPolicyView {
+	view := AITenantQuotaPolicyView{
+		TenantID:              tenant.ID,
+		SystemCode:            tenant.SystemCode,
+		TenantName:            tenant.Name,
+		TenantStatus:          tenant.Status,
+		Period:                period,
+		Enabled:               limits.Enabled,
+		MonthlyRequestLimit:   limits.MonthlyRequestLimit,
+		MonthlyTokenLimit:     limits.MonthlyTokenLimit,
+		RequestLimitInherited: limits.RequestLimitInherited,
+		TokenLimitInherited:   limits.TokenLimitInherited,
+		RequestCount:          usage.RequestCount,
+		TokenCount:            usage.TokenCount,
+		RequestsRemaining:     nonNegativeInt(limits.MonthlyRequestLimit - usage.RequestCount),
+		TokensRemaining:       nonNegativeInt64(limits.MonthlyTokenLimit - usage.TokenCount),
+		PolicyConfigured:      policy != nil,
+	}
+	if policy != nil {
+		updatedAt := policy.UpdatedAt
+		view.UpdatedAt = &updatedAt
+		view.LastUpdatedReason = policy.LastUpdatedReason
+	}
+	return view
+}
+
+func normalizeAIUsagePeriod(period string) (string, error) {
+	period = strings.TrimSpace(period)
+	if period == "" {
+		return time.Now().Format("2006-01"), nil
+	}
+	parsed, err := time.Parse("2006-01", period)
+	if err != nil || parsed.Format("2006-01") != period {
+		return "", ErrAIQuotaInvalidPeriod
+	}
+	return period, nil
+}
+
+func validateAITenantQuotaPolicyInput(input AITenantQuotaPolicyInput) error {
+	if input.MonthlyRequestLimit != nil && (*input.MonthlyRequestLimit < 1 || *input.MonthlyRequestLimit > 1000000) {
+		return &AIQuotaValidationError{Message: "monthly AI request limit must be between 1 and 1000000, or omitted to inherit"}
+	}
+	if input.MonthlyTokenLimit != nil && (*input.MonthlyTokenLimit < 1000 || *input.MonthlyTokenLimit > 1000000000) {
+		return &AIQuotaValidationError{Message: "monthly AI token limit must be between 1000 and 1000000000, or omitted to inherit"}
+	}
+	reason := strings.TrimSpace(input.Reason)
+	if reason == "" || len([]rune(reason)) > 255 {
+		return &AIQuotaValidationError{Message: "a change reason of 1-255 characters is required"}
+	}
+	return nil
+}
+
+func (s *PlatformAIService) ListTenantQuotaPolicies(period, search string, page, pageSize int) (*AITenantQuotaPolicyPage, error) {
+	period, err := normalizeAIUsagePeriod(period)
+	if err != nil {
+		return nil, err
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+	query := model.DB.Model(&model.Tenant{})
+	if search = strings.TrimSpace(search); search != "" {
+		like := "%" + search + "%"
+		query = query.Where("name LIKE ? OR system_code LIKE ?", like, like)
+	}
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, err
+	}
+	var tenants []model.Tenant
+	if err := query.Order("id ASC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&tenants).Error; err != nil {
+		return nil, err
+	}
+	config, err := loadAIConfigDefaults(model.DB)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uint, 0, len(tenants))
+	for _, tenant := range tenants {
+		ids = append(ids, tenant.ID)
+	}
+	policies := make(map[uint]model.AITenantQuotaPolicy, len(ids))
+	usages := make(map[uint]AIUsageView, len(ids))
+	if len(ids) > 0 {
+		var rows []model.AITenantQuotaPolicy
+		if err := model.DB.Where("tenant_id IN ?", ids).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			policies[row.TenantID] = row
+		}
+		var usageRows []model.AIUsageMonth
+		if err := model.DB.Where("tenant_id IN ? AND period = ?", ids, period).Find(&usageRows).Error; err != nil {
+			return nil, err
+		}
+		for _, row := range usageRows {
+			usages[row.TenantID] = AIUsageView{RequestCount: row.RequestCount, TokenCount: row.TokenCount}
+		}
+	}
+	data := make([]AITenantQuotaPolicyView, 0, len(tenants))
+	for _, tenant := range tenants {
+		var policy *model.AITenantQuotaPolicy
+		if row, ok := policies[tenant.ID]; ok {
+			rowCopy := row
+			policy = &rowCopy
+		}
+		limits := aiTenantQuotaLimitsForPolicy(config, policy)
+		data = append(data, aiTenantQuotaView(tenant, period, limits, policy, usages[tenant.ID]))
+	}
+	return &AITenantQuotaPolicyPage{Data: data, Total: total, Page: page, PageSize: pageSize, Period: period}, nil
+}
+
+func (s *PlatformAIService) UpdateTenantQuotaPolicy(tenantID uint, input AITenantQuotaPolicyInput, actorID uint, actorRole string) (*AITenantQuotaPolicyView, error) {
+	if tenantID == 0 {
+		return nil, errors.New("tenant is required")
+	}
+	if err := validateAITenantQuotaPolicyInput(input); err != nil {
+		return nil, err
+	}
+	var result *AITenantQuotaPolicyView
+	err := model.Write(func(tx *gorm.DB) error {
+		var tenant model.Tenant
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", tenantID).First(&tenant).Error; err != nil {
+			return err
+		}
+		config, err := loadAIConfigDefaults(tx)
+		if err != nil {
+			return err
+		}
+		var existing model.AITenantQuotaPolicy
+		findErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ?", tenantID).First(&existing).Error
+		if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return findErr
+		}
+		var beforePolicy *model.AITenantQuotaPolicy
+		if findErr == nil {
+			beforeCopy := existing
+			beforePolicy = &beforeCopy
+		}
+		beforeLimits, _, err := resolveAITenantQuota(tx, tenantID, config)
+		if err != nil {
+			return err
+		}
+		var usageRow model.AIUsageMonth
+		usage := AIUsageView{}
+		if err := tx.Where("tenant_id = ? AND period = ?", tenantID, time.Now().Format("2006-01")).First(&usageRow).Error; err == nil {
+			usage = AIUsageView{RequestCount: usageRow.RequestCount, TokenCount: usageRow.TokenCount}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		before := aiTenantQuotaView(tenant, time.Now().Format("2006-01"), beforeLimits, beforePolicy, usage)
+		if findErr == nil {
+			if err := tx.Model(&existing).Updates(map[string]interface{}{
+				"monthly_request_limit": input.MonthlyRequestLimit,
+				"monthly_token_limit":   input.MonthlyTokenLimit,
+				"enabled":               input.Enabled,
+				"updated_by":            actorID,
+				"last_updated_reason":   strings.TrimSpace(input.Reason),
+			}).Error; err != nil {
+				return err
+			}
+		} else {
+			existing = model.AITenantQuotaPolicy{
+				TenantID: tenantID, MonthlyRequestLimit: input.MonthlyRequestLimit,
+				MonthlyTokenLimit: input.MonthlyTokenLimit, Enabled: input.Enabled,
+				UpdatedBy: actorID, LastUpdatedReason: strings.TrimSpace(input.Reason),
+			}
+			if err := tx.Create(&existing).Error; err != nil {
+				return err
+			}
+		}
+		afterLimits, _, err := resolveAITenantQuota(tx, tenantID, config)
+		if err != nil {
+			return err
+		}
+		afterPolicy := existing
+		after := aiTenantQuotaView(tenant, before.Period, afterLimits, &afterPolicy, usage)
+		if err := recordAuditTx(tx, actorID, tenantID, actorRole, "platform", "platform.ai_tenant_quota.update", "ai_tenant_quota_policy", existing.ID, strings.TrimSpace(input.Reason), mustJSON(before), mustJSON(after)); err != nil {
+			return err
+		}
+		result = &after
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (s *PlatformAIService) GetConfig() (*PlatformAIConfigView, error) {
@@ -389,15 +679,22 @@ func (s *PlatformAIService) Availability(tenantID uint) (*AIAvailabilityView, er
 	result.Provider = config.Provider
 	result.Model = config.Model
 	result.ProtocolMode = resolveAgentTaskProtocol(config)
-	result.MonthlyRequestLimit = config.DefaultMonthlyRequestLimit
-	result.MonthlyTokenLimit = config.DefaultMonthlyTokenLimit
+	limits, _, err := resolveAITenantQuota(model.DB, tenantID, config)
+	if err != nil {
+		return nil, err
+	}
+	result.MonthlyRequestLimit = limits.MonthlyRequestLimit
+	result.MonthlyTokenLimit = limits.MonthlyTokenLimit
 	usage, err := aiUsageForPeriod(tenantID, time.Now().Format("2006-01"))
 	if err != nil {
 		return nil, err
 	}
-	result.RequestsRemaining = nonNegativeInt(config.DefaultMonthlyRequestLimit - usage.RequestCount)
-	result.TokensRemaining = nonNegativeInt64(config.DefaultMonthlyTokenLimit - usage.TokenCount)
-	if result.RequestsRemaining == 0 || result.TokensRemaining == 0 {
+	result.RequestsRemaining = nonNegativeInt(limits.MonthlyRequestLimit - usage.RequestCount)
+	result.TokensRemaining = nonNegativeInt64(limits.MonthlyTokenLimit - usage.TokenCount)
+	if !limits.Enabled {
+		result.Enabled = false
+		result.Reason = "本租户 AI 已暂停"
+	} else if result.RequestsRemaining == 0 || result.TokensRemaining == 0 {
 		result.Enabled = false
 		result.Reason = ErrAIBudgetExceeded.Error()
 	}
@@ -837,8 +1134,15 @@ func (s *PlatformAIService) ReserveUsage(tenantID uint, config model.PlatformAIC
 	}
 	period := time.Now().Format("2006-01")
 	return model.Write(func(tx *gorm.DB) error {
+		limits, _, err := resolveAITenantQuota(tx, tenantID, config)
+		if err != nil {
+			return err
+		}
+		if !limits.Enabled {
+			return ErrAIUnavailable
+		}
 		var usage model.AIUsageMonth
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND period = ?", tenantID, period).First(&usage).Error
+		err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND period = ?", tenantID, period).First(&usage).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			// Seed the unique row before locking it. ON CONFLICT closes the
 			// first-request race between two workers for the same tenant/month.
@@ -852,7 +1156,7 @@ func (s *PlatformAIService) ReserveUsage(tenantID uint, config model.PlatformAIC
 		} else if err != nil {
 			return err
 		}
-		if usage.RequestCount+1 > config.DefaultMonthlyRequestLimit || usage.TokenCount+estimatedTokens > config.DefaultMonthlyTokenLimit {
+		if usage.RequestCount+1 > limits.MonthlyRequestLimit || usage.TokenCount+estimatedTokens > limits.MonthlyTokenLimit {
 			return ErrAIBudgetExceeded
 		}
 		usage.RequestCount++

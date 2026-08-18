@@ -43,6 +43,12 @@ const router = createRouter({
             meta: { scope: 'platform', roles: ['platform_admin'], title: 'AI 助手配置' }
         },
         {
+            path: '/platform-ai/quotas',
+            name: 'platform-ai-quotas',
+            component: () => import('../views/PlatformAIQuotaView.vue'),
+            meta: { scope: 'platform', roles: ['platform_admin'], title: 'AI 租户额度' }
+        },
+        {
             path: '/distribution',
             name: 'distribution',
             component: () => import('../views/DistributionView.vue'),

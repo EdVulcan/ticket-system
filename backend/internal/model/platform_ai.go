@@ -25,6 +25,20 @@ type PlatformAIConfig struct {
 	UpdatedBy                  uint       `gorm:"index" json:"updated_by"`
 }
 
+// AITenantQuotaPolicy is an optional tenant-scoped override of the platform
+// AI budget. A nil limit inherits the corresponding platform default. The
+// usage ledger remains separate and append-only; this policy only controls
+// whether future requests may reserve usage.
+type AITenantQuotaPolicy struct {
+	Base
+	TenantID            uint   `gorm:"uniqueIndex:idx_ai_tenant_quota_policy,priority:1;not null" json:"tenant_id"`
+	MonthlyRequestLimit *int   `json:"monthly_request_limit,omitempty"`
+	MonthlyTokenLimit   *int64 `json:"monthly_token_limit,omitempty"`
+	Enabled             bool   `gorm:"not null;default:true" json:"enabled"`
+	UpdatedBy           uint   `gorm:"index" json:"updated_by"`
+	LastUpdatedReason   string `gorm:"size:255" json:"last_updated_reason,omitempty"`
+}
+
 // AIUsageMonth is the tenant-scoped cost ledger for the platform provider.
 // Requests are counted even when the provider fails after reservation so a
 // retry storm cannot bypass the platform's monthly budget.
