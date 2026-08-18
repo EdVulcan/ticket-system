@@ -484,6 +484,19 @@ func (s *PlatformAIService) chatWithTools(ctx context.Context, config model.Plat
 }
 
 func (s *PlatformAIService) chatWithToolsChoice(ctx context.Context, config model.PlatformAIConfig, apiKey string, messages []AIMessage, tools []AIToolDefinition, maxTokens int, toolChoice interface{}) (*AICompletionResult, error) {
+	completion, err := s.chatWithToolsChoiceAttempt(ctx, config, apiKey, messages, tools, maxTokens, toolChoice)
+	if !shouldRetryDeepSeekToolChoice(config, toolChoice, err) {
+		return completion, err
+	}
+	// DeepSeek accounts can enable thinking mode independently of the model
+	// alias. That mode rejects a named function choice but accepts automatic
+	// selection. Retry only this explicit compatibility error, inside the same
+	// logical provider call, so task idempotency and usage reservation remain
+	// unchanged.
+	return s.chatWithToolsChoiceAttempt(ctx, config, apiKey, messages, tools, maxTokens, "auto")
+}
+
+func (s *PlatformAIService) chatWithToolsChoiceAttempt(ctx context.Context, config model.PlatformAIConfig, apiKey string, messages []AIMessage, tools []AIToolDefinition, maxTokens int, toolChoice interface{}) (*AICompletionResult, error) {
 	if len(tools) == 0 {
 		return nil, errors.New("AI tool registry is empty")
 	}
@@ -533,6 +546,29 @@ func (s *PlatformAIService) chatWithToolsChoice(ctx context.Context, config mode
 	}
 	recordAIProviderResult(config, nil)
 	return &AICompletionResult{Message: choice.Message, UsageTokens: decoded.Usage.TotalTokens, FinishReason: choice.FinishReason, ProviderRequestID: decoded.ID}, nil
+}
+
+func shouldRetryDeepSeekToolChoice(config model.PlatformAIConfig, toolChoice interface{}, err error) bool {
+	if normalizeAIProvider(config.Provider) != defaultAIProvider || !isNamedAgentToolChoice(toolChoice) {
+		return false
+	}
+	var providerErr *AIProviderError
+	if !errors.As(err, &providerErr) || providerErr.HTTPStatus != http.StatusBadRequest {
+		return false
+	}
+	message := strings.ToLower(providerErr.Error())
+	return strings.Contains(message, "thinking mode") &&
+		strings.Contains(message, "tool_choice") &&
+		(strings.Contains(message, "does not support") || strings.Contains(message, "unsupported"))
+}
+
+func isNamedAgentToolChoice(toolChoice interface{}) bool {
+	choice, ok := toolChoice.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	choiceType, _ := choice["type"].(string)
+	return strings.EqualFold(strings.TrimSpace(choiceType), "function")
 }
 
 func (s *PlatformAIService) probe(ctx context.Context, config model.PlatformAIConfig, apiKey string, messages []AIMessage, maxTokens int) error {

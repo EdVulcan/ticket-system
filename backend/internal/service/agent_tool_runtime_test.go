@@ -204,6 +204,41 @@ func TestAgentProductCreateScopesPlannerToPrepareTool(t *testing.T) {
 	}
 }
 
+func TestAgentDeepSeekThinkingToolChoiceFallsBackToAuto(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		calls.Add(1)
+		var body struct {
+			ToolChoice json.RawMessage `json:"tool_choice"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			http.Error(writer, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if string(body.ToolChoice) != `"auto"` {
+			writer.Header().Set("Content-Type", "application/json")
+			writer.WriteHeader(http.StatusBadRequest)
+			_, _ = writer.Write([]byte(`{"error":{"message":"Thinking mode does not support this tool_choice"}}`))
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(toolCallPayload("call-thinking-fallback", "search_ticket_products", `{"query":"Adult Ticket","limit":10}`, 18))
+	}))
+	defer server.Close()
+	config := model.PlatformAIConfig{Provider: defaultAIProvider, BaseURL: server.URL, Model: defaultAIModel, RequestTimeoutSeconds: 5}
+	choice := map[string]interface{}{"type": "function", "function": map[string]string{"name": "search_ticket_products"}}
+	result, err := (&PlatformAIService{}).chatWithToolsChoice(t.Context(), config, "test-provider-key", []AIMessage{{Role: "user", Content: "查询票种"}}, []AIToolDefinition{{Type: "function", Function: AIToolFunction{Name: "search_ticket_products"}}}, 256, choice)
+	if err != nil {
+		t.Fatalf("thinking-mode tool choice fallback failed: %v", err)
+	}
+	if result == nil || len(result.Message.ToolCalls) != 1 || result.Message.ToolCalls[0].Function.Name != "search_ticket_products" {
+		t.Fatalf("unexpected fallback result: %+v", result)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("fallback physical calls=%d, want 2", calls.Load())
+	}
+}
+
 func TestAgentRejectsProviderToolOutsideTaskRegistry(t *testing.T) {
 	fixture := seedCatalogBatchFixture(t)
 	server, _ := toolProvider(t, func(_ []AIMessage) (map[string]interface{}, error) {
