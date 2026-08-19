@@ -503,6 +503,29 @@ func agentHasAffirmativeAgentWord(input string, values []string) bool {
 	return false
 }
 
+// agentHotelMutationIntent keeps hotel writes on the typed hotel tool route.
+// The short phrases below cover common wording; this guarded fallback also
+// handles variants such as “给酒店房量设置为 5” without turning a plain
+// “查询房量” into a mutation. The actual operation, target and values remain
+// server-validated by the hotel adapter.
+func agentHotelMutationIntent(input string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if normalized == "" {
+		return false
+	}
+	if agentHasAffirmativeAgentWord(normalized, agentHotelMutationIntentWords) {
+		return true
+	}
+	if agentHasAny(normalized, []string{"查询", "查看", "列出", "统计", "报表"}) {
+		return false
+	}
+	if !agentHasAny(normalized, agentHotelIntentWords) {
+		return false
+	}
+	return agentHasAny(normalized, []string{"设置", "调整", "增加", "减少", "清除", "修改", "登记", "关闭", "开启", "打开"}) &&
+		agentHasAny(normalized, []string{"房量", "房态", "关房", "价格计划", "价格日历", "销售价", "覆盖价", "入住", "离店", "未到店"})
+}
+
 func agentPureReadRequest(input string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(input))
 	if !agentHasAny(normalized, agentReadIntentWords) {
@@ -514,7 +537,7 @@ func agentPureReadRequest(input string) bool {
 	mutationWords = append(mutationWords, agentProductBatchUpdateIntentWords...)
 	mutationWords = append(mutationWords, agentHotelMutationIntentWords...)
 	mutationWords = append(mutationWords, []string{"支付", "退款", "退票", "设备控制", "下发设备", "硬件", "凭据", "密钥", "api key", "appid", "secret", "付款", "充值", "结算确认", "确认结算", "权限变更", "赋权", "写入", "执行", "确认"}...)
-	return !agentHasAffirmativeAgentWord(normalized, mutationWords)
+	return !agentHasAffirmativeAgentWord(normalized, mutationWords) && !agentHotelMutationIntent(normalized)
 }
 
 func agentUnsupportedCapabilityMessage(input string) string {
@@ -582,7 +605,7 @@ func agentReadOnlyCompoundIntent(input string) bool {
 	mutationWords = append(mutationWords, agentProductBatchUpdateIntentWords...)
 	mutationWords = append(mutationWords, agentHotelMutationIntentWords...)
 	mutationWords = append(mutationWords, "支付", "退款", "退票", "设备控制", "凭据", "密钥", "分销授权", "渠道授权", "上架", "下架", "写入", "执行", "确认", "充值", "结算", "入园")
-	return !agentHasAffirmativeAgentWord(normalized, mutationWords)
+	return !agentHasAffirmativeAgentWord(normalized, mutationWords) && !agentHotelMutationIntent(normalized)
 }
 
 // agentReadOnlyToolRoute narrows an unambiguous single-topic query to one
@@ -590,7 +613,7 @@ func agentReadOnlyCompoundIntent(input string) bool {
 // leaving explicit multi-topic requests to query_compound_readonly.
 func agentReadOnlyToolRoute(input string) []string {
 	normalized := strings.ToLower(strings.TrimSpace(input))
-	if normalized == "" || agentReadOnlyCompoundIntent(normalized) || agentHasAffirmativeAgentWord(normalized, agentCatalogIntentWords) ||
+	if normalized == "" || agentReadOnlyCompoundIntent(normalized) || agentHotelMutationIntent(normalized) || agentHasAffirmativeAgentWord(normalized, agentCatalogIntentWords) ||
 		agentHasAffirmativeAgentWord(normalized, agentProductCreateIntentWords) || agentHasAffirmativeAgentWord(normalized, agentProductUpdateIntentWords) ||
 		agentHasAffirmativeAgentWord(normalized, agentProductBatchUpdateIntentWords) {
 		return nil
@@ -843,7 +866,7 @@ func agentCompoundIntent(input string) bool {
 	if !agentHasAny(normalized, agentCompoundIntentWords) {
 		return false
 	}
-	return agentHasAny(normalized, agentCatalogIntentWords) || agentHasAny(normalized, agentProductCreateIntentWords) || agentHasAny(normalized, agentProductUpdateIntentWords) || agentHasAny(normalized, agentProductBatchUpdateIntentWords) || agentHasAny(normalized, agentHotelMutationIntentWords)
+	return agentHasAny(normalized, agentCatalogIntentWords) || agentHasAny(normalized, agentProductCreateIntentWords) || agentHasAny(normalized, agentProductUpdateIntentWords) || agentHasAny(normalized, agentProductBatchUpdateIntentWords) || agentHotelMutationIntent(normalized)
 }
 
 var agentReadIntentWords = []string{

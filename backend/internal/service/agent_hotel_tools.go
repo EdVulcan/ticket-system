@@ -233,6 +233,147 @@ type agentHotelSummaryQueryArgs struct {
 	EndDate   string `json:"end_date"`
 }
 
+// agentHotelCompoundReadContext keeps an explicit multi-topic hotel query
+// resumable across turns. It contains only the user's request and
+// server-owned tool names; no hotel/room/product database identifiers or
+// guest data are stored in the provider context.
+type agentHotelCompoundReadContext struct {
+	OriginalRequest string   `json:"original_request,omitempty"`
+	ToolNames       []string `json:"tool_names,omitempty"`
+}
+
+// agentHotelCompoundReadToolNames conservatively maps an explicit multi-topic
+// hotel read to the typed read adapters. It never invents filters or values;
+// missing names and dates are collected by agentHotelCompoundReadMissingFields.
+func agentHotelCompoundReadToolNames(input string) []string {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if normalized == "" || !agentReadOnlyCompoundIntent(normalized) || !agentHasAny(normalized, agentHotelIntentWords) {
+		return nil
+	}
+	tools := make([]string, 0, 5)
+	add := func(name string) {
+		for _, existing := range tools {
+			if existing == name {
+				return
+			}
+		}
+		tools = append(tools, name)
+	}
+	if agentHasAny(normalized, []string{"酒店目录", "酒店、", "房型", "价格计划", "酒店产品", "日历房", "预售房"}) {
+		add("search_hotel_catalog")
+	}
+	if agentHasAny(normalized, []string{"酒店房量", "酒店房态", "酒店库存", "房量", "房态"}) {
+		add("query_hotel_inventory")
+	}
+	if agentHasAny(normalized, []string{"价格计划日历", "房型价格日历", "入住日价格"}) ||
+		(agentHasAny(normalized, []string{"价格计划"}) && agentHasAny(normalized, []string{"价格日历"})) {
+		add("query_hotel_rate_calendar")
+	}
+	if agentHasAny(normalized, []string{"酒店产品价格", "酒店产品售价", "酒店产品日历", "日历房售价"}) ||
+		(agentHasAny(normalized, []string{"酒店产品"}) && agentHasAny(normalized, []string{"价格日历", "销售价"})) {
+		add("query_hotel_product_calendar")
+	}
+	if agentHasAny(normalized, []string{"住宿预订", "酒店预订", "入住名单"}) {
+		add("query_hotel_reservations")
+	}
+	if agentHasAny(normalized, []string{"预约权益", "住宿权益", "待预约住宿"}) {
+		add("query_hotel_booking_entitlements")
+	}
+	if agentHasAny(normalized, []string{"酒店经营汇总", "住宿经营汇总", "酒店业务汇总"}) {
+		add("query_hotel_business_summary")
+	}
+	if len(tools) < 2 {
+		return nil
+	}
+	return tools
+}
+
+func agentHotelCompoundReadHasKnownName(tenantID uint, input string, kind string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if normalized == "" || tenantID == 0 {
+		return false
+	}
+	contains := func(name string) bool { return strings.Contains(normalized, strings.ToLower(strings.TrimSpace(name))) }
+	switch kind {
+	case "hotel":
+		var rows []model.HotelProperty
+		if model.DB.Where("tenant_id = ?", tenantID).Find(&rows).Error != nil {
+			return false
+		}
+		for _, row := range rows {
+			if contains(row.Name) || contains(row.Code) {
+				return true
+			}
+		}
+	case "room_type":
+		var rows []model.HotelRoomType
+		if model.DB.Where("tenant_id = ?", tenantID).Find(&rows).Error != nil {
+			return false
+		}
+		for _, row := range rows {
+			if contains(row.Name) || contains(row.Code) {
+				return true
+			}
+		}
+	case "rate_plan":
+		var rows []model.HotelRatePlan
+		if model.DB.Where("tenant_id = ?", tenantID).Find(&rows).Error != nil {
+			return false
+		}
+		for _, row := range rows {
+			if contains(row.Name) || contains(row.Code) {
+				return true
+			}
+		}
+	case "product":
+		var rows []model.Product
+		if model.DB.Where("tenant_id = ? AND product_kind = ?", tenantID, "hotel").Find(&rows).Error != nil {
+			return false
+		}
+		for _, row := range rows {
+			if contains(row.Name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// agentHotelCompoundReadMissingFields intentionally returns all currently
+// missing semantic inputs in one response. It is used before the provider is
+// called so an underspecified multi-topic request cannot degrade into a
+// generic empty-plan error. Exact target resolution still happens in each
+// typed adapter after the user supplies the values.
+func agentHotelCompoundReadMissingFields(tenantID uint, input string, toolNames []string) []AgentMissingField {
+	missing := make([]AgentMissingField, 0, 5)
+	has := func(name string) bool {
+		for _, tool := range toolNames {
+			if tool == name {
+				return true
+			}
+		}
+		return false
+	}
+	if (has("query_hotel_inventory") || has("query_hotel_rate_calendar") || has("query_hotel_product_calendar") || has("query_hotel_business_summary")) && !agentHotelCompoundReadHasKnownName(tenantID, input, "hotel") {
+		missing = append(missing, AgentMissingField{Field: "hotel_name", Label: "酒店名称", Question: "请提供要查询的酒店名称；不要使用“所有酒店”代替具体酒店。"})
+	}
+	if (has("query_hotel_inventory") || has("query_hotel_rate_calendar")) && !agentHotelCompoundReadHasKnownName(tenantID, input, "room_type") {
+		missing = append(missing, AgentMissingField{Field: "room_type_name", Label: "房型名称", Question: "请提供房型名称；房量和价格计划日历必须落到一个明确房型。"})
+	}
+	if has("query_hotel_rate_calendar") && !agentHotelCompoundReadHasKnownName(tenantID, input, "rate_plan") {
+		missing = append(missing, AgentMissingField{Field: "rate_plan_name", Label: "价格计划名称", Question: "请提供要查询的价格计划名称。"})
+	}
+	if has("query_hotel_product_calendar") && !agentHotelCompoundReadHasKnownName(tenantID, input, "product") {
+		missing = append(missing, AgentMissingField{Field: "product_name", Label: "酒店产品名称", Question: "请提供要查询销售价日历的独立酒店产品名称。"})
+	}
+	if has("query_hotel_inventory") || has("query_hotel_rate_calendar") || has("query_hotel_product_calendar") || has("query_hotel_business_summary") {
+		if len(directAgentQueryDatePattern.FindAllString(input, -1)) == 0 {
+			missing = append(missing, AgentMissingField{Field: "date_range", Label: "入住日期范围", Question: "请一次提供开始和结束入住日期（YYYY-MM-DD 至 YYYY-MM-DD）；单日查询可填写同一天。"})
+		}
+	}
+	return missing
+}
+
 func hotelAgentDateRange(startDate, endDate string) ([]time.Time, error) {
 	start, end, err := parseHotelDateRange(strings.TrimSpace(startDate), strings.TrimSpace(endDate), "酒店日期")
 	if err != nil {

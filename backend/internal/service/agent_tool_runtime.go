@@ -139,8 +139,60 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 	if len(visible) == 0 {
 		return nil, agentInvalid("当前账号没有可用的 AI 工具")
 	}
+	var priorContext agentTaskContext
+	if strings.TrimSpace(task.ContextJSON) != "" {
+		_ = json.Unmarshal([]byte(task.ContextJSON), &priorContext)
+	}
+	hotelCompoundTools := agentHotelCompoundReadToolNames(input)
+	if len(hotelCompoundTools) < 2 && priorContext.HotelCompoundRead != nil {
+		hotelCompoundTools = append([]string(nil), priorContext.HotelCompoundRead.ToolNames...)
+	}
+	if len(hotelCompoundTools) >= 2 {
+		// A compound hotel query is only eligible when every nested typed read
+		// tool is visible to this actor. Do this check before asking for names or
+		// dates so a distributor/travel agency cannot learn supplier-only facts.
+		for _, toolName := range hotelCompoundTools {
+			spec, ok := findAgentTool(toolName)
+			if !ok || !agentToolAllowed(tenantID, actorRole, spec) {
+				return nil, agentInvalid("当前账号或租户没有该酒店复合查询权限")
+			}
+		}
+		combinedInput := strings.TrimSpace(input)
+		if priorContext.HotelCompoundRead != nil && strings.TrimSpace(priorContext.HotelCompoundRead.OriginalRequest) != "" {
+			combinedInput = strings.TrimSpace(priorContext.HotelCompoundRead.OriginalRequest + "\n" + combinedInput)
+		}
+		missing := agentHotelCompoundReadMissingFields(tenantID, combinedInput, hotelCompoundTools)
+		if len(missing) > 0 {
+			contextValue := priorContext
+			contextValue.OperationType = AgentOperationPending
+			if contextValue.HotelCompoundRead == nil {
+				contextValue.HotelCompoundRead = &agentHotelCompoundReadContext{OriginalRequest: strings.TrimSpace(input), ToolNames: append([]string(nil), hotelCompoundTools...)}
+			}
+			return &agentPlanningResult{
+				OperationType: AgentOperationPending,
+				Context:       contextValue,
+				Missing:       missing,
+				ResponseText:  "这是一个酒店复合只读查询。请一次补齐下方所有缺失条件；补齐后系统将分别返回服务器事实，不会修改房量、价格或预订。",
+			}, nil
+		}
+		if priorContext.HotelCompoundRead == nil {
+			priorContext.HotelCompoundRead = &agentHotelCompoundReadContext{OriginalRequest: strings.TrimSpace(input), ToolNames: append([]string(nil), hotelCompoundTools...)}
+		}
+		priorContext.OperationType = AgentOperationPending
+		encodedContext, marshalErr := json.Marshal(priorContext)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		task.ContextJSON = string(encodedContext)
+	}
 	directReadOnlyTool := ""
 	readCompoundIntent := task.OperationType == AgentOperationPending && agentReadOnlyCompoundIntent(input)
+	if len(hotelCompoundTools) >= 2 {
+		// On a continuation, the current turn may contain only the missing
+		// values. The durable context still identifies this as the same typed
+		// compound query and prevents routing it to a single ticket query.
+		readCompoundIntent = true
+	}
 	compoundIntent := task.OperationType == AgentOperationCompound || (task.OperationType == AgentOperationPending && agentCompoundIntent(input))
 	if readCompoundIntent {
 		// Explicit multi-topic reads are deterministic: resolve the requested
@@ -176,15 +228,16 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 		normalizedInput := strings.ToLower(strings.TrimSpace(input))
 		priorInput := strings.ToLower(strings.TrimSpace(task.InputText))
 		hotelOperation := task.OperationType == AgentOperationHotelInventoryChange || task.OperationType == AgentOperationHotelRateCalendarChange || task.OperationType == AgentOperationHotelProductCalendarChange || task.OperationType == AgentOperationHotelReservationStatusChange
-		hotelIntent := hotelOperation || agentHasAffirmativeAgentWord(normalizedInput, agentHotelMutationIntentWords) || agentHasAffirmativeAgentWord(priorInput, agentHotelMutationIntentWords)
+		hotelIntent := hotelOperation || agentHotelMutationIntent(normalizedInput) || agentHotelMutationIntent(priorInput)
 		if hotelIntent {
 			toolName := ""
 			switch {
 			case task.OperationType == AgentOperationHotelInventoryChange || agentHasAny(normalizedInput, []string{"房量", "房态", "关房", "开房"}):
 				toolName = "prepare_hotel_inventory_change"
-			case task.OperationType == AgentOperationHotelProductCalendarChange || agentHasAny(normalizedInput, []string{"酒店产品价格", "酒店产品售价", "日历房售价"}):
+			case task.OperationType == AgentOperationHotelProductCalendarChange || agentHasAny(normalizedInput, []string{"酒店产品价格", "酒店产品售价", "酒店产品日历", "日历房售价"}):
 				toolName = "prepare_hotel_product_calendar_change"
-			case task.OperationType == AgentOperationHotelRateCalendarChange || agentHasAny(normalizedInput, []string{"价格计划日历", "房型价格日历", "入住日价格"}):
+			case task.OperationType == AgentOperationHotelRateCalendarChange || agentHasAny(normalizedInput, []string{"价格计划日历", "房型价格日历", "入住日价格"}) ||
+				(agentHasAny(normalizedInput, []string{"价格计划"}) && agentHasAny(normalizedInput, []string{"覆盖价", "入住日", "价格日历", "设置价格", "调整价格"})):
 				toolName = "prepare_hotel_rate_calendar_change"
 			case task.OperationType == AgentOperationHotelReservationStatusChange || agentHasAny(normalizedInput, []string{"登记入住", "登记离店", "登记未到店", "已入住", "已离店", "未到店"}):
 				toolName = "prepare_hotel_reservation_status_change"

@@ -132,6 +132,7 @@ type agentTaskContext struct {
 	HotelRateCalendar      *agentHotelRateCalendarPlan      `json:"hotel_rate_calendar,omitempty"`
 	HotelProductCalendar   *agentHotelProductCalendarPlan   `json:"hotel_product_calendar,omitempty"`
 	HotelReservationStatus *agentHotelReservationStatusPlan `json:"hotel_reservation_status,omitempty"`
+	HotelCompoundRead      *agentHotelCompoundReadContext   `json:"hotel_compound_read,omitempty"`
 	Compound               *agentCompoundDraft              `json:"compound,omitempty"`
 	TargetScope            *agentTargetScopeState           `json:"target_scope,omitempty"`
 	TargetScopes           []*agentTargetScopeState         `json:"target_scopes,omitempty"`
@@ -949,12 +950,16 @@ func (s *AgentTaskService) loadOrCreateTask(tenantID, actorUserID uint, actorRol
 		var configured model.PlatformAIConfig
 		if configErr := tx.Where("config_key = ?", platformAIConfigKey).First(&configured).Error; configErr == nil {
 			candidate.ProtocolMode = resolveAgentTaskProtocol(configured)
-			// DeepSeek legacy configurations predate the read-only tool registry.
-			// Keep old mutation tasks compatible, but route new single/compound
-			// queries through the server-owned adapters so reports do not fall
-			// into the legacy JSON planner and fail with an empty plan.
+			// DeepSeek legacy configurations predate the typed tool registry. Keep
+			// existing mutation tasks compatible, but route every *new* hotel
+			// low-risk mutation through the typed adapter. The legacy planner only
+			// knows the ticket envelope; allowing a hotel change through it can
+			// produce a ticket preview (or an empty plan) for a request that must
+			// remain a hotel_inventory/rate-calendar/product-calendar preview.
+			// Read-only requests already use the server-owned adapters as well.
 			if candidate.ProtocolMode == agentProtocolLegacyJSON && normalizeAIProvider(configured.Provider) == defaultAIProvider &&
-				(agentReadOnlyCompoundIntent(input) || len(agentReadOnlyToolRoute(input)) == 1) {
+				(agentReadOnlyCompoundIntent(input) || len(agentReadOnlyToolRoute(input)) == 1 ||
+					agentHotelMutationIntent(input)) {
 				candidate.ProtocolMode = agentProtocolToolV1
 			}
 		}
@@ -998,7 +1003,7 @@ func (s *AgentTaskService) plan(ctx context.Context, tenantID, actorUserID uint,
 	normalizedInput := strings.ToLower(strings.TrimSpace(input))
 	hotelTask := task.OperationType == AgentOperationHotelInventoryChange || task.OperationType == AgentOperationHotelRateCalendarChange || task.OperationType == AgentOperationHotelProductCalendarChange || task.OperationType == AgentOperationHotelReservationStatusChange
 	hotelIntent := hotelTask || agentHasAny(normalizedInput, agentHotelIntentWords)
-	hotelMutation := hotelTask || agentHasAffirmativeAgentWord(normalizedInput, agentHotelMutationIntentWords)
+	hotelMutation := hotelTask || agentHotelMutationIntent(normalizedInput)
 	if hotelIntent {
 		if !hotelMutation {
 			return nil, agentInvalid("当前 AI 配置使用 legacy_json，酒店查询需要启用 tool_v1 协议；请让平台管理员切换为 auto 或 tool_v1")
