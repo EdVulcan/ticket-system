@@ -74,6 +74,41 @@ func TestAgentTargetScopeAppliesStatusBeforeAmbiguityAndRequiresScenicArea(t *te
 	}
 }
 
+func TestAgentTargetScopeTurnsUnconfirmedAllScenicInferenceIntoClarification(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	var secondArea model.ScenicArea
+	if err := model.Write(func(tx *gorm.DB) error {
+		secondArea = model.ScenicArea{TenantID: fixture.tenant.ID, Code: "SCOPE-AREA-ALL", Name: "Second Scenic", Status: "active"}
+		return tx.Create(&secondArea).Error
+	}); err != nil {
+		t.Fatal(err)
+	}
+	products := []model.Product{
+		{Base: model.Base{ID: 211}, TenantID: fixture.tenant.ID, ScenicAreaID: fixture.area.ID, Name: "Water Park A", Type: "online", Status: "online"},
+		{Base: model.Base{ID: 212}, TenantID: fixture.tenant.ID, ScenicAreaID: secondArea.ID, Name: "Water Park B", Type: "online", Status: "online"},
+	}
+
+	resolution, err := resolveAgentTargetScope(model.DB, fixture.tenant.ID, &AgentTargetScope{
+		Version: agentTargetScopeVersion, Intent: "batch", ProductType: "online", AllScenicAreas: true,
+	}, nil, "把所有线上门票设置为未核销随时退", products, nil)
+	if err != nil {
+		t.Fatalf("unconfirmed provider expansion should become clarification: %v", err)
+	}
+	if len(resolution.Missing) != 1 || resolution.State == nil || resolution.State.AmbiguityReason != agentScopeReasonScenicArea {
+		t.Fatalf("expected durable scenic-area clarification, got resolution=%+v", resolution)
+	}
+	if resolution.Scope.AllScenicAreas {
+		t.Fatal("unconfirmed all_scenic_areas inference was retained")
+	}
+
+	explicit, err := resolveAgentTargetScope(model.DB, fixture.tenant.ID, &AgentTargetScope{
+		Version: agentTargetScopeVersion, Intent: "batch", ProductType: "online", AllScenicAreas: true,
+	}, nil, "把所有线上门票设置为未核销随时退，全部景区", products, nil)
+	if err != nil || len(explicit.Targets) != 2 || !explicit.Scope.AllScenicAreas {
+		t.Fatalf("explicit all-scenic scope did not resolve: resolution=%+v err=%v", explicit, err)
+	}
+}
+
 func TestAgentTargetScopeRecognizesUnlistedStatus(t *testing.T) {
 	fixture := seedCatalogBatchFixture(t)
 	products := []model.Product{
