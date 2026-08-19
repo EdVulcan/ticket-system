@@ -382,6 +382,13 @@ const queryToolLabel = (tool: unknown) => ({
   query_team_groups: '团队计划查询',
   query_team_settlement_summary: '团队结算查询',
   query_team_account_summary: '团队账户查询',
+  search_hotel_catalog: '酒店目录查询',
+  query_hotel_inventory: '酒店房量查询',
+  query_hotel_rate_calendar: '价格计划日历查询',
+  query_hotel_product_calendar: '酒店产品售价日历查询',
+  query_hotel_reservations: '住宿预订查询',
+  query_hotel_booking_entitlements: '住宿预约权益查询',
+  query_hotel_business_summary: '酒店经营汇总查询',
   query_compound_readonly: '复合只读查询',
 } as Record<string, string>)[String(tool || '')] || '业务查询'
 const queryFieldLabel = (key: string) => ({
@@ -404,6 +411,11 @@ const queryFieldLabel = (key: string) => ({
   settlement_status: '结算状态', admission_batch_count: '入园批次', admitted_count: '已入园', confirmation_count: '确认次数',
   latest_confirmed_count: '最近确认人数', supplier_acknowledged: '供应商已确认', kind: '结算类型', gross_cents: '应收金额',
   refund_cents: '退款冲减', deposit_cents: '预付款', due_date: '到期日期', completed_at: '完成时间',
+  hotel_name: '酒店', room_type_name: '房型', rate_plan_name: '价格计划', reservation_no: '预订号',
+  check_in_date: '入住日期', check_out_date: '离店日期', sale_mode: '销售模式', name: '名称',
+  source: '价格来源', base_retail_price: '基础售价', base_settlement_price: '基础结算价',
+  has_override: '有入住日覆盖价', reserved: '已预留', available_after_reserved: '扣除预留后可售', closed: '关房',
+  business_type: '业务类型', sales_amount: '售券金额', booking_amount: '预约金额', stay_amount: '入住金额',
 } as Record<string, string>)[key] || key.replace(/_/g, ' ')
 const isSafeQueryField = (key: string) => !/(^id$|_id$|tenant|user|password|token|secret|api[_-]?key|identity|id_number|phone|mobile)/i.test(key)
 const queryEntries = (value: unknown) => {

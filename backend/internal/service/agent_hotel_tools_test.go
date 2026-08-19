@@ -75,6 +75,29 @@ func TestHotelAgentReadCompoundDefersRequiredHotelArguments(t *testing.T) {
 	}
 }
 
+func TestHotelCatalogQueryUsesServerOwnedSingleTopicRoute(t *testing.T) {
+	resetBusinessData(t)
+	tenant := seedHotelSupplier(t, "HOTEL-AGENT-DIRECT-CATALOG")
+	server, calls := toolProvider(t, func(_ []AIMessage) (map[string]interface{}, error) {
+		return nil, fmt.Errorf("provider must not be called for hotel catalog lookup")
+	})
+	if _, err := (&PlatformAIService{}).SaveConfig(toolConfig(server.URL), 77, "platform_admin"); err != nil {
+		t.Fatalf("save tool config: %v", err)
+	}
+	view, err := (&AgentTaskService{}).Submit(t.Context(), tenant.ID, 11, "admin", AgentTaskRequest{
+		InputText: "查询酒店、房型和价格计划", IdempotencyKey: "hotel-direct-catalog-1", TurnKey: "turn-1",
+	})
+	if err != nil {
+		t.Fatalf("hotel catalog query: %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("hotel catalog lookup called provider %d times", calls.Load())
+	}
+	if !strings.Contains(view.Message, "酒店目录查询") || len(view.Result) == 0 {
+		t.Fatalf("unexpected hotel catalog response: message=%q result=%s", view.Message, string(view.Result))
+	}
+}
+
 func TestAgentCandidateContextIncludesHotelBusinessNamesWithoutGuestData(t *testing.T) {
 	resetBusinessData(t)
 	tenant := seedHotelSupplier(t, "AGENT-HOTEL-CONTEXT")

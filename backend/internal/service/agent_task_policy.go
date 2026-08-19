@@ -26,7 +26,7 @@ var agentUnsupportedCapabilityMarkers = []string{
 	"分销授权", "渠道授权", "授权分销", "上架", "下架", "权限变更", "赋权", "充值", "付款", "结算确认", "确认结算", "入园",
 	"创建预约", "预约创建", "取消预约", "预约取消", "改期预约", "预约改期", "修改预约", "预约入住",
 	"创建酒店", "删除酒店", "修改酒店", "创建房型", "删除房型", "修改房型", "创建价格计划", "删除价格计划", "修改价格计划",
-	"发布渠道", "渠道发布", "同步渠道", "pms", "webhook", "小红书", "携程", "ota",
+	"发布渠道", "渠道发布", "同步渠道", "pms", "webhook",
 }
 
 var agentUnsafeInputMarkers = []string{
@@ -420,6 +420,9 @@ func rejectUnsupportedAgentCapability(input string) error {
 		return nil
 	}
 	creationIntent := agentExplicitTicketProductCreateIntent(normalized)
+	if agentExternalChannelMutationIntent(normalized) {
+		return agentInvalid(agentUnsupportedCapabilityMessage(normalized))
+	}
 	for _, marker := range agentUnsupportedCapabilityMarkers {
 		// “创建一个线上票，不上架、不分销” describes the initial state of
 		// the draft. It is not a request to mutate a protected listing fact.
@@ -434,6 +437,20 @@ func rejectUnsupportedAgentCapability(input string) error {
 		}
 	}
 	return nil
+}
+
+// Channel names are valid business text in a product name (for example
+// “携程沙箱联调测试票” or “小红书沙盒票”). They are not, by themselves, a
+// request to call or configure an external channel. Require an explicit
+// channel action before entering the fail-closed boundary so ordinary
+// ticket/rule edits are not rejected merely because the target is channel-
+// branded.
+func agentExternalChannelMutationIntent(input string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(input))
+	if normalized == "" || !agentHasAny(normalized, []string{"小红书", "携程", "ota"}) {
+		return false
+	}
+	return agentHasAny(normalized, []string{"对接", "接入", "同步", "推送", "发布到", "渠道配置", "渠道接口", "渠道凭据", "渠道回调", "渠道订单", "渠道退款", "外部平台", "开放平台", "回调通知"})
 }
 
 func agentUnsupportedMarkerNegated(input, marker string) bool {
@@ -507,7 +524,7 @@ func agentUnsupportedCapabilityMessage(input string) string {
 	if agentHasAny(input, []string{"创建酒店", "删除酒店", "修改酒店", "创建房型", "删除房型", "修改房型", "创建价格计划", "删除价格计划", "修改价格计划"}) {
 		return "当前 AI 助手未开放酒店结构配置；请使用酒店基础资料页面完成操作"
 	}
-	if agentHasAny(input, []string{"发布渠道", "渠道发布", "同步渠道", "pms", "webhook", "小红书", "携程", "ota"}) {
+	if agentHasAny(input, []string{"发布渠道", "渠道发布", "同步渠道", "pms", "webhook"}) || agentExternalChannelMutationIntent(input) {
 		return "当前 AI 助手未开放酒店渠道、PMS、Webhook 或外部平台状态操作；请使用对应业务页面完成操作"
 	}
 	if agentHasAny(input, []string{"设备控制", "下发设备", "开闸", "硬件"}) {
@@ -534,6 +551,17 @@ func agentReadOnlyCompoundIntent(input string) bool {
 		return false
 	}
 	sequenced := agentHasAny(normalized, []string{"复合", "多步", "步骤", "依次", "分别", "先", "再", "1)", "1、", "第一步", "第二步", "然后", "接着", "随后", "同时"})
+	// Hotel catalog nouns are one projection, not separate queries. A request
+	// such as “查询酒店、房型和价格计划” is asking for the directory view;
+	// treating each noun as a compound step would force typed dates/names for
+	// inventory and calendars and make an otherwise deterministic read depend
+	// on the provider inventing arguments. Keep explicit sequencing available
+	// for genuine multi-query hotel requests.
+	hotelCatalogNouns := []string{"酒店", "房型", "价格计划", "日历房", "预售房"}
+	hotelOperationalNouns := []string{"房量", "房态", "库存", "价格日历", "销售价", "住宿预订", "酒店预订", "预约权益", "入住名单", "经营汇总", "入住", "离店", "未到店"}
+	if !sequenced && agentHasAny(normalized, hotelCatalogNouns) && !agentHasAny(normalized, hotelOperationalNouns) {
+		return false
+	}
 	queryTopics := []string{"订单", "库存", "销售汇总", "核销汇总", "分销关系", "授权商品", "供应商履约", "分销结算", "团队合同", "团队计划", "团队结算", "团队账户", "票种规则", "检票点", "景区"}
 	queryTopics = append(queryTopics, "酒店", "住宿预订", "房量", "价格计划", "价格日历", "入住", "离店")
 	topicCount := 0

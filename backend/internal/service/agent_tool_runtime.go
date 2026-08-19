@@ -277,7 +277,7 @@ func (s *AgentTaskService) planToolTask(ctx context.Context, tenantID, actorUser
 						return nil, agentInvalid("当前账号没有该查询能力或对应业务权限")
 					}
 					visible = routed
-					if route[0] == "query_sales_summary" || route[0] == "query_verification_summary" {
+					if route[0] == "query_sales_summary" || route[0] == "query_verification_summary" || route[0] == "search_hotel_catalog" {
 						directReadOnlyTool = route[0]
 					}
 				}
@@ -566,6 +566,7 @@ func directAgentQueryResponse(toolName string, returned int) string {
 		"query_team_groups":               "团队计划查询",
 		"query_team_settlement_summary":   "团队结算查询",
 		"query_team_account_summary":      "团队账户查询",
+		"search_hotel_catalog":            "酒店目录查询",
 	}
 	label := labels[toolName]
 	if label == "" {

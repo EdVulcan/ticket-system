@@ -123,6 +123,23 @@ func TestAgentTargetScopeCandidateReferenceCannotCrossTask(t *testing.T) {
 	}
 }
 
+func TestAgentTargetScopeIgnoresUnmentionedProviderCandidateOnExplicitBatch(t *testing.T) {
+	fixture := seedCatalogBatchFixture(t)
+	products := []model.Product{
+		{Base: model.Base{ID: 405}, TenantID: fixture.tenant.ID, ScenicAreaID: fixture.area.ID, Name: "Adult Ticket", Type: "online", Status: "online"},
+		{Base: model.Base{ID: 406}, TenantID: fixture.tenant.ID, ScenicAreaID: fixture.area.ID, Name: "Adult Ticket Package", Type: "online", Status: "offline"},
+	}
+	resolution, err := resolveAgentTargetScope(model.DB, fixture.tenant.ID, &AgentTargetScope{
+		Intent: "batch", NameTerms: []string{"Adult Ticket"}, ScenicAreaNames: []string{fixture.area.Name}, CandidateRefs: []string{"候选1"},
+	}, nil, "批量操作全部匹配的 Adult Ticket，景区为 "+fixture.area.Name, products, nil)
+	if err != nil {
+		t.Fatalf("explicit batch should not fail on an echoed candidate ref: %v", err)
+	}
+	if len(resolution.Targets) != 2 || len(resolution.Scope.CandidateRefs) != 0 {
+		t.Fatalf("provider candidate ref narrowed explicit batch: targets=%+v scope=%+v", resolution.Targets, resolution.Scope)
+	}
+}
+
 func TestAgentTargetScopeAllowsProviderRepeatOfResolvedTarget(t *testing.T) {
 	fixture := seedCatalogBatchFixture(t)
 	products := []model.Product{{Base: model.Base{ID: 402}, TenantID: fixture.tenant.ID, ScenicAreaID: fixture.area.ID, Name: "Adult Ticket", Type: "online", Status: "online"}}

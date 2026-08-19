@@ -181,6 +181,21 @@ func normalizeAgentTargetScope(db *gorm.DB, tenantID uint, requested *AgentTarge
 	if agentBatchMarkerPresent(input) && singleIntent {
 		return AgentTargetScope{}, agentInvalid("请求同时包含单票和批量范围，请明确只操作一个还是批量操作")
 	}
+	// Candidate references are an internal disambiguation aid, not a user
+	// supplied filter. Providers sometimes echo an option such as “候选1”
+	// after the operator has explicitly said “批量/全部匹配”; retaining that
+	// unmentioned ref would incorrectly narrow the batch and then fail evidence
+	// validation. In an explicit batch turn, discard every ref absent from the
+	// user's text; a current-turn candidate reference remains explicit evidence.
+	if batchIntent && len(scope.CandidateRefs) > 0 {
+		refs := make([]string, 0, len(scope.CandidateRefs))
+		for _, ref := range scope.CandidateRefs {
+			if agentTextContains(input, ref) {
+				refs = appendUniqueString(refs, ref)
+			}
+		}
+		scope.CandidateRefs = refs
+	}
 	// The user's current turn is authoritative for cardinality. A provider may
 	// omit the field or return the wrong value, but it cannot narrow an explicit
 	// batch request to one product or broaden an explicit single-product request.

@@ -349,6 +349,7 @@ func TestAgentReadOnlyToolRouteKeepsSingleTopicDeterministic(t *testing.T) {
 		{"查看团队合同", "query_team_contracts"},
 		{"查询团队入园情况", "query_team_groups"},
 		{"查看票种规则", "get_ticket_product_rules"},
+		{"查询酒店、房型和价格计划", "search_hotel_catalog"},
 	}
 	for _, tc := range cases {
 		route := agentReadOnlyToolRoute(tc.input)
@@ -371,6 +372,9 @@ func TestAgentReadOnlyToolRouteKeepsSingleTopicDeterministic(t *testing.T) {
 	}
 	if !agentReadOnlyCompoundIntent("依次查询订单、库存和销售汇总") {
 		t.Fatal("explicit multi-topic query was not recognized as compound")
+	}
+	if agentReadOnlyCompoundIntent("查询酒店、房型和价格计划") {
+		t.Fatal("hotel catalog nouns should stay a single directory query")
 	}
 }
 
@@ -465,6 +469,18 @@ func TestAgentAllowsTicketRefundPolicyButRejectsScriptInput(t *testing.T) {
 	}
 	if err := rejectUnsupportedAgentCapability("查询订单 <script>alert(1)</script>"); err == nil || !strings.Contains(err.Error(), "SQL") {
 		t.Fatalf("script input was not rejected: %v", err)
+	}
+}
+
+func TestAgentAllowsChannelBrandedProductNames(t *testing.T) {
+	if err := rejectUnsupportedAgentCapability("给携程沙箱联调测试票增加水上乐园检票点"); err != nil {
+		t.Fatalf("channel-branded product name was rejected: %v", err)
+	}
+	if err := rejectUnsupportedAgentCapability("修改小红书沙盒联调测试票的票面售价"); err != nil {
+		t.Fatalf("channel-branded product update was rejected: %v", err)
+	}
+	if err := rejectUnsupportedAgentCapability("把商品同步到携程渠道"); err == nil || !strings.Contains(err.Error(), "未开放") {
+		t.Fatalf("explicit channel synchronization was not rejected: %v", err)
 	}
 }
 
