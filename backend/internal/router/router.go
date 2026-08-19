@@ -211,6 +211,20 @@ func InitRouter(r *gin.Engine) {
 		agentAliasGroup.DELETE("/:aliasID", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), agentAliasController.Delete)
 	}
 
+	// The execution center is a read-only projection over existing durable
+	// tasks. Source workbenches remain responsible for approval and retry; this
+	// endpoint only gives tenant operators one place to see what needs attention.
+	executionCenterController := &api.ExecutionCenterController{Service: service.ExecutionCenterService{}}
+	executionCenterGroup := protected.Group("/execution-center")
+	executionCenterGroup.Use(
+		middleware.RequireTenantPermission(authz.PermissionOperationsRead),
+		middleware.RequireAnyRole(authz.RoleTenantAdmin, authz.RoleProductOperator, authz.RoleTeamOperator, authz.RoleSettlementOperator, authz.RoleViewer, "super_admin"),
+		middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"),
+	)
+	{
+		executionCenterGroup.GET("", executionCenterController.List)
+	}
+
 	orderController := &api.OrderController{}
 	orderGroup := protected.Group("/orders")
 	orderGroup.Use(middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"))

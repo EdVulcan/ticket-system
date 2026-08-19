@@ -260,7 +260,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, onMounted } from 'vue'
+import { computed, reactive, ref, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
@@ -271,6 +272,7 @@ import { activeCapabilitySet, isActiveScenicSupplier, readStoredUser } from '@/u
 const user = computed<any>(() => {
   return readStoredUser()
 })
+const route = useRoute()
 const capabilities = computed(() => activeCapabilitySet(user.value))
 const hasCapability = (value: string) => capabilities.value.has(value)
 const isScenicSupplier = computed(() => isActiveScenicSupplier(user.value))
@@ -279,7 +281,12 @@ const canScenicWrite = computed(() => hasPermission(user.value, 'onsite.manage')
 const canSettlementWrite = computed(() => hasPermission(user.value, 'settlements.write'))
 const currentTenantID = computed(() => Number(user.value.tenant_id || 0))
 const firstTab = () => isScenicSupplier.value ? 'scenic' : hasCapability('travel_agency') ? 'teams' : 'channels'
-const activeTab = ref(firstTab())
+const validTabs = new Set(['scenic', 'channels', 'teams', 'settlements', 'ledger', 'shifts', 'prints', 'alerts'])
+const requestedTab = () => {
+  const tab = String(route.query.tab || '')
+  return validTabs.has(tab) ? tab : firstTab()
+}
+const activeTab = ref(requestedTab())
 const loading = ref(false)
 const rows = reactive<Record<string, any[]>>({ scenic: [], channels: [], teams: [], settlements: [], ledger: [], shifts: [], prints: [], alerts: [] })
 const financialAccounts = ref<any[]>([])
@@ -509,6 +516,13 @@ const submitReconcile = async () => {
     await loadActiveTab()
   } finally { shiftActionLoading.value = false }
 }
+watch(() => route.query.tab, () => {
+  const next = requestedTab()
+  if (next !== activeTab.value) {
+    activeTab.value = next
+    void loadActiveTab()
+  }
+})
 onMounted(loadActiveTab)
 </script>
 

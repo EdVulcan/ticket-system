@@ -66,3 +66,11 @@ test('只读分销岗位可以查看合作关系但不能发起申请或上架',
   await expect(page.getByRole('button', { name: '采购/上架' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '新建组合产品' })).toHaveCount(0)
 })
+
+test('有运营读取权限的租户可以进入可信执行中心', async ({ page }) => {
+  await openAs(page, 'viewer', ['distributor'], '/execution-center')
+
+  await expect(page.getByRole('heading', { name: '可信执行中心' })).toBeVisible()
+  await expect(page.getByText('待处理事项')).toBeVisible()
+  await expect(page.getByText('只读聚合，不改变业务状态')).toBeVisible()
+})
