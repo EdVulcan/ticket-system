@@ -19,6 +19,12 @@ const router = createRouter({
             meta: { title: '控制台' }
         },
         {
+            path: '/execution-center',
+            name: 'execution-center',
+            component: () => import('../views/ExecutionCenterView.vue'),
+            meta: { scope: 'tenant', roles: ['admin', 'super_admin', 'product_operator', 'team_operator', 'settlement_operator', 'viewer'], permission: 'operations.read', capabilities: ['supplier', 'distributor', 'travel_agency'], title: '可信执行中心' }
+        },
+        {
             path: '/tenant',
             name: 'tenant',
             component: () => import('../views/TenantView.vue'),

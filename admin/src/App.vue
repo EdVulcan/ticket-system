@@ -208,6 +208,12 @@ const navGroups = computed<NavGroup[]>(() => {
     return [overview, { label: '平台管理', items: platformItems }]
   }
 
+  const roleParts = String(user.value.role || '').split(',').map(value => value.trim()).filter(Boolean)
+  const backOfficeRole = roleParts.length > 0 && roleParts.every(value => ['admin', 'super_admin', 'product_operator', 'team_operator', 'settlement_operator', 'viewer'].includes(value))
+  if (backOfficeRole && can('operations.read') && hasAnyCapability('supplier', 'distributor', 'travel_agency')) {
+    overview.items.push({ path: '/execution-center', label: '可信执行中心', icon: Warning })
+  }
+
   const scenicSupplier = hasCapability('supplier') && hasSupplierBusinessType('scenic')
   const scenicHistorySupplier = hasCapability('supplier') && hasConfiguredSupplierBusinessType('scenic')
   const hotelHistorySupplier = configuredCapabilities.value.has('supplier') && hasConfiguredSupplierBusinessType('hotel')
