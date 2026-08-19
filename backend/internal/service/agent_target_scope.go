@@ -218,8 +218,15 @@ func normalizeAgentTargetScope(db *gorm.DB, tenantID uint, requested *AgentTarge
 	if scope.Intent == "batch" && singleIntent && previous == nil {
 		return AgentTargetScope{}, agentInvalid("请求同时包含单票和批量范围，请明确只操作一个还是批量操作")
 	}
-	if scope.AllScenicAreas && !agentExplicitAllScenicAreas(input) && previous == nil {
-		return AgentTargetScope{}, agentInvalid("模型不能自行扩大到全部景区，请在请求中明确全部景区")
+	// A provider may infer all_scenic_areas from a broad phrase such as
+	// “所有线上门票” before the operator has answered the server's scenic-area
+	// clarification. Treat that inference as unconfirmed instead of returning a
+	// hard error: the resolver below will keep the full tenant-scoped candidate
+	// set and return a durable missing-field prompt. Once the operator explicitly
+	// says “全部景区”, or that scope was already confirmed on a previous turn,
+	// preserve the value and allow the batch to resolve.
+	if scope.AllScenicAreas && !agentExplicitAllScenicAreas(input) && (previous == nil || !previous.Requested.AllScenicAreas) {
+		scope.AllScenicAreas = false
 	}
 	if strings.TrimSpace(scope.DistributionState) != "" {
 		return AgentTargetScope{}, agentInvalid("分销状态筛选的业务口径尚未开放，请先使用名称、景区、上架状态或票种类型筛选")
