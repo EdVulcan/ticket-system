@@ -182,7 +182,11 @@ func (c *OperationsController) QueuePrint(ctx *gin.Context) {
 
 func (c *OperationsController) ListPrintJobs(ctx *gin.Context) {
 	deviceID, _ := strconv.ParseUint(ctx.Query("device_id"), 10, 32)
-	jobs, err := c.Service.ListPrintJobs(ctx.GetUint("tenant_id"), uint(deviceID), ctx.Query("status"))
+	operatorID := uint(0)
+	if strings.HasPrefix(ctx.GetString("subject"), "staff:") && !authz.HasTenantPermission(ctx.GetString("role"), authz.PermissionOnsiteManage) {
+		operatorID = ctx.GetUint("user_id")
+	}
+	jobs, err := c.Service.ListPrintJobsForOperator(ctx.GetUint("tenant_id"), uint(deviceID), operatorID, ctx.Query("status"))
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

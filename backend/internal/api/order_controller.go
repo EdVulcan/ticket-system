@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
+	"ticket-backend/internal/authz"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
 	"time"
@@ -25,7 +27,8 @@ type windowOrderItemRequest struct {
 }
 
 type windowOrderRequest struct {
-	Items []windowOrderItemRequest `json:"items" binding:"required,min=1"`
+	Items           []windowOrderItemRequest `json:"items" binding:"required,min=1"`
+	ClientRequestID string                   `json:"client_request_id"`
 }
 
 func (c *OrderController) Create(ctx *gin.Context) {
@@ -35,7 +38,7 @@ func (c *OrderController) Create(ctx *gin.Context) {
 		return
 	}
 	req := model.Order{
-		TenantID: ctx.GetUint("tenant_id"), Channel: "window",
+		TenantID: ctx.GetUint("tenant_id"), Channel: "window", ClientRequestID: strings.TrimSpace(body.ClientRequestID),
 		Items: make([]model.OrderItem, len(body.Items)),
 	}
 	for i := range body.Items {
@@ -46,8 +49,15 @@ func (c *OrderController) Create(ctx *gin.Context) {
 		}
 	}
 
-	if err := c.Service.Create(&req); err != nil {
+	if err := c.Service.Create(&req); err != nil && !errors.Is(err, service.ErrIdempotentWindowOrder) {
+		if errors.Is(err, service.ErrWindowOrderRequestMismatch) {
+			ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	} else if err != nil {
+		ctx.JSON(http.StatusOK, req)
 		return
 	}
 
@@ -85,6 +95,9 @@ func (c *OrderController) Get(ctx *gin.Context) {
 			ctx.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load order detail"})
 		}
 		return
+	}
+	if !authz.HasTenantPermission(ctx.GetString("role"), authz.PermissionAfterSalesRead) {
+		detail.AfterSales = nil
 	}
 	ctx.JSON(http.StatusOK, detail)
 }
