@@ -48,6 +48,12 @@ type PrintJob struct {
 	PrintedAt          *time.Time `json:"printed_at,omitempty"`
 	OperatorID         uint       `gorm:"index;not null" json:"operator_id"`
 	ShiftID            uint       `gorm:"index;not null" json:"shift_id"`
+	TemplateRevisionID uint       `gorm:"index;not null;default:0" json:"template_revision_id"`
+	PrintDocumentJSON  string     `gorm:"type:text;not null;default:''" json:"print_document,omitempty"`
+	ContentHash        string     `gorm:"size:64;index" json:"content_hash,omitempty"`
+	PaperWidthMM       int        `gorm:"not null;default:58" json:"paper_width_mm"`
+	CopyCount          int        `gorm:"not null;default:1" json:"copy_count"`
+	ReprintOfJobID     uint       `gorm:"index;not null;default:0" json:"reprint_of_job_id,omitempty"`
 }
 
 type DeviceAlert struct {

@@ -109,6 +109,12 @@ const router = createRouter({
             meta: { scope: 'tenant', permission: 'catalog.read', capability: 'supplier', supplierBusinessType: 'scenic', supplierBusinessTypeAllowSuspended: true, title: '批量规则操作' }
         },
         {
+            path: '/print-templates',
+            name: 'print-templates',
+            component: () => import('../views/PrintTemplateView.vue'),
+            meta: { scope: 'tenant', permission: 'catalog.read', capability: 'supplier', supplierBusinessType: 'scenic', supplierBusinessTypeAllowSuspended: true, title: '门票打印模板' }
+        },
+        {
             path: '/agent-aliases',
             name: 'agent-aliases',
             component: () => import('../views/AgentAliasView.vue'),

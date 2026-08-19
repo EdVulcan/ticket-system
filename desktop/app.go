@@ -1,14 +1,20 @@
 package main
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 type App struct {
 	ctx context.Context
 }
 
 type PrintTicketRequest struct {
-	OrderNo    string `json:"order_no"`
-	TicketCode string `json:"ticket_code"`
+	Document           json.RawMessage `json:"document"`
+	ContentHash        string          `json:"content_hash"`
+	TemplateRevisionID uint            `json:"template_revision_id"`
+	PaperWidthMM       int             `json:"paper_width_mm"`
+	CopyCount          int             `json:"copy_count"`
 }
 
 type HardwareResult struct {

@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 102
+const CurrentPostgresSchemaVersion = 103
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -53,7 +53,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&ChannelBillRecord{}, &ChannelReconciliation{}, &ChannelReconciliationLine{},
 		&TravelContract{}, &TravelAgent{}, &TourGuide{}, &TravelVehicle{}, &TourGroup{}, &TourGroupMember{},
 		&TourEntryBatch{}, &TourGroupConfirmation{}, &TourGroupMemberChange{}, &TeamSettlementStatement{}, &TeamSettlementAdjustment{},
-		&POSShift{}, &POSShiftCorrection{}, &PrintJob{}, &DeviceAlert{}, &POSHold{}, &POSHoldLine{},
+		&POSShift{}, &POSShiftCorrection{}, &PrintJob{}, &PrintTemplate{}, &PrintTemplateRevision{}, &DeviceAlert{}, &POSHold{}, &POSHoldLine{},
 		&SettlementStatement{}, &SettlementLine{}, &SettlementAdjustment{}, &StaffResourceScope{},
 		&AfterSaleRequest{}, &AfterSaleEvent{}, &HardwareCommand{}, &HardwareEvent{}, &DeviceRequestNonce{}, &DeviceVerification{}, &MigrationAuditIssue{},
 	}
@@ -274,6 +274,23 @@ func runPostgresMigrations(db *gorm.DB) error {
 			return fmt.Errorf("register tenant AI quota policies: %w", err)
 		}
 	}
+	if previousSchemaVersion < 103 {
+		if err := db.Exec(`
+			-- Older model revisions accidentally created this as a global unique
+			-- index on version. Recreate it as the intended per-template key.
+			DROP INDEX IF EXISTS idx_print_template_revision_version;
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_print_template_scope
+				ON print_templates(tenant_id, scenic_area_id, product_id, product_revision_id)
+				WHERE deleted_at IS NULL;
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_print_template_revision_version
+				ON print_template_revisions(template_id, version)
+				WHERE deleted_at IS NULL;
+			CREATE INDEX IF NOT EXISTS idx_print_jobs_template_revision
+				ON print_jobs(tenant_id, template_revision_id);
+		`).Error; err != nil {
+			return fmt.Errorf("register print template revisions and print snapshots: %w", err)
+		}
+	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
 		if err := db.Exec(`
 			INSERT INTO supplier_business_types
@@ -422,7 +439,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "tenant AI quota policies",
+		Name:      "print template revisions and immutable print snapshots",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -594,6 +611,57 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 			   OR (NEW.product_kind = 'hotel' AND (NEW.source_product_id <> 0 OR NEW.scenic_area_id <> 0))
 			   OR (NEW.product_kind IN ('ticket','scenic_hotel_package') AND NEW.source_product_id = 0 AND (NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM scenic_areas s WHERE s.id = NEW.scenic_area_id AND s.tenant_id = NEW.tenant_id))) THEN
 				RAISE EXCEPTION 'product scenic area ownership mismatch';
+			END IF;
+		WHEN 'print_templates' THEN
+			IF NEW.tenant_id = 0 OR NEW.scenic_area_id = 0
+			   OR NEW.status NOT IN ('active','disabled')
+			   OR NEW.paper_width_mm NOT IN (58,80)
+			   OR NOT EXISTS (SELECT 1 FROM scenic_areas s WHERE s.id = NEW.scenic_area_id AND s.tenant_id = NEW.tenant_id AND s.deleted_at IS NULL)
+			   OR (NEW.product_id = 0 AND NEW.product_revision_id <> 0)
+			   OR (NEW.product_id <> 0 AND NOT EXISTS (
+					SELECT 1 FROM products p WHERE p.id = NEW.product_id AND p.tenant_id = NEW.tenant_id
+					  AND p.product_kind = 'ticket' AND p.scenic_area_id = NEW.scenic_area_id AND p.deleted_at IS NULL
+				   ))
+			   OR (NEW.product_revision_id <> 0 AND NOT EXISTS (
+					SELECT 1 FROM product_revisions r WHERE r.id = NEW.product_revision_id AND r.product_id = NEW.product_id
+					  AND r.tenant_id = NEW.tenant_id AND r.scenic_area_id = NEW.scenic_area_id
+				   ))
+			   OR (NEW.current_revision_id <> 0 AND NOT EXISTS (
+					SELECT 1 FROM print_template_revisions r WHERE r.id = NEW.current_revision_id AND r.template_id = NEW.id
+					  AND r.tenant_id = NEW.tenant_id AND r.status = 'published'
+				   )) THEN
+				RAISE EXCEPTION 'print template ownership or publication state is invalid';
+			END IF;
+		WHEN 'print_template_revisions' THEN
+			IF NEW.tenant_id = 0 OR NEW.scenic_area_id = 0 OR NEW.template_id = 0 OR NEW.version <= 0
+			   OR NEW.status NOT IN ('draft','published','retired') OR COALESCE(NEW.definition_json,'') = ''
+			   OR COALESCE(NEW.definition_hash,'') = ''
+			   OR NOT EXISTS (
+					SELECT 1 FROM print_templates t WHERE t.id = NEW.template_id AND t.tenant_id = NEW.tenant_id
+					  AND t.scenic_area_id = NEW.scenic_area_id AND t.deleted_at IS NULL
+				   )
+			   OR (TG_OP = 'UPDATE' AND OLD.status IN ('published','retired') AND (
+					NEW.template_id IS DISTINCT FROM OLD.template_id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+					OR NEW.scenic_area_id IS DISTINCT FROM OLD.scenic_area_id OR NEW.version IS DISTINCT FROM OLD.version
+					OR NEW.definition_json IS DISTINCT FROM OLD.definition_json OR NEW.definition_hash IS DISTINCT FROM OLD.definition_hash
+				   )) THEN
+				RAISE EXCEPTION 'published print template revision is immutable';
+			END IF;
+		WHEN 'print_jobs' THEN
+			IF NEW.tenant_id = 0 OR NEW.device_id = 0 OR NEW.shift_id = 0 OR COALESCE(NEW.order_no,'') = ''
+			   OR NEW.status NOT IN ('queued','printing','printed','failed') OR NEW.attempt_count < 0 OR NEW.copy_count <= 0
+			   OR NOT EXISTS (SELECT 1 FROM devices d WHERE d.id = NEW.device_id AND d.tenant_id = NEW.tenant_id AND d.type = 'pos')
+			   OR NOT EXISTS (SELECT 1 FROM pos_shifts s WHERE s.id = NEW.shift_id AND s.tenant_id = NEW.tenant_id AND s.device_id = NEW.device_id)
+			   OR NOT EXISTS (SELECT 1 FROM orders o WHERE o.order_no = NEW.order_no AND o.tenant_id = NEW.tenant_id)
+			   OR (COALESCE(NEW.ticket_code,'') <> '' AND NOT EXISTS (
+					SELECT 1 FROM tickets t JOIN orders o ON o.id = t.order_id
+					WHERE t.ticket_code = NEW.ticket_code AND o.order_no = NEW.order_no AND o.tenant_id = NEW.tenant_id
+				   ))
+			   OR (NEW.template_revision_id <> 0 AND NOT EXISTS (
+					SELECT 1 FROM print_template_revisions r WHERE r.id = NEW.template_revision_id AND r.tenant_id = NEW.tenant_id
+				   ))
+			   OR NEW.template_revision_id <> 0 AND COALESCE(NEW.print_document_json,'') = '' THEN
+				RAISE EXCEPTION 'print job ownership or immutable snapshot is invalid';
 			END IF;
 		WHEN 'catalog_batch_change_plans' THEN
 			IF NEW.tenant_id = 0
@@ -1039,7 +1107,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "ai_tenant_quota_policies", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_rate_plan_prices", "hotel_room_inventories", "hotel_products", "hotel_product_revisions", "hotel_product_calendar_prices", "hotel_product_entitlements", "hotel_product_reservations", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
+	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "print_templates", "print_template_revisions", "print_jobs", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "ai_tenant_quota_policies", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_rate_plan_prices", "hotel_room_inventories", "hotel_products", "hotel_product_revisions", "hotel_product_calendar_prices", "hotel_product_entitlements", "hotel_product_reservations", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

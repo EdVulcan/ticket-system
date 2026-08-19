@@ -170,6 +170,20 @@ func InitRouter(r *gin.Engine) {
 		catalogBatchGroup.POST("/:planID/confirm", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), catalogBatchController.Confirm)
 	}
 
+	printTemplateController := &api.PrintTemplateController{Service: service.PrintTemplateService{}}
+	printTemplateGroup := protected.Group("/print-templates")
+	printTemplateGroup.Use(middleware.RequireTenantPermission(authz.PermissionCatalogRead), middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
+	{
+		printTemplateGroup.GET("", printTemplateController.List)
+		printTemplateGroup.GET("/:id", printTemplateController.Get)
+		printTemplateGroup.GET("/:id/revisions", printTemplateController.Revisions)
+		printTemplateGroup.POST("/preview", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), printTemplateController.Preview)
+		printTemplateGroup.POST("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), printTemplateController.Save)
+		printTemplateGroup.PUT("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), printTemplateController.Save)
+		printTemplateGroup.POST("/:id/publish", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), printTemplateController.Publish)
+		printTemplateGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), printTemplateController.SetStatus)
+	}
+
 	// The floating assistant uses one durable task boundary for all supported
 	// catalog capabilities. It remains supplier-owned and never exposes
 	// distributor or channel mutation authority.

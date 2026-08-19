@@ -713,16 +713,25 @@ func (s *OperationsService) QueuePrint(tenantID, deviceID, operatorID, shiftID u
 			}
 		}
 		var printedCount int64
-		if err := tx.Model(&model.PrintJob{}).Where(
-			"tenant_id = ? AND order_no = ? AND ticket_code = ? AND status = ?", tenantID, orderNo, strings.TrimSpace(ticketCode), "printed",
-		).Count(&printedCount).Error; err != nil {
+		printedQuery := tx.Model(&model.PrintJob{}).Where("tenant_id = ? AND order_no = ? AND status = ?", tenantID, orderNo, "printed")
+		if strings.TrimSpace(ticketCode) != "" {
+			printedQuery = printedQuery.Where("ticket_code = ?", strings.TrimSpace(ticketCode))
+		}
+		if err := printedQuery.Count(&printedCount).Error; err != nil {
 			return err
 		}
 		if printedCount > 0 {
 			return errors.New("ticket was already printed; use the supervised reissue workflow")
 		}
-		job = model.PrintJob{TenantID: tenantID, DeviceID: deviceID, OperatorID: operatorID, ShiftID: shiftID, OrderNo: orderNo, TicketCode: strings.TrimSpace(ticketCode), Status: "queued"}
-		return tx.Create(&job).Error
+		queued, err := buildPrintJobSnapshotTx(tx, tenantID, deviceID, operatorID, shiftID, &order, strings.TrimSpace(ticketCode), "", 0)
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(queued).Error; err != nil {
+			return err
+		}
+		job = *queued
+		return nil
 	})
 	if err != nil {
 		return nil, err

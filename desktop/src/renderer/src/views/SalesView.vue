@@ -642,13 +642,22 @@ const handleReprint = async () => {
       return
     }
     await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printing' })
-    const result = await printTicket({ order_no: job.order_no, ticket_code: job.ticket_code })
+    const result = await printTicket(serverPrintPayload(job))
     if (!result?.success) throw new Error(result?.message || '打印失败')
     await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printed' })
     ElMessage.success('重打完成')
   } catch (error: any) {
     ElMessage.error(error.response?.data?.error || error.message || '重打失败')
   }
+}
+
+const serverPrintPayload = (job: any) => {
+  let document: unknown = job?.print_document
+  if (typeof document === 'string') {
+    try { document = JSON.parse(document) } catch { document = null }
+  }
+  if (!document || !job?.content_hash) throw new Error('服务端打印快照缺失，已拒绝调用打印机')
+  return { document, content_hash: job.content_hash, template_revision_id: job.template_revision_id, paper_width_mm: job.paper_width_mm, copy_count: job.copy_count || 1 }
 }
 
 const handleHold = async () => {
@@ -861,22 +870,47 @@ const handlePaymentSuccess = async () => {
       ElMessage.warning('支付已成功，但未能创建打印任务，请到订单页处理。')
       return
     }
-    let job: any
+    const ticketCodes = [...new Set((currentOrder.value.items || [])
+      .flatMap((item: any) => item.tickets || [])
+      .map((ticket: any) => String(ticket.ticket_code || '').trim())
+      .filter(Boolean))]
+    // One server snapshot represents one template revision. Normal window
+    // orders queue one job per ticket so product-specific templates cannot be
+    // accidentally replaced by the first product in a mixed cart. The empty
+    // fallback keeps compatibility with older order responses that did not
+    // include ticket codes; the server still rejects mixed-template orders.
+    const codesToPrint = ticketCodes.length > 0 ? ticketCodes : ['']
+    const jobs: Array<{ job: any, status: 'queued' | 'printing' | 'printed' }> = []
     try {
-      const queued = await axios.post('/operations/print-jobs', { device_id: posDeviceId.value, shift_id: shiftState.value.shiftId, order_no: currentOrder.value.order_no })
-      job = queued.data
-      await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printing' })
-      const result = await printTicket(currentOrder.value)
-      if (!result?.success) throw new Error(result?.message || '打印失败')
-      await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printed' })
+      for (const ticketCode of codesToPrint) {
+        const queued = await axios.post('/operations/print-jobs', {
+          device_id: posDeviceId.value,
+          shift_id: shiftState.value.shiftId,
+          order_no: currentOrder.value.order_no,
+          ...(ticketCode ? { ticket_code: ticketCode } : {}),
+        })
+        jobs.push({ job: queued.data, status: 'queued' })
+      }
+      for (const entry of jobs) {
+        entry.status = 'printing'
+        await axios.post(`/operations/print-jobs/${entry.job.id}/status`, { device_id: posDeviceId.value, status: 'printing' })
+        const result = await printTicket(serverPrintPayload(entry.job))
+        if (!result?.success) throw new Error(result?.message || '打印失败')
+        await axios.post(`/operations/print-jobs/${entry.job.id}/status`, { device_id: posDeviceId.value, status: 'printed' })
+        entry.status = 'printed'
+      }
       cart.value = []
       currentOrder.value = null
       ElMessage.success('支付成功，打印完成')
     } catch (error: any) {
-      if (job) {
-        await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'failed', error: error.message || '打印失败' }).catch(() => undefined)
+      for (const entry of jobs) {
+        if (entry.status === 'printing') {
+          await axios.post(`/operations/print-jobs/${entry.job.id}/status`, { device_id: posDeviceId.value, status: 'failed', error: error.message || '打印失败' }).catch(() => undefined)
+        }
       }
-      ElMessage.error('支付已成功，但打印失败。订单和打印任务已保留，可稍后重打。')
+      ElMessage.error(jobs.some(entry => entry.status === 'printed')
+        ? '支付已成功，部分票据已打印，剩余打印任务已保留，请逐张重打。'
+        : '支付已成功，但打印失败。订单和打印任务已保留，可稍后重打。')
     }
 }
 

@@ -37,6 +37,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&CatalogBatchChangePlan{}, &CatalogBatchChangeLine{},
 		&PlatformAIConfig{}, &AITenantQuotaPolicy{}, &AIUsageMonth{},
 		&AgentTask{}, &AgentTaskEvent{},
+		&PrintTemplate{}, &PrintTemplateRevision{},
 	} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("table for %T is missing", table)
@@ -60,6 +61,9 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		{&HotelProductCalendarPrice{}, "idx_hotel_product_calendar_prices_scope"},
 		{&AgentTask{}, "idx_agent_task_idempotency"},
 		{&AITenantQuotaPolicy{}, "idx_ai_tenant_quota_policy"},
+		{&PrintTemplate{}, "idx_print_template_scope"},
+		{&PrintTemplateRevision{}, "idx_print_template_revision_version"},
+		{&PrintJob{}, "idx_print_jobs_template_revision"},
 	} {
 		if !db.Migrator().HasIndex(index.model, index.name) {
 			t.Fatalf("index %s is missing", index.name)
@@ -79,6 +83,15 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 	for _, column := range []string{"tenant_id", "actor_user_id", "idempotency_key"} {
 		if !strings.Contains(agentTaskIndex, column) {
 			t.Fatalf("agent task idempotency index omitted %s: %s", column, agentTaskIndex)
+		}
+	}
+	var printRevisionIndex string
+	if err := db.Raw(`SELECT indexdef FROM pg_indexes WHERE schemaname = CURRENT_SCHEMA() AND indexname = 'idx_print_template_revision_version'`).Scan(&printRevisionIndex).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range []string{"template_id", "version"} {
+		if !strings.Contains(printRevisionIndex, column) {
+			t.Fatalf("print template revision index omitted %s: %s", column, printRevisionIndex)
 		}
 	}
 	defaultStatusTenant := Tenant{Name: "Default Status Tenant", SystemCode: "SUPPLIER-BUSINESS-DEFAULT", Status: "active"}
@@ -539,6 +552,59 @@ func TestPostgresSchema102AddsTenantQuotaPolicyToSchema101Database(t *testing.T)
 	}
 	if !db.Migrator().HasTable(&AITenantQuotaPolicy{}) || !db.Migrator().HasIndex(&AITenantQuotaPolicy{}, "idx_ai_tenant_quota_policy") {
 		t.Fatal("schema 102 did not recreate tenant AI quota policy table and index")
+	}
+}
+
+func TestPostgresSchema103PrintTemplateOwnershipGuard(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if CurrentPostgresSchemaVersion < 103 {
+		t.Fatalf("current schema version=%d, want at least 103", CurrentPostgresSchemaVersion)
+	}
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	tenant := Tenant{Name: "Print Template Tenant", SystemCode: "PRINT-TEMPLATE-" + suffix, SecretKey: "print", Status: "active"}
+	other := Tenant{Name: "Other Print Tenant", SystemCode: "OTHER-PRINT-" + suffix, SecretKey: "other", Status: "active"}
+	if err := db.Create(&tenant).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+	area := ScenicArea{TenantID: tenant.ID, Code: "PRINT-AREA-" + suffix, Name: "打印景区", Status: "active"}
+	otherArea := ScenicArea{TenantID: other.ID, Code: "OTHER-AREA-" + suffix, Name: "其他景区", Status: "active"}
+	if err := db.Create(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&otherArea).Error; err != nil {
+		t.Fatal(err)
+	}
+	product := Product{Name: "打印测试票", TenantID: tenant.ID, ScenicAreaID: area.ID, ProductKind: "ticket", Type: "online", Status: "online", Price: 10, SettlementPrice: 8}
+	if err := db.Create(&product).Error; err != nil {
+		t.Fatal(err)
+	}
+	template := PrintTemplate{TenantID: tenant.ID, ScenicAreaID: area.ID, ProductID: product.ID, Name: "有效模板", Status: "active", PaperWidthMM: 58}
+	if err := db.Create(&template).Error; err != nil {
+		t.Fatal(err)
+	}
+	foreignTemplate := PrintTemplate{TenantID: tenant.ID, ScenicAreaID: otherArea.ID, Name: "越权模板", Status: "active", PaperWidthMM: 58}
+	if err := db.Create(&foreignTemplate).Error; err == nil {
+		t.Fatal("cross-tenant print template was accepted")
+	}
+	revision := PrintTemplateRevision{TenantID: tenant.ID, ScenicAreaID: area.ID, TemplateID: template.ID, Version: 1, Status: "published", DefinitionJSON: `{"schema_version":1,"paper_width_mm":58,"blocks":[{"kind":"ticket_code"}]}`, DefinitionHash: "revision-hash", CreatedBy: 1, PublishedBy: 1}
+	if err := db.Create(&revision).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&template).Update("current_revision_id", revision.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	foreignRevision := PrintTemplateRevision{TenantID: other.ID, ScenicAreaID: otherArea.ID, TemplateID: template.ID, Version: 2, Status: "draft", DefinitionJSON: revision.DefinitionJSON, DefinitionHash: "foreign-hash", CreatedBy: 1}
+	if err := db.Create(&foreignRevision).Error; err == nil {
+		t.Fatal("cross-tenant print template revision was accepted")
+	}
+	if err := db.Model(&revision).Update("definition_json", `{"schema_version":1}`).Error; err == nil {
+		t.Fatal("published print template revision was mutable")
 	}
 }
 

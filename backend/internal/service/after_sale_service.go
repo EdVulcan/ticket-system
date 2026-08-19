@@ -805,7 +805,11 @@ func executeReissueTx(tx *gorm.DB, req *model.AfterSaleRequest, actor uint, role
 		return err
 	}
 	for _, code := range codes {
-		if err := tx.Create(&model.PrintJob{TenantID: req.TenantID, DeviceID: req.DeviceID, OperatorID: shift.OperatorID, ShiftID: req.ShiftID, OrderNo: req.OrderNo, TicketCode: code, AfterSaleRequestNo: req.RequestNo, Status: "queued"}).Error; err != nil {
+		queued, err := buildPrintJobSnapshotTx(tx, req.TenantID, req.DeviceID, shift.OperatorID, req.ShiftID, &order, code, req.RequestNo, 0)
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(queued).Error; err != nil {
 			return err
 		}
 	}
