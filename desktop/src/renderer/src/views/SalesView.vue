@@ -657,7 +657,7 @@ const serverPrintPayload = (job: any) => {
     try { document = JSON.parse(document) } catch { document = null }
   }
   if (!document || !job?.content_hash) throw new Error('服务端打印快照缺失，已拒绝调用打印机')
-  return { document, content_hash: job.content_hash, template_revision_id: job.template_revision_id, paper_width_mm: job.paper_width_mm, copy_count: job.copy_count || 1 }
+  return { document, content_hash: job.content_hash, template_revision_id: job.template_revision_id, paper_width_mm: job.paper_width_mm, orientation: job.orientation || (document as any).orientation || 'portrait', copy_count: job.copy_count || 1 }
 }
 
 const handleHold = async () => {

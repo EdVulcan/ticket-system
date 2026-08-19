@@ -34,7 +34,7 @@
         <template #default="{ row }"><div class="template-name"><strong>{{ row.name }}</strong><span>{{ scopeText(row) }}</span></div></template>
       </el-table-column>
       <el-table-column label="景区" min-width="160"><template #default="{ row }">{{ scenicName(row.scenic_area_id) }}</template></el-table-column>
-      <el-table-column label="纸张" width="100"><template #default="{ row }">{{ row.paper_width_mm }} mm</template></el-table-column>
+      <el-table-column label="纸张" width="130"><template #default="{ row }">{{ row.paper_width_mm }} mm · {{ orientationText(row.orientation) }}</template></el-table-column>
       <el-table-column label="版本" width="110"><template #default="{ row }">{{ row.current_revision?.version ? `v${row.current_revision.version}` : '未发布' }}</template></el-table-column>
       <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">{{ row.status === 'active' ? '已启用' : '已停用' }}</el-tag></template></el-table-column>
       <el-table-column label="草稿" width="100"><template #default="{ row }"><el-tag v-if="row.draft_revision" type="warning" effect="plain">待发布</el-tag><span v-else class="muted">—</span></template></el-table-column>
@@ -54,13 +54,16 @@
           <el-form label-position="top">
             <div class="form-grid">
               <el-form-item label="模板名称" required><el-input v-model="editor.name" maxlength="100" placeholder="例如：窗口标准票据" /></el-form-item>
-              <el-form-item label="纸张宽度"><el-radio-group v-model="editor.paperWidthMM"><el-radio-button :label="58">58 mm</el-radio-button><el-radio-button :label="80">80 mm</el-radio-button></el-radio-group></el-form-item>
+              <el-form-item label="纸张宽度"><el-radio-group v-model="editor.paperWidthMM"><el-radio-button :label="58">58 mm</el-radio-button><el-radio-button :label="80">80 mm</el-radio-button></el-radio-group><div class="field-hint">按实际热敏纸宽度选择；横版只改变票面的方向，不改变 58/80 mm 纸宽。</div></el-form-item>
             </div>
             <div class="form-grid">
+              <el-form-item label="打印方向"><el-radio-group v-model="editor.orientation"><el-radio-button label="portrait">竖版</el-radio-button><el-radio-button label="landscape">横版</el-radio-button></el-radio-group><div class="field-hint">横版会将票面宽度作为短边，服务端快照和后续打印适配器都会保留该方向。</div></el-form-item>
               <el-form-item label="适用景区" required><el-select v-model="editor.scenicAreaID" filterable class="w-full" :disabled="Boolean(editor.id)"><el-option v-for="area in scenicAreas" :key="area.id" :label="area.name" :value="area.id" /></el-select></el-form-item>
-              <el-form-item label="票种覆盖"><el-select v-model="editor.productID" filterable clearable class="w-full" :disabled="Boolean(editor.id && editor.currentRevisionID)" placeholder="不选则作为景区默认模板"><el-option label="景区默认模板" :value="0" /><el-option v-for="product in productsForArea(editor.scenicAreaID)" :key="product.id" :label="product.name" :value="product.id" /></el-select></el-form-item>
             </div>
-            <el-form-item v-if="editor.productID" label="版本范围"><el-radio-group v-model="editor.revisionMode"><el-radio-button label="product">产品全部版本</el-radio-button><el-radio-button label="current">仅当前版本</el-radio-button></el-radio-group><div class="field-hint">产品全部版本的覆盖更稳定；指定当前版本适合临时版式，产品生成新 revision 后会回退到产品级覆盖。</div></el-form-item>
+            <div class="form-grid">
+              <el-form-item label="票种覆盖"><el-select v-model="editor.productID" filterable clearable class="w-full" :disabled="Boolean(editor.id && editor.currentRevisionID)" placeholder="不选则作为景区默认模板"><el-option label="景区默认模板" :value="0" /><el-option v-for="product in productsForArea(editor.scenicAreaID)" :key="product.id" :label="product.name" :value="product.id" /></el-select></el-form-item>
+              <el-form-item v-if="editor.productID" label="版本范围"><el-radio-group v-model="editor.revisionMode"><el-radio-button label="product">产品全部版本</el-radio-button><el-radio-button label="current">仅当前版本</el-radio-button></el-radio-group><div class="field-hint">产品全部版本的覆盖更稳定；指定当前版本适合临时版式，产品生成新 revision 后会回退到产品级覆盖。</div></el-form-item>
+            </div>
           </el-form>
 
           <div class="block-heading"><div><span class="panel-kicker">CONTENT BLOCKS</span><h3>打印内容</h3></div><span class="block-count">{{ editor.definition.blocks.length }} / 64</span></div>
@@ -85,8 +88,8 @@
         </div>
 
         <aside class="preview-card">
-          <div class="preview-header"><div><span class="panel-kicker">LIVE PREVIEW</span><h3>样例票据</h3></div><el-tag size="small" effect="plain">{{ editor.paperWidthMM }} mm</el-tag></div>
-          <div class="paper-wrap"><div class="paper" :class="editor.paperWidthMM === 80 ? 'paper-wide' : 'paper-narrow'">
+          <div class="preview-header"><div><span class="panel-kicker">LIVE PREVIEW</span><h3>样例票据</h3></div><el-tag size="small" effect="plain">{{ editor.paperWidthMM }} mm · {{ orientationText(editor.orientation) }}</el-tag></div>
+          <div class="paper-wrap"><div class="paper" :class="[editor.paperWidthMM === 80 ? 'paper-wide' : 'paper-narrow', editor.orientation === 'landscape' ? 'paper-landscape' : 'paper-portrait']">
             <div v-for="(block, index) in previewDocument.blocks" :key="`${index}-${block.kind}`" class="paper-block" :class="[`align-${block.align}`, { bold: block.bold, separator: block.separator }]" :style="{ fontSize: `${numberValue(block.font_size, 12) > 22 ? 22 : numberValue(block.font_size, 12) < 9 ? 9 : numberValue(block.font_size, 12)}px`, marginBottom: `${Math.max(2, numberValue(block.spacing, 0) * 3)}px` }">
               <template v-if="block.kind === 'qr_code' || block.kind === 'barcode'"><div class="code-placeholder"><span>{{ block.kind === 'qr_code' ? 'QR' : 'BAR' }}</span><small>{{ block.text }}</small></div></template>
               <template v-else>{{ block.text || ' ' }}</template>
@@ -102,7 +105,7 @@
     <el-dialog v-model="revisionDialog.visible" title="模板版本历史" width="760px">
       <el-timeline v-loading="revisionDialog.loading">
         <el-timeline-item v-for="revision in revisionDialog.rows" :key="revision.id" :timestamp="formatTime(revision.created_at)" :type="revision.status === 'published' ? 'success' : revision.status === 'draft' ? 'warning' : 'info'">
-          <div class="revision-row"><div><strong>v{{ revision.version }}</strong><el-tag size="small" effect="plain" class="ml-2">{{ revisionStatus(revision.status) }}</el-tag><p>{{ revision.definition?.blocks?.length || 0 }} 个区块 · {{ revision.definition?.paper_width_mm || 58 }} mm · {{ revision.definition_hash?.slice(0, 12) }}…</p></div><span>{{ revision.published_at ? `发布于 ${formatTime(revision.published_at)}` : '未发布' }}</span></div>
+          <div class="revision-row"><div><strong>v{{ revision.version }}</strong><el-tag size="small" effect="plain" class="ml-2">{{ revisionStatus(revision.status) }}</el-tag><p>{{ revision.definition?.blocks?.length || 0 }} 个区块 · {{ revision.definition?.paper_width_mm || 58 }} mm · {{ orientationText(revision.definition?.orientation) }} · {{ revision.definition_hash?.slice(0, 12) }}…</p></div><span>{{ revision.published_at ? `发布于 ${formatTime(revision.published_at)}` : '未发布' }}</span></div>
         </el-timeline-item>
       </el-timeline>
       <el-empty v-if="!revisionDialog.loading && !revisionDialog.rows.length" description="暂无版本" />
@@ -117,7 +120,7 @@ import { InfoFilled, Lock, Plus, Refresh } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 
 type PrintBlock = { kind: string, text?: string, align: string, font_size: number, bold: boolean, spacing: number, separator?: boolean }
-type Definition = { schema_version: number, paper_width_mm: number, blocks: PrintBlock[] }
+type Definition = { schema_version: number, paper_width_mm: number, orientation: 'portrait' | 'landscape', blocks: PrintBlock[] }
 
 const blockOptions = [
   { value: 'scenic_name', label: '景区名称' }, { value: 'logo', label: 'Logo（预留）' }, { value: 'product_name', label: '票种名称' },
@@ -132,12 +135,13 @@ const products = ref<any[]>([])
 const templates = ref<any[]>([])
 const loading = ref(false)
 const filters = reactive<{ scenicAreaID: number | undefined, productID: number | undefined }>({ scenicAreaID: undefined, productID: undefined })
-const editor = reactive<any>({ visible: false, id: 0, name: '', scenicAreaID: 0, productID: 0, productRevisionID: 0, currentRevisionID: 0, revisionMode: 'product', paperWidthMM: 58, printerProfile: 'escpos', definition: emptyDefinition(58), previewDocument: { blocks: [] }, previewHash: '', saving: false, previewing: false })
+const editor = reactive<any>({ visible: false, id: 0, name: '', scenicAreaID: 0, productID: 0, productRevisionID: 0, currentRevisionID: 0, revisionMode: 'product', paperWidthMM: 58, orientation: 'portrait', printerProfile: 'escpos', definition: emptyDefinition(58, 'portrait'), previewDocument: { blocks: [] }, previewHash: '', saving: false, previewing: false })
 const revisionDialog = reactive({ visible: false, loading: false, rows: [] as any[] })
 const previewDocument = computed(() => editor.previewDocument || { blocks: [] })
 
-function emptyDefinition(width: number): Definition { return { schema_version: 1, paper_width_mm: width, blocks: [{ kind: 'scenic_name', align: 'center', font_size: 18, bold: true, spacing: 1 }, { kind: 'product_name', align: 'center', font_size: 15, bold: true, spacing: 1 }, { kind: 'ticket_code', align: 'left', font_size: 11, bold: true, spacing: 0 }, { kind: 'qr_code', align: 'center', font_size: 12, bold: false, spacing: 1 }, { kind: 'footer_text', align: 'center', font_size: 9, bold: false, spacing: 1, text: '请妥善保管票据，入园时出示二维码' }] } }
-function cloneDefinition(value: any, width: number): Definition { const source = value || emptyDefinition(width); return { schema_version: 1, paper_width_mm: Number(source.paper_width_mm || width), blocks: (source.blocks || []).map((block: any) => ({ kind: block.kind, text: block.text || '', align: block.align || 'left', font_size: Number(block.font_size || 12), bold: Boolean(block.bold), spacing: Number(block.spacing || 0), separator: Boolean(block.separator) })) } }
+function emptyDefinition(width: number, orientation: 'portrait' | 'landscape' = 'portrait'): Definition { return { schema_version: 1, paper_width_mm: width, orientation, blocks: [{ kind: 'scenic_name', align: 'center', font_size: 18, bold: true, spacing: 1 }, { kind: 'product_name', align: 'center', font_size: 15, bold: true, spacing: 1 }, { kind: 'ticket_code', align: 'left', font_size: 11, bold: true, spacing: 0 }, { kind: 'qr_code', align: 'center', font_size: 12, bold: false, spacing: 1 }, { kind: 'footer_text', align: 'center', font_size: 9, bold: false, spacing: 1, text: '请妥善保管票据，入园时出示二维码' }] } }
+function orientationText(value: unknown) { return value === 'landscape' ? '横版' : '竖版' }
+function cloneDefinition(value: any, width: number, orientation: 'portrait' | 'landscape' = 'portrait'): Definition { const source = value || emptyDefinition(width, orientation); const resolvedOrientation = source.orientation === 'landscape' ? 'landscape' : orientation; return { schema_version: 1, paper_width_mm: Number(source.paper_width_mm || width), orientation: resolvedOrientation, blocks: (source.blocks || []).map((block: any) => ({ kind: block.kind, text: block.text || '', align: block.align || 'left', font_size: Number(block.font_size || 12), bold: Boolean(block.bold), spacing: Number(block.spacing || 0), separator: Boolean(block.separator) })) } }
 function normalizeBlock(block: PrintBlock) { block.text = isTextBlock(block.kind) ? block.text || '' : ''; block.align = block.align || 'left'; block.font_size = block.font_size || 12; block.spacing = block.spacing || 0 }
 function isTextBlock(kind: string) { return kind === 'custom_text' || kind === 'footer_text' }
 function blockDescription(kind: string) { return blockDescriptions[kind] || '服务端字段' }
@@ -164,24 +168,26 @@ const loadTemplates = async () => {
 
 const openCreate = () => {
   const areaID = Number(filters.scenicAreaID || scenicAreas.value[0]?.id || 0)
-  Object.assign(editor, { visible: true, id: 0, name: '', scenicAreaID: areaID, productID: 0, productRevisionID: 0, currentRevisionID: 0, revisionMode: 'product', paperWidthMM: 58, printerProfile: 'escpos', definition: emptyDefinition(58), previewDocument: { blocks: [] }, previewHash: '', saving: false })
+  Object.assign(editor, { visible: true, id: 0, name: '', scenicAreaID: areaID, productID: 0, productRevisionID: 0, currentRevisionID: 0, revisionMode: 'product', paperWidthMM: 58, orientation: 'portrait', printerProfile: 'escpos', definition: emptyDefinition(58, 'portrait'), previewDocument: { blocks: [] }, previewHash: '', saving: false })
   void refreshPreview()
 }
 const openEdit = (row: any) => {
   const definition = row.draft_definition || row.definition
-  Object.assign(editor, { visible: true, id: row.id, name: row.name, scenicAreaID: row.scenic_area_id, productID: row.product_id || 0, productRevisionID: row.product_revision_id || 0, currentRevisionID: row.current_revision_id || 0, revisionMode: row.product_revision_id ? 'current' : 'product', paperWidthMM: row.paper_width_mm || definition?.paper_width_mm || 58, printerProfile: row.printer_profile || 'escpos', definition: cloneDefinition(definition, row.paper_width_mm || 58), previewDocument: { blocks: [] }, previewHash: '', saving: false })
+  const orientation = row.orientation === 'landscape' || definition?.orientation === 'landscape' ? 'landscape' : 'portrait'
+  Object.assign(editor, { visible: true, id: row.id, name: row.name, scenicAreaID: row.scenic_area_id, productID: row.product_id || 0, productRevisionID: row.product_revision_id || 0, currentRevisionID: row.current_revision_id || 0, revisionMode: row.product_revision_id ? 'current' : 'product', paperWidthMM: row.paper_width_mm || definition?.paper_width_mm || 58, orientation, printerProfile: row.printer_profile || 'escpos', definition: cloneDefinition(definition, row.paper_width_mm || 58, orientation), previewDocument: { blocks: [] }, previewHash: '', saving: false })
   void refreshPreview()
 }
 const addBlock = () => { if (editor.definition.blocks.length >= 64) return; editor.definition.blocks.push({ kind: 'custom_text', text: '请输入说明', align: 'left', font_size: 12, bold: false, spacing: 0 }) }
 const removeBlock = (index: number) => { if (editor.definition.blocks.length <= 1) { ElMessage.warning('至少保留一个打印区块'); return } editor.definition.blocks.splice(index, 1) }
 const moveBlock = (index: number, direction: number) => { const target = index + direction; if (target < 0 || target >= editor.definition.blocks.length) return; const [block] = editor.definition.blocks.splice(index, 1); editor.definition.blocks.splice(target, 0, block) }
-const requestPayload = () => ({ id: editor.id || undefined, scenic_area_id: Number(editor.scenicAreaID), product_id: Number(editor.productID || 0), product_revision_id: editor.productID && editor.revisionMode === 'current' ? Number(products.value.find(product => Number(product.id) === Number(editor.productID))?.current_revision_id || 0) : 0, name: editor.name.trim(), paper_width_mm: Number(editor.paperWidthMM), printer_profile: editor.printerProfile, definition: { ...editor.definition, schema_version: 1, paper_width_mm: Number(editor.paperWidthMM) } })
+const requestPayload = () => ({ id: editor.id || undefined, scenic_area_id: Number(editor.scenicAreaID), product_id: Number(editor.productID || 0), product_revision_id: editor.productID && editor.revisionMode === 'current' ? Number(products.value.find(product => Number(product.id) === Number(editor.productID))?.current_revision_id || 0) : 0, name: editor.name.trim(), paper_width_mm: Number(editor.paperWidthMM), orientation: editor.orientation, printer_profile: editor.printerProfile, definition: { ...editor.definition, schema_version: 1, paper_width_mm: Number(editor.paperWidthMM), orientation: editor.orientation } })
 const refreshPreview = async () => {
   if (!editor.scenicAreaID || !editor.definition.blocks.length) return
   editor.previewing = true
   try {
     const response = await request.post('/print-templates/preview', requestPayload())
-    editor.definition = cloneDefinition(response.data.definition, editor.paperWidthMM)
+    editor.orientation = response.data.definition?.orientation === 'landscape' ? 'landscape' : 'portrait'
+    editor.definition = cloneDefinition(response.data.definition, editor.paperWidthMM, editor.orientation)
     editor.previewDocument = response.data.document
     editor.previewHash = response.data.content_hash || ''
   } finally { editor.previewing = false }
@@ -229,7 +235,7 @@ onMounted(() => { void loadWorkspace() })
 .editor-form { min-width: 0; }.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }.w-full { width: 100%; }
 .block-heading, .preview-header { display: flex; align-items: center; justify-content: space-between; margin: 8px 0 12px; }.block-heading h3, .preview-header h3 { margin: 3px 0 0; font-size: 16px; color: #0f172a; }.panel-kicker { color: #94a3b8; font-size: 10px; letter-spacing: .12em; font-weight: 700; }.block-count { color: #64748b; font-size: 12px; }
 .block-list { display: grid; gap: 8px; max-height: 440px; overflow: auto; padding-right: 4px; }.block-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border: 1px solid #e6ebf2; border-radius: 10px; background: #fff; }.block-index { color: #94a3b8; font-family: ui-monospace, monospace; font-size: 11px; }.block-main { min-width: 0; display: grid; gap: 7px; }.block-line { display: flex; align-items: center; gap: 8px; }.kind-select { min-width: 152px; flex: 1; }.align-select { width: 92px; }.font-size-input { width: 82px; }.block-actions { white-space: nowrap; }.add-block-button { width: 100%; margin-top: 10px; border-style: dashed; }.editor-safety { display: flex; gap: 8px; align-items: flex-start; margin-top: 14px; padding: 10px 12px; color: #64748b; font-size: 12px; line-height: 1.5; background: #f8fafc; border-radius: 9px; }
-.preview-card { min-width: 0; padding: 16px; border: 1px solid #e6ebf2; border-radius: 14px; background: #f8fafc; }.paper-wrap { display: flex; justify-content: center; padding: 18px 0; }.paper { min-height: 470px; padding: 22px 15px; color: #111827; background: #fff; box-shadow: 0 10px 28px rgba(15, 23, 42, .12); }.paper-narrow { width: 238px; }.paper-wide { width: 310px; }.paper-block { line-height: 1.3; word-break: break-all; }.align-left { text-align: left; }.align-center { text-align: center; }.align-right { text-align: right; }.paper-block.bold { font-weight: 700; }.paper-block.separator { border-top: 1px dashed #94a3b8; padding-top: 5px; }.code-placeholder { display: grid; justify-items: center; gap: 4px; padding: 10px; border: 1px dashed #cbd5e1; color: #0f172a; }.code-placeholder span { font-size: 25px; font-weight: 800; letter-spacing: .12em; }.code-placeholder small { color: #64748b; font-family: ui-monospace, monospace; font-size: 10px; }.preview-hash { margin-top: 12px; color: #94a3b8; font-size: 10px; font-family: ui-monospace, monospace; }.revision-row { display: flex; justify-content: space-between; gap: 16px; }.revision-row p { margin: 6px 0 0; color: #94a3b8; font-size: 12px; }
+.preview-card { min-width: 0; padding: 16px; border: 1px solid #e6ebf2; border-radius: 14px; background: #f8fafc; }.paper-wrap { display: flex; justify-content: center; padding: 18px 0; overflow-x: auto; }.paper { padding: 22px 15px; color: #111827; background: #fff; box-shadow: 0 10px 28px rgba(15, 23, 42, .12); transition: width .2s ease, min-height .2s ease; }.paper-narrow { width: 238px; }.paper-wide { width: 310px; }.paper-portrait { min-height: 470px; }.paper-landscape.paper-narrow { width: 470px; min-height: 238px; }.paper-landscape.paper-wide { width: 560px; min-height: 310px; }.paper-block { line-height: 1.3; word-break: break-all; }.align-left { text-align: left; }.align-center { text-align: center; }.align-right { text-align: right; }.paper-block.bold { font-weight: 700; }.paper-block.separator { border-top: 1px dashed #94a3b8; padding-top: 5px; }.code-placeholder { display: grid; justify-items: center; gap: 4px; padding: 10px; border: 1px dashed #cbd5e1; color: #0f172a; }.code-placeholder span { font-size: 25px; font-weight: 800; letter-spacing: .12em; }.code-placeholder small { color: #64748b; font-family: ui-monospace, monospace; font-size: 10px; }.preview-hash { margin-top: 12px; color: #94a3b8; font-size: 10px; font-family: ui-monospace, monospace; }.revision-row { display: flex; justify-content: space-between; gap: 16px; }.revision-row p { margin: 6px 0 0; color: #94a3b8; font-size: 12px; }
 @media (max-width: 1000px) { .template-editor { grid-template-columns: 1fr; }.preview-card { order: -1; }.template-toolbar { flex-wrap: wrap; }.toolbar-note { width: 100%; margin-left: 0; } }
 @media (max-width: 620px) { .form-grid { grid-template-columns: 1fr; }.block-row { grid-template-columns: 26px minmax(0, 1fr); }.block-actions { grid-column: 2; }.block-line { flex-wrap: wrap; }.kind-select { width: 100%; flex-basis: 100%; } }
 </style>

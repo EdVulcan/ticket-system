@@ -14,6 +14,7 @@ type PrintTicketRequest struct {
 	ContentHash        string          `json:"content_hash"`
 	TemplateRevisionID uint            `json:"template_revision_id"`
 	PaperWidthMM       int             `json:"paper_width_mm"`
+	Orientation        string          `json:"orientation"`
 	CopyCount          int             `json:"copy_count"`
 }
 

@@ -16,9 +16,10 @@ func TestPrintTemplatePublishesImmutableRevisionAndQueuesServerSnapshot(t *testi
 		t.Fatal(err)
 	}
 	definition := DefaultPrintTemplateDefinition()
+	definition.Orientation = "landscape"
 	definition.Blocks = []model.PrintTemplateBlock{{Kind: "product_name", Align: "center", FontSize: 18, Bold: true}, {Kind: "ticket_code", Align: "left", FontSize: 11}}
 	service := &PrintTemplateService{}
-	draft, err := service.SaveDraft(tenantID, 11, PrintTemplateSaveRequest{ScenicAreaID: area.ID, ProductID: productID, Name: "窗口票据", PaperWidthMM: 80, Definition: definition}, "admin")
+	draft, err := service.SaveDraft(tenantID, 11, PrintTemplateSaveRequest{ScenicAreaID: area.ID, ProductID: productID, Name: "窗口票据", PaperWidthMM: 80, Orientation: "landscape", Definition: definition}, "admin")
 	if err != nil {
 		t.Fatalf("save draft: %v", err)
 	}
@@ -29,7 +30,7 @@ func TestPrintTemplatePublishesImmutableRevisionAndQueuesServerSnapshot(t *testi
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	if published.CurrentRevisionID == 0 || published.CurrentDefinition == nil || published.CurrentDefinition.PaperWidthMM != 80 {
+	if published.CurrentRevisionID == 0 || published.CurrentDefinition == nil || published.CurrentDefinition.PaperWidthMM != 80 || published.CurrentDefinition.Orientation != "landscape" || published.Orientation != "landscape" {
 		t.Fatalf("published template missing current revision: %+v", published)
 	}
 
@@ -53,20 +54,20 @@ func TestPrintTemplatePublishesImmutableRevisionAndQueuesServerSnapshot(t *testi
 	if err != nil {
 		t.Fatalf("queue print: %v", err)
 	}
-	if job.TemplateRevisionID != published.CurrentRevisionID || job.ContentHash == "" || job.PrintDocumentJSON == "" || job.PaperWidthMM != 80 {
+	if job.TemplateRevisionID != published.CurrentRevisionID || job.ContentHash == "" || job.PrintDocumentJSON == "" || job.PaperWidthMM != 80 || job.Orientation != "landscape" {
 		t.Fatalf("print snapshot missing: %+v", job)
 	}
 	if !strings.Contains(job.PrintDocumentJSON, ticket.TicketCode) || !strings.Contains(job.PrintDocumentJSON, "Adult Ticket") {
 		t.Fatalf("server snapshot did not contain ticket facts: %s", job.PrintDocumentJSON)
 	}
 	var document model.PrintDocument
-	if err := json.Unmarshal([]byte(job.PrintDocumentJSON), &document); err != nil || len(document.Blocks) != 2 {
+	if err := json.Unmarshal([]byte(job.PrintDocumentJSON), &document); err != nil || len(document.Blocks) != 2 || document.Orientation != "landscape" {
 		t.Fatalf("invalid print document: err=%v document=%+v", err, document)
 	}
 
 	changed := definition
 	changed.Blocks = append(changed.Blocks, model.PrintTemplateBlock{Kind: "footer_text", Text: "新版本", Align: "center", FontSize: 9})
-	if _, err := service.SaveDraft(tenantID, 11, PrintTemplateSaveRequest{ID: draft.ID, ScenicAreaID: area.ID, ProductID: productID, Name: "窗口票据", PaperWidthMM: 80, Definition: changed}, "admin"); err != nil {
+	if _, err := service.SaveDraft(tenantID, 11, PrintTemplateSaveRequest{ID: draft.ID, ScenicAreaID: area.ID, ProductID: productID, Name: "窗口票据", PaperWidthMM: 80, Orientation: "landscape", Definition: changed}, "admin"); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := service.Publish(tenantID, 11, draft.ID, "admin")
@@ -106,6 +107,11 @@ func TestPrintTemplatePreviewAndBindingFailClosedAcrossTenants(t *testing.T) {
 	}
 	if _, err := service.SaveDraft(tenantID, 11, PrintTemplateSaveRequest{ScenicAreaID: area.ID, ProductID: productID, Name: "", Definition: DefaultPrintTemplateDefinition()}, "admin"); err == nil {
 		t.Fatal("empty template name was accepted")
+	}
+	invalid := DefaultPrintTemplateDefinition()
+	invalid.Orientation = "diagonal"
+	if _, err := service.Preview(tenantID, PrintTemplatePreviewRequest{ScenicAreaID: area.ID, ProductID: productID, Name: "非法方向", Orientation: "diagonal", Definition: invalid}); err == nil {
+		t.Fatal("invalid print orientation was accepted")
 	}
 }
 

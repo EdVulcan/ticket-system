@@ -52,6 +52,7 @@ type PrintJob struct {
 	PrintDocumentJSON  string     `gorm:"type:text;not null;default:''" json:"print_document,omitempty"`
 	ContentHash        string     `gorm:"size:64;index" json:"content_hash,omitempty"`
 	PaperWidthMM       int        `gorm:"not null;default:58" json:"paper_width_mm"`
+	Orientation        string     `gorm:"size:20;not null;default:'portrait'" json:"orientation"`
 	CopyCount          int        `gorm:"not null;default:1" json:"copy_count"`
 	ReprintOfJobID     uint       `gorm:"index;not null;default:0" json:"reprint_of_job_id,omitempty"`
 }

@@ -47,6 +47,7 @@ test('供应商可以预览、保存、发布、查看历史并停用打印模�
     draft_revision: null as any,
     current_revision: null as any,
     definition: null as any,
+    orientation: 'portrait',
   }
   let nextRevision = 1
   await page.route('**/api/v1/print-templates**', async route => {
@@ -57,7 +58,7 @@ test('供应商可以预览、保存、发布、查看历史并停用打印模�
       const body = request.postDataJSON()
       await json(route, {
         definition: body.definition,
-        document: { schema_version: 1, paper_width_mm: body.paper_width_mm || 58, template_name: body.name || '样例模板', scenic_area: '青云景区', blocks: (body.definition?.blocks || []).map((block: any) => ({ ...block, text: block.kind === 'ticket_code' ? '票码：SAMPLE-001' : block.text || block.kind })) },
+        document: { schema_version: 1, paper_width_mm: body.paper_width_mm || 58, orientation: body.orientation || 'portrait', template_name: body.name || '样例模板', scenic_area: '青云景区', blocks: (body.definition?.blocks || []).map((block: any) => ({ ...block, text: block.kind === 'ticket_code' ? '票码：SAMPLE-001' : block.text || block.kind })) },
         content_hash: 'preview-hash-501',
       })
       return
@@ -82,6 +83,7 @@ test('供应商可以预览、保存、发布、查看历史并停用打印模�
       const body = request.postDataJSON()
       template.name = body.name
       template.paper_width_mm = body.paper_width_mm
+      template.orientation = body.orientation || 'portrait'
       template.draft_revision = { id: 701, version: nextRevision, status: 'draft', definition_hash: 'draft-hash-501', definition: body.definition, created_at: '2026-08-19T10:00:00+08:00' }
       await json(route, template, request.method() === 'POST' ? 201 : 200)
       return
@@ -94,6 +96,10 @@ test('供应商可以预览、保存、发布、查看历史并停用打印模�
   await page.getByRole('button', { name: '新建模板' }).click()
   const editor = page.getByRole('dialog', { name: '新建打印模板' })
   await editor.getByRole('textbox', { name: '模板名称' }).fill('窗口标准票据')
+  await editor.getByText('横版', { exact: true }).click()
+  await expect(editor.locator('.paper-landscape')).toBeVisible()
+  await editor.getByText('80 mm', { exact: true }).click()
+  await expect(editor.locator('.paper-wide.paper-landscape')).toBeVisible()
   await editor.getByRole('button', { name: '增加打印区块' }).click()
   await expect(editor.getByText('只允许结构化字段；不支持任意 HTML、JavaScript、SQL 或渠道密钥。')).toBeVisible()
   await editor.getByRole('button', { name: '保存草稿' }).click()

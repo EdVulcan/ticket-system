@@ -555,13 +555,13 @@ func TestPostgresSchema102AddsTenantQuotaPolicyToSchema101Database(t *testing.T)
 	}
 }
 
-func TestPostgresSchema103PrintTemplateOwnershipGuard(t *testing.T) {
+func TestPostgresSchema104PrintTemplateOrientationAndOwnershipGuard(t *testing.T) {
 	db := testdb.Open(t)
 	if err := runMigrations(db); err != nil {
 		t.Fatal(err)
 	}
-	if CurrentPostgresSchemaVersion < 103 {
-		t.Fatalf("current schema version=%d, want at least 103", CurrentPostgresSchemaVersion)
+	if CurrentPostgresSchemaVersion < 104 {
+		t.Fatalf("current schema version=%d, want at least 104", CurrentPostgresSchemaVersion)
 	}
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	tenant := Tenant{Name: "Print Template Tenant", SystemCode: "PRINT-TEMPLATE-" + suffix, SecretKey: "print", Status: "active"}
@@ -584,9 +584,16 @@ func TestPostgresSchema103PrintTemplateOwnershipGuard(t *testing.T) {
 	if err := db.Create(&product).Error; err != nil {
 		t.Fatal(err)
 	}
-	template := PrintTemplate{TenantID: tenant.ID, ScenicAreaID: area.ID, ProductID: product.ID, Name: "有效模板", Status: "active", PaperWidthMM: 58}
+	template := PrintTemplate{TenantID: tenant.ID, ScenicAreaID: area.ID, ProductID: product.ID, Name: "有效模板", Status: "active", PaperWidthMM: 58, Orientation: "landscape"}
 	if err := db.Create(&template).Error; err != nil {
 		t.Fatal(err)
+	}
+	if template.Orientation != "landscape" {
+		t.Fatalf("template orientation was not persisted: %q", template.Orientation)
+	}
+	invalidOrientation := PrintTemplate{TenantID: tenant.ID, ScenicAreaID: area.ID, Name: "非法方向", Status: "active", PaperWidthMM: 58, Orientation: "diagonal"}
+	if err := db.Create(&invalidOrientation).Error; err == nil {
+		t.Fatal("invalid print template orientation was accepted")
 	}
 	foreignTemplate := PrintTemplate{TenantID: tenant.ID, ScenicAreaID: otherArea.ID, Name: "越权模板", Status: "active", PaperWidthMM: 58}
 	if err := db.Create(&foreignTemplate).Error; err == nil {
@@ -605,6 +612,44 @@ func TestPostgresSchema103PrintTemplateOwnershipGuard(t *testing.T) {
 	}
 	if err := db.Model(&revision).Update("definition_json", `{"schema_version":1}`).Error; err == nil {
 		t.Fatal("published print template revision was mutable")
+	}
+}
+
+func TestPostgresSchema104AddsPrintOrientationToSchema103(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrator().DropColumn(&PrintTemplate{}, "Orientation"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrator().DropColumn(&PrintJob{}, "Orientation"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("version = ?", CurrentPostgresSchemaVersion).Delete(&SchemaMigration{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&SchemaMigration{Version: 103, Name: "schema 103 fixture", AppliedAt: time.Now()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if !db.Migrator().HasColumn(&PrintTemplate{}, "Orientation") || !db.Migrator().HasColumn(&PrintJob{}, "Orientation") {
+		t.Fatal("schema 104 did not add print orientation columns")
+	}
+	var templateOrientation, jobOrientation string
+	if err := db.Raw(`SELECT column_default FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'print_templates' AND column_name = 'orientation'`).Scan(&templateOrientation).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(templateOrientation, "portrait") {
+		t.Fatalf("print template orientation default=%q, want portrait", templateOrientation)
+	}
+	if err := db.Raw(`SELECT column_default FROM information_schema.columns WHERE table_schema = CURRENT_SCHEMA() AND table_name = 'print_jobs' AND column_name = 'orientation'`).Scan(&jobOrientation).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(jobOrientation, "portrait") {
+		t.Fatalf("print job orientation default=%q, want portrait", jobOrientation)
 	}
 }
 

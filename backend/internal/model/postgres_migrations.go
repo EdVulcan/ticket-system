@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 103
+const CurrentPostgresSchemaVersion = 104
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -291,6 +291,22 @@ func runPostgresMigrations(db *gorm.DB) error {
 			return fmt.Errorf("register print template revisions and print snapshots: %w", err)
 		}
 	}
+	if previousSchemaVersion < 104 {
+		if err := db.Exec(`
+			ALTER TABLE print_templates ADD COLUMN IF NOT EXISTS orientation varchar(20) NOT NULL DEFAULT 'portrait';
+			ALTER TABLE print_jobs ADD COLUMN IF NOT EXISTS orientation varchar(20) NOT NULL DEFAULT 'portrait';
+			UPDATE print_templates SET orientation = 'portrait' WHERE orientation IS NULL OR orientation = '';
+			UPDATE print_jobs SET orientation = 'portrait' WHERE orientation IS NULL OR orientation = '';
+			ALTER TABLE print_templates DROP CONSTRAINT IF EXISTS chk_print_templates_orientation;
+			ALTER TABLE print_templates ADD CONSTRAINT chk_print_templates_orientation
+				CHECK (orientation IN ('portrait','landscape'));
+			ALTER TABLE print_jobs DROP CONSTRAINT IF EXISTS chk_print_jobs_orientation;
+			ALTER TABLE print_jobs ADD CONSTRAINT chk_print_jobs_orientation
+				CHECK (orientation IN ('portrait','landscape'));
+		`).Error; err != nil {
+			return fmt.Errorf("add print template orientation: %w", err)
+		}
+	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
 		if err := db.Exec(`
 			INSERT INTO supplier_business_types
@@ -439,7 +455,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "print template revisions and immutable print snapshots",
+		Name:      "print template orientation and immutable print snapshots",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -616,6 +632,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 			IF NEW.tenant_id = 0 OR NEW.scenic_area_id = 0
 			   OR NEW.status NOT IN ('active','disabled')
 			   OR NEW.paper_width_mm NOT IN (58,80)
+			   OR NEW.orientation NOT IN ('portrait','landscape')
 			   OR NOT EXISTS (SELECT 1 FROM scenic_areas s WHERE s.id = NEW.scenic_area_id AND s.tenant_id = NEW.tenant_id AND s.deleted_at IS NULL)
 			   OR (NEW.product_id = 0 AND NEW.product_revision_id <> 0)
 			   OR (NEW.product_id <> 0 AND NOT EXISTS (
@@ -650,6 +667,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 		WHEN 'print_jobs' THEN
 			IF NEW.tenant_id = 0 OR NEW.device_id = 0 OR NEW.shift_id = 0 OR COALESCE(NEW.order_no,'') = ''
 			   OR NEW.status NOT IN ('queued','printing','printed','failed') OR NEW.attempt_count < 0 OR NEW.copy_count <= 0
+			   OR NEW.orientation NOT IN ('portrait','landscape')
 			   OR NOT EXISTS (SELECT 1 FROM devices d WHERE d.id = NEW.device_id AND d.tenant_id = NEW.tenant_id AND d.type = 'pos')
 			   OR NOT EXISTS (SELECT 1 FROM pos_shifts s WHERE s.id = NEW.shift_id AND s.tenant_id = NEW.tenant_id AND s.device_id = NEW.device_id)
 			   OR NOT EXISTS (SELECT 1 FROM orders o WHERE o.order_no = NEW.order_no AND o.tenant_id = NEW.tenant_id)

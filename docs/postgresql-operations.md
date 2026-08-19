@@ -6,7 +6,7 @@
 
 应用启动时必须拒绝高于自身支持版本的数据库 schema，避免旧程序在回滚后忽略新增的租户或业态授权边界。schema 80 首次上线属于前向迁移：部署前必须完成备份，不能直接回滚到不认识 `supplier_business_types` 的旧二进制。schema 91 会把旧平台 AI 配置中的 30 秒请求超时迁移为 120 秒，并更新列默认值；schema 93 会把旧 AI 工具事件的任务版本幂等键迁移为按调用尝试唯一，并将旧调用编号索引改为非唯一索引；schema 94 会把 DeepSeek 的旧默认 `legacy_json` 协议迁移为 `auto`，使新任务使用原生工具调用；schema 95 扩展 Agent 任务的 ownership guard 和基础信息预览/确认类型；schema 96 增加批量基础信息预览/确认操作类型；schema 97 增加租户业务别名表和 ownership guard；schema 98 注册复合低风险预览父任务类型，子任务继续复用现有确认和版本校验；schema 99 增加酒店价格计划入住日期覆盖表及联合归属约束；schema 100 增加独立酒店产品目录、产品售价日历、住宿权益/预订表及联合租户归属约束；部署前仍必须完成备份。
 
-schema 101 将 Agent 任务创建幂等键固定为 `(tenant_id, actor_user_id, idempotency_key)`，schema 102 增加独立的租户 AI 额度策略表及归属/额度触发器；schema 103 增加租户/景区/票种范围的结构化门票打印模板、不可变模板版本、打印任务服务端内容快照及对应 ownership guard。策略的空上限继承平台默认值，暂停和额度调整不改写 `AIUsageMonth` 账本。PostgreSQL 负责并发事务和持久化，也是自动化测试的唯一数据库。项目不再包含 SQLite 驱动、运行配置、备份恢复或兼容测试。
+schema 101 将 Agent 任务创建幂等键固定为 `(tenant_id, actor_user_id, idempotency_key)`，schema 102 增加独立的租户 AI 额度策略表及归属/额度触发器；schema 103 增加租户/景区/票种范围的结构化门票打印模板、不可变模板版本、打印任务服务端内容快照及对应 ownership guard；schema 104 为模板、打印快照和打印任务增加竖版/横版方向。策略的空上限继承平台默认值，暂停和额度调整不改写 `AIUsageMonth` 账本。PostgreSQL 负责并发事务和持久化，也是自动化测试的唯一数据库。项目不再包含 SQLite 驱动、运行配置、备份恢复或兼容测试。
 
 Agent 边界补充（2026-08-17）：schema 95/96 的任务与 ownership guard 兼容现有任务结构；当前运行时允许当前租户自有票种（包括已上架或允许分销者）进行基础信息预览/确认，分销副本仍拒绝。该边界调整不改变迁移版本，也不允许修改上架、分销授权或跨租户归属事实。
 

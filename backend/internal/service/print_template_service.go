@@ -22,6 +22,8 @@ const (
 	printRevisionDraft          = "draft"
 	printRevisionPublished      = "published"
 	printRevisionRetired        = "retired"
+	printOrientationPortrait    = "portrait"
+	printOrientationLandscape   = "landscape"
 )
 
 var supportedPrintBlockKinds = map[string]struct{}{
@@ -39,6 +41,7 @@ func DefaultPrintTemplateDefinition() model.PrintTemplateDefinition {
 	return model.PrintTemplateDefinition{
 		SchemaVersion: 1,
 		PaperWidthMM:  58,
+		Orientation:   printOrientationPortrait,
 		Blocks: []model.PrintTemplateBlock{
 			{Kind: "scenic_name", Align: "center", FontSize: 18, Bold: true, Spacing: 1},
 			{Kind: "product_name", Align: "center", FontSize: 15, Bold: true, Spacing: 1},
@@ -60,6 +63,7 @@ type PrintTemplateSaveRequest struct {
 	ProductRevisionID uint                          `json:"product_revision_id"`
 	Name              string                        `json:"name"`
 	PaperWidthMM      int                           `json:"paper_width_mm"`
+	Orientation       string                        `json:"orientation"`
 	PrinterProfile    string                        `json:"printer_profile"`
 	Definition        model.PrintTemplateDefinition `json:"definition"`
 }
@@ -70,6 +74,7 @@ type PrintTemplatePreviewRequest struct {
 	ProductRevisionID uint                          `json:"product_revision_id"`
 	Name              string                        `json:"name"`
 	PaperWidthMM      int                           `json:"paper_width_mm"`
+	Orientation       string                        `json:"orientation"`
 	Definition        model.PrintTemplateDefinition `json:"definition"`
 }
 
@@ -90,7 +95,7 @@ type PrintTemplateRevisionView struct {
 
 type PrintTemplateService struct{}
 
-func normalizePrintTemplateDefinition(def model.PrintTemplateDefinition, paperWidth int) (model.PrintTemplateDefinition, error) {
+func normalizePrintTemplateDefinition(def model.PrintTemplateDefinition, paperWidth int, requestedOrientation ...string) (model.PrintTemplateDefinition, error) {
 	if def.SchemaVersion == 0 {
 		def.SchemaVersion = 1
 	}
@@ -103,10 +108,22 @@ func normalizePrintTemplateDefinition(def model.PrintTemplateDefinition, paperWi
 	if paperWidth != 58 && paperWidth != 80 {
 		return model.PrintTemplateDefinition{}, errors.New("paper width must be 58 or 80 mm")
 	}
+	orientation := strings.TrimSpace(def.Orientation)
+	if len(requestedOrientation) > 0 && strings.TrimSpace(requestedOrientation[0]) != "" {
+		orientation = strings.TrimSpace(requestedOrientation[0])
+	}
+	if orientation == "" {
+		orientation = printOrientationPortrait
+	}
+	orientation = strings.ToLower(orientation)
+	if orientation != printOrientationPortrait && orientation != printOrientationLandscape {
+		return model.PrintTemplateDefinition{}, errors.New("print orientation must be portrait or landscape")
+	}
 	if len(def.Blocks) == 0 || len(def.Blocks) > 64 {
 		return model.PrintTemplateDefinition{}, errors.New("print template must contain 1 to 64 blocks")
 	}
 	def.PaperWidthMM = paperWidth
+	def.Orientation = orientation
 	for index := range def.Blocks {
 		block := &def.Blocks[index]
 		if _, ok := supportedPrintBlockKinds[block.Kind]; !ok {
@@ -221,7 +238,7 @@ func (s *PrintTemplateService) Preview(tenantID uint, req PrintTemplatePreviewRe
 	if tenantID == 0 || req.ScenicAreaID == 0 {
 		return nil, errors.New("scenic area is required")
 	}
-	definition, err := normalizePrintTemplateDefinition(req.Definition, req.PaperWidthMM)
+	definition, err := normalizePrintTemplateDefinition(req.Definition, req.PaperWidthMM, req.Orientation)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +270,7 @@ func (s *PrintTemplateService) SaveDraft(tenantID, actorID uint, req PrintTempla
 	if name == "" || utf8.RuneCountInString(name) > 100 {
 		return nil, errors.New("template name is required and must be at most 100 characters")
 	}
-	definition, err := normalizePrintTemplateDefinition(req.Definition, req.PaperWidthMM)
+	definition, err := normalizePrintTemplateDefinition(req.Definition, req.PaperWidthMM, req.Orientation)
 	if err != nil {
 		return nil, err
 	}
@@ -267,12 +284,13 @@ func (s *PrintTemplateService) SaveDraft(tenantID, actorID uint, req PrintTempla
 			return err
 		}
 		paperWidth := definition.PaperWidthMM
+		orientation := definition.Orientation
 		profile := strings.TrimSpace(req.PrinterProfile)
 		if profile == "" {
 			profile = "escpos"
 		}
 		if req.ID == 0 {
-			template = model.PrintTemplate{TenantID: tenantID, ScenicAreaID: req.ScenicAreaID, ProductID: req.ProductID, ProductRevisionID: req.ProductRevisionID, Name: name, Status: printTemplateStatusActive, PaperWidthMM: paperWidth, PrinterProfile: profile}
+			template = model.PrintTemplate{TenantID: tenantID, ScenicAreaID: req.ScenicAreaID, ProductID: req.ProductID, ProductRevisionID: req.ProductRevisionID, Name: name, Status: printTemplateStatusActive, PaperWidthMM: paperWidth, Orientation: orientation, PrinterProfile: profile}
 			if err := tx.Create(&template).Error; err != nil {
 				return err
 			}
@@ -286,8 +304,8 @@ func (s *PrintTemplateService) SaveDraft(tenantID, actorID uint, req PrintTempla
 				}
 				template.ScenicAreaID, template.ProductID, template.ProductRevisionID = req.ScenicAreaID, req.ProductID, req.ProductRevisionID
 			}
-			template.Name, template.PaperWidthMM, template.PrinterProfile = name, paperWidth, profile
-			if err := tx.Model(&template).Updates(map[string]interface{}{"name": name, "scenic_area_id": template.ScenicAreaID, "product_id": template.ProductID, "product_revision_id": template.ProductRevisionID, "paper_width_mm": paperWidth, "printer_profile": profile}).Error; err != nil {
+			template.Name, template.PaperWidthMM, template.Orientation, template.PrinterProfile = name, paperWidth, orientation, profile
+			if err := tx.Model(&template).Updates(map[string]interface{}{"name": name, "scenic_area_id": template.ScenicAreaID, "product_id": template.ProductID, "product_revision_id": template.ProductRevisionID, "paper_width_mm": paperWidth, "orientation": orientation, "printer_profile": profile}).Error; err != nil {
 				return err
 			}
 		}
@@ -454,7 +472,7 @@ func ensureDefaultPrintTemplateTx(tx *gorm.DB, tenantID, scenicAreaID, actorID u
 		if hashErr != nil {
 			return nil, nil, hashErr
 		}
-		template = model.PrintTemplate{TenantID: tenantID, ScenicAreaID: scenicAreaID, Name: "景区默认票据", Status: printTemplateStatusActive, PaperWidthMM: definition.PaperWidthMM, PrinterProfile: "escpos"}
+		template = model.PrintTemplate{TenantID: tenantID, ScenicAreaID: scenicAreaID, Name: "景区默认票据", Status: printTemplateStatusActive, PaperWidthMM: definition.PaperWidthMM, Orientation: definition.Orientation, PrinterProfile: "escpos"}
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&template).Error; err != nil {
 			return nil, nil, err
 		}
@@ -520,7 +538,7 @@ func renderSamplePrintDocument(name string, definition model.PrintTemplateDefini
 }
 
 func renderPrintDocument(name, scenic string, definition model.PrintTemplateDefinition, input printTicketRenderInput) model.PrintDocument {
-	document := model.PrintDocument{SchemaVersion: 1, PaperWidthMM: definition.PaperWidthMM, TemplateName: name, ScenicArea: scenic, Blocks: make([]model.PrintDocumentBlock, 0, len(definition.Blocks)*maxPrintInt(1, len(input.Tickets)))}
+	document := model.PrintDocument{SchemaVersion: 1, PaperWidthMM: definition.PaperWidthMM, Orientation: definition.Orientation, TemplateName: name, ScenicArea: scenic, Blocks: make([]model.PrintDocumentBlock, 0, len(definition.Blocks)*maxPrintInt(1, len(input.Tickets)))}
 	tickets := input.Tickets
 	if len(tickets) == 0 {
 		tickets = []model.Ticket{{OrderItem: model.OrderItem{ProductName: "门票"}, TicketCode: input.OrderNo}}
@@ -741,6 +759,6 @@ func buildPrintJobSnapshotTx(tx *gorm.DB, tenantID, deviceID, operatorID, shiftI
 	if err != nil {
 		return nil, err
 	}
-	job := &model.PrintJob{TenantID: tenantID, DeviceID: deviceID, OperatorID: operatorID, ShiftID: shiftID, OrderNo: order.OrderNo, TicketCode: strings.TrimSpace(ticketCode), AfterSaleRequestNo: strings.TrimSpace(afterSaleRequestNo), Status: "queued", TemplateRevisionID: revision.ID, PrintDocumentJSON: string(encoded), ContentHash: contentHash, PaperWidthMM: document.PaperWidthMM, CopyCount: 1, ReprintOfJobID: reprintOfJobID}
+	job := &model.PrintJob{TenantID: tenantID, DeviceID: deviceID, OperatorID: operatorID, ShiftID: shiftID, OrderNo: order.OrderNo, TicketCode: strings.TrimSpace(ticketCode), AfterSaleRequestNo: strings.TrimSpace(afterSaleRequestNo), Status: "queued", TemplateRevisionID: revision.ID, PrintDocumentJSON: string(encoded), ContentHash: contentHash, PaperWidthMM: document.PaperWidthMM, Orientation: document.Orientation, CopyCount: 1, ReprintOfJobID: reprintOfJobID}
 	return job, nil
 }

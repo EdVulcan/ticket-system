@@ -16,6 +16,7 @@ type PrintTemplate struct {
 	Status            string `gorm:"size:20;not null;default:'active';index" json:"status"` // active, disabled
 	CurrentRevisionID uint   `gorm:"index;not null;default:0" json:"current_revision_id"`
 	PaperWidthMM      int    `gorm:"not null;default:58" json:"paper_width_mm"`
+	Orientation       string `gorm:"size:20;not null;default:'portrait'" json:"orientation"` // portrait, landscape
 	PrinterProfile    string `gorm:"size:30;not null;default:'escpos'" json:"printer_profile"`
 }
 
@@ -52,6 +53,7 @@ type PrintTemplateBlock struct {
 type PrintTemplateDefinition struct {
 	SchemaVersion int                  `json:"schema_version"`
 	PaperWidthMM  int                  `json:"paper_width_mm"`
+	Orientation   string               `json:"orientation"` // portrait, landscape
 	Blocks        []PrintTemplateBlock `json:"blocks"`
 }
 
@@ -61,6 +63,7 @@ type PrintTemplateDefinition struct {
 type PrintDocument struct {
 	SchemaVersion int                  `json:"schema_version"`
 	PaperWidthMM  int                  `json:"paper_width_mm"`
+	Orientation   string               `json:"orientation"` // portrait, landscape
 	TemplateName  string               `json:"template_name"`
 	ScenicArea    string               `json:"scenic_area"`
 	Blocks        []PrintDocumentBlock `json:"blocks"`
