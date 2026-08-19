@@ -197,6 +197,39 @@
               </ul>
             </div>
           </template>
+          <template v-else-if="isHotelPreview">
+            <div class="hotel-preview-heading">
+              <div>
+                <strong>{{ hotelOperationLabel }}</strong>
+                <span>{{ hotelPreviewScope }}</span>
+              </div>
+              <el-tag size="small" type="info" effect="plain">酒店业务</el-tag>
+            </div>
+            <div v-if="hotelPreviewLines.length" class="hotel-preview-list">
+              <article v-for="line in hotelPreviewLines" :key="line.stay_date" class="hotel-preview-row">
+                <div class="diff-heading">
+                  <strong>{{ line.stay_date }}</strong>
+                  <span>{{ hotelLineChangeText(line) }}</span>
+                </div>
+                <div class="hotel-preview-values">
+                  <div><small>变更前</small><strong>{{ hotelLineBeforeText(line) }}</strong></div>
+                  <el-icon><Right /></el-icon>
+                  <div><small>变更后</small><strong>{{ hotelLineAfterText(line) }}</strong></div>
+                </div>
+              </article>
+            </div>
+            <div v-else-if="isHotelReservationStatusPreview" class="hotel-status-diff">
+              <div><span>住宿预订号</span><strong>{{ preview.reservation_no || '-' }}</strong></div>
+              <div><span>酒店 / 房型</span><strong>{{ preview.hotel_name || '-' }} · {{ preview.room_type_name || '-' }}</strong></div>
+              <div><span>入住日期</span><strong>{{ preview.check_in_date || '-' }} 至 {{ preview.check_out_date || '-' }}</strong></div>
+              <div><span>当前状态</span><strong>{{ hotelStatusLabel(preview.before_status) }}</strong></div>
+              <div><span>登记为</span><strong>{{ hotelStatusLabel(preview.after_status) }}</strong></div>
+              <div v-if="preview.reason" class="wide"><span>原因</span><strong>{{ preview.reason }}</strong></div>
+            </div>
+            <ul v-if="preview.safety?.length" class="assumption-list">
+              <li v-for="item in preview.safety" :key="item">{{ item }}</li>
+            </ul>
+          </template>
           <template v-else>
             <div class="operation-summary">
               <div><span>规范化操作</span><strong>{{ preview.operations?.length || 0 }} 项</strong></div>
@@ -334,6 +367,45 @@ const queryResults = computed(() => {
 const isCompoundPreview = computed(() => preview.value?.operation_type === 'compound_preview')
 const isProductUpdatePreview = computed(() => preview.value?.operation_type === 'ticket_product_update')
 const isProductBatchUpdatePreview = computed(() => preview.value?.operation_type === 'ticket_product_batch_update')
+const hotelOperationTypes = new Set(['hotel_inventory_change', 'hotel_rate_calendar_change', 'hotel_product_calendar_change', 'hotel_reservation_status_change'])
+const isHotelPreview = computed(() => hotelOperationTypes.has(String(preview.value?.operation_type || '')))
+const isHotelReservationStatusPreview = computed(() => preview.value?.operation_type === 'hotel_reservation_status_change')
+const hotelOperationLabel = computed(() => {
+  switch (preview.value?.operation_type) {
+    case 'hotel_inventory_change': return '设置酒店房量'
+    case 'hotel_rate_calendar_change': return '设置房型价格日历'
+    case 'hotel_product_calendar_change': return '设置酒店产品价格日历'
+    case 'hotel_reservation_status_change': return '登记住宿履约状态'
+    default: return '酒店操作预览'
+  }
+})
+const hotelPreviewScope = computed(() => {
+  const current = preview.value || {}
+  if (current.operation_type === 'hotel_inventory_change') return `${current.hotel_name || '-'} · ${current.room_type_name || '-'}`
+  if (current.operation_type === 'hotel_rate_calendar_change') return `${current.hotel_name || '-'} · ${current.scope_name || '-'}（价格计划）`
+  if (current.operation_type === 'hotel_product_calendar_change') return `${current.hotel_name || '-'} · ${current.scope_name || '-'}（日历房产品）`
+  return `${current.hotel_name || '-'} · ${current.room_type_name || '-'}`
+})
+const hotelPreviewLines = computed(() => Array.isArray(preview.value?.lines) ? preview.value.lines : [])
+const hotelMoney = (value: any) => typeof value === 'number' ? `¥${value.toFixed(2)}` : '-'
+const hotelStatusLabel = (value: any) => ({ reserved: '已预约', confirmed: '已确认', checked_in: '已入住', checked_out: '已离店', no_show: '未到店', cancelled: '已取消', refunded: '已退款' } as Record<string, string>)[String(value || '')] || String(value || '-')
+const hotelLineBeforeText = (line: any) => {
+  const before = line?.before || {}
+  if (preview.value?.operation_type === 'hotel_inventory_change') return `房量 ${before.capacity ?? 0} · 可售 ${before.available ?? 0} · ${before.closed ? '已关房' : '营业'}`
+  return `${hotelMoney(before.retail_price)} / 结算 ${hotelMoney(before.settlement_price)} · ${before.source === 'override' ? '日期覆盖' : '基础价'}`
+}
+const hotelLineAfterText = (line: any) => {
+  const after = line?.after || {}
+  if (preview.value?.operation_type === 'hotel_inventory_change') return `房量 ${after.capacity ?? 0} · 可售 ${after.available ?? 0} · ${after.closed ? '已关房' : '营业'}`
+  return `${hotelMoney(after.retail_price)} / 结算 ${hotelMoney(after.settlement_price)} · ${after.source === 'override' ? '日期覆盖' : '基础价'}`
+}
+const hotelLineChangeText = (line: any) => {
+  if (preview.value?.operation_type === 'hotel_inventory_change') {
+    const changes = Object.entries(line?.change || {}).filter(([, changed]) => changed).map(([key]) => key === 'capacity' ? '房量' : '关房')
+    return changes.join('、') || '无变化'
+  }
+  return '入住日价格'
+}
 const isAnyProductUpdatePreview = computed(() => isProductUpdatePreview.value || isProductBatchUpdatePreview.value)
 const productPreview = computed(() => {
   if (preview.value?.operation_type === 'ticket_product_create') return preview.value
@@ -824,6 +896,20 @@ const startNewTask = async () => {
 .product-detail-grid span { color: #929baa; font-size: 10px; }
 .product-detail-grid strong { margin-top: 3px; overflow-wrap: anywhere; color: #344054; font-size: 11px; line-height: 16px; }
 .rule-preview { padding: 10px; border: 1px solid #e2e7ee; border-radius: 5px; }
+.hotel-preview-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; padding: 10px 11px; border: 1px solid #dbe7f3; border-radius: 7px; background: #f7fbff; }
+.hotel-preview-heading > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.hotel-preview-heading strong { color: #1d4ed8; font-size: 13px; }
+.hotel-preview-heading span { overflow-wrap: anywhere; color: #667085; font-size: 11px; }
+.hotel-preview-list { display: flex; flex-direction: column; gap: 8px; }
+.hotel-preview-row { padding: 10px; border: 1px solid #e2e7ee; border-radius: 7px; background: #fff; }
+.hotel-preview-values { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 8px; }
+.hotel-preview-values > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.hotel-preview-values small, .hotel-status-diff span { color: #667085; font-size: 10px; }
+.hotel-preview-values strong { overflow-wrap: anywhere; color: #344054; font-size: 11px; line-height: 16px; }
+.hotel-status-diff { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px 12px; padding: 11px; border: 1px solid #e2e7ee; border-radius: 7px; }
+.hotel-status-diff > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.hotel-status-diff strong { overflow-wrap: anywhere; color: #344054; font-size: 12px; line-height: 17px; }
+.hotel-status-diff .wide { grid-column: 1 / -1; }
 .product-update-diff { margin-top: 10px; padding: 10px; border: 1px solid #e2e7ee; border-radius: 5px; }
 .product-batch-summary { margin-bottom: 10px; }
 .compound-step-list { display: flex; flex-direction: column; gap: 8px; }
@@ -865,5 +951,5 @@ const startNewTask = async () => {
 .diff-values .el-icon { color: #929baa; }
 .line-error { margin: 8px 0 0; color: #d94b54; font-size: 11px; }
 .preview-actions { justify-content: flex-end; }
-@media (max-width: 560px) { .ai-assistant { right: 14px; bottom: 14px; } .assistant-panel { width: calc(100vw - 28px); max-height: calc(100vh - 28px); } .assistant-body { max-height: calc(100vh - 89px); padding: 12px; } .assistant-actions { align-items: flex-end; } .diff-values, .product-update-values { grid-template-columns: minmax(0, 1fr); } .diff-values > .el-icon, .product-update-values > .el-icon { justify-self: center; transform: rotate(90deg); } .query-row { grid-template-columns: minmax(0, 1fr); gap: 2px; } .query-row > span { margin-top: 4px; } .query-result-card-heading { display: block; } .query-result-card-heading span { text-align: left; } }
+@media (max-width: 560px) { .ai-assistant { right: 14px; bottom: 14px; } .assistant-panel { width: calc(100vw - 28px); max-height: calc(100vh - 28px); } .assistant-body { max-height: calc(100vh - 89px); padding: 12px; } .assistant-actions { align-items: flex-end; } .diff-values, .product-update-values, .hotel-preview-values { grid-template-columns: minmax(0, 1fr); } .diff-values > .el-icon, .product-update-values > .el-icon, .hotel-preview-values > .el-icon { justify-self: center; transform: rotate(90deg); } .hotel-status-diff { grid-template-columns: minmax(0, 1fr); } .hotel-status-diff .wide { grid-column: auto; } .query-row { grid-template-columns: minmax(0, 1fr); gap: 2px; } .query-row > span { margin-top: 4px; } .query-result-card-heading { display: block; } .query-result-card-heading span { text-align: left; } }
 </style>

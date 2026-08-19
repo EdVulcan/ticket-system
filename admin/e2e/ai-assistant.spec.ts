@@ -159,6 +159,65 @@ test('AI 助手预览明确区分窗口票类型和未上架状态', async ({ pa
   await expect(assistant.getByRole('button', { name: '确认执行' })).toBeEnabled()
 })
 
+test('AI 助手酒店房量预览使用酒店专用展示，不误显示为票规', async ({ page }) => {
+  await page.addInitScript(user => {
+    localStorage.setItem('token', 'tenant-token')
+    localStorage.setItem('user', JSON.stringify(user))
+  }, tenantUser)
+  await page.route('**/api/v1/**', async route => {
+    const url = route.request().url()
+    if (url.endsWith('/tenants/me')) {
+      await json(route, {
+        id: tenantUser.tenant_id,
+        name: tenantUser.tenant_name,
+        system_code: tenantUser.system_code,
+        status: 'active',
+        permissions: tenantUser.permissions,
+        capabilities: tenantUser.capabilities,
+        supplier_business_types: [...tenantUser.supplier_business_types, { business_type: 'hotel', status: 'active' }],
+      })
+      return
+    }
+    if (url.endsWith('/agent/tasks/availability')) {
+      await json(route, { enabled: true, provider: 'deepseek', requests_remaining: 100 })
+      return
+    }
+    if (url.endsWith('/agent/tasks') && route.request().method() === 'POST') {
+      await json(route, {
+        task_id: 44,
+        operation_type: 'hotel_inventory_change',
+        state: 'awaiting_confirmation',
+        input_text: '为遇见·过山瑶酒店的标准大床房在 2026-08-20 到 2026-08-22 设置房量 5',
+        can_confirm: true,
+        preview: {
+          operation_type: 'hotel_inventory_change',
+          hotel_name: '遇见·过山瑶酒店',
+          room_type_name: '标准大床房',
+          lines: [
+            { stay_date: '2026-08-20', before: { capacity: 0, available: 0, closed: false }, after: { capacity: 5, available: 5, closed: false }, change: { capacity: true, closed: false } },
+          ],
+          safety: ['确认前不会写入房量。'],
+        },
+      })
+      return
+    }
+    await json(route, {})
+  })
+
+  await page.goto('/')
+  const assistant = page.getByTestId('ai-assistant')
+  await assistant.getByRole('button', { name: '打开 AI 助手' }).click()
+  await assistant.getByLabel('操作描述').fill('为遇见·过山瑶酒店的标准大床房在 2026-08-20 到 2026-08-22 设置房量 5')
+  await assistant.getByRole('button', { name: '生成计划' }).click()
+
+  await expect(assistant.getByText('设置酒店房量', { exact: true })).toBeVisible()
+  await expect(assistant.getByText('酒店业务', { exact: true })).toBeVisible()
+  await expect(assistant.getByText('房量 0 · 可售 0 · 营业', { exact: true })).toBeVisible()
+  await expect(assistant.getByText('房量 5 · 可售 5 · 营业', { exact: true })).toBeVisible()
+  await expect(assistant.getByText('影响票种', { exact: true })).toHaveCount(0)
+  await expect(assistant.getByRole('button', { name: '确认执行' })).toBeEnabled()
+})
+
 test('AI 助手 provider 失败后可以放弃当前会话并新建任务', async ({ page }) => {
   let submitCount = 0
   await page.addInitScript(user => {
