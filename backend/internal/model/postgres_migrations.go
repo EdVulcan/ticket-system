@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 104
+const CurrentPostgresSchemaVersion = 105
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -307,6 +307,17 @@ func runPostgresMigrations(db *gorm.DB) error {
 			return fmt.Errorf("add print template orientation: %w", err)
 		}
 	}
+	if previousSchemaVersion < 105 {
+		if err := db.Exec(`
+			ALTER TABLE orders ADD COLUMN IF NOT EXISTS client_request_id varchar(100) NOT NULL DEFAULT '';
+			ALTER TABLE orders ADD COLUMN IF NOT EXISTS client_request_hash varchar(64) NOT NULL DEFAULT '';
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_window_client_request
+				ON orders(tenant_id, channel, client_request_id)
+				WHERE channel = 'window' AND client_request_id <> '' AND deleted_at IS NULL;
+		`).Error; err != nil {
+			return fmt.Errorf("add window order client request idempotency: %w", err)
+		}
+	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
 		if err := db.Exec(`
 			INSERT INTO supplier_business_types
@@ -455,7 +466,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "print template orientation and immutable print snapshots",
+		Name:      "window order idempotency and print template orientation",
 		AppliedAt: time.Now(),
 	}).Error
 }

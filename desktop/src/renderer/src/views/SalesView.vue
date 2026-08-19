@@ -89,7 +89,7 @@
             <button @click="showPolicy = true"><el-icon><Reading /></el-icon><span>政策</span></button>
             <button @click="showCalc = true"><el-icon><Grid /></el-icon><span>计算器</span></button>
             <button @click="openHolds"><el-icon><Notebook /></el-icon><span>挂单列表</span></button>
-            <button @click="handleReprint"><el-icon><Printer /></el-icon><span>失败重打</span></button>
+            <button @click="openPrintTaskCenter"><el-icon><Printer /></el-icon><span>打印任务</span></button>
             <button @click="showNote = true"><el-icon><EditPen /></el-icon><span>交班便签</span></button>
           </div>
         </div>
@@ -126,10 +126,20 @@
           </div>
 
           <div class="checkout-panel">
+            <div v-if="paymentComplete || pendingPrintOrderNo" class="sale-lock-banner">
+              <div>
+                <strong>已收款订单待处理</strong>
+                <span>{{ currentOrder?.order_no || pendingPrintOrderNo }} · 请先完成打印任务，避免重复收款</span>
+              </div>
+              <div class="sale-lock-actions">
+                <el-button size="small" @click="openOrderDetail(currentOrder?.order_no || pendingPrintOrderNo)">查看订单</el-button>
+                <el-button size="small" type="primary" @click="openPrintTaskCenter">处理打印</el-button>
+              </div>
+            </div>
             <div class="total-line"><span>应收 · 共 {{ cartItemCount }} 张</span><strong>¥{{ totalAmount.toFixed(2) }}</strong></div>
             <div class="checkout-actions">
               <el-button size="large" :disabled="cart.length === 0" @click="handleHold"><el-icon><Notebook /></el-icon>挂单</el-button>
-              <el-button type="success" size="large" :disabled="cart.length === 0 || !shiftState.isOpen || !posDeviceId" @click="handleCheckout">
+              <el-button type="success" size="large" :disabled="cart.length === 0 || !shiftState.isOpen || !posDeviceId || paymentComplete || !!pendingPrintOrderNo" @click="handleCheckout">
                 <el-icon><Wallet /></el-icon>收款
               </el-button>
             </div>
@@ -162,6 +172,7 @@
             <el-table-column label="金额" width="110"><template #default="{ row }"><strong class="money">¥{{ row.total_amount }}</strong></template></el-table-column>
             <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="orderStatusTag(row.status)">{{ orderStatusLabel(row.status) }}</el-tag></template></el-table-column>
             <el-table-column label="下单时间" width="180"><template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template></el-table-column>
+            <el-table-column label="操作" width="100" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openOrderDetail(row.order_no)">详情</el-button></template></el-table-column>
           </el-table>
         </div>
         <el-pagination
@@ -295,6 +306,84 @@
         <template #footer><el-button @click="showHolds = false">关闭</el-button></template>
       </el-dialog>
 
+      <el-dialog v-model="showPrintTasks" title="打印任务中心" width="900px" align-center @open="loadPrintJobs">
+        <el-alert
+          v-if="printJobs.some(job => job.status === 'printing')"
+          class="mb-3"
+          type="warning"
+          :closable="false"
+          title="存在打印中任务，请先确认设备是否已经出纸；系统不会自动重打，避免重复出票。"
+        />
+        <div class="print-task-toolbar">
+          <span>当前终端的排队、打印中、失败和已完成任务</span>
+          <el-button :icon="Refresh" circle aria-label="刷新打印任务" :loading="printJobsLoading" @click="loadPrintJobs" />
+        </div>
+        <el-table :data="printJobs" stripe max-height="480" v-loading="printJobsLoading" row-key="id">
+          <el-table-column prop="id" label="任务" width="80" />
+          <el-table-column prop="order_no" label="订单号" min-width="180" />
+          <el-table-column prop="ticket_code" label="票码" min-width="180"><template #default="{ row }">{{ row.ticket_code || '整单快照' }}</template></el-table-column>
+          <el-table-column label="状态" width="120"><template #default="{ row }"><el-tag :type="printStatusTag(row.status)">{{ printStatusLabel(row.status) }}</el-tag></template></el-table-column>
+          <el-table-column label="失败原因" min-width="210" show-overflow-tooltip><template #default="{ row }">{{ row.last_error || (row.status === 'printing' ? '请确认设备输出' : '—') }}</template></el-table-column>
+          <el-table-column label="操作" width="130" fixed="right">
+            <template #default="{ row }">
+              <el-button v-if="row.status === 'queued' || row.status === 'failed'" link type="primary" :loading="printJobPrinting === row.id" @click="retryPrintJob(row)">逐项重打</el-button>
+              <span v-else-if="row.status === 'printing'" class="muted-action">待人工确认</span>
+              <span v-else class="muted-action">—</span>
+            </template>
+          </el-table-column>
+        </el-table>
+        <template #footer><el-button @click="showPrintTasks = false">关闭</el-button></template>
+      </el-dialog>
+
+      <el-dialog v-model="showOrderDetail" title="窗口订单详情" width="960px" align-center>
+        <div v-loading="orderDetailLoading" class="order-detail-dialog">
+          <template v-if="selectedOrderDetail?.order">
+            <div class="order-detail-summary">
+              <div><span class="eyebrow">订单号</span><strong>{{ selectedOrderDetail.order.order_no }}</strong></div>
+              <div><span class="eyebrow">状态</span><el-tag :type="orderStatusTag(selectedOrderDetail.order.status)">{{ orderStatusLabel(selectedOrderDetail.order.status) }}</el-tag></div>
+              <div><span class="eyebrow">应收金额</span><strong class="money">¥{{ Number(selectedOrderDetail.order.total_amount || 0).toFixed(2) }}</strong></div>
+              <div><span class="eyebrow">下单时间</span><span>{{ new Date(selectedOrderDetail.order.created_at).toLocaleString() }}</span></div>
+            </div>
+            <el-divider content-position="left">票券</el-divider>
+            <el-table :data="selectedOrderDetail.order.items || []" stripe size="small">
+              <el-table-column prop="product_name" label="票种" min-width="180" />
+              <el-table-column prop="quantity" label="数量" width="80" />
+              <el-table-column label="票码与状态" min-width="360">
+                <template #default="{ row }">
+                  <div v-if="row.tickets?.length" class="ticket-detail-list"><span v-for="ticket in row.tickets" :key="ticket.id"><code>{{ ticket.ticket_code }}</code><el-tag size="small" :type="ticket.status === 'refunded' ? 'danger' : ticket.status === 'used' ? 'success' : 'info'">{{ ticketStatusLabel(ticket.status) }}</el-tag></span></div>
+                  <span v-else class="muted-action">暂无出票</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-divider content-position="left">支付流水</el-divider>
+            <el-table :data="selectedOrderDetail.payments || []" stripe size="small">
+              <el-table-column prop="payment_no" label="流水号" min-width="180" />
+              <el-table-column prop="method" label="方式" width="100" />
+              <el-table-column label="金额" width="110"><template #default="{ row }">¥{{ Number(row.amount_cents || Math.round(Number(row.amount || 0) * 100)) / 100 }}</template></el-table-column>
+              <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="paymentStatusTag(row.status)">{{ paymentStatusLabel(row.status) }}</el-tag></template></el-table-column>
+              <el-table-column prop="error_message" label="说明" min-width="180" />
+            </el-table>
+            <el-divider content-position="left">打印任务</el-divider>
+            <el-table :data="selectedOrderDetail.print_jobs || []" stripe size="small">
+              <el-table-column prop="id" label="任务" width="80" />
+              <el-table-column prop="ticket_code" label="票码" min-width="180" />
+              <el-table-column label="状态" width="120"><template #default="{ row }"><el-tag :type="printStatusTag(row.status)">{{ printStatusLabel(row.status) }}</el-tag></template></el-table-column>
+              <el-table-column prop="last_error" label="最后说明" min-width="220" />
+            </el-table>
+            <el-divider content-position="left">售后记录</el-divider>
+            <el-table :data="selectedOrderDetail.after_sales || []" stripe size="small">
+              <el-table-column prop="request_no" label="申请号" min-width="170" />
+              <el-table-column label="类型" width="100"><template #default="{ row }">{{ afterSaleTypeLabel(row.type) }}</template></el-table-column>
+              <el-table-column label="状态" width="110"><template #default="{ row }"><el-tag :type="afterSaleStatusTag(row.status)">{{ afterSaleStatusLabel(row.status) }}</el-tag></template></el-table-column>
+              <el-table-column prop="reason" label="原因" min-width="220" />
+            </el-table>
+            <el-alert class="mt-3" type="info" :closable="false" title="售后申请、审核和资金处理仍由授权后台岗位执行；窗口售票员不能绕过审批直接退款或作废。" />
+          </template>
+          <el-empty v-else description="暂无订单详情" />
+        </div>
+        <template #footer><el-button @click="showOrderDetail = false">关闭</el-button></template>
+      </el-dialog>
+
       <el-dialog v-model="showPolicy" title="票务政策" width="600px" align-center>
         <PolicyModal />
       </el-dialog>
@@ -378,9 +467,19 @@ const noteContent = ref('')
 const showPayment = ref(false)
 const paymentLocked = ref(false)
 const currentOrder = ref<any>(null)
+const paymentComplete = ref(false)
+const orderClientRequestID = ref('')
+const pendingPrintOrderNo = ref('')
 const showHolds = ref(false)
 const holds = ref<any[]>([])
 const holdsLoading = ref(false)
+const showPrintTasks = ref(false)
+const printJobs = ref<any[]>([])
+const printJobsLoading = ref(false)
+const printJobPrinting = ref<number | null>(null)
+const showOrderDetail = ref(false)
+const selectedOrderDetail = ref<any>(null)
+const orderDetailLoading = ref(false)
 const updateChecking = ref(false)
 const desktopVersion = ref('')
 
@@ -629,28 +728,6 @@ const saveNote = () => {
   ElMessage.success('便签已保存')
 }
 
-const handleReprint = async () => {
-  if (!posDeviceId.value) {
-    ElMessage.warning('请先配置当前售票终端')
-    return
-  }
-  try {
-    const { data } = await axios.get('/operations/print-jobs', { params: { device_id: posDeviceId.value, status: 'failed' } })
-    const job = data.data?.[0]
-    if (!job) {
-      ElMessage.info('当前没有等待重打的失败任务')
-      return
-    }
-    await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printing' })
-    const result = await printTicket(serverPrintPayload(job))
-    if (!result?.success) throw new Error(result?.message || '打印失败')
-    await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printed' })
-    ElMessage.success('重打完成')
-  } catch (error: any) {
-    ElMessage.error(error.response?.data?.error || error.message || '重打失败')
-  }
-}
-
 const serverPrintPayload = (job: any) => {
   let document: unknown = job?.print_document
   if (typeof document === 'string') {
@@ -658,6 +735,99 @@ const serverPrintPayload = (job: any) => {
   }
   if (!document || !job?.content_hash) throw new Error('服务端打印快照缺失，已拒绝调用打印机')
   return { document, content_hash: job.content_hash, template_revision_id: job.template_revision_id, paper_width_mm: job.paper_width_mm, orientation: job.orientation || (document as any).orientation || 'portrait', copy_count: job.copy_count || 1 }
+}
+
+const openPrintTaskCenter = async () => {
+  if (!posDeviceId.value) {
+    ElMessage.warning('请先配置当前售票终端')
+    return
+  }
+  showPrintTasks.value = true
+  await loadPrintJobs()
+}
+
+const loadPrintJobs = async () => {
+  if (!posDeviceId.value) return
+  printJobsLoading.value = true
+  try {
+    const { data } = await axios.get('/operations/print-jobs', { params: { device_id: posDeviceId.value } })
+    printJobs.value = Array.isArray(data.data) ? data.data : []
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '获取打印任务失败')
+  } finally {
+    printJobsLoading.value = false
+  }
+}
+
+const retryPrintJob = async (job: any) => {
+  if (!posDeviceId.value || !job || !['queued', 'failed'].includes(job.status)) return
+  try {
+    await ElMessageBox.confirm(
+      `确认只重打任务 ${job.id}${job.ticket_code ? `（${job.ticket_code}）` : ''}？请先确认这张票没有已经出纸。`,
+      '逐项重打确认',
+      { type: 'warning', confirmButtonText: '确认重打', cancelButtonText: '取消' },
+    )
+    printJobPrinting.value = job.id
+    await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printing' })
+    let physicalPrinted = false
+    try {
+      const result = await printTicket(serverPrintPayload(job))
+      if (!result?.success) throw new Error(result?.message || '打印失败')
+      physicalPrinted = true
+      await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'printed' })
+      ElMessage.success(`任务 ${job.id} 已打印`)
+    } catch (error: any) {
+      if (physicalPrinted) {
+        await loadPrintJobs()
+        ElMessage.warning('打印机已报告出纸，但任务状态同步失败；已保留为打印中，请人工确认后再处理。')
+        return
+      }
+      await axios.post(`/operations/print-jobs/${job.id}/status`, { device_id: posDeviceId.value, status: 'failed', error: error.message || '打印失败' }).catch(() => undefined)
+      throw error
+    }
+    await loadPrintJobs()
+    await clearPendingPrintIfComplete()
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error.response?.data?.error || error.message || '重打失败')
+    await loadPrintJobs()
+  } finally {
+    printJobPrinting.value = null
+  }
+}
+
+const clearPendingPrintIfComplete = async () => {
+  if (!pendingPrintOrderNo.value) return
+  try {
+    const { data } = await axios.get(`/orders/${encodeURIComponent(pendingPrintOrderNo.value)}`)
+    const jobs = data.print_jobs || []
+    if (jobs.length > 0 && jobs.every((job: any) => job.status === 'printed')) {
+      pendingPrintOrderNo.value = ''
+      localStorage.removeItem('pos_pending_print_order')
+      paymentComplete.value = false
+      currentOrder.value = null
+      orderClientRequestID.value = ''
+      cart.value = []
+      ElMessage.success('打印任务已全部完成，可以开始下一笔交易')
+    }
+  } catch {
+    // Keep the lock when the reconciliation query is unavailable.
+  }
+}
+
+const openOrderDetail = async (orderNo: string) => {
+  if (!String(orderNo || '').trim()) return
+  showOrderDetail.value = true
+  selectedOrderDetail.value = null
+  orderDetailLoading.value = true
+  try {
+    const { data } = await axios.get(`/orders/${encodeURIComponent(orderNo)}`)
+    selectedOrderDetail.value = data
+    if (pendingPrintOrderNo.value === orderNo && data.order) currentOrder.value = data.order
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '获取订单详情失败')
+  } finally {
+    orderDetailLoading.value = false
+  }
 }
 
 const handleHold = async () => {
@@ -759,6 +929,14 @@ const orderStatusLabel = (status: string) => {
   return labels[status] || '未知状态'
 }
 const orderStatusTag = (status: string) => status === 'paid' || status === 'completed' ? 'success' : status === 'partial_refunded' ? 'warning' : status === 'refunded' || status === 'cancelled' ? 'danger' : 'info'
+const ticketStatusLabel = (status: string) => ({ unused: '未使用', active: '有效', used: '已核销', refunded: '已退款', cancelled: '已取消' } as Record<string, string>)[status] || status || '未知'
+const paymentStatusLabel = (status: string) => ({ pending: '待确认', paid: '已支付', partial_refunded: '部分退款', refunded: '已退款', failed: '失败' } as Record<string, string>)[status] || status || '未知'
+const paymentStatusTag = (status: string) => status === 'paid' ? 'success' : status === 'failed' ? 'danger' : status === 'refunded' || status === 'partial_refunded' ? 'warning' : 'info'
+const printStatusLabel = (status: string) => ({ queued: '排队中', printing: '打印中·待确认', printed: '已打印', failed: '失败待处理' } as Record<string, string>)[status] || status || '未知'
+const printStatusTag = (status: string) => status === 'printed' ? 'success' : status === 'failed' ? 'danger' : status === 'printing' ? 'warning' : 'info'
+const afterSaleTypeLabel = (type: string) => ({ refund: '退款', reschedule: '改期', exchange: '换票', void: '作废', reissue: '补打' } as Record<string, string>)[type] || type || '未知'
+const afterSaleStatusLabel = (status: string) => ({ pending: '待审核', approved: '已批准', processing: '处理中', completed: '已完成', rejected: '已拒绝', failed: '失败' } as Record<string, string>)[status] || status || '未知'
+const afterSaleStatusTag = (status: string) => status === 'completed' ? 'success' : status === 'failed' ? 'danger' : status === 'rejected' ? 'info' : 'warning'
 
 const filteredProducts = computed(() => {
   let res = products.value
@@ -851,12 +1029,29 @@ const handleCheckout = async () => {
     ElMessage.warning('请先在当前售票终端上开班')
     return
   }
+  if (paymentComplete.value || pendingPrintOrderNo.value) {
+    ElMessage.warning('当前已有已收款订单待完成打印，请先处理打印任务')
+    return
+  }
+  if (currentOrder.value) {
+    showPayment.value = true
+    return
+  }
   try {
+    if (!orderClientRequestID.value) orderClientRequestID.value = globalThis.crypto?.randomUUID?.() || `window-${Date.now()}-${Math.random().toString(16).slice(2)}`
     const orderData = {
-      items: cart.value.map(orderLinePayload)
+      items: cart.value.map(orderLinePayload),
+      client_request_id: orderClientRequestID.value,
     }
     const res = await axios.post('/orders', orderData)
     currentOrder.value = res.data
+    if (['paid', 'completed', 'partial_refunded'].includes(String(res.data?.status || ''))) {
+      paymentComplete.value = true
+      pendingPrintOrderNo.value = res.data.order_no
+      localStorage.setItem('pos_pending_print_order', res.data.order_no)
+      await handlePaymentSuccess()
+      return
+    }
     showPayment.value = true
   } catch (e: any) {
     ElMessage.error(e.response?.data?.error || '下单失败')
@@ -866,8 +1061,15 @@ const handleCheckout = async () => {
 const handlePaymentSuccess = async () => {
     paymentLocked.value = false
     showPayment.value = false
-    if (!currentOrder.value || !posDeviceId.value || !shiftState.value.shiftId) {
-      ElMessage.warning('支付已成功，但未能创建打印任务，请到订单页处理。')
+    paymentComplete.value = true
+    if (!currentOrder.value) {
+      ElMessage.warning('支付已成功，但未能恢复订单，请到订单页核对。')
+      return
+    }
+    pendingPrintOrderNo.value = currentOrder.value.order_no
+    localStorage.setItem('pos_pending_print_order', currentOrder.value.order_no)
+    if (!posDeviceId.value || !shiftState.value.shiftId) {
+      ElMessage.warning('支付已成功，但未能创建打印任务，请到打印任务中心处理。')
       return
     }
     const ticketCodes = [...new Set((currentOrder.value.items || [])
@@ -880,7 +1082,7 @@ const handlePaymentSuccess = async () => {
     // fallback keeps compatibility with older order responses that did not
     // include ticket codes; the server still rejects mixed-template orders.
     const codesToPrint = ticketCodes.length > 0 ? ticketCodes : ['']
-    const jobs: Array<{ job: any, status: 'queued' | 'printing' | 'printed' }> = []
+    const jobs: Array<{ job: any, status: 'queued' | 'printing' | 'printed', physicalPrinted: boolean }> = []
     try {
       for (const ticketCode of codesToPrint) {
         const queued = await axios.post('/operations/print-jobs', {
@@ -889,28 +1091,38 @@ const handlePaymentSuccess = async () => {
           order_no: currentOrder.value.order_no,
           ...(ticketCode ? { ticket_code: ticketCode } : {}),
         })
-        jobs.push({ job: queued.data, status: 'queued' })
+        jobs.push({ job: queued.data, status: 'queued', physicalPrinted: false })
       }
       for (const entry of jobs) {
         entry.status = 'printing'
         await axios.post(`/operations/print-jobs/${entry.job.id}/status`, { device_id: posDeviceId.value, status: 'printing' })
         const result = await printTicket(serverPrintPayload(entry.job))
         if (!result?.success) throw new Error(result?.message || '打印失败')
-        await axios.post(`/operations/print-jobs/${entry.job.id}/status`, { device_id: posDeviceId.value, status: 'printed' })
+        // The device may already have produced paper when the follow-up
+        // status request is lost. Do not turn this into a retryable failure.
+        entry.physicalPrinted = true
         entry.status = 'printed'
+        await axios.post(`/operations/print-jobs/${entry.job.id}/status`, { device_id: posDeviceId.value, status: 'printed' })
       }
       cart.value = []
       currentOrder.value = null
+      paymentComplete.value = false
+      pendingPrintOrderNo.value = ''
+      orderClientRequestID.value = ''
+      localStorage.removeItem('pos_pending_print_order')
       ElMessage.success('支付成功，打印完成')
     } catch (error: any) {
       for (const entry of jobs) {
-        if (entry.status === 'printing') {
+        if (entry.status === 'printing' && !entry.physicalPrinted) {
           await axios.post(`/operations/print-jobs/${entry.job.id}/status`, { device_id: posDeviceId.value, status: 'failed', error: error.message || '打印失败' }).catch(() => undefined)
         }
       }
-      ElMessage.error(jobs.some(entry => entry.status === 'printed')
-        ? '支付已成功，部分票据已打印，剩余打印任务已保留，请逐张重打。'
-        : '支付已成功，但打印失败。订单和打印任务已保留，可稍后重打。')
+      const hasUnconfirmedPhysicalOutput = jobs.some(entry => entry.physicalPrinted && entry.status === 'printed')
+      ElMessage.error(hasUnconfirmedPhysicalOutput
+        ? '支付已成功，至少一张票已出纸但打印状态同步失败，任务已保留待人工确认，请勿直接重打。'
+        : jobs.some(entry => entry.status === 'printed')
+          ? '支付已成功，部分票据已打印，剩余打印任务已保留，请逐张重打。'
+          : '支付已成功，但打印失败。订单和打印任务已保留，可稍后重打。')
     }
 }
 
@@ -985,6 +1197,26 @@ const searchOrders = () => {
   fetchOrders()
 }
 
+const restorePendingPrintOrder = async () => {
+  const orderNo = String(localStorage.getItem('pos_pending_print_order') || '').trim()
+  if (!orderNo) return
+  pendingPrintOrderNo.value = orderNo
+  paymentComplete.value = true
+  try {
+    const { data } = await axios.get(`/orders/${encodeURIComponent(orderNo)}`)
+    if (!data?.order || !['paid', 'completed', 'partial_refunded'].includes(String(data.order.status || ''))) {
+      pendingPrintOrderNo.value = ''
+      paymentComplete.value = false
+      localStorage.removeItem('pos_pending_print_order')
+      return
+    }
+    currentOrder.value = data.order
+    await clearPendingPrintIfComplete()
+  } catch {
+    ElMessage.warning('检测到一笔已收款但打印状态待确认的订单，请在打印任务中心核对')
+  }
+}
+
 // --- Lifecycle ---
 let timer: any
 let updateTimer: any
@@ -1010,6 +1242,7 @@ onMounted(async () => {
   if (canSell.value) {
     await Promise.all([fetchProducts(), fetchPOSTerminals()])
     await restoreOpenShift()
+    await restorePendingPrintOrder()
   }
   await fetchCheckPoints()
   timer = setInterval(updateTime, 1000)
@@ -1031,6 +1264,10 @@ watch(currentView, (val) => {
 const handlePaymentCancelled = () => {
   paymentLocked.value = false
   showPayment.value = false
+  paymentComplete.value = false
+  pendingPrintOrderNo.value = ''
+  orderClientRequestID.value = ''
+  localStorage.removeItem('pos_pending_print_order')
   cart.value = []
   currentOrder.value = null
 }
@@ -1164,6 +1401,11 @@ onUnmounted(() => {
 .quantity-stepper button:hover { background: #dfe5dd; }
 .quantity-stepper span { width: 34px; text-align: center; color: var(--ink); font-size: 14px; font-weight: 700; }
 .checkout-panel { flex: 0 0 auto; padding: 15px 18px 18px; border-top: 1px solid var(--line); background: #fff; box-shadow: 0 -6px 18px rgba(31, 43, 35, .035); }
+.sale-lock-banner { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 13px; padding: 10px 11px; border: 1px solid #e3c37a; border-radius: 7px; background: #fff8e8; color: #73500f; }
+.sale-lock-banner > div:first-child { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.sale-lock-banner strong { font-size: 13px; }
+.sale-lock-banner span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.sale-lock-actions { display: flex; flex: 0 0 auto; gap: 5px; }
 .total-line { justify-content: space-between; margin-bottom: 14px; color: var(--muted); }
 .total-line strong { color: var(--amber); font-size: 31px; line-height: 36px; font-variant-numeric: tabular-nums; }
 .checkout-actions { gap: 10px; }
@@ -1183,6 +1425,15 @@ onUnmounted(() => {
 .order-pagination { justify-content: flex-end; padding-top: 12px; }
 .order-item-text { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .money { color: var(--amber); font-variant-numeric: tabular-nums; }
+.print-task-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; color: var(--muted); font-size: 13px; }
+.muted-action { color: #8b948c; font-size: 12px; }
+.order-detail-dialog { min-height: 260px; }
+.order-detail-summary { display: grid; grid-template-columns: 1.5fr .8fr .8fr 1.2fr; gap: 10px; padding: 13px; border: 1px solid #dce3db; border-radius: 7px; background: #f7faf7; }
+.order-detail-summary > div { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.order-detail-summary > div > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ticket-detail-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.ticket-detail-list > span { display: inline-flex; align-items: center; gap: 5px; padding: 3px 5px; border: 1px solid #e1e6df; border-radius: 4px; background: #fbfcfa; }
+.ticket-detail-list code { color: #3d5545; font-size: 11px; }
 
 .verify-workspace { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 360px; background: #f7f8f5; }
 .verify-main { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px; }

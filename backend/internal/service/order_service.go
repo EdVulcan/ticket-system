@@ -2,6 +2,7 @@ package service
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,13 @@ import (
 )
 
 var ErrDuplicateExternalOrder = errors.New("external order already exists")
+
+// ErrIdempotentWindowOrder tells the HTTP boundary that the exact same
+// terminal request already created an order. The request object is replaced
+// with the durable order before this error is returned, so a retry can safely
+// reuse the original order instead of creating a second payment target.
+var ErrIdempotentWindowOrder = errors.New("window order already exists")
+var ErrWindowOrderRequestMismatch = errors.New("window order client request idempotency data mismatch")
 
 const DefaultOrderReservationTTL = 15 * time.Minute
 
@@ -48,6 +56,9 @@ type SalesOrderFulfillmentView struct {
 type SalesOrderDetailView struct {
 	Order        model.Order                 `json:"order"`
 	Fulfillments []SalesOrderFulfillmentView `json:"fulfillments"`
+	Payments     []model.Payment             `json:"payments"`
+	PrintJobs    []model.PrintJob            `json:"print_jobs"`
+	AfterSales   []model.AfterSaleRequest    `json:"after_sales"`
 }
 
 func (s *OrderService) GenerateOrderNo() string {
@@ -85,9 +96,27 @@ func (s *OrderService) Create(req *model.Order) error {
 	if err := validateOrder(req); err != nil {
 		return err
 	}
+	if req.Channel == "window" && strings.TrimSpace(req.ClientRequestID) != "" {
+		req.ClientRequestHash = hashWindowOrderItems(req.Items)
+	}
 	err := model.Write(func(tx *gorm.DB) error {
 		if err := requireActiveTenant(tx, req.TenantID); err != nil {
 			return err
+		}
+		if req.Channel == "window" && strings.TrimSpace(req.ClientRequestID) != "" {
+			var existing model.Order
+			if err := tx.Preload("Items").Preload("Items.Tickets").Preload("Items.VisitorRecords").Where(
+				"tenant_id = ? AND channel = ? AND client_request_id = ?",
+				req.TenantID, req.Channel, strings.TrimSpace(req.ClientRequestID),
+			).First(&existing).Error; err == nil {
+				if existing.ClientRequestHash != "" && existing.ClientRequestHash != req.ClientRequestHash {
+					return ErrWindowOrderRequestMismatch
+				}
+				*req = existing
+				return ErrIdempotentWindowOrder
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
 		}
 		req.Environment = "production"
 		var channelAccount *model.ChannelAccount
@@ -377,10 +406,43 @@ func (s *OrderService) Create(req *model.Order) error {
 		}
 		return createFulfillmentProjections(tx, s, req)
 	})
+	if req.Channel == "window" && strings.TrimSpace(req.ClientRequestID) != "" && isWindowOrderUniqueViolation(err) {
+		var existing model.Order
+		if lookupErr := model.DB.Preload("Items").Preload("Items.Tickets").Preload("Items.VisitorRecords").Where(
+			"tenant_id = ? AND channel = ? AND client_request_id = ?",
+			req.TenantID, req.Channel, strings.TrimSpace(req.ClientRequestID),
+		).First(&existing).Error; lookupErr == nil {
+			if existing.ClientRequestHash != "" && existing.ClientRequestHash != req.ClientRequestHash {
+				return ErrWindowOrderRequestMismatch
+			}
+			*req = existing
+			return ErrIdempotentWindowOrder
+		}
+	}
 	if req.ExternalNo != nil && isExternalOrderUniqueViolation(err) {
 		return ErrDuplicateExternalOrder
 	}
 	return err
+}
+
+func hashWindowOrderItems(items []model.OrderItem) string {
+	type itemIdentity struct {
+		ProductID       uint       `json:"product_id"`
+		BundleProductID uint       `json:"bundle_product_id"`
+		Quantity        int        `json:"quantity"`
+		UseDate         *time.Time `json:"use_date,omitempty"`
+		StockSlot       string     `json:"stock_slot"`
+	}
+	identities := make([]itemIdentity, len(items))
+	for i := range items {
+		identities[i] = itemIdentity{
+			ProductID: items[i].ProductID, BundleProductID: items[i].BundleProductID,
+			Quantity: items[i].Quantity, UseDate: items[i].UseDate, StockSlot: items[i].StockSlot,
+		}
+	}
+	encoded, _ := json.Marshal(identities)
+	hash := sha256.Sum256(encoded)
+	return hex.EncodeToString(hash[:])
 }
 
 func isExternalOrderUniqueViolation(err error) bool {
@@ -388,6 +450,13 @@ func isExternalOrderUniqueViolation(err error) bool {
 	return errors.As(err, &postgresError) &&
 		postgresError.Code == "23505" &&
 		postgresError.ConstraintName == "idx_order_external"
+}
+
+func isWindowOrderUniqueViolation(err error) bool {
+	var postgresError *pgconn.PgError
+	return errors.As(err, &postgresError) &&
+		postgresError.Code == "23505" &&
+		postgresError.ConstraintName == "idx_orders_window_client_request"
 }
 
 func sameOptionalDate(left, right *time.Time) bool {
@@ -1224,7 +1293,19 @@ func (s *OrderService) GetDetail(orderNo string, tenantID uint) (*SalesOrderDeta
 		}
 		views = append(views, view)
 	}
-	return &SalesOrderDetailView{Order: *order, Fulfillments: views}, nil
+	var payments []model.Payment
+	if err := model.DB.Where("tenant_id = ? AND order_no = ?", tenantID, order.OrderNo).Order("created_at ASC, id ASC").Find(&payments).Error; err != nil {
+		return nil, err
+	}
+	var printJobs []model.PrintJob
+	if err := model.DB.Where("tenant_id = ? AND order_no = ?", tenantID, order.OrderNo).Order("created_at ASC, id ASC").Find(&printJobs).Error; err != nil {
+		return nil, err
+	}
+	var afterSales []model.AfterSaleRequest
+	if err := model.DB.Where("tenant_id = ? AND order_no = ?", tenantID, order.OrderNo).Order("created_at DESC, id DESC").Find(&afterSales).Error; err != nil {
+		return nil, err
+	}
+	return &SalesOrderDetailView{Order: *order, Fulfillments: views, Payments: payments, PrintJobs: printJobs, AfterSales: afterSales}, nil
 }
 
 func (s *OrderService) GetByExternalNo(externalNo, channel string, tenantID uint) (*model.Order, error) {

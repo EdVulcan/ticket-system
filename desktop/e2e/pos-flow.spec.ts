@@ -322,3 +322,103 @@ test('POS机收款作为线下已收款独立入账', async ({ page }) => {
   })
   await expect(payment).not.toBeVisible()
 })
+
+test('支付成功但打印失败后锁定原订单，不能再次创建窗口订单', async ({ page }) => {
+  await preparePOS(page, true)
+  let orderCreateCount = 0
+  await page.route('**/api/v1/orders', async route => {
+    orderCreateCount++
+    await json(route, { id: 91, order_no: 'POS-PRINT-LOCK', total_amount: 80, status: 'unpaid' })
+  })
+  await page.route('**/api/v1/payments/orders/POS-PRINT-LOCK', route => json(route, { has_partial_cash: false, payments: [] }))
+  await page.route('**/api/v1/payments/pay', route => json(route, { id: 92, order_no: 'POS-PRINT-LOCK', method: 'cash', status: 'paid' }))
+  await page.route('**/api/v1/operations/print-jobs', route => json(route, { id: 93, order_no: 'POS-PRINT-LOCK' }, 201))
+  await page.route('**/api/v1/operations/print-jobs/93/status', route => json(route, { status: 'failed' }))
+
+  await page.goto('/#/')
+  await page.getByRole('button', { name: /标准成人票/ }).click()
+  await page.getByRole('button', { name: '收款' }).click()
+  const payment = page.getByRole('dialog', { name: '收款' })
+  await payment.getByRole('button', { name: '现金', exact: true }).click()
+  await payment.getByRole('spinbutton').fill('80')
+  await payment.getByRole('button', { name: '确认现金收款' }).click()
+
+  await expect(page.getByText('已收款订单待处理')).toBeVisible()
+  await expect(page.getByRole('button', { name: '收款' })).toBeDisabled()
+  expect(orderCreateCount).toBe(1)
+  await expect(page.getByText('支付已成功，但打印失败。订单和打印任务已保留，可稍后重打。')).toBeVisible()
+})
+
+test('订单详情展示票券、支付和打印任务状态', async ({ page }) => {
+  await preparePOS(page, true)
+  await page.route('**/api/v1/orders?*', route => json(route, { data: [{ id: 101, order_no: 'POS-DETAIL-1', contact_name: '窗口游客', total_amount: 80, status: 'paid', items: [], created_at: '2026-08-01T09:00:00Z' }], total: 1 }))
+  await page.route('**/api/v1/orders/POS-DETAIL-1', route => json(route, {
+    order: { order_no: 'POS-DETAIL-1', total_amount: 80, status: 'paid', created_at: '2026-08-01T09:00:00Z', items: [{ product_name: '标准成人票', quantity: 1, tickets: [{ id: 1, ticket_code: 'T-DETAIL-1', status: 'unused' }] }] },
+    payments: [{ payment_no: 'PAY-DETAIL-1', method: 'cash', amount_cents: 8000, status: 'paid' }],
+    print_jobs: [{ id: 301, ticket_code: 'T-DETAIL-1', status: 'failed', last_error: '缺纸' }],
+    after_sales: [],
+    fulfillments: [],
+  }))
+
+  await page.goto('/#/')
+  await page.getByRole('button', { name: '订单', exact: true }).click()
+  await page.getByRole('button', { name: '详情', exact: true }).click()
+  const detail = page.getByRole('dialog', { name: '窗口订单详情' })
+  await expect(detail.getByText('POS-DETAIL-1', { exact: true })).toBeVisible()
+  await expect(detail.getByText('T-DETAIL-1', { exact: true }).first()).toBeVisible()
+  await expect(detail.getByText('缺纸', { exact: true })).toBeVisible()
+})
+
+test('打印任务中心不自动选取任务，失败任务必须逐项确认重打', async ({ page }) => {
+  await page.addInitScript(() => {
+    ;(window as any).go = { main: { App: { PrintTicket: async () => ({ success: true, message: 'printed' }) } } }
+  })
+  await preparePOS(page, true)
+  const statusRequests: any[] = []
+  await page.route('**/api/v1/operations/print-jobs?*', route => json(route, { data: [
+    { id: 401, order_no: 'POS-TASK-1', ticket_code: 'T-TASK-1', status: 'failed', last_error: '缺纸', print_document: { schema_version: 1, blocks: [] }, content_hash: 'hash-401', template_revision_id: 1, paper_width_mm: 58, orientation: 'portrait', copy_count: 1 },
+    { id: 402, order_no: 'POS-TASK-2', ticket_code: 'T-TASK-2', status: 'queued', last_error: '', print_document: { schema_version: 1, blocks: [] }, content_hash: 'hash-402', template_revision_id: 1, paper_width_mm: 58, orientation: 'portrait', copy_count: 1 },
+  ] }))
+  await page.route('**/api/v1/operations/print-jobs/401/status', async route => { statusRequests.push(route.request().postDataJSON()); await json(route, { id: 401, status: 'printed' }) })
+
+  await page.goto('/#/')
+  await page.getByRole('button', { name: '打印任务', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '打印任务中心' })
+  await expect(dialog.getByText('缺纸', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('失败待处理', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('排队中', { exact: true })).toBeVisible()
+  expect(statusRequests).toHaveLength(0)
+  await dialog.getByRole('button', { name: '逐项重打' }).first().click()
+  await page.getByRole('button', { name: '确认重打' }).click()
+  await expect.poll(() => statusRequests.length).toBe(2)
+  expect(statusRequests.map(request => request.status)).toEqual(['printing', 'printed'])
+})
+
+test('实体打印成功但状态同步失败时保留人工确认态，不能标记为失败重打', async ({ page }) => {
+  await page.addInitScript(() => {
+    ;(window as any).go = { main: { App: { PrintTicket: async () => ({ success: true, message: 'printed' }) } } }
+  })
+  await preparePOS(page, true)
+  const statusRequests: any[] = []
+  await page.route('**/api/v1/operations/print-jobs?*', route => json(route, { data: [
+    { id: 403, order_no: 'POS-TASK-3', ticket_code: 'T-TASK-3', status: 'failed', last_error: '上次缺纸', print_document: { schema_version: 1, blocks: [] }, content_hash: 'hash-403', template_revision_id: 1, paper_width_mm: 58, orientation: 'portrait', copy_count: 1 },
+  ] }))
+  await page.route('**/api/v1/operations/print-jobs/403/status', async route => {
+    const payload = route.request().postDataJSON()
+    statusRequests.push(payload)
+    if (payload.status === 'printed') {
+      await json(route, { error: 'status sync timeout' }, 503)
+      return
+    }
+    await json(route, { id: 403, status: 'printing' })
+  })
+
+  await page.goto('/#/')
+  await page.getByRole('button', { name: '打印任务', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '打印任务中心' })
+  await dialog.getByRole('button', { name: '逐项重打' }).click()
+  await page.getByRole('button', { name: '确认重打' }).click()
+  await expect(page.getByText('打印机已报告出纸，但任务状态同步失败', { exact: false })).toBeVisible()
+  expect(statusRequests.map(request => request.status)).toEqual(['printing', 'printed'])
+  expect(statusRequests.some(request => request.status === 'failed')).toBe(false)
+})

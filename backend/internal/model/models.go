@@ -182,21 +182,26 @@ type Product struct {
 // Order 订单
 type Order struct {
 	Base
-	OrderNo              string      `gorm:"size:50;uniqueIndex;not null" json:"order_no"`
-	TenantID             uint        `gorm:"uniqueIndex:idx_order_external,priority:1" json:"tenant_id"`
-	TotalAmount          float64     `gorm:"type:decimal(10,2)" json:"total_amount"`
-	Status               string      `gorm:"size:20;default:'unpaid'" json:"status"` // unpaid, paid, cancelled, refunded, partial_refunded, completed
-	ExpiresAt            *time.Time  `json:"expires_at,omitempty"`
-	ContactName          string      `gorm:"size:50" json:"contact_name"`
-	ContactPhone         string      `gorm:"size:20" json:"contact_phone"`
-	VisitorID            string      `gorm:"size:50" json:"visitor_id,omitempty"`
-	VisitorRegion        string      `gorm:"size:50" json:"visitor_region,omitempty"`
-	Channel              string      `gorm:"size:50;default:'online';uniqueIndex:idx_order_external,priority:2" json:"channel"` // online, ota, window
-	Environment          string      `gorm:"size:20;not null;default:'production';index" json:"environment"`                    // production, sandbox
-	ChannelAccountID     uint        `gorm:"index" json:"channel_account_id"`
-	ChannelReservationID uint        `gorm:"index" json:"channel_reservation_id,omitempty"`
-	ExternalNo           *string     `gorm:"size:100;uniqueIndex:idx_order_external,priority:3" json:"external_no,omitempty"`
-	Items                []OrderItem `gorm:"foreignKey:OrderID" json:"items,omitempty"`
+	OrderNo              string     `gorm:"size:50;uniqueIndex;not null" json:"order_no"`
+	TenantID             uint       `gorm:"uniqueIndex:idx_order_external,priority:1" json:"tenant_id"`
+	TotalAmount          float64    `gorm:"type:decimal(10,2)" json:"total_amount"`
+	Status               string     `gorm:"size:20;default:'unpaid'" json:"status"` // unpaid, paid, cancelled, refunded, partial_refunded, completed
+	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
+	ContactName          string     `gorm:"size:50" json:"contact_name"`
+	ContactPhone         string     `gorm:"size:20" json:"contact_phone"`
+	VisitorID            string     `gorm:"size:50" json:"visitor_id,omitempty"`
+	VisitorRegion        string     `gorm:"size:50" json:"visitor_region,omitempty"`
+	Channel              string     `gorm:"size:50;default:'online';uniqueIndex:idx_order_external,priority:2" json:"channel"` // online, ota, window
+	Environment          string     `gorm:"size:20;not null;default:'production';index" json:"environment"`                    // production, sandbox
+	ChannelAccountID     uint       `gorm:"index" json:"channel_account_id"`
+	ChannelReservationID uint       `gorm:"index" json:"channel_reservation_id,omitempty"`
+	ExternalNo           *string    `gorm:"size:100;uniqueIndex:idx_order_external,priority:3" json:"external_no,omitempty"`
+	// ClientRequestID is used by the window terminal to safely retry order
+	// creation after a network interruption. It is scoped by tenant and
+	// channel; the server never accepts it as an external/channel identity.
+	ClientRequestID   string      `gorm:"size:100;index" json:"-"`
+	ClientRequestHash string      `gorm:"size:64" json:"-"`
+	Items             []OrderItem `gorm:"foreignKey:OrderID" json:"items,omitempty"`
 	// Sale attribution is resolved from the original successful payment. These
 	// fields are read-only projections so refunds cannot erase the sales fact.
 	SaleOperatorID        uint   `gorm:"-" json:"sale_operator_id,omitempty"`

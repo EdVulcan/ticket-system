@@ -740,9 +740,19 @@ func (s *OperationsService) QueuePrint(tenantID, deviceID, operatorID, shiftID u
 }
 
 func (s *OperationsService) ListPrintJobs(tenantID, deviceID uint, status string) ([]model.PrintJob, error) {
+	return s.ListPrintJobsForOperator(tenantID, deviceID, 0, status)
+}
+
+// ListPrintJobsForOperator keeps a frontline terminal focused on tasks it can
+// actually act on. Supervisory callers pass operatorID=0 to inspect the whole
+// terminal queue; the tenant predicate remains mandatory in both cases.
+func (s *OperationsService) ListPrintJobsForOperator(tenantID, deviceID, operatorID uint, status string) ([]model.PrintJob, error) {
 	query := model.DB.Where("tenant_id = ?", tenantID)
 	if deviceID != 0 {
 		query = query.Where("device_id = ?", deviceID)
+	}
+	if operatorID != 0 {
+		query = query.Where("operator_id = ?", operatorID)
 	}
 	if status != "" {
 		query = query.Where("status = ?", status)

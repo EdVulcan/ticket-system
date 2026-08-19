@@ -653,6 +653,41 @@ func TestPostgresSchema104AddsPrintOrientationToSchema103(t *testing.T) {
 	}
 }
 
+func TestPostgresSchema105AddsWindowOrderIdempotency(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if CurrentPostgresSchemaVersion < 105 {
+		t.Fatalf("current schema version=%d, want at least 105", CurrentPostgresSchemaVersion)
+	}
+	if err := db.Migrator().DropColumn(&Order{}, "ClientRequestID"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrator().DropColumn(&Order{}, "ClientRequestHash"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("version = ?", CurrentPostgresSchemaVersion).Delete(&SchemaMigration{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&SchemaMigration{Version: 104, Name: "schema 104 fixture", AppliedAt: time.Now()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if !db.Migrator().HasColumn(&Order{}, "ClientRequestID") || !db.Migrator().HasColumn(&Order{}, "ClientRequestHash") {
+		t.Fatal("schema 105 did not add window order idempotency columns")
+	}
+	var indexDefinition string
+	if err := db.Raw(`SELECT indexdef FROM pg_indexes WHERE schemaname = CURRENT_SCHEMA() AND indexname = 'idx_orders_window_client_request'`).Scan(&indexDefinition).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(indexDefinition, "client_request_id") || !strings.Contains(indexDefinition, "channel") || !strings.Contains(indexDefinition, "deleted_at") {
+		t.Fatalf("window order idempotency index=%q", indexDefinition)
+	}
+}
+
 func TestPostgresSchema84UpgradesRealSchema83BookingFacts(t *testing.T) {
 	db := testdb.Open(t)
 	if err := runMigrations(db); err != nil {
