@@ -104,7 +104,6 @@ func (s *ExecutionCenterService) List(tenantID uint, category, severity string, 
 			ActionRoute: "/operations?tab=alerts", ActionLabel: "处理闸机结果",
 			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt})
 	}
-
 	var printJobs []model.PrintJob
 	if err := model.DB.Where("tenant_id = ? AND status IN ?", tenantID, []string{"queued", "printing", "failed"}).Order("updated_at DESC").Limit(limit).Find(&printJobs).Error; err != nil {
 		return nil, err
