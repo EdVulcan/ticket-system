@@ -384,6 +384,9 @@ func (s *DeviceService) VerifyDirect(req DirectVerifyRequest) (*VerifyResponse, 
 	if err := s.DB.Where("id = ? AND tenant_id = ? AND check_point_id = ? AND scenic_area_id != 0", req.DeviceID, req.TenantID, req.CheckPointID).First(&device).Error; err != nil {
 		return denyResponse(ErrAccessDenied), nil
 	}
+	if device.Type != "gate" && device.Type != "handheld" {
+		return denyResponse(ErrAccessDenied), nil
+	}
 	if device.Status != "online" {
 		return &VerifyResponse{Code: 403, Result: "deny", DisplayText: "设备不在线", VoiceFile: "invalid.mp3"}, nil
 	}
@@ -457,10 +460,14 @@ func (s *DeviceService) ReportOpenResult(tenantID, deviceID uint, req OpenResult
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND device_id = ? AND request_id = ? AND status = ? AND result = ?", tenantID, deviceID, strings.TrimSpace(req.VerificationRequestID), "completed", "allow").First(&verification).Error; err != nil {
 			return errors.New("未找到允许通行的核销请求")
 		}
+		var device model.Device
+		if err := tx.Where("id = ? AND tenant_id = ? AND type = ?", deviceID, tenantID, "gate").First(&device).Error; err != nil {
+			return errors.New("只有闸机设备可以回报开闸结果")
+		}
 		if verification.OpenStatus == req.Status {
 			return nil
 		}
-		if verification.OpenStatus == "opened" || verification.OpenStatus == "failed" {
+		if verification.OpenStatus == "opened" || (verification.OpenStatus == "failed" && req.Status != "opened") {
 			return errors.New("该核销请求已经上报过不同的开闸结果")
 		}
 		now := time.Now()

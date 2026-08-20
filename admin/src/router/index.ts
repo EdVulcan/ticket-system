@@ -208,7 +208,7 @@ const router = createRouter({
             path: '/gate-simulator',
             name: 'gate-simulator',
             component: () => import('../views/GateSimulator.vue'),
-            meta: { scope: 'tenant', permission: 'onsite.manage', capability: 'supplier', supplierBusinessType: 'scenic', title: '虚拟闸机模拟' }
+            meta: { scope: 'tenant', permission: 'onsite.manage', capability: 'supplier', supplierBusinessType: 'scenic', title: '闸机联调说明' }
         }
     ]
 })

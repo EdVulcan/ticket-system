@@ -942,6 +942,13 @@ func TestDirectDeviceVerificationReplaysResultAndTracksGateOpen(t *testing.T) {
 	if err := model.DB.Model(&model.CheckInRecord{}).Where("device_id = ? AND device_request_id = ? AND result = ?", deviceID, req.RequestID, "success").Count(&successful).Error; err != nil || successful != 1 {
 		t.Fatalf("successful records=%d err=%v", successful, err)
 	}
+	failed := OpenResultRequest{VerificationRequestID: req.RequestID, Status: "failed", Error: "controller rejected"}
+	if err := svc.ReportOpenResult(tenantID, deviceID, failed); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ReportOpenResult(tenantID, deviceID, failed); err != nil {
+		t.Fatalf("idempotent failed report: %v", err)
+	}
 	open := OpenResultRequest{VerificationRequestID: req.RequestID, Status: "opened", OccurredAt: time.Now().Format(time.RFC3339)}
 	if err := svc.ReportOpenResult(tenantID, deviceID, open); err != nil {
 		t.Fatal(err)
@@ -955,6 +962,31 @@ func TestDirectDeviceVerificationReplaysResultAndTracksGateOpen(t *testing.T) {
 	var events int64
 	if err := model.DB.Model(&model.HardwareEvent{}).Where("device_id = ? AND command_no = ? AND event_type = ?", deviceID, "VERIFY:"+req.RequestID, "gate_opened").Count(&events).Error; err != nil || events != 1 {
 		t.Fatalf("open events=%d err=%v", events, err)
+	}
+
+	checkpointID := checkpoint.ID
+	pos := model.Device{TenantID: tenantID, ScenicAreaID: checkpoint.ScenicAreaID, CheckPointID: &checkpointID, Name: "POS should not verify", SerialNumber: fmt.Sprintf("POS-NO-GATE-%d", time.Now().UnixNano()), Type: "pos", Status: "online", AuthKeyCiphertext: encryptedDeviceKeyForTest(t, "test-device-key")}
+	if err := model.DB.Create(&pos).Error; err != nil {
+		t.Fatal(err)
+	}
+	secondOrder := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	if err := orders.Create(&secondOrder); err != nil {
+		t.Fatal(err)
+	}
+	if err := orders.MarkAsPaid(secondOrder.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var secondTicket model.Ticket
+	if err := model.DB.Where("order_id = ?", secondOrder.ID).First(&secondTicket).Error; err != nil {
+		t.Fatal(err)
+	}
+	posResp, err := svc.VerifyDirect(DirectVerifyRequest{TenantID: tenantID, DeviceID: pos.ID, CheckPointID: checkpoint.ID, RequestID: "pos-scan-1", RequestHash: "pos-body", TicketCode: secondTicket.TicketCode})
+	if err != nil || posResp.Result != "deny" {
+		t.Fatalf("POS device unexpectedly verified ticket: response=%+v err=%v", posResp, err)
+	}
+	var posVerifications int64
+	if err := model.DB.Model(&model.DeviceVerification{}).Where("device_id = ?", pos.ID).Count(&posVerifications).Error; err != nil || posVerifications != 0 {
+		t.Fatalf("POS verification fact was created: count=%d err=%v", posVerifications, err)
 	}
 }
 
