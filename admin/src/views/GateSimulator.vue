@@ -1,287 +1,44 @@
 <template>
-  <div class="gate-simulator">
-    <el-card class="simulator-card">
+  <section class="max-w-[900px] mx-auto">
+    <el-card>
       <template #header>
-        <div class="card-header">
-          <span>虚拟闸机模拟器</span>
-          <el-tag :type="deviceStatus === 'online' ? 'success' : 'info'">
-            {{ deviceStatus === 'online' ? '在线 (Online)' : '离线 (Offline)' }}
-          </el-tag>
+        <div class="flex items-center justify-between gap-3">
+          <span class="font-semibold">闸机联调说明</span>
+          <el-tag type="warning">等待真实硬件协议</el-tag>
         </div>
       </template>
 
-      <el-form label-width="120px">
-        <el-form-item label="系统编号 System">
-          <el-input v-model="form.system_code" placeholder="例如: SYS001" />
-        </el-form-item>
-        <el-form-item label="设备序列号 S/N">
-          <el-input v-model="form.serial_number" placeholder="例如: GT-8888" />
-        </el-form-item>
-        <el-form-item label="设备密钥 Key">
-          <el-input v-model="form.device_key" type="password" show-password placeholder="设备创建或轮换时获得的密钥" />
-        </el-form-item>
-        
-        <el-divider content-position="left">设备动作</el-divider>
+      <el-alert
+        title="浏览器不能直接模拟真实闸机"
+        type="warning"
+        :closable="false"
+        show-icon
+      >
+        当前硬件入口要求设备使用独立密钥签名请求。管理端不会收集或提交设备原始密钥，也不会伪造核销或开闸成功。
+      </el-alert>
 
-        <el-form-item>
-          <el-button type="primary" @click="sendHeartbeat" :loading="loading.heartbeat">
-            发送心跳 (Send Heartbeat)
-          </el-button>
-          <div class="heartbeat-info" v-if="lastHeartbeat">
-            上次心跳: {{ lastHeartbeat }}
-          </div>
-        </el-form-item>
+      <div class="mt-6 space-y-4 text-sm text-gray-600">
+        <p>请在 Linux 闸机控制机上运行 gate-client，通过本机扫码入口和测试驱动进行联调。</p>
+        <p>真实三辊闸的继电器、串口、RS485、TCP 或厂商 SDK 协议确定后，再接入对应硬件适配器。</p>
+        <p>本页面只保留说明入口；不再从浏览器直接调用硬件核销接口。</p>
+      </div>
 
-        <el-divider content-position="left">验票操作</el-divider>
+      <el-divider />
 
-        <el-form-item label="票据号码 Ticket">
-          <el-input v-model="form.ticket_code" placeholder="模拟扫码结果..." clearable />
-        </el-form-item>
-        
-        <el-form-item>
-          <el-button type="success" size="large" @click="verifyTicket" :loading="loading.verify">
-            模拟刷票 (Simulate Scan)
-          </el-button>
-        </el-form-item>
-      </el-form>
-
-      <!-- Simulation Result Display -->
-      <div v-if="result" class="simulation-screen" :class="result.result">
-        <div class="screen-content">
-          <el-icon v-if="result.result === 'allow'" :size="60"><CircleCheckFilled /></el-icon>
-          <el-icon v-else :size="60"><CircleCloseFilled /></el-icon>
-          
-          <h2 class="display-text" style="white-space: pre-wrap;">{{ result.display_text }}</h2>
-          
-          <div class="gate-animation" v-if="result.result === 'allow'">
-             <div class="gate-door left open"></div>
-             <div class="gate-door right open"></div>
-          </div>
-          <div class="gate-animation" v-else>
-             <div class="gate-door left closed"></div>
-             <div class="gate-door right closed"></div>
-          </div>
-
-          <div class="audio-log" v-if="result.voice_code || result.voice_file">
-            <el-icon><Microphone /></el-icon> 本地语音：{{ result.voice_code || result.voice_file }}
-          </div>
+      <div class="grid gap-3 md:grid-cols-3">
+        <div class="rounded-lg bg-gray-50 p-4">
+          <div class="font-medium text-gray-900">扫码入口</div>
+          <code class="mt-2 block text-xs text-gray-500">POST http://127.0.0.1:19300/scan</code>
+        </div>
+        <div class="rounded-lg bg-gray-50 p-4">
+          <div class="font-medium text-gray-900">恢复入口</div>
+          <code class="mt-2 block text-xs text-gray-500">POST http://127.0.0.1:19300/recovery</code>
+        </div>
+        <div class="rounded-lg bg-gray-50 p-4">
+          <div class="font-medium text-gray-900">状态检查</div>
+          <code class="mt-2 block text-xs text-gray-500">GET http://127.0.0.1:19300/status</code>
         </div>
       </div>
     </el-card>
-
-    <!-- Log Panel -->
-    <el-card class="log-card">
-      <template #header>设备日志</template>
-      <div class="log-container">
-        <div v-for="(log, index) in logs" :key="index" class="log-item">
-          <span class="log-time">[{{ log.time }}]</span>
-          <span :class="log.type">{{ log.message }}</span>
-        </div>
-      </div>
-    </el-card>
-  </div>
+  </section>
 </template>
-
-<script setup lang="ts">
-import { ref, reactive } from 'vue'
-import { ElMessage } from 'element-plus'
-import { CircleCheckFilled, CircleCloseFilled, Microphone } from '@element-plus/icons-vue'
-import axios from 'axios' // Directly use axios to bypass interceptors if needed, or use request instance
-
-const form = reactive({
-  system_code: 'SYS001',
-  serial_number: 'GT-001',
-  device_key: '',
-  ticket_code: 'T202312240001'
-})
-
-const deviceStatus = ref('offline')
-const lastHeartbeat = ref('')
-const loading = reactive({
-  heartbeat: false,
-  verify: false
-})
-
-const result = ref<any>(null)
-const logs = ref<any[]>([])
-
-// Base URL handling - usually proxied or direct
-const API_BASE = '/api/v1/hardware' 
-
-const addLog = (message: string, type: 'info' | 'success' | 'error' = 'info') => {
-  const now = new Date().toLocaleTimeString()
-  logs.value.unshift({ time: now, message, type })
-}
-
-const sendHeartbeat = async () => {
-  loading.heartbeat = true
-  try {
-    await axios.post(`${API_BASE}/heartbeat`, {
-      system_code: form.system_code,
-      serial_number: form.serial_number,
-      device_key: form.device_key,
-      ip: '127.0.0.1',
-      status: 'ok'
-    })
-    deviceStatus.value = 'online'
-    lastHeartbeat.value = new Date().toLocaleTimeString()
-    addLog('心跳发送成功 (Heartbeat Success)', 'success')
-  } catch (error: any) {
-    deviceStatus.value = 'offline'
-    addLog(`心跳失败: ${error.response?.data?.error || error.message}`, 'error')
-    ElMessage.error('心跳失败: 设备未就绪或未注册')
-  } finally {
-    loading.heartbeat = false
-  }
-}
-
-const verifyTicket = async () => {
-  if (!form.ticket_code) return
-  
-  loading.verify = true
-  result.value = null
-  
-  try {
-    addLog(`正在验票: ${form.ticket_code}...`, 'info')
-    const response = await axios.post(`${API_BASE}/verify`, {
-      system_code: form.system_code,
-      serial_number: form.serial_number,
-      device_key: form.device_key,
-      ticket_code: form.ticket_code,
-      media_type: 'qr_code',
-      scan_time: new Date().toISOString()
-    })
-    
-    result.value = response.data
-    
-    if (response.data.result === 'allow') {
-      addLog(`放行: ${response.data.display_text.replace('\n', ' ')}`, 'success')
-      // Auto clear after 5s
-      setTimeout(() => {
-        if(result.value === response.data) result.value = null
-      }, response.data.open_duration || 5000)
-    } else {
-      addLog(`拒绝: ${response.data.display_text.replace('\n', ' ')}`, 'error')
-    }
-
-  } catch (error: any) {
-    addLog(`验票错误: ${error.response?.data?.error || error.message}`, 'error')
-    ElMessage.error('验票请求失败')
-  } finally {
-    loading.verify = false
-  }
-}
-</script>
-
-<style scoped>
-.gate-simulator {
-  display: flex;
-  gap: 20px;
-  padding: 20px;
-  max-width: 1200px;
-  margin: 0 auto;
-}
-
-.simulator-card {
-  flex: 1;
-  position: relative;
-}
-
-.log-card {
-  width: 350px;
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.heartbeat-info {
-  margin-left: 10px;
-  color: #909399;
-  font-size: 12px;
-}
-
-.simulation-screen {
-  margin-top: 20px;
-  border-radius: 8px;
-  padding: 20px;
-  text-align: center;
-  color: white;
-  min-height: 200px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-}
-
-.simulation-screen.allow {
-  background: #16875f;
-}
-
-.simulation-screen.deny {
-  background: #d94b54;
-}
-
-.display-text {
-  margin: 15px 0;
-  font-size: 24px;
-  font-weight: bold;
-  text-shadow: 0 2px 4px rgba(0,0,0,0.2);
-}
-
-.gate-animation {
-  width: 120px;
-  height: 60px;
-  background: rgba(0,0,0,0.1);
-  position: relative;
-  margin: 10px auto;
-  border-radius: 4px;
-  display: flex;
-  justify-content: space-between;
-  overflow: hidden;
-}
-
-.gate-door {
-  width: 45%;
-  height: 100%;
-  background: rgba(255,255,255,0.8);
-  transition: transform 0.5s ease;
-}
-
-.gate-door.open.left { transform: translateX(-100%); }
-.gate-door.open.right { transform: translateX(100%); }
-.gate-door.closed { transform: translateX(0); }
-
-.audio-log {
-  margin-top: 10px;
-  font-size: 12px;
-  opacity: 0.8;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.log-container {
-  height: 400px;
-  overflow-y: auto;
-  font-family: monospace;
-  font-size: 12px;
-}
-
-.log-item {
-  margin-bottom: 5px;
-  border-bottom: 1px solid #f0f0f0;
-  padding-bottom: 2px;
-}
-
-.log-time {
-  color: #909399;
-  margin-right: 8px;
-}
-
-.log-item .success { color: #16875f; }
-.log-item .error { color: #d94b54; }
-.log-item .info { color: #606266; }
-</style>

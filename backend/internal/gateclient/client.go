@@ -26,6 +26,7 @@ type Config struct {
 	SerialNumber string
 	DeviceKey    string
 	DriverURL    string
+	Driver       GateDriver
 	ListenAddr   string
 	ScanToken    string
 	StateFile    string
@@ -47,13 +48,14 @@ type ScanRequest struct {
 }
 
 type ScanResult struct {
-	RequestID   string `json:"request_id"`
-	Allowed     bool   `json:"allowed"`
-	Opened      bool   `json:"opened"`
-	DisplayText string `json:"display_text"`
-	VoiceFile   string `json:"voice_file,omitempty"`
-	VoiceCode   string `json:"voice_code,omitempty"`
-	Error       string `json:"error,omitempty"`
+	RequestID      string `json:"request_id"`
+	Allowed        bool   `json:"allowed"`
+	Opened         bool   `json:"opened"`
+	PhysicalStatus string `json:"physical_status,omitempty"` // pending, opened, failed, unknown
+	DisplayText    string `json:"display_text"`
+	VoiceFile      string `json:"voice_file,omitempty"`
+	VoiceCode      string `json:"voice_code,omitempty"`
+	Error          string `json:"error,omitempty"`
 }
 
 type pendingScan struct {
@@ -68,6 +70,7 @@ type Client struct {
 	base    *url.URL
 	http    *http.Client
 	key     []byte
+	driver  GateDriver
 	mu      sync.Mutex
 	stateMu sync.Mutex
 	pending map[string]pendingScan
@@ -81,10 +84,20 @@ func New(config Config) (*Client, error) {
 	if strings.TrimSpace(config.SystemCode) == "" || strings.TrimSpace(config.SerialNumber) == "" || strings.TrimSpace(config.DeviceKey) == "" {
 		return nil, errors.New("景区系统编号、设备序列号和设备密钥不能为空")
 	}
+	if strings.TrimSpace(config.StateFile) == "" {
+		return nil, errors.New("GATE_STATE_FILE 不能为空，闸机恢复状态必须持久化")
+	}
 	if config.HTTPClient == nil {
 		config.HTTPClient = &http.Client{Timeout: 8 * time.Second}
 	}
-	client := &Client{config: config, base: base, http: config.HTTPClient, key: deviceauth.DeriveKey(config.DeviceKey), pending: make(map[string]pendingScan)}
+	driver := config.Driver
+	if driver == nil {
+		driver, err = NewHTTPDriver(config.DriverURL, config.HTTPClient)
+		if err != nil {
+			return nil, err
+		}
+	}
+	client := &Client{config: config, base: base, http: config.HTTPClient, key: deviceauth.DeriveKey(config.DeviceKey), driver: driver, pending: make(map[string]pendingScan)}
 	if err := client.loadState(); err != nil {
 		return nil, fmt.Errorf("load gate recovery state: %w", err)
 	}
@@ -133,29 +146,88 @@ func (c *Client) Scan(ctx context.Context, input ScanRequest) ScanResult {
 		_ = c.clearPending(stateKey)
 		return result
 	}
+	result.PhysicalStatus = "pending"
 
-	if pending.Stage == "opening" {
+	switch pending.Stage {
+	case "opening":
+		result.PhysicalStatus = "unknown"
 		result.Error = "上次开闸结果未知，请现场确认后处理"
 		return result
+	case "failed":
+		result.PhysicalStatus = "failed"
+		result.Error = "上次开闸失败，请先确认现场未通行后重试"
+		return result
+	case "opened":
+		result.PhysicalStatus = "opened"
+		result.Opened = true
+		return c.finishOpen(ctx, stateKey, pending, result)
+	case "verified":
+		return c.openVerified(ctx, stateKey, pending, result)
+	default:
+		result.Error = "闸机本地状态无效，请检查状态文件"
+		return result
 	}
-	if pending.Stage == "verified" {
-		pending.Stage = "opening"
-		if err := c.storePending(stateKey, pending); err != nil {
-			result.Error = err.Error()
-			return result
-		}
-		if openErr := c.openGate(ctx, requestID, verification); openErr != nil {
-			result.Error = openErr.Error()
-			return result
-		}
+}
+
+func (c *Client) openVerified(ctx context.Context, stateKey string, pending pendingScan, result ScanResult) ScanResult {
+	pending.Stage = "opening"
+	if err := c.storePending(stateKey, pending); err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	driverResult, err := c.driver.Open(ctx, OpenRequest{
+		RequestID: pending.RequestID, OpenDurationMS: pending.Verification.OpenDuration,
+		DisplayText: pending.Verification.DisplayText, VoiceCode: pending.Verification.VoiceCode,
+		VoiceFile: pending.Verification.VoiceFile, Direction: "entry",
+	})
+	if err != nil {
+		driverResult = OpenResult{Status: DriverUnknown, Error: err.Error()}
+	}
+	if driverResult.Error != "" {
+		result.Error = driverResult.Error
+	}
+	switch driverResult.Status {
+	case DriverOpened:
+		result.PhysicalStatus = "opened"
 		pending.Stage = "opened"
 		if err := c.storePending(stateKey, pending); err != nil {
-			return ScanResult{RequestID: requestID, Allowed: true, Opened: true, DisplayText: verification.DisplayText, VoiceFile: verification.VoiceFile, VoiceCode: verification.VoiceCode, Error: err.Error()}
+			result.Opened = true
+			result.Error = joinError(result.Error, err.Error())
+			return result
 		}
+		result.Opened = true
+		return c.finishOpen(ctx, stateKey, pending, result)
+	case DriverFailed:
+		result.PhysicalStatus = "failed"
+		pending.Stage = "failed"
+		if err := c.storePending(stateKey, pending); err != nil {
+			result.Error = joinError(result.Error, err.Error())
+			return result
+		}
+		if reportErr := c.reportOpenResult(ctx, pending.RequestID, "failed", driverResult.Error); reportErr != nil {
+			result.Error = joinError(result.Error, "开闸失败结果回报失败："+reportErr.Error())
+		} else if result.Error == "" {
+			result.Error = "开闸驱动拒绝"
+		}
+		return result
+	default:
+		result.PhysicalStatus = "unknown"
+		// Unknown means the command may already have reached the controller.
+		// Keep the local record locked and require a physical confirmation.
+		pending.Stage = "opening"
+		if err := c.storePending(stateKey, pending); err != nil {
+			result.Error = joinError(result.Error, err.Error())
+			return result
+		}
+		if result.Error == "" {
+			result.Error = "开闸结果未知，请现场确认后处理"
+		}
+		return result
 	}
-	result.Opened = true
-	report := map[string]string{"verification_request_id": requestID, "status": "opened", "occurred_at": time.Now().Format(time.RFC3339)}
-	if _, err := c.post(ctx, "/api/v1/hardware/open-result", randomID(), report, nil); err != nil {
+}
+
+func (c *Client) finishOpen(ctx context.Context, stateKey string, pending pendingScan, result ScanResult) ScanResult {
+	if err := c.reportOpenResult(ctx, pending.RequestID, "opened", ""); err != nil {
 		result.Error = "开闸结果回报失败：" + err.Error()
 		return result
 	}
@@ -163,6 +235,28 @@ func (c *Client) Scan(ctx context.Context, input ScanRequest) ScanResult {
 		result.Error = err.Error()
 	}
 	return result
+}
+
+func (c *Client) reportOpenResult(ctx context.Context, verificationRequestID, status, message string) error {
+	_, err := c.post(ctx, "/api/v1/hardware/open-result", randomID(), map[string]string{
+		"verification_request_id": verificationRequestID,
+		"status":                  status,
+		"error":                   strings.TrimSpace(message),
+		"occurred_at":             time.Now().Format(time.RFC3339),
+	}, nil)
+	return err
+}
+
+func joinError(first, second string) string {
+	first, second = strings.TrimSpace(first), strings.TrimSpace(second)
+	switch {
+	case first == "":
+		return second
+	case second == "":
+		return first
+	default:
+		return first + "；" + second
+	}
 }
 
 func (c *Client) getOrCreatePending(key string, input ScanRequest) (pendingScan, error) {
@@ -296,31 +390,21 @@ func (c *Client) post(ctx context.Context, path, requestID string, payload inter
 	return resp.StatusCode, nil
 }
 
-func (c *Client) openGate(ctx context.Context, requestID string, verification VerifyResponse) error {
-	if strings.TrimSpace(c.config.DriverURL) == "" {
-		return errors.New("未配置真实开闸驱动")
-	}
-	body, _ := json.Marshal(map[string]interface{}{"request_id": requestID, "open_duration_ms": verification.OpenDuration, "display_text": verification.DisplayText, "voice_file": verification.VoiceFile, "voice_code": verification.VoiceCode})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.config.DriverURL, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("开闸驱动调用失败：%w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("开闸驱动返回 %d", resp.StatusCode)
-	}
-	return nil
-}
-
 func (c *Client) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	mux.HandleFunc("/status", func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != http.MethodGet {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "仅支持 GET"})
+			return
+		}
+		if c.config.ScanToken == "" || req.Header.Get("Authorization") != "Bearer "+c.config.ScanToken {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "本机状态接口认证失败"})
+			return
+		}
+		writeJSON(w, http.StatusOK, c.statusSnapshot())
 	})
 	mux.HandleFunc("/scan", func(w http.ResponseWriter, req *http.Request) {
 		if req.Method != http.MethodPost {
@@ -377,20 +461,50 @@ func (c *Client) Handler() http.Handler {
 	return mux
 }
 
+func (c *Client) statusSnapshot() map[string]interface{} {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	byStage := make(map[string]int)
+	for _, pending := range c.pending {
+		byStage[pending.Stage]++
+	}
+	return map[string]interface{}{
+		"status":                "ok",
+		"system_code":           c.config.SystemCode,
+		"serial_number":         c.config.SerialNumber,
+		"pending_count":         len(c.pending),
+		"pending_by_stage":      byStage,
+		"state_file_configured": strings.TrimSpace(c.config.StateFile) != "",
+		"driver_configured":     c.driver != nil,
+		"offline_mode_enabled":  false,
+	}
+}
+
 func (c *Client) resolveOpeningState(key, action string) error {
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
 	value, ok := c.pending[key]
-	if !ok || value.Stage != "opening" {
+	if !ok {
 		return errors.New("没有需要人工确认的开闸记录")
 	}
 	switch strings.TrimSpace(action) {
 	case "confirm_opened":
+		if value.Stage != "opening" {
+			return errors.New("只有开闸结果未知时才能确认已开")
+		}
 		value.Stage = "opened"
 	case "confirm_not_opened":
+		if value.Stage != "opening" {
+			return errors.New("只有开闸结果未知时才能确认未开")
+		}
+		value.Stage = "verified"
+	case "retry_open":
+		if value.Stage != "failed" {
+			return errors.New("只有开闸失败时才能重试")
+		}
 		value.Stage = "verified"
 	default:
-		return errors.New("恢复动作必须是确认已开或确认未开")
+		return errors.New("恢复动作必须是确认已开、确认未开或重试开闸")
 	}
 	c.pending[key] = value
 	return c.saveStateLocked()

@@ -79,6 +79,32 @@ func (s *ExecutionCenterService) List(tenantID uint, category, severity string, 
 			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt})
 	}
 
+	// DeviceVerification is the source fact for a successful ticket check and
+	// its later physical turnstile result. Keep pending/failed results visible
+	// without creating another task table; the original verification request
+	// remains the only place where recovery and audit are recorded.
+	var gateVerifications []model.DeviceVerification
+	if err := model.DB.Model(&model.DeviceVerification{}).
+		Joins("JOIN devices ON devices.id = device_verifications.device_id AND devices.tenant_id = device_verifications.tenant_id AND devices.deleted_at IS NULL").
+		Where("device_verifications.tenant_id = ? AND device_verifications.result = ? AND device_verifications.open_status IN ? AND devices.type = ?", tenantID, "allow", []string{"pending", "failed"}, "gate").
+		Order("device_verifications.updated_at DESC").Limit(limit).Find(&gateVerifications).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range gateVerifications {
+		description := strings.TrimSpace(row.TicketCode)
+		if row.RequestID != "" {
+			description += " · " + row.RequestID
+		}
+		if row.OpenError != "" {
+			description += " · " + row.OpenError
+		}
+		appendItem(ExecutionCenterItem{Source: "device_verification", Category: "现场设备", ID: row.ID,
+			Title: "闸机物理结果待处理", Description: description, Status: row.OpenStatus,
+			Severity: "critical", Retryable: row.OpenStatus == "failed",
+			ActionRoute: "/operations?tab=alerts", ActionLabel: "处理闸机结果",
+			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt})
+	}
+
 	var printJobs []model.PrintJob
 	if err := model.DB.Where("tenant_id = ? AND status IN ?", tenantID, []string{"queued", "printing", "failed"}).Order("updated_at DESC").Limit(limit).Find(&printJobs).Error; err != nil {
 		return nil, err
