@@ -21,7 +21,7 @@ func main() {
 	if listen == "" {
 		listen = "127.0.0.1:19300"
 	}
-	client, err := gateclient.New(gateclient.Config{ServerURL: serverURL, SystemCode: os.Getenv("GATE_SYSTEM_CODE"), SerialNumber: os.Getenv("GATE_SERIAL_NUMBER"), DeviceKey: os.Getenv("GATE_DEVICE_KEY"), DriverURL: os.Getenv("GATE_DRIVER_URL"), ListenAddr: listen, ScanToken: os.Getenv("GATE_SCAN_TOKEN"), StateFile: os.Getenv("GATE_STATE_FILE")})
+	client, err := gateclient.New(gateclient.Config{ServerURL: serverURL, SystemCode: os.Getenv("GATE_SYSTEM_CODE"), SerialNumber: os.Getenv("GATE_SERIAL_NUMBER"), DeviceKey: os.Getenv("GATE_DEVICE_KEY"), MaintenanceURL: os.Getenv("GATE_MAINTENANCE_URL"), MaintenanceSecret: os.Getenv("GATE_MAINTENANCE_SECRET"), DriverURL: os.Getenv("GATE_DRIVER_URL"), ListenAddr: listen, ScanToken: os.Getenv("GATE_SCAN_TOKEN"), StateFile: os.Getenv("GATE_STATE_FILE")})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -32,6 +32,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	go client.RunHeartbeat(ctx, 20*time.Second)
+	go client.RunMaintenance(ctx, 5*time.Second)
 	server := &http.Server{Addr: listen, Handler: client.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second}
 	go func() {
 		log.Printf("闸机客户端已启动，监听 %s", listen)

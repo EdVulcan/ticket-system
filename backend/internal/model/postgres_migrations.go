@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 105
+const CurrentPostgresSchemaVersion = 106
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -55,7 +55,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&TourEntryBatch{}, &TourGroupConfirmation{}, &TourGroupMemberChange{}, &TeamSettlementStatement{}, &TeamSettlementAdjustment{},
 		&POSShift{}, &POSShiftCorrection{}, &PrintJob{}, &PrintTemplate{}, &PrintTemplateRevision{}, &DeviceAlert{}, &POSHold{}, &POSHoldLine{},
 		&SettlementStatement{}, &SettlementLine{}, &SettlementAdjustment{}, &StaffResourceScope{},
-		&AfterSaleRequest{}, &AfterSaleEvent{}, &HardwareCommand{}, &HardwareEvent{}, &DeviceRequestNonce{}, &DeviceVerification{}, &MigrationAuditIssue{},
+		&AfterSaleRequest{}, &AfterSaleEvent{}, &HardwareCommand{}, &HardwareEvent{}, &DeviceRequestNonce{}, &DeviceVerification{}, &DeviceMaintenanceCredential{}, &DeviceMaintenanceSession{}, &MigrationAuditIssue{},
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
@@ -318,6 +318,28 @@ func runPostgresMigrations(db *gorm.DB) error {
 			return fmt.Errorf("add window order client request idempotency: %w", err)
 		}
 	}
+	if previousSchemaVersion < 106 {
+		if err := db.Exec(`
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_device_maintenance_active_credential
+				ON device_maintenance_credentials(device_id)
+				WHERE status = 'active' AND deleted_at IS NULL;
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_device_maintenance_session_active_device
+				ON device_maintenance_sessions(device_id)
+				WHERE status IN ('pending','active') AND deleted_at IS NULL;
+			ALTER TABLE device_maintenance_credentials
+				DROP CONSTRAINT IF EXISTS chk_device_maintenance_credential_status;
+			ALTER TABLE device_maintenance_credentials
+				ADD CONSTRAINT chk_device_maintenance_credential_status
+				CHECK (status IN ('active','revoked'));
+			ALTER TABLE device_maintenance_sessions
+				DROP CONSTRAINT IF EXISTS chk_device_maintenance_session_status;
+			ALTER TABLE device_maintenance_sessions
+				ADD CONSTRAINT chk_device_maintenance_session_status
+				CHECK (status IN ('pending','active','closed','expired','interrupted'));
+		`).Error; err != nil {
+			return fmt.Errorf("register device maintenance credentials and sessions: %w", err)
+		}
+	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
 		if err := db.Exec(`
 			INSERT INTO supplier_business_types
@@ -466,7 +488,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "window order idempotency and print template orientation",
+		Name:      "device maintenance credentials and sessions",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -632,6 +654,72 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 			IF NEW.scenic_area_id = 0 OR NOT EXISTS (SELECT 1 FROM scenic_areas s WHERE s.id = NEW.scenic_area_id AND s.tenant_id = NEW.tenant_id)
 			   OR (NEW.check_point_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM check_points c WHERE c.id = NEW.check_point_id AND c.tenant_id = NEW.tenant_id AND c.scenic_area_id = NEW.scenic_area_id)) THEN
 				RAISE EXCEPTION 'device ownership mismatch';
+			END IF;
+		WHEN 'device_maintenance_credentials' THEN
+			IF TG_OP = 'UPDATE'
+			   AND NEW.tenant_id IS NOT DISTINCT FROM OLD.tenant_id
+			   AND NEW.scenic_area_id IS NOT DISTINCT FROM OLD.scenic_area_id
+			   AND NEW.device_id IS NOT DISTINCT FROM OLD.device_id
+			   AND NEW.secret_hash IS NOT DISTINCT FROM OLD.secret_hash THEN
+				IF NEW.tenant_id = 0 OR NEW.scenic_area_id = 0 OR NEW.device_id = 0
+				   OR NEW.status NOT IN ('active','revoked') OR COALESCE(NEW.secret_hash, '') = '' THEN
+					RAISE EXCEPTION 'device maintenance credential ownership mismatch';
+				END IF;
+			ELSIF TG_OP = 'UPDATE'
+			   AND (NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+				OR NEW.scenic_area_id IS DISTINCT FROM OLD.scenic_area_id
+				OR NEW.device_id IS DISTINCT FROM OLD.device_id
+				OR NEW.secret_hash IS DISTINCT FROM OLD.secret_hash) THEN
+				RAISE EXCEPTION 'device maintenance credential identity is immutable';
+			ELSIF NEW.tenant_id = 0 OR NEW.scenic_area_id = 0 OR NEW.device_id = 0
+			   OR NEW.status NOT IN ('active','revoked')
+			   OR COALESCE(NEW.secret_hash, '') = ''
+			   OR NOT EXISTS (
+					SELECT 1 FROM devices d
+					WHERE d.id = NEW.device_id AND d.tenant_id = NEW.tenant_id
+					  AND d.scenic_area_id = NEW.scenic_area_id AND d.type = 'gate'
+					  AND d.deleted_at IS NULL
+				   ) THEN
+				RAISE EXCEPTION 'device maintenance credential ownership mismatch';
+			END IF;
+		WHEN 'device_maintenance_sessions' THEN
+			IF TG_OP = 'UPDATE'
+			   AND NEW.tenant_id IS NOT DISTINCT FROM OLD.tenant_id
+			   AND NEW.scenic_area_id IS NOT DISTINCT FROM OLD.scenic_area_id
+			   AND NEW.device_id IS NOT DISTINCT FROM OLD.device_id
+			   AND NEW.actor_user_id IS NOT DISTINCT FROM OLD.actor_user_id
+			   AND NEW.mode IS NOT DISTINCT FROM OLD.mode
+			   AND NEW.reason IS NOT DISTINCT FROM OLD.reason
+			   AND NEW.token_hash IS NOT DISTINCT FROM OLD.token_hash
+			   AND NEW.gateway_session_id IS NOT DISTINCT FROM OLD.gateway_session_id THEN
+				IF NEW.tenant_id = 0 OR NEW.scenic_area_id = 0 OR NEW.device_id = 0 OR NEW.actor_user_id = 0
+				   OR NEW.mode <> 'ssh'
+				   OR NEW.status NOT IN ('pending','active','closed','expired','interrupted')
+				   OR COALESCE(NEW.reason, '') = '' OR COALESCE(NEW.token_hash, '') = '' OR COALESCE(NEW.gateway_session_id, '') = '' THEN
+					RAISE EXCEPTION 'device maintenance session ownership mismatch';
+				END IF;
+			ELSIF TG_OP = 'UPDATE'
+			   AND (NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+				OR NEW.scenic_area_id IS DISTINCT FROM OLD.scenic_area_id
+				OR NEW.device_id IS DISTINCT FROM OLD.device_id
+				OR NEW.actor_user_id IS DISTINCT FROM OLD.actor_user_id
+				OR NEW.mode IS DISTINCT FROM OLD.mode
+				OR NEW.reason IS DISTINCT FROM OLD.reason
+				OR NEW.token_hash IS DISTINCT FROM OLD.token_hash
+				OR NEW.gateway_session_id IS DISTINCT FROM OLD.gateway_session_id) THEN
+				RAISE EXCEPTION 'device maintenance session identity is immutable';
+			ELSIF NEW.tenant_id = 0 OR NEW.scenic_area_id = 0 OR NEW.device_id = 0 OR NEW.actor_user_id = 0
+			   OR NEW.mode <> 'ssh'
+			   OR NEW.status NOT IN ('pending','active','closed','expired','interrupted')
+			   OR COALESCE(NEW.reason, '') = '' OR COALESCE(NEW.token_hash, '') = '' OR COALESCE(NEW.gateway_session_id, '') = ''
+			   OR NOT EXISTS (
+					SELECT 1 FROM devices d
+					WHERE d.id = NEW.device_id AND d.tenant_id = NEW.tenant_id
+					  AND d.scenic_area_id = NEW.scenic_area_id AND d.type = 'gate'
+					  AND d.deleted_at IS NULL
+				   )
+			   OR NOT EXISTS (SELECT 1 FROM users u WHERE u.id = NEW.actor_user_id AND u.tenant_id = NEW.tenant_id AND u.deleted_at IS NULL) THEN
+				RAISE EXCEPTION 'device maintenance session ownership mismatch';
 			END IF;
 		WHEN 'products' THEN
 			IF NEW.product_kind NOT IN ('ticket','scenic_hotel_package','hotel')
@@ -1136,7 +1224,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "products", "product_inventories", "print_templates", "print_template_revisions", "print_jobs", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "ai_tenant_quota_policies", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_rate_plan_prices", "hotel_room_inventories", "hotel_products", "hotel_product_revisions", "hotel_product_calendar_prices", "hotel_product_entitlements", "hotel_product_reservations", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
+	for _, table := range []string{"check_points", "devices", "device_maintenance_credentials", "device_maintenance_sessions", "products", "product_inventories", "print_templates", "print_template_revisions", "print_jobs", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "ai_tenant_quota_policies", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_rate_plan_prices", "hotel_room_inventories", "hotel_products", "hotel_product_revisions", "hotel_product_calendar_prices", "hotel_product_entitlements", "hotel_product_reservations", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

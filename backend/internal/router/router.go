@@ -1,6 +1,7 @@
 package router
 
 import (
+	"strings"
 	"ticket-backend/internal/api"
 	"ticket-backend/internal/authz"
 	"ticket-backend/internal/config"
@@ -12,6 +13,21 @@ import (
 )
 
 func InitRouter(r *gin.Engine) {
+	InitRouterWithMaintenance(r, nil)
+}
+
+// InitRouterWithMaintenance keeps the legacy test/bootstrap entry point
+// intact while allowing the real server to inject the single process-wide
+// maintenance service and WSS gateway.
+func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.DeviceMaintenanceService) {
+	if maintenanceService == nil {
+		maintenanceService, _ = service.NewDeviceMaintenanceService(model.DB, config.GlobalConfig.Maintenance)
+	}
+	if maintenanceService == nil {
+		// A disabled gateway is still safe to expose: every handler returns a
+		// clear 501 instead of silently pretending that a tunnel exists.
+		maintenanceService, _ = service.NewDeviceMaintenanceService(model.DB, config.MaintenanceConfig{})
+	}
 	// Global Middleware
 	r.Use(middleware.SecurityHeaders(), middleware.RequestBodyLimit(8<<20), middleware.Cors())
 
@@ -117,6 +133,7 @@ func InitRouter(r *gin.Engine) {
 	// Device Routes
 	deviceService := service.NewDeviceService(model.DB, &service.TicketService{})
 	deviceController := api.NewDeviceController(deviceService)
+	deviceMaintenanceController := api.NewDeviceMaintenanceController(maintenanceService)
 
 	// Public Hardware APIs
 
@@ -137,6 +154,24 @@ func InitRouter(r *gin.Engine) {
 		deviceGroup.PUT("/:id", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), deviceController.Update)
 		deviceGroup.POST("/:id/rotate-key", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), deviceController.RotateKey)
 		deviceGroup.DELETE("/:id", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), deviceController.Delete)
+		deviceGroup.GET("/:id/maintenance-credential", middleware.RequireTenantPermission(authz.PermissionOnsiteMaintenance), deviceMaintenanceController.CredentialStatus)
+		deviceGroup.POST("/:id/maintenance-credential", middleware.RequireTenantPermission(authz.PermissionOnsiteMaintenance), deviceMaintenanceController.RotateCredential)
+		deviceGroup.DELETE("/:id/maintenance-credential", middleware.RequireTenantPermission(authz.PermissionOnsiteMaintenance), deviceMaintenanceController.RevokeCredential)
+		deviceGroup.GET("/:id/maintenance-sessions", middleware.RequireTenantPermission(authz.PermissionOnsiteMaintenance), deviceMaintenanceController.ListSessions)
+		deviceGroup.POST("/:id/maintenance-sessions", middleware.RequireTenantPermission(authz.PermissionOnsiteMaintenance), deviceMaintenanceController.CreateSession)
+		deviceGroup.POST("/:id/maintenance-sessions/:sessionID/close", middleware.RequireTenantPermission(authz.PermissionOnsiteMaintenance), deviceMaintenanceController.CloseSession)
+	}
+	if maintenanceService != nil && maintenanceService.Gateway != nil {
+		path := strings.TrimSpace(config.GlobalConfig.Maintenance.Path)
+		if path == "" {
+			path = "/api/v1/hardware/maintenance/ws"
+		}
+		r.GET(path, func(ctx *gin.Context) {
+			maintenanceService.Gateway.DeviceWebSocketHandler(ctx.Writer, ctx.Request)
+		})
+		r.GET("/api/v1/hardware/maintenance/sessions/:sessionID/ws", func(ctx *gin.Context) {
+			maintenanceService.Gateway.SessionWebSocketHandler(ctx.Writer, ctx.Request, ctx.Param("sessionID"))
+		})
 	}
 	hardwareCommandGroup := protected.Group("/hardware-commands")
 	hardwareCommandGroup.Use(middleware.RequireTenantPermission(authz.PermissionOnsiteManage), middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))

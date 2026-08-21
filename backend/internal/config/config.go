@@ -14,12 +14,13 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	Database  DatabaseConfig  `mapstructure:"database"`
-	Log       LogConfig       `mapstructure:"log"`
-	Security  SecurityConfig  `mapstructure:"security"`
-	Bootstrap BootstrapConfig `mapstructure:"bootstrap"`
-	Backup    BackupConfig    `mapstructure:"backup"`
+	Server      ServerConfig      `mapstructure:"server"`
+	Database    DatabaseConfig    `mapstructure:"database"`
+	Log         LogConfig         `mapstructure:"log"`
+	Security    SecurityConfig    `mapstructure:"security"`
+	Bootstrap   BootstrapConfig   `mapstructure:"bootstrap"`
+	Backup      BackupConfig      `mapstructure:"backup"`
+	Maintenance MaintenanceConfig `mapstructure:"maintenance"`
 }
 
 type ServerConfig struct {
@@ -102,6 +103,16 @@ type BackupConfig struct {
 	PostgresBinDir string `mapstructure:"postgres_bin_dir"`
 }
 
+// MaintenanceConfig controls the optional device maintenance gateway. The
+// gateway is disabled by default; enabling it requires a separately managed
+// TLS/WSS endpoint and a stable host identity in deployment configuration.
+type MaintenanceConfig struct {
+	Enabled           bool   `mapstructure:"enabled"`
+	Path              string `mapstructure:"path"`
+	SessionTTLSeconds int    `mapstructure:"session_ttl_seconds"`
+	MaxSessionTTL     int    `mapstructure:"max_session_ttl_seconds"`
+}
+
 type LogConfig struct {
 	Level      string `mapstructure:"level"`
 	Filename   string `mapstructure:"filename"`
@@ -148,6 +159,10 @@ func InitConfig() error {
 	viper.SetDefault("backup.interval_hours", 24)
 	viper.SetDefault("backup.retention", 14)
 	viper.SetDefault("backup.postgres_bin_dir", "")
+	viper.SetDefault("maintenance.enabled", false)
+	viper.SetDefault("maintenance.path", "/api/v1/hardware/maintenance/ws")
+	viper.SetDefault("maintenance.session_ttl_seconds", 900)
+	viper.SetDefault("maintenance.max_session_ttl_seconds", 1800)
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
@@ -237,6 +252,15 @@ func (c Config) Validate() error {
 	}
 	if c.Backup.IntervalHours <= 0 || c.Backup.Retention <= 0 {
 		return fmt.Errorf("backup interval and retention must be greater than zero")
+	}
+	if c.Maintenance.SessionTTLSeconds <= 0 || c.Maintenance.MaxSessionTTL < c.Maintenance.SessionTTLSeconds || c.Maintenance.MaxSessionTTL > 24*60*60 {
+		return fmt.Errorf("invalid maintenance session limits")
+	}
+	if strings.TrimSpace(c.Maintenance.Path) == "" || !strings.HasPrefix(strings.TrimSpace(c.Maintenance.Path), "/") {
+		return fmt.Errorf("maintenance path must be an absolute URL path")
+	}
+	if c.Maintenance.Enabled && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.Server.PublicBaseURL)), "https://") {
+		return fmt.Errorf("enabled maintenance gateway requires an HTTPS public base URL")
 	}
 	if c.Bootstrap.AdminPassword != "" && c.Bootstrap.PlatformPassword != "" && c.Bootstrap.AdminPassword == c.Bootstrap.PlatformPassword {
 		return fmt.Errorf("platform bootstrap password must differ from tenant administrator password")

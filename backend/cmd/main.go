@@ -49,6 +49,15 @@ func main() {
 		return
 	}
 	logger.Log.Info("Database connected")
+	maintenanceService, err := service.NewDeviceMaintenanceService(model.DB, config.GlobalConfig.Maintenance)
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("Failed to initialize device maintenance gateway: %v", err))
+		return
+	}
+	if err := maintenanceService.ReconcileStartup(time.Now()); err != nil {
+		logger.Log.Error(fmt.Sprintf("Failed to reconcile maintenance sessions: %v", err))
+		return
+	}
 
 	// 3.5 Seed Admin User
 	if err := seedAdminUser(); err != nil {
@@ -78,6 +87,9 @@ func main() {
 	deviceContext, stopDeviceWorker := context.WithCancel(context.Background())
 	defer stopDeviceWorker()
 	go runDeviceHealthWorker(deviceContext)
+	maintenanceContext, stopMaintenanceWorker := context.WithCancel(context.Background())
+	defer stopMaintenanceWorker()
+	go runDeviceMaintenanceWorker(maintenanceContext, maintenanceService)
 	printContext, stopPrintWorker := context.WithCancel(context.Background())
 	defer stopPrintWorker()
 	go runPrintJobRecoveryWorker(printContext)
@@ -106,7 +118,7 @@ func main() {
 	}
 
 	// Register Routes
-	router.InitRouter(r)
+	router.InitRouterWithMaintenance(r, maintenanceService)
 
 	r.GET("/ping", func(c *gin.Context) {
 		c.JSON(200, gin.H{
@@ -154,6 +166,7 @@ func main() {
 	if err := server.Shutdown(shutdownContext); err != nil {
 		logger.Log.Error(fmt.Sprintf("HTTP server shutdown failed: %v", err))
 	}
+	maintenanceService.Gateway.StopAll()
 	stopBackups()
 	if err := model.CloseWriter(shutdownContext); err != nil {
 		logger.Log.Error(fmt.Sprintf("Database writer shutdown failed: %v", err))
@@ -161,6 +174,28 @@ func main() {
 	if sqlDB, err := model.DB.DB(); err == nil {
 		if err := sqlDB.Close(); err != nil {
 			logger.Log.Error(fmt.Sprintf("Database close failed: %v", err))
+		}
+	}
+}
+
+func runDeviceMaintenanceWorker(ctx context.Context, maintenanceService *service.DeviceMaintenanceService) {
+	if maintenanceService == nil {
+		return
+	}
+	process := func(now time.Time) {
+		if _, err := maintenanceService.ExpireSessions(now, 100); err != nil {
+			logger.Log.Error(fmt.Sprintf("device maintenance session expiry failed: %v", err))
+		}
+	}
+	process(time.Now())
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			process(now)
 		}
 	}
 }

@@ -33,10 +33,11 @@
         </template>
       </el-table-column>
       <el-table-column prop="ip_address" label="网络地址" width="140" />
-      <el-table-column label="操作" width="230" fixed="right">
+      <el-table-column label="操作" width="330" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
           <el-button link type="warning" size="small" @click="handleRotateKey(row)">轮换密钥</el-button>
+          <el-button v-if="row.type === 'gate' && canMaintenance" link type="success" size="small" @click="openMaintenance(row)">远程维护</el-button>
           <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -97,9 +98,9 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="credentialVisible" title="设备接入密钥" width="520px" :close-on-click-modal="false">
+    <el-dialog v-model="credentialVisible" :title="credentialIsMaintenance ? '闸机维护凭据' : '设备接入密钥'" width="520px" :close-on-click-modal="false">
       <el-alert type="warning" :closable="false" show-icon class="mb-4">
-        此密钥只显示一次。请立即配置到设备 {{ credentialDeviceName }}，系统不会保存明文。
+        此密钥只显示一次。<template v-if="credentialIsMaintenance">请立即配置到 Linux gate-client 的 GATE_MAINTENANCE_SECRET；它与设备核销密钥不同。</template><template v-else>请立即配置到设备 {{ credentialDeviceName }}，系统不会保存明文。</template>
       </el-alert>
       <el-input v-model="credentialKey" readonly>
         <template #append>
@@ -110,13 +111,72 @@
         <el-button type="primary" @click="credentialVisible = false">我已保存</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="maintenanceVisible" title="闸机远程维护" width="760px" :close-on-click-modal="false">
+      <el-alert type="info" :closable="false" show-icon class="mb-4">
+        维护通道只连接闸机本机 <code>127.0.0.1:22</code>，不提供任意内网转发；会话默认 15 分钟，到期自动关闭。请先把一次性维护密钥配置到 Linux gate-client。
+      </el-alert>
+      <el-descriptions v-if="maintenanceDevice" :column="2" border class="mb-4">
+        <el-descriptions-item label="设备">{{ maintenanceDevice.name }}</el-descriptions-item>
+        <el-descriptions-item label="序列号">{{ maintenanceDevice.serial_number }}</el-descriptions-item>
+        <el-descriptions-item label="在线状态">
+          <el-tag :type="maintenanceDevice.status === 'online' ? 'success' : 'danger'">{{ maintenanceDevice.status === 'online' ? '在线' : '离线' }}</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="维护凭据">
+          <el-tag :type="maintenanceCredential ? 'success' : 'warning'">{{ maintenanceCredential ? '已配置' : '未配置' }}</el-tag>
+        </el-descriptions-item>
+      </el-descriptions>
+
+      <div class="flex gap-2 mb-4">
+        <el-button type="warning" :loading="maintenanceLoading" @click="rotateMaintenanceCredential">{{ maintenanceCredential ? '轮换维护凭据' : '生成维护凭据' }}</el-button>
+        <el-button @click="loadMaintenance">刷新状态</el-button>
+      </div>
+
+      <el-form label-width="100px" class="mb-5">
+        <el-form-item label="会话原因" required>
+          <el-input v-model="maintenanceForm.reason" maxlength="255" show-word-limit placeholder="例如：现场排查三辊闸控制板连接" />
+        </el-form-item>
+        <el-form-item label="有效时长">
+          <el-input-number v-model="maintenanceForm.ttl_seconds" :min="60" :max="1800" :step="60" />
+          <span class="text-xs text-gray-500 ml-3">最多 30 分钟</span>
+        </el-form-item>
+        <el-form-item>
+          <el-button type="primary" :loading="maintenanceLoading" :disabled="!maintenanceCredential || maintenanceDevice?.status !== 'online'" @click="createMaintenanceSession">创建 SSH 会话</el-button>
+        </el-form-item>
+      </el-form>
+
+      <el-alert v-if="maintenanceSession" type="success" :closable="false" class="mb-4">
+        <template #title>会话已创建，令牌只显示本次</template>
+        <div class="text-xs mt-2 break-all">WebSocket：{{ maintenanceSession.websocket_url }}</div>
+        <div class="text-xs mt-1 break-all">令牌：{{ maintenanceSession.session_token }}</div>
+        <div class="text-xs mt-1">可在管理员电脑执行：<code>ssh -o ProxyCommand="gate-ssh --url '{{ maintenanceSession.websocket_url }}' --token '{{ maintenanceSession.session_token }}'" root@127.0.0.1</code></div>
+        <div class="mt-2 flex gap-2">
+          <el-button size="small" @click="copyMaintenanceText(maintenanceSession.websocket_url, '连接地址')">复制连接地址</el-button>
+          <el-button size="small" @click="copyMaintenanceText(maintenanceSession.session_token, '会话令牌')">复制令牌</el-button>
+        </div>
+      </el-alert>
+
+      <el-table :data="maintenanceSessions" size="small" max-height="220" v-loading="maintenanceLoading">
+        <el-table-column prop="id" label="会话" width="75" />
+        <el-table-column prop="status" label="状态" width="100" />
+        <el-table-column prop="reason" label="原因" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="expires_at" label="到期时间" width="180" />
+        <el-table-column label="操作" width="90">
+          <template #default="{ row }">
+            <el-button v-if="['pending', 'active'].includes(row.status)" link type="danger" size="small" @click="closeMaintenanceSession(row)">关闭</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-dialog>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, computed } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
+import { hasPermission } from '@/utils/permissions'
+import { readStoredUser } from '@/utils/tenantAccess'
 
 const loading = ref(false)
 const tableData = ref([])
@@ -129,6 +189,15 @@ const formRef = ref()
 const credentialVisible = ref(false)
 const credentialKey = ref('')
 const credentialDeviceName = ref('')
+const credentialIsMaintenance = ref(false)
+const canMaintenance = computed(() => hasPermission(readStoredUser(), 'onsite.maintenance'))
+const maintenanceVisible = ref(false)
+const maintenanceLoading = ref(false)
+const maintenanceDevice = ref<any | null>(null)
+const maintenanceCredential = ref<any | null>(null)
+const maintenanceSessions = ref<any[]>([])
+const maintenanceSession = ref<any | null>(null)
+const maintenanceForm = reactive({ reason: '', ttl_seconds: 900 })
 
 const form = reactive({
   id: 0,
@@ -223,9 +292,10 @@ const handleDelete = (row: any) => {
   })
 }
 
-const showCredential = (deviceName: string, key: string) => {
+const showCredential = (deviceName: string, key: string, maintenance = false) => {
   credentialDeviceName.value = deviceName
   credentialKey.value = key
+  credentialIsMaintenance.value = maintenance
   credentialVisible.value = true
 }
 
@@ -249,6 +319,93 @@ const handleRotateKey = async (row: any) => {
     showCredential(row.name, response.data.auth_key)
   } catch (error: any) {
     if (error !== 'cancel' && error !== 'close') ElMessage.error('密钥轮换失败')
+  }
+}
+
+const openMaintenance = async (row: any) => {
+  maintenanceDevice.value = row
+  maintenanceCredential.value = null
+  maintenanceSessions.value = []
+  maintenanceSession.value = null
+  maintenanceForm.reason = ''
+  maintenanceForm.ttl_seconds = 900
+  maintenanceVisible.value = true
+  await loadMaintenance()
+}
+
+const loadMaintenance = async () => {
+  if (!maintenanceDevice.value) return
+  maintenanceLoading.value = true
+  try {
+    try {
+      const credential = await request.get(`/devices/${maintenanceDevice.value.id}/maintenance-credential`, { skipErrorToast: true } as any)
+      maintenanceCredential.value = credential.data
+    } catch (error: any) {
+      if (error.response?.status !== 404) throw error
+      maintenanceCredential.value = null
+    }
+    const sessions = await request.get(`/devices/${maintenanceDevice.value.id}/maintenance-sessions`, { params: { page: 1, page_size: 20 } })
+    maintenanceSessions.value = sessions.data.data || []
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '获取维护状态失败')
+  } finally {
+    maintenanceLoading.value = false
+  }
+}
+
+const rotateMaintenanceCredential = async () => {
+  if (!maintenanceDevice.value) return
+  try {
+    const reason = await ElMessageBox.prompt('请说明轮换维护凭据的原因', '维护凭据', {
+      confirmButtonText: '生成', cancelButtonText: '取消', inputValidator: value => value.trim() ? true : '原因不能为空',
+    })
+    maintenanceLoading.value = true
+    const response = await request.post(`/devices/${maintenanceDevice.value.id}/maintenance-credential`, { reason: reason.value })
+    showCredential(maintenanceDevice.value.name + '（维护密钥）', response.data.secret, true)
+    await loadMaintenance()
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error.response?.data?.error || '维护凭据生成失败')
+  } finally {
+    maintenanceLoading.value = false
+  }
+}
+
+const createMaintenanceSession = async () => {
+  if (!maintenanceDevice.value || !maintenanceForm.reason.trim()) {
+    ElMessage.warning('请先填写会话原因')
+    return
+  }
+  maintenanceLoading.value = true
+  try {
+    const response = await request.post(`/devices/${maintenanceDevice.value.id}/maintenance-sessions`, maintenanceForm)
+    maintenanceSession.value = response.data
+    await loadMaintenance()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || 'SSH 会话创建失败')
+  } finally {
+    maintenanceLoading.value = false
+  }
+}
+
+const closeMaintenanceSession = async (row: any) => {
+  try {
+    const result = await ElMessageBox.prompt('请说明关闭维护会话的原因', '关闭会话', {
+      confirmButtonText: '关闭', cancelButtonText: '取消', inputValidator: value => value.trim() ? true : '原因不能为空',
+    })
+    await request.post(`/devices/${maintenanceDevice.value.id}/maintenance-sessions/${row.id}/close`, { reason: result.value })
+    ElMessage.success('维护会话已关闭')
+    await loadMaintenance()
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error.response?.data?.error || '会话关闭失败')
+  }
+}
+
+const copyMaintenanceText = async (value: string, label: string) => {
+  try {
+    await navigator.clipboard.writeText(value)
+    ElMessage.success(`${label}已复制`)
+  } catch {
+    ElMessage.error(`复制${label}失败，请手动选择`)
   }
 }
 
