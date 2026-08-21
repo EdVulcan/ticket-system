@@ -21,16 +21,18 @@ import (
 )
 
 type Config struct {
-	ServerURL    string
-	SystemCode   string
-	SerialNumber string
-	DeviceKey    string
-	DriverURL    string
-	Driver       GateDriver
-	ListenAddr   string
-	ScanToken    string
-	StateFile    string
-	HTTPClient   *http.Client
+	ServerURL         string
+	SystemCode        string
+	SerialNumber      string
+	DeviceKey         string
+	MaintenanceURL    string
+	MaintenanceSecret string
+	DriverURL         string
+	Driver            GateDriver
+	ListenAddr        string
+	ScanToken         string
+	StateFile         string
+	HTTPClient        *http.Client
 }
 
 type VerifyResponse struct {

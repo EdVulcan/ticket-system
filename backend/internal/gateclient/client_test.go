@@ -1,11 +1,16 @@
 package gateclient
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/net/websocket"
+	"ticket-backend/internal/gatetunnel"
 )
 
 func testClient(t *testing.T, config Config) *Client {
@@ -151,6 +156,35 @@ func TestStatusEndpointDoesNotExposeDeviceSecret(t *testing.T) {
 	client.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "secret") || !strings.Contains(response.Body.String(), "pending_count") {
 		t.Fatalf("unexpected status response: code=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestMaintenanceRunStopsWhenContextIsCancelled(t *testing.T) {
+	server := httptest.NewServer(websocket.Server{Handler: func(ws *websocket.Conn) {
+		defer ws.Close()
+		if err := gatetunnel.SendControl(ws, gatetunnel.ControlMessage{Type: "ready"}); err != nil {
+			return
+		}
+		_, _, _ = gatetunnel.ReceiveFrame(ws)
+	}})
+	defer server.Close()
+	location := "ws" + server.URL[len("http"):]
+	client := testClient(t, Config{
+		ServerURL: "https://example.invalid", MaintenanceURL: location, MaintenanceSecret: "maintenance-secret",
+		SystemCode: "S", SerialNumber: "G", DeviceKey: "K",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		client.RunMaintenance(ctx, time.Millisecond)
+		close(done)
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("maintenance loop remained blocked after context cancellation")
 	}
 }
 

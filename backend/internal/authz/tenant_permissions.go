@@ -37,6 +37,7 @@ const (
 	PermissionOperationsWrite         = "operations.write"
 	PermissionOnsiteRead              = "onsite.read"
 	PermissionOnsiteManage            = "onsite.manage"
+	PermissionOnsiteMaintenance       = "onsite.maintenance"
 	PermissionTicketsVerify           = "tickets.verify"
 	PermissionPaymentsRead            = "payments.read"
 	PermissionPaymentsWrite           = "payments.write"

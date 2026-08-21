@@ -40,6 +40,8 @@ Linux 控制机建议以独立受限账号运行，并由 `systemd` 保持进程
 | `GATE_SYSTEM_CODE` | 是 | 景区商户的系统编号 |
 | `GATE_SERIAL_NUMBER` | 是 | 后台登记的设备序列号 |
 | `GATE_DEVICE_KEY` | 是 | 后台创建设备或轮换密钥时仅显示一次的原始密钥 |
+| `GATE_MAINTENANCE_SECRET` | 否 | 后台“远程维护”生成的独立维护凭据；为空则不建立维护通道 |
+| `GATE_MAINTENANCE_URL` | 启用维护时建议显式配置 | 后台返回的 `wss://.../api/v1/hardware/maintenance/ws` 地址；留空时从 `GATE_SERVER_URL` 的主机推导；不把令牌写进 URL |
 | `GATE_DRIVER_URL` | 生产必填 | 本机硬件适配器地址；拿到真实厂商协议前可指向测试驱动 |
 | `GATE_SCAN_TOKEN` | 是 | 本机扫码接口令牌，应使用高强度随机值 |
 | `GATE_STATE_FILE` | 生产必填 | 待处理开闸状态文件，例如 `/var/lib/ticket-gate/state.json`，目录仅允许闸机程序账号访问 |
@@ -47,6 +49,25 @@ Linux 控制机建议以独立受限账号运行，并由 `systemd` 保持进程
 | `GATE_ALLOW_INSECURE_HTTP` | 仅本地调试 | 设为 `true` 才允许使用 HTTP 云端地址 |
 
 密钥不写入请求正文，也不应写入日志、安装包或源码。云端数据库只保存加密后的设备密钥。升级前已经创建的设备必须在后台轮换一次密钥后才能使用新版直连接口；密钥泄露后也应立即轮换。
+
+## 3.1 服务器承载的临时 SSH 维护通道
+
+远程维护是一个独立的、默认关闭的运维能力，不参与票权核销、开闸命令或设备 HMAC。租户管理员在设备管理中先生成/轮换维护凭据，再按原因创建短时会话；凭据和会话令牌都只返回一次。Linux `gate-client` 通过 HTTPS 服务器建立 WSS 长连接，服务端只允许把管理端字节流转发到闸机控制机本机的固定 `127.0.0.1:22`，不接受服务端下发目标地址，也不提供通用 TCP、SOCKS、VPN 或横向内网代理。
+
+启用前必须同时满足：
+
+1. 反向代理为维护路径提供 HTTPS/WSS 和部署侧的证书/客户端准入策略；应用配置 `maintenance.enabled: true` 时 `server.public_base_url` 必须是 `https://`。
+2. 闸机控制机的维护凭据只保存在 gate-client 账号可读的受限配置中，不能与 `GATE_DEVICE_KEY` 混用。
+3. 管理员创建会话后使用页面显示的地址和令牌运行 `gate-ssh`（建议作为 OpenSSH `ProxyCommand`），会话关闭、过期、服务重启或凭据轮换都会立即断开。
+
+构建并使用代理命令：
+
+```bash
+go build -o gate-ssh ./cmd/gate-ssh
+ssh -o "ProxyCommand=gate-ssh --url '<websocket_url>' --token '<session_token>'" root@127.0.0.1
+```
+
+`root@127.0.0.1` 只是 SSH 客户端显示的本机目标名；真正的 TCP 连接始终由闸机上的 gate-client 固定拨号到 `127.0.0.1:22`。不要把会话令牌放入脚本仓库、工单、浏览器历史或日志。当前实现不宣称已经具备厂商三辊闸控制板协议；SSH 只用于现场诊断、配置和协议嗅探准备，仍需人工审批和现场操作规范。
 
 ## 4. 本机扫码接口
 

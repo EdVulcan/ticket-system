@@ -51,6 +51,14 @@ backup:
   # TICKET_BACKUP_POSTGRES_BIN_DIR on the deployment machine.
   postgres_bin_dir: ""
 
+maintenance:
+  # Disabled until a reverse proxy/WSS endpoint and a dedicated gate-client
+  # maintenance credential have been provisioned.
+  enabled: false
+  path: "/api/v1/hardware/maintenance/ws"
+  session_ttl_seconds: 900
+  max_session_ttl_seconds: 1800
+
 log:
   level: debug
   filename: "app.log"

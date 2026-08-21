@@ -38,6 +38,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&PlatformAIConfig{}, &AITenantQuotaPolicy{}, &AIUsageMonth{},
 		&AgentTask{}, &AgentTaskEvent{},
 		&PrintTemplate{}, &PrintTemplateRevision{},
+		&DeviceMaintenanceCredential{}, &DeviceMaintenanceSession{},
 	} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("table for %T is missing", table)
@@ -64,6 +65,8 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		{&PrintTemplate{}, "idx_print_template_scope"},
 		{&PrintTemplateRevision{}, "idx_print_template_revision_version"},
 		{&PrintJob{}, "idx_print_jobs_template_revision"},
+		{&DeviceMaintenanceCredential{}, "idx_device_maintenance_active_credential"},
+		{&DeviceMaintenanceSession{}, "idx_device_maintenance_session_active_device"},
 	} {
 		if !db.Migrator().HasIndex(index.model, index.name) {
 			t.Fatalf("index %s is missing", index.name)
@@ -1275,5 +1278,134 @@ func TestPostgresOwnershipGuardsRejectCrossTenantRows(t *testing.T) {
 		TicketCode: "forbidden", Sequence: 1, Name: "cross-tenant",
 	}).Error; err == nil {
 		t.Fatal("orphan order visitor was accepted by PostgreSQL guard")
+	}
+}
+
+func TestPostgresSchema106MaintenanceOwnershipGuards(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	first := Tenant{Name: "Maintenance Guard A", SystemCode: "MNT-GUARD-A", SecretKey: "mnt-a", Status: "active"}
+	second := Tenant{Name: "Maintenance Guard B", SystemCode: "MNT-GUARD-B", SecretKey: "mnt-b", Status: "active"}
+	if err := db.Create(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	firstArea := ScenicArea{TenantID: first.ID, Code: "MNT-A", Name: "Maintenance A", Status: "active"}
+	secondArea := ScenicArea{TenantID: second.ID, Code: "MNT-B", Name: "Maintenance B", Status: "active"}
+	if err := db.Create(&firstArea).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&secondArea).Error; err != nil {
+		t.Fatal(err)
+	}
+	firstUser := User{TenantID: first.ID, Username: "mnt-admin-a", Password: "hash", Role: "admin"}
+	if err := db.Create(&firstUser).Error; err != nil {
+		t.Fatal(err)
+	}
+	secondUser := User{TenantID: second.ID, Username: "mnt-admin-b", Password: "hash", Role: "admin"}
+	if err := db.Create(&secondUser).Error; err != nil {
+		t.Fatal(err)
+	}
+	firstDevice := Device{TenantID: first.ID, ScenicAreaID: firstArea.ID, Name: "Gate A", SerialNumber: "MNT-GATE-A", Type: "gate", Status: "online"}
+	secondDevice := Device{TenantID: second.ID, ScenicAreaID: secondArea.ID, Name: "Gate B", SerialNumber: "MNT-GATE-B", Type: "gate", Status: "online"}
+	if err := db.Create(&firstDevice).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&secondDevice).Error; err != nil {
+		t.Fatal(err)
+	}
+	validCredential := DeviceMaintenanceCredential{TenantID: first.ID, ScenicAreaID: firstArea.ID, DeviceID: firstDevice.ID, SecretHash: strings.Repeat("a", 64), Status: "active"}
+	if err := db.Create(&validCredential).Error; err != nil {
+		t.Fatalf("valid maintenance credential rejected: %v", err)
+	}
+	invalidCredential := validCredential
+	invalidCredential.Base = Base{}
+	invalidCredential.SecretHash = strings.Repeat("b", 64)
+	invalidCredential.TenantID = first.ID
+	invalidCredential.ScenicAreaID = secondArea.ID
+	invalidCredential.DeviceID = secondDevice.ID
+	if err := db.Create(&invalidCredential).Error; err == nil {
+		t.Fatal("cross-tenant maintenance credential was accepted")
+	}
+	validSession := DeviceMaintenanceSession{
+		TenantID: first.ID, ScenicAreaID: firstArea.ID, DeviceID: firstDevice.ID, ActorUserID: firstUser.ID,
+		Reason: "ownership test", Mode: "ssh", Status: "pending", TokenHash: strings.Repeat("c", 64),
+		GatewaySessionID: "MNT-GUARD-SESSION", ExpiresAt: time.Now().Add(time.Minute),
+	}
+	if err := db.Create(&validSession).Error; err != nil {
+		t.Fatalf("valid maintenance session rejected: %v", err)
+	}
+	if err := db.Model(&validCredential).Update("secret_hash", strings.Repeat("e", 64)).Error; err == nil {
+		t.Fatal("maintenance credential identity was mutable")
+	}
+	if err := db.Model(&validSession).Update("tenant_id", second.ID).Error; err == nil {
+		t.Fatal("maintenance session tenant identity was mutable")
+	}
+	invalidSession := validSession
+	invalidSession.Base = Base{}
+	invalidSession.TokenHash = strings.Repeat("d", 64)
+	invalidSession.GatewaySessionID = "MNT-GUARD-CROSS"
+	invalidSession.ScenicAreaID = secondArea.ID
+	invalidSession.DeviceID = secondDevice.ID
+	if err := db.Create(&invalidSession).Error; err == nil {
+		t.Fatal("cross-tenant maintenance session was accepted")
+	}
+	// Closing historical maintenance facts must remain possible after the
+	// device or operator is soft-deleted; the immutable ownership columns are
+	// still checked by the trigger.
+	if err := db.Delete(&firstDevice).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete(&firstUser).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&validCredential).Updates(map[string]interface{}{"status": "revoked", "revoked_at": time.Now()}).Error; err != nil {
+		t.Fatalf("historical credential could not be revoked after device deletion: %v", err)
+	}
+	if err := db.Model(&validSession).Updates(map[string]interface{}{"status": "interrupted", "closed_at": time.Now(), "closed_reason": "device removed"}).Error; err != nil {
+		t.Fatalf("historical session could not be closed after owner deletion: %v", err)
+	}
+}
+
+func TestPostgresSchema106UpgradeAddsMaintenanceFactsToSchema105(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Where("version >= ?", CurrentPostgresSchemaVersion).Delete(&SchemaMigration{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&SchemaMigration{Version: 105, Name: "window order idempotency and print template orientation", AppliedAt: time.Now()}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("schema 105 to 106 upgrade failed: %v", err)
+	}
+	for _, field := range []struct {
+		model interface{}
+		name  string
+	}{{&DeviceMaintenanceCredential{}, "SecretHash"}, {&DeviceMaintenanceSession{}, "GatewaySessionID"}, {&DeviceMaintenanceSession{}, "Status"}} {
+		if !db.Migrator().HasColumn(field.model, field.name) {
+			t.Fatalf("schema 106 column %s for %T is missing", field.name, field.model)
+		}
+	}
+	for _, index := range []struct {
+		model interface{}
+		name  string
+	}{{&DeviceMaintenanceCredential{}, "idx_device_maintenance_active_credential"}, {&DeviceMaintenanceSession{}, "idx_device_maintenance_session_active_device"}} {
+		if !db.Migrator().HasIndex(index.model, index.name) {
+			t.Fatalf("schema 106 index %s is missing", index.name)
+		}
+	}
+	var latest SchemaMigration
+	if err := db.Order("version DESC").First(&latest).Error; err != nil {
+		t.Fatal(err)
+	}
+	if latest.Version != CurrentPostgresSchemaVersion {
+		t.Fatalf("latest schema=%d, want %d", latest.Version, CurrentPostgresSchemaVersion)
 	}
 }

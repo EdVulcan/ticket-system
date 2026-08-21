@@ -2,6 +2,43 @@ package model
 
 import "time"
 
+// DeviceMaintenanceCredential is independent from the ticketing HMAC key.
+// The raw secret is returned only when an administrator rotates it; the
+// server stores a hash for authentication and never reuses it for hardware
+// verification requests.
+type DeviceMaintenanceCredential struct {
+	Base
+	TenantID     uint       `gorm:"index;not null" json:"tenant_id"`
+	ScenicAreaID uint       `gorm:"index;not null" json:"scenic_area_id"`
+	DeviceID     uint       `gorm:"index;not null" json:"device_id"`
+	SecretHash   string     `gorm:"size:64;uniqueIndex;not null" json:"-"`
+	Status       string     `gorm:"size:20;not null;default:'active';index" json:"status"` // active, revoked
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
+	LastUsedAt   *time.Time `json:"last_used_at,omitempty"`
+}
+
+// DeviceMaintenanceSession is a short-lived, audited maintenance lease. It
+// authorizes exactly one device and one fixed localhost SSH bridge; it is not
+// a generic TCP proxy or a second ticketing workflow.
+type DeviceMaintenanceSession struct {
+	Base
+	TenantID          uint       `gorm:"index;not null" json:"tenant_id"`
+	ScenicAreaID      uint       `gorm:"index;not null" json:"scenic_area_id"`
+	DeviceID          uint       `gorm:"index;not null" json:"device_id"`
+	ActorUserID       uint       `gorm:"index;not null" json:"actor_user_id"`
+	Reason            string     `gorm:"size:255;not null" json:"reason"`
+	Mode              string     `gorm:"size:20;not null;default:'ssh'" json:"mode"`             // ssh
+	Status            string     `gorm:"size:20;not null;default:'pending';index" json:"status"` // pending, active, closed, expired, interrupted
+	TokenHash         string     `gorm:"size:64;uniqueIndex;not null" json:"-"`
+	GatewaySessionID  string     `gorm:"size:80;uniqueIndex;not null" json:"-"`
+	ConnectionVersion int64      `gorm:"not null;default:0" json:"connection_version"`
+	ExpiresAt         time.Time  `gorm:"index;not null" json:"expires_at"`
+	OpenedAt          *time.Time `json:"opened_at,omitempty"`
+	ClosedAt          *time.Time `json:"closed_at,omitempty"`
+	ClosedReason      string     `gorm:"size:255" json:"closed_reason,omitempty"`
+}
+
 // HardwareCommand is a durable command sent to a printer, gate, scanner, or
 // identity reader. A command is never considered successful merely because a
 // browser requested it; the device must acknowledge it with the same token.

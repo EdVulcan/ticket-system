@@ -42,6 +42,17 @@ func TestAgentUseIsSeparateFromHighRiskPermissions(t *testing.T) {
 	}
 }
 
+func TestMaintenanceTunnelIsRestrictedToTenantAdministrator(t *testing.T) {
+	if !HasTenantPermission(RoleTenantAdmin, PermissionOnsiteMaintenance) {
+		t.Fatal("tenant administrator must be able to manage maintenance sessions")
+	}
+	for _, role := range []string{RoleProductOperator, RoleTeamOperator, RoleSettlementOperator, RoleViewer, "seller", "checker"} {
+		if HasTenantPermission(role, PermissionOnsiteMaintenance) {
+			t.Fatalf("role %q unexpectedly received maintenance tunnel permission", role)
+		}
+	}
+}
+
 func TestTeamCommercialConfigurationRequiresContractPermission(t *testing.T) {
 	if HasTenantPermission(RoleTeamOperator, PermissionTeamContractsWrite) {
 		t.Fatal("team operator must not change contract prices or credit limits")
