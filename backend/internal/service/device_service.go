@@ -16,6 +16,15 @@ import (
 type DeviceService struct {
 	DB            *gorm.DB
 	TicketService *TicketService
+	Maintenance   DeviceMaintenanceInvalidator
+}
+
+// DeviceMaintenanceInvalidator is the narrow control-plane seam used by the
+// device service when a device lifecycle change must immediately terminate
+// the maintenance data plane. Keeping the dependency small avoids coupling
+// ticket verification to the WSS implementation.
+type DeviceMaintenanceInvalidator interface {
+	DisconnectDevice(deviceID uint, reason string)
 }
 
 // MarkOffline transitions stale devices and opens one alert per incident.
@@ -23,6 +32,7 @@ type DeviceService struct {
 // and open-alert lookup make the operation idempotent.
 func (s *DeviceService) MarkOffline(now time.Time, timeout time.Duration) (int, error) {
 	changed := 0
+	var disconnected []uint
 	err := model.Write(func(tx *gorm.DB) error {
 		cutoff := now.Add(-timeout)
 		var devices []model.Device
@@ -36,10 +46,16 @@ func (s *DeviceService) MarkOffline(now time.Time, timeout time.Duration) (int, 
 			if err := syncDeviceAlertTx(tx, &devices[i], "offline", now); err != nil {
 				return err
 			}
+			disconnected = append(disconnected, devices[i].ID)
 			changed++
 		}
 		return nil
 	})
+	if err == nil && s != nil && s.Maintenance != nil {
+		for _, deviceID := range disconnected {
+			s.Maintenance.DisconnectDevice(deviceID, "设备心跳超时")
+		}
+	}
 	return changed, err
 }
 
@@ -103,12 +119,14 @@ type DirectVerifyRequest struct {
 
 type OpenResultRequest struct {
 	VerificationRequestID string `json:"verification_request_id" binding:"required"`
-	Status                string `json:"status" binding:"required"` // opened, failed
+	Status                string `json:"status" binding:"required"` // opened, failed, unknown
 	Error                 string `json:"error"`
 	OccurredAt            string `json:"occurred_at"`
 }
 
 var ErrVerificationProcessing = errors.New("verification request is processing")
+
+const deviceVerificationProcessingTTL = 5 * time.Minute
 
 type HardwareCommandRequest struct {
 	TenantID    uint
@@ -137,6 +155,41 @@ type DirectHardwareAckRequest struct {
 	Error     string `json:"error"`
 }
 
+var supportedDeviceTypes = map[string]struct{}{
+	"gate":     {},
+	"handheld": {},
+	"pos":      {},
+}
+
+var hardwareCommandMatrix = map[string]map[string]struct{}{
+	"gate": {
+		"verify":    {},
+		"open_gate": {},
+	},
+	"handheld": {
+		"verify":        {},
+		"read_identity": {},
+	},
+	"pos": {
+		"print":         {},
+		"read_identity": {},
+	},
+}
+
+func validDeviceType(deviceType string) bool {
+	_, ok := supportedDeviceTypes[strings.TrimSpace(deviceType)]
+	return ok
+}
+
+func hardwareCommandAllowed(deviceType, kind string) bool {
+	commands, ok := hardwareCommandMatrix[strings.TrimSpace(deviceType)]
+	if !ok {
+		return false
+	}
+	_, ok = commands[strings.TrimSpace(kind)]
+	return ok
+}
+
 func (s *DeviceService) QueueHardwareCommand(req HardwareCommandRequest) (*model.HardwareCommand, error) {
 	if req.TenantID == 0 || req.DeviceID == 0 || strings.TrimSpace(req.Kind) == "" {
 		return nil, errors.New("tenant, device and command kind are required")
@@ -147,11 +200,14 @@ func (s *DeviceService) QueueHardwareCommand(req HardwareCommandRequest) (*model
 	var command model.HardwareCommand
 	err := model.Write(func(tx *gorm.DB) error {
 		var device model.Device
-		if err := tx.Where("id = ? AND tenant_id = ? AND status != ?", req.DeviceID, req.TenantID, "offline").First(&device).Error; err != nil {
+		if err := tx.Where("id = ? AND tenant_id = ? AND status = ?", req.DeviceID, req.TenantID, "online").First(&device).Error; err != nil {
 			return errors.New("device is unavailable")
 		}
 		if device.ScenicAreaID == 0 {
 			return errors.New("device has no scenic area")
+		}
+		if !hardwareCommandAllowed(device.Type, strings.TrimSpace(req.Kind)) {
+			return errors.New("command is not allowed for this device type")
 		}
 		command = model.HardwareCommand{
 			TenantID: req.TenantID, ScenicAreaID: device.ScenicAreaID, DeviceID: req.DeviceID,
@@ -180,6 +236,9 @@ func (s *DeviceService) PollHardwareCommand(systemCode, serialNumber, deviceKey 
 		var device model.Device
 		if err := tx.Where("serial_number = ? AND tenant_id = ?", serialNumber, tenant.ID).First(&device).Error; err != nil || !validDeviceKey(&device, deviceKey) {
 			return errors.New("unauthorized device")
+		}
+		if device.Status != "online" {
+			return errors.New("device is unavailable")
 		}
 		now := time.Now()
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND device_id = ? AND status IN ? AND expires_at > ?", tenant.ID, device.ID, []string{"queued", "delivered"}, now).Order("id").First(&command)
@@ -241,6 +300,10 @@ func (s *DeviceService) AckHardwareCommand(req HardwareAckRequest) error {
 func (s *DeviceService) PollHardwareCommandByDevice(tenantID, deviceID uint) (*model.HardwareCommand, error) {
 	var command model.HardwareCommand
 	err := model.Write(func(tx *gorm.DB) error {
+		var device model.Device
+		if err := tx.Where("id = ? AND tenant_id = ? AND status = ?", deviceID, tenantID, "online").First(&device).Error; err != nil {
+			return errors.New("device is unavailable")
+		}
 		now := time.Now()
 		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND device_id = ? AND status IN ? AND expires_at > ?", tenantID, deviceID, []string{"queued", "delivered"}, now).Order("id").First(&command)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -354,7 +417,7 @@ func (s *DeviceService) Verify(req VerifyRequest) (*VerifyResponse, error) {
 
 	// 2. Validate Device
 	var device model.Device
-	if err := s.DB.Where("serial_number = ? AND tenant_id = ? AND status != ?", req.SerialNumber, tenant.ID, "disabled").First(&device).Error; err != nil {
+	if err := s.DB.Where("serial_number = ? AND tenant_id = ? AND status = ?", req.SerialNumber, tenant.ID, "online").First(&device).Error; err != nil {
 		return &VerifyResponse{Code: 403, Result: "deny", DisplayText: "Unauthorized Device"}, nil
 	}
 	if !validDeviceKey(&device, req.DeviceKey) {
@@ -384,11 +447,11 @@ func (s *DeviceService) VerifyDirect(req DirectVerifyRequest) (*VerifyResponse, 
 	if err := s.DB.Where("id = ? AND tenant_id = ? AND check_point_id = ? AND scenic_area_id != 0", req.DeviceID, req.TenantID, req.CheckPointID).First(&device).Error; err != nil {
 		return denyResponse(ErrAccessDenied), nil
 	}
-	if device.Type != "gate" && device.Type != "handheld" {
+	if device.Status != "online" {
 		return denyResponse(ErrAccessDenied), nil
 	}
-	if device.Status != "online" {
-		return &VerifyResponse{Code: 403, Result: "deny", DisplayText: "设备不在线", VoiceFile: "invalid.mp3"}, nil
+	if device.Type != "gate" && device.Type != "handheld" {
+		return denyResponse(ErrAccessDenied), nil
 	}
 
 	verification, replay, err := s.beginDeviceVerification(req, device.ScenicAreaID)
@@ -406,6 +469,12 @@ func (s *DeviceService) VerifyDirect(req DirectVerifyRequest) (*VerifyResponse, 
 	}
 	var checkIn model.CheckInRecord
 	_ = s.DB.Where("device_id = ? AND device_request_id = ?", req.DeviceID, req.RequestID).Order("id desc").First(&checkIn).Error
+	if checkIn.ID != 0 {
+		// A concurrent retry may have completed the ticket while this process was
+		// waiting. Prefer the durable admission fact over a transient error from
+		// the losing verifier so the request remains idempotent.
+		resp = responseFromCheckIn(s, &checkIn)
+	}
 	if err := model.Write(func(tx *gorm.DB) error {
 		return tx.Model(&model.DeviceVerification{}).Where("id = ? AND status = ?", verification.ID, "processing").Updates(map[string]interface{}{
 			"status": "completed", "response_code": resp.Code, "result": resp.Result, "display_text": resp.DisplayText,
@@ -436,6 +505,20 @@ func (s *DeviceService) beginDeviceVerification(req DirectVerifyRequest, scenicA
 			})
 			return &existing, resp, nil
 		}
+		// A process can die after creating the processing row but before calling
+		// TicketService. A stale row may be safely taken over: the ticket service
+		// still locks the ticket and the request ID remains the idempotency key.
+		cutoff := time.Now().Add(-deviceVerificationProcessingTTL)
+		result := s.DB.Model(&model.DeviceVerification{}).
+			Where("id = ? AND status = ? AND updated_at <= ?", existing.ID, "processing", cutoff).
+			Update("updated_at", time.Now())
+		if result.Error != nil {
+			return nil, nil, result.Error
+		}
+		if result.RowsAffected == 1 {
+			existing.UpdatedAt = time.Now()
+			return &existing, nil, nil
+		}
 		return &existing, nil, ErrVerificationProcessing
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -452,8 +535,9 @@ func (s *DeviceService) beginDeviceVerification(req DirectVerifyRequest, scenicA
 }
 
 func (s *DeviceService) ReportOpenResult(tenantID, deviceID uint, req OpenResultRequest) error {
-	if req.Status != "opened" && req.Status != "failed" {
-		return errors.New("开闸结果必须是 opened 或 failed")
+	req.Status = strings.TrimSpace(req.Status)
+	if req.Status != "opened" && req.Status != "failed" && req.Status != "unknown" {
+		return errors.New("开闸结果必须是 opened、failed 或 unknown")
 	}
 	return model.Write(func(tx *gorm.DB) error {
 		var verification model.DeviceVerification
@@ -483,6 +567,9 @@ func (s *DeviceService) ReportOpenResult(tenantID, deviceID uint, req OpenResult
 			return err
 		}
 		eventType := "gate_open_failed"
+		if req.Status == "unknown" {
+			eventType = "gate_open_unknown"
+		}
 		if req.Status == "opened" {
 			eventType = "gate_opened"
 		}
@@ -558,6 +645,12 @@ func (s *DeviceService) validateCheckPoint(db *gorm.DB, tenantID uint, checkPoin
 }
 
 func (s *DeviceService) Create(device *model.Device, tenantID uint) error {
+	if device == nil {
+		return errors.New("device is required")
+	}
+	if !validDeviceType(device.Type) {
+		return errors.New("invalid device type")
+	}
 	device.AuthKey = utils.GenerateRandomString(40)
 	ciphertext, err := utils.EncryptAES(device.AuthKey)
 	if err != nil {
@@ -565,6 +658,8 @@ func (s *DeviceService) Create(device *model.Device, tenantID uint) error {
 	}
 	device.AuthKeyCiphertext = ciphertext
 	device.AuthKeyHash = ""
+	device.Status = "offline"
+	device.LastHeartbeat = nil
 	return model.Write(func(tx *gorm.DB) error {
 		if err := requireActiveTenantCapability(tx, tenantID, "supplier"); err != nil {
 			return err
@@ -584,9 +679,27 @@ func (s *DeviceService) Create(device *model.Device, tenantID uint) error {
 }
 
 func (s *DeviceService) Update(id, tenantID uint, device *model.Device) error {
-	return model.Write(func(tx *gorm.DB) error {
+	if device == nil {
+		return errors.New("device is required")
+	}
+	var disconnect bool
+	err := model.Write(func(tx *gorm.DB) error {
 		if err := requireActiveTenantCapability(tx, tenantID, "supplier"); err != nil {
 			return err
+		}
+		var current model.Device
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", id, tenantID).First(&current).Error; err != nil {
+			return err
+		}
+		requestedType := strings.TrimSpace(device.Type)
+		if requestedType != "" && requestedType != current.Type {
+			return errors.New("设备类型不可直接修改，请新建设备")
+		}
+		if device.CheckPointID != nil && current.CheckPointID != nil && *device.CheckPointID != *current.CheckPointID && current.Status != "offline" {
+			return errors.New("设备在线时不能更换检票点，请先停止设备")
+		}
+		if device.CheckPointID == nil && current.CheckPointID != nil && current.Status != "offline" {
+			return errors.New("设备在线时不能解除检票点，请先停止设备")
 		}
 		if err := s.validateCheckPoint(tx, tenantID, device.CheckPointID); err != nil {
 			return err
@@ -595,9 +708,21 @@ func (s *DeviceService) Update(id, tenantID uint, device *model.Device) error {
 		if err != nil {
 			return err
 		}
-		device.ScenicAreaID = areaID
-		result := tx.Model(&model.Device{}).Where("id = ? AND tenant_id = ?", id, tenantID).
-			Omit("tenant_id", "serial_number", "auth_key_hash", "auth_key_ciphertext", "ScenicAreaID").Updates(device)
+		if current.ScenicAreaID != areaID && current.Status != "offline" {
+			return errors.New("设备在线时不能更换所属景区，请先停止设备")
+		}
+		identityChanged := current.ScenicAreaID != areaID || !sameCheckpoint(current.CheckPointID, device.CheckPointID)
+		if identityChanged {
+			if err := revokeDeviceMaintenanceFactsTx(tx, tenantID, id, "设备履约归属已变更"); err != nil {
+				return err
+			}
+		}
+		updates := map[string]interface{}{
+			"name": strings.TrimSpace(device.Name), "check_point_id": device.CheckPointID,
+			"ip_address": strings.TrimSpace(device.IPAddress), "mac_address": strings.TrimSpace(device.MACAddress),
+			"scenic_area_id": areaID,
+		}
+		result := tx.Model(&model.Device{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(updates)
 		if result.Error == nil {
 			result = tx.Model(&model.Device{}).Where("id = ? AND tenant_id = ?", id, tenantID).Update("scenic_area_id", areaID)
 		}
@@ -607,8 +732,20 @@ func (s *DeviceService) Update(id, tenantID uint, device *model.Device) error {
 		if result.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
 		}
+		disconnect = identityChanged
 		return nil
 	})
+	if err == nil && disconnect && s != nil && s.Maintenance != nil {
+		s.Maintenance.DisconnectDevice(id, "设备检票点已变更")
+	}
+	return err
+}
+
+func sameCheckpoint(left, right *uint) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
 }
 
 func scenicAreaForCheckpoint(db *gorm.DB, tenantID uint, checkpointID *uint, requestedAreaID uint) (uint, error) {
@@ -638,15 +775,23 @@ func (s *DeviceService) RotateKey(id, tenantID uint) (string, error) {
 		return "", fmt.Errorf("encrypt device key: %w", encryptErr)
 	}
 	err := model.Write(func(tx *gorm.DB) error {
-		result := tx.Model(&model.Device{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(map[string]interface{}{"auth_key_ciphertext": ciphertext, "auth_key_hash": ""})
+		result := tx.Model(&model.Device{}).Where("id = ? AND tenant_id = ?", id, tenantID).Updates(map[string]interface{}{
+			"auth_key_ciphertext": ciphertext, "auth_key_hash": "", "status": "offline", "last_heartbeat": nil,
+		})
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected == 0 {
 			return gorm.ErrRecordNotFound
 		}
+		if err := revokeDeviceMaintenanceFactsTx(tx, tenantID, id, "设备接入密钥已轮换"); err != nil {
+			return err
+		}
 		return nil
 	})
+	if err == nil && s != nil && s.Maintenance != nil {
+		s.Maintenance.DisconnectDevice(id, "设备接入密钥已轮换")
+	}
 	return key, err
 }
 
@@ -662,8 +807,18 @@ func validDeviceKey(device *model.Device, key string) bool {
 }
 
 func (s *DeviceService) Delete(id, tenantID uint) error {
-	return model.Write(func(tx *gorm.DB) error {
-		result := tx.Where("id = ? AND tenant_id = ?", id, tenantID).Delete(&model.Device{})
+	err := model.Write(func(tx *gorm.DB) error {
+		var device model.Device
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", id, tenantID).First(&device).Error; err != nil {
+			return err
+		}
+		if err := revokeDeviceMaintenanceFactsTx(tx, tenantID, id, "设备已删除"); err != nil {
+			return err
+		}
+		if err := tx.Model(&device).Updates(map[string]interface{}{"status": "disabled", "auth_key_ciphertext": "", "auth_key_hash": "", "last_heartbeat": nil}).Error; err != nil {
+			return err
+		}
+		result := tx.Delete(&device)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -672,6 +827,33 @@ func (s *DeviceService) Delete(id, tenantID uint) error {
 		}
 		return nil
 	})
+	if err == nil && s != nil && s.Maintenance != nil {
+		s.Maintenance.DisconnectDevice(id, "设备已删除")
+	}
+	return err
+}
+
+// revokeDeviceMaintenanceFactsTx closes durable maintenance state before a
+// device lifecycle change commits. The in-memory gateway is disconnected by
+// the caller after commit, while these rows make a restart fail closed too.
+func revokeDeviceMaintenanceFactsTx(tx *gorm.DB, tenantID, deviceID uint, reason string) error {
+	if tx == nil || tenantID == 0 || deviceID == 0 {
+		return errors.New("device maintenance identity is required")
+	}
+	now := time.Now()
+	if err := tx.Model(&model.DeviceMaintenanceCredential{}).
+		Where("tenant_id = ? AND device_id = ? AND status = ?", tenantID, deviceID, "active").
+		Updates(map[string]interface{}{"status": "revoked", "revoked_at": now}).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(&model.DeviceMaintenanceSession{}).
+		Where("tenant_id = ? AND device_id = ? AND status IN ?", tenantID, deviceID, []string{"pending", "active"}).
+		Updates(map[string]interface{}{"status": "interrupted", "closed_at": now, "closed_reason": strings.TrimSpace(reason)}).Error; err != nil {
+		return err
+	}
+	return tx.Model(&model.DeviceProvisioningLease{}).
+		Where("tenant_id = ? AND device_id = ? AND status IN ?", tenantID, deviceID, []string{"pending", "claimed"}).
+		Updates(map[string]interface{}{"status": "revoked", "revoked_at": now, "encrypted_bundle": "", "installer_public_key": ""}).Error
 }
 
 func (s *DeviceService) GetByID(id, tenantID uint) (*model.Device, error) {

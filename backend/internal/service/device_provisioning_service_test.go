@@ -98,6 +98,13 @@ func TestDeviceProvisioningClaimRetryAndConfirm(t *testing.T) {
 	if err := fixture.service.Confirm(fixture.tenant.ID, fixture.device.ID, ProvisioningConfirmRequest{InstallationID: "install-1", Fingerprint: deviceprovision.Fingerprint(publicKey)}); err != nil {
 		t.Fatal(err)
 	}
+	var confirmedDevice model.Device
+	if err := model.DB.First(&confirmedDevice, fixture.device.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !validDeviceKey(&confirmedDevice, bundle.DeviceKey) {
+		t.Fatal("confirmed installation device key was unexpectedly invalidated")
+	}
 	var stored model.DeviceProvisioningLease
 	if err := model.DB.First(&stored, lease.Lease.ID).Error; err != nil {
 		t.Fatal(err)
@@ -158,6 +165,12 @@ func TestDeviceProvisioningFailsClosedAndSerializesClaims(t *testing.T) {
 	if _, err := fixture.service.CreateLease(ProvisioningLeaseRequest{TenantID: fixture.tenant.ID, DeviceID: fixture.device.ID, ActorUserID: fixture.user.ID, Reason: "在线设备"}); !errors.Is(err, ErrProvisioningDeviceOnline) {
 		t.Fatalf("online lease error=%v", err)
 	}
+	if err := model.DB.Model(&device).Update("status", "fault").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.service.CreateLease(ProvisioningLeaseRequest{TenantID: fixture.tenant.ID, DeviceID: fixture.device.ID, ActorUserID: fixture.user.ID, Reason: "故障设备"}); !errors.Is(err, ErrProvisioningDeviceNotOffline) {
+		t.Fatalf("fault lease error=%v", err)
+	}
 }
 
 func TestDeviceProvisioningRequiresHTTPSPublicURL(t *testing.T) {
@@ -197,16 +210,29 @@ func TestDeviceProvisioningCreateLeaseReclaimsExpiredLease(t *testing.T) {
 
 func TestDeviceProvisioningRevokeClearsClaimedEnvelope(t *testing.T) {
 	fixture := newProvisioningFixture(t)
+	maintenance, err := NewDeviceMaintenanceService(model.DB, config.GlobalConfig.Maintenance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.service.Maintenance = maintenance
 	lease, err := fixture.service.CreateLease(ProvisioningLeaseRequest{TenantID: fixture.tenant.ID, DeviceID: fixture.device.ID, ActorUserID: fixture.user.ID, Reason: "撤销错误绑定"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, publicKey, err := deviceprovision.GenerateKeyPair()
+	privateKey, publicKey, err := deviceprovision.GenerateKeyPair()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.service.Claim(ProvisioningClaimRequest{Token: lease.ActivationCode, InstallationID: "revoke-install", PublicKey: deviceprovision.EncodePublicKey(publicKey)}); err != nil {
+	claim, err := fixture.service.Claim(ProvisioningClaimRequest{Token: lease.ActivationCode, InstallationID: "revoke-install", PublicKey: deviceprovision.EncodePublicKey(publicKey)})
+	if err != nil {
 		t.Fatal(err)
+	}
+	bundle, err := deviceprovision.DecryptBundle(claim.Envelope, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := maintenance.authenticateCredential(bundle.MaintenanceSecret); err != nil {
+		t.Fatalf("claimed maintenance credential was not initially usable: %v", err)
 	}
 	if err := fixture.service.RevokeLease(fixture.tenant.ID, fixture.device.ID, lease.Lease.ID, fixture.user.ID, "绑定码误发"); err != nil {
 		t.Fatal(err)
@@ -218,7 +244,105 @@ func TestDeviceProvisioningRevokeClearsClaimedEnvelope(t *testing.T) {
 	if stored.Status != "revoked" || stored.EncryptedBundle != "" {
 		t.Fatalf("revoked lease=%+v", stored)
 	}
+	assertClaimedCredentialsInvalid(t, fixture, bundle.DeviceKey, bundle.MaintenanceSecret, maintenance)
 	if _, err := fixture.service.Claim(ProvisioningClaimRequest{Token: lease.ActivationCode, InstallationID: "revoke-install", PublicKey: deviceprovision.EncodePublicKey(publicKey)}); !errors.Is(err, ErrProvisioningLeaseInvalid) {
 		t.Fatalf("revoked claim error=%v", err)
+	}
+}
+
+func TestDeviceProvisioningExpiryInvalidatesClaimedCredentials(t *testing.T) {
+	fixture := newProvisioningFixture(t)
+	maintenance, err := NewDeviceMaintenanceService(model.DB, config.GlobalConfig.Maintenance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.service.Maintenance = maintenance
+	lease, err := fixture.service.CreateLease(ProvisioningLeaseRequest{TenantID: fixture.tenant.ID, DeviceID: fixture.device.ID, ActorUserID: fixture.user.ID, Reason: "过期领取"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey, publicKey, err := deviceprovision.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := fixture.service.Claim(ProvisioningClaimRequest{Token: lease.ActivationCode, InstallationID: "expired-install", PublicKey: deviceprovision.EncodePublicKey(publicKey)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := deviceprovision.DecryptBundle(claim.Envelope, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := maintenance.authenticateCredential(bundle.MaintenanceSecret); err != nil {
+		t.Fatalf("claimed maintenance credential was not initially usable: %v", err)
+	}
+	expiredAt := lease.Lease.ExpiresAt.Add(time.Second)
+	count, err := fixture.service.ExpireLeases(expiredAt, 10)
+	if err != nil || count != 1 {
+		t.Fatalf("expire claimed lease count=%d err=%v", count, err)
+	}
+	var stored model.DeviceProvisioningLease
+	if err := model.DB.First(&stored, lease.Lease.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "expired" || stored.EncryptedBundle != "" {
+		t.Fatalf("expired lease=%+v", stored)
+	}
+	assertClaimedCredentialsInvalid(t, fixture, bundle.DeviceKey, bundle.MaintenanceSecret, maintenance)
+}
+
+func TestDeviceProvisioningExpiredClaimInvalidatesClaimedCredentials(t *testing.T) {
+	fixture := newProvisioningFixture(t)
+	maintenance, err := NewDeviceMaintenanceService(model.DB, config.GlobalConfig.Maintenance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.service.Maintenance = maintenance
+	lease, err := fixture.service.CreateLease(ProvisioningLeaseRequest{TenantID: fixture.tenant.ID, DeviceID: fixture.device.ID, ActorUserID: fixture.user.ID, Reason: "领取后超时"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey, publicKey, err := deviceprovision.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, err := fixture.service.Claim(ProvisioningClaimRequest{Token: lease.ActivationCode, InstallationID: "expired-claim-install", PublicKey: deviceprovision.EncodePublicKey(publicKey)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := deviceprovision.DecryptBundle(claim.Envelope, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := maintenance.authenticateCredential(bundle.MaintenanceSecret); err != nil {
+		t.Fatalf("claimed maintenance credential was not initially usable: %v", err)
+	}
+	if err := model.DB.Model(&model.DeviceProvisioningLease{}).Where("id = ?", lease.Lease.ID).Update("expires_at", time.Now().Add(-time.Second)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.service.Claim(ProvisioningClaimRequest{Token: lease.ActivationCode, InstallationID: "expired-claim-install", PublicKey: deviceprovision.EncodePublicKey(publicKey)}); !errors.Is(err, ErrProvisioningLeaseInvalid) {
+		t.Fatalf("expired claimed lease error=%v", err)
+	}
+	assertClaimedCredentialsInvalid(t, fixture, bundle.DeviceKey, bundle.MaintenanceSecret, maintenance)
+}
+
+func assertClaimedCredentialsInvalid(t *testing.T, fixture provisioningFixture, deviceKey, maintenanceSecret string, maintenance *DeviceMaintenanceService) {
+	t.Helper()
+	var device model.Device
+	if err := model.DB.First(&device, fixture.device.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if device.AuthKeyCiphertext != "" || validDeviceKey(&device, deviceKey) {
+		t.Fatalf("revoked claimed device key remains usable: ciphertext=%t", device.AuthKeyCiphertext != "")
+	}
+	var credential model.DeviceMaintenanceCredential
+	if err := model.DB.Where("tenant_id = ? AND device_id = ? AND secret_hash = ?", fixture.tenant.ID, fixture.device.ID, hashMaintenanceSecret(maintenanceSecret)).First(&credential).Error; err != nil {
+		t.Fatal(err)
+	}
+	if credential.Status != "revoked" || credential.RevokedAt == nil {
+		t.Fatalf("claimed maintenance credential was not revoked: %+v", credential)
+	}
+	if _, err := maintenance.authenticateCredential(maintenanceSecret); !errors.Is(err, ErrMaintenanceCredential) {
+		t.Fatalf("revoked maintenance credential authenticated: %v", err)
 	}
 }

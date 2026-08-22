@@ -90,7 +90,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	platformAIQuotaGroup.PUT("/:tenantID", platformAIController.UpdateTenantQuota)
 
 	// Tenant Routes
-	tenantController := &api.TenantController{}
+	tenantController := &api.TenantController{Service: service.TenantService{Maintenance: maintenanceService}}
 	tenantGroup := protected.Group("/tenants")
 	{
 		tenantGroup.GET("/me", tenantController.GetSelf)
@@ -132,6 +132,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	// Device Routes
 	// Device Routes
 	deviceService := service.NewDeviceService(model.DB, &service.TicketService{})
+	deviceService.Maintenance = maintenanceService.Gateway
 	deviceController := api.NewDeviceController(deviceService)
 	deviceMaintenanceController := api.NewDeviceMaintenanceController(maintenanceService)
 	deviceProvisioningService := service.NewDeviceProvisioningService(model.DB, maintenanceService)

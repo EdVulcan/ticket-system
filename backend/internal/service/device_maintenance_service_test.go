@@ -35,6 +35,12 @@ func newMaintenanceFixture(t *testing.T) maintenanceFixture {
 		if err := tx.Create(&fixture.tenant).Error; err != nil {
 			return err
 		}
+		if err := tx.Create(&model.TenantCapability{TenantID: fixture.tenant.ID, Capability: "supplier", Status: "active"}).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&model.SupplierBusinessType{TenantID: fixture.tenant.ID, BusinessType: "scenic", Status: "active"}).Error; err != nil {
+			return err
+		}
 		fixture.area = model.ScenicArea{TenantID: fixture.tenant.ID, Code: "MNT-SERVICE-AREA", Name: "Maintenance Service Area", Status: "active"}
 		if err := tx.Create(&fixture.area).Error; err != nil {
 			return err

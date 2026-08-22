@@ -15,6 +15,19 @@ type DeviceController struct {
 	Service *service.DeviceService
 }
 
+// deviceWriteRequest intentionally contains only operator-editable metadata.
+// Lifecycle state, heartbeat timestamps and authentication material are owned
+// by the device protocol/service and must never be accepted from JSON binding.
+type deviceWriteRequest struct {
+	Name         string `json:"name" binding:"required"`
+	SerialNumber string `json:"serial_number"`
+	Type         string `json:"type"`
+	ScenicAreaID uint   `json:"scenic_area_id"`
+	CheckPointID *uint  `json:"check_point_id"`
+	IPAddress    string `json:"ip_address"`
+	MACAddress   string `json:"mac_address"`
+}
+
 func NewDeviceController(s *service.DeviceService) *DeviceController {
 	return &DeviceController{Service: s}
 }
@@ -128,11 +141,12 @@ func (c *DeviceController) QueueCommand(ctx *gin.Context) {
 // --- CRUD Methods ---
 
 func (c *DeviceController) Create(ctx *gin.Context) {
-	var device model.Device
-	if err := ctx.ShouldBindJSON(&device); err != nil {
+	var body deviceWriteRequest
+	if err := ctx.ShouldBindJSON(&body); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	device := model.Device{Name: body.Name, SerialNumber: body.SerialNumber, Type: body.Type, ScenicAreaID: body.ScenicAreaID, CheckPointID: body.CheckPointID, IPAddress: body.IPAddress, MACAddress: body.MACAddress}
 
 	// Set TenantID from context
 	if tid, exists := ctx.Get("tenant_id"); exists {
@@ -149,11 +163,12 @@ func (c *DeviceController) Create(ctx *gin.Context) {
 
 func (c *DeviceController) Update(ctx *gin.Context) {
 	id, _ := strconv.Atoi(ctx.Param("id"))
-	var device model.Device
-	if err := ctx.ShouldBindJSON(&device); err != nil {
+	var body deviceWriteRequest
+	if err := ctx.ShouldBindJSON(&body); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	device := model.Device{Name: body.Name, Type: body.Type, ScenicAreaID: body.ScenicAreaID, CheckPointID: body.CheckPointID, IPAddress: body.IPAddress, MACAddress: body.MACAddress}
 
 	if err := c.Service.Update(uint(id), ctx.GetUint("tenant_id"), &device); err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

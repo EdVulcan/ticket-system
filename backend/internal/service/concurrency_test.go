@@ -942,12 +942,12 @@ func TestDirectDeviceVerificationReplaysResultAndTracksGateOpen(t *testing.T) {
 	if err := model.DB.Model(&model.CheckInRecord{}).Where("device_id = ? AND device_request_id = ? AND result = ?", deviceID, req.RequestID, "success").Count(&successful).Error; err != nil || successful != 1 {
 		t.Fatalf("successful records=%d err=%v", successful, err)
 	}
-	failed := OpenResultRequest{VerificationRequestID: req.RequestID, Status: "failed", Error: "controller rejected"}
-	if err := svc.ReportOpenResult(tenantID, deviceID, failed); err != nil {
+	unknown := OpenResultRequest{VerificationRequestID: req.RequestID, Status: "unknown", Error: "controller response lost"}
+	if err := svc.ReportOpenResult(tenantID, deviceID, unknown); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.ReportOpenResult(tenantID, deviceID, failed); err != nil {
-		t.Fatalf("idempotent failed report: %v", err)
+	if err := svc.ReportOpenResult(tenantID, deviceID, unknown); err != nil {
+		t.Fatalf("idempotent unknown report: %v", err)
 	}
 	open := OpenResultRequest{VerificationRequestID: req.RequestID, Status: "opened", OccurredAt: time.Now().Format(time.RFC3339)}
 	if err := svc.ReportOpenResult(tenantID, deviceID, open); err != nil {

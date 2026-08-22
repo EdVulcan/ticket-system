@@ -15,6 +15,9 @@ import (
 
 func testClient(t *testing.T, config Config) *Client {
 	t.Helper()
+	// The test servers use httptest's plain HTTP endpoint. Production callers
+	// must leave this false; dedicated tests below cover the fail-closed path.
+	config.AllowInsecureHTTP = true
 	if config.StateFile == "" {
 		config.StateFile = t.TempDir() + "/state.json"
 	}
@@ -185,6 +188,27 @@ func TestMaintenanceRunStopsWhenContextIsCancelled(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("maintenance loop remained blocked after context cancellation")
+	}
+}
+
+func TestProductionRejectsInsecureMaintenanceURL(t *testing.T) {
+	if _, err := New(Config{
+		ServerURL: "https://example.invalid", MaintenanceURL: "ws://127.0.0.1:19300/ws",
+		MaintenanceSecret: "maintenance-secret", SystemCode: "S", SerialNumber: "G", DeviceKey: "K",
+		StateFile: t.TempDir() + "/state.json",
+	}); err != nil && !strings.Contains(err.Error(), "wss") {
+		t.Fatalf("unexpected validation error: %v", err)
+	} else if err == nil {
+		t.Fatal("production client accepted insecure maintenance URL")
+	}
+}
+
+func TestProductionRejectsInsecureServerURL(t *testing.T) {
+	if _, err := New(Config{
+		ServerURL: "http://127.0.0.1:8080", SystemCode: "S", SerialNumber: "G", DeviceKey: "K",
+		StateFile: t.TempDir() + "/state.json",
+	}); err == nil || !strings.Contains(err.Error(), "GATE_SERVER_URL") {
+		t.Fatalf("insecure server URL was accepted: %v", err)
 	}
 }
 

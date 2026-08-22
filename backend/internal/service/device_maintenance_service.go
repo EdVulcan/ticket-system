@@ -134,6 +134,9 @@ func (s *DeviceMaintenanceService) authenticateCredential(secret string) (gatetu
 	if err := s.DB.Where("secret_hash = ? AND status = ?", hash, "active").First(&credential).Error; err != nil {
 		return gatetunnel.DeviceIdentity{}, ErrMaintenanceCredential
 	}
+	if err := requireActiveScenicSupplier(s.DB, credential.TenantID); err != nil {
+		return gatetunnel.DeviceIdentity{}, ErrMaintenanceCredential
+	}
 	now := time.Now()
 	if credential.ExpiresAt != nil && !credential.ExpiresAt.After(now) {
 		return gatetunnel.DeviceIdentity{}, ErrMaintenanceCredential
@@ -263,6 +266,9 @@ func (s *DeviceMaintenanceService) CreateSession(req MaintenanceSessionRequest) 
 	if err := s.DB.Where("tenant_id = ? AND device_id = ? AND status = ? AND (expires_at IS NULL OR expires_at > ?)", req.TenantID, req.DeviceID, "active", time.Now()).First(&credential).Error; err != nil {
 		return nil, gorm.ErrRecordNotFound
 	}
+	if err := requireActiveScenicSupplier(s.DB, req.TenantID); err != nil {
+		return nil, ErrMaintenanceCredential
+	}
 	if !s.Gateway.DeviceConnected(req.DeviceID) {
 		return nil, gatetunnel.ErrDeviceOffline
 	}
@@ -324,6 +330,25 @@ func (s *DeviceMaintenanceService) CreateSession(req MaintenanceSessionRequest) 
 	}
 	session.TokenHash = ""
 	return &MaintenanceSessionResult{Session: session, SessionToken: token, SessionID: sessionID}, nil
+}
+
+// RevokeTenantAccessTx closes durable maintenance facts before a platform
+// tenant/capability transition commits. The caller disconnects the in-memory
+// gateway after the transaction succeeds.
+func (s *DeviceMaintenanceService) RevokeTenantAccessTx(tx *gorm.DB, tenantID uint, reason string) ([]uint, error) {
+	var deviceIDs []uint
+	if tx == nil || tenantID == 0 {
+		return nil, errors.New("tenant maintenance identity is required")
+	}
+	if err := tx.Model(&model.Device{}).Where("tenant_id = ?", tenantID).Pluck("id", &deviceIDs).Error; err != nil {
+		return nil, err
+	}
+	for _, deviceID := range deviceIDs {
+		if err := revokeDeviceMaintenanceFactsTx(tx, tenantID, deviceID, reason); err != nil {
+			return nil, err
+		}
+	}
+	return deviceIDs, nil
 }
 
 func (s *DeviceMaintenanceService) markSessionClosed(id, tenantID, actorUserID uint, reason, status string) error {

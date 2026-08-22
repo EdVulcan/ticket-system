@@ -118,7 +118,7 @@ const goTo = (path: string) => router.push(path)
 const formatTime = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
 const severityLabel = (value: string) => ({ critical: '立即处理', warning: '等待收敛', info: '待关注' } as Record<string, string>)[value] || value || '未知'
 const severityType = (value: string) => value === 'critical' ? 'danger' : value === 'warning' ? 'warning' : 'info'
-const statusLabel = (value: string) => ({ open: '待处理', queued: '排队中', printing: '打印中·待确认', pending: '待执行', processing: '处理中', submitted: '渠道处理中', failed: '失败', manual_review: '人工复核', retryable: '可重试', needs_review: '待复核', remote_succeeded: '平台已成功', confirm_pending: '本地待收尾', compensation_pending: '补偿待处理', disputed: '存在争议' } as Record<string, string>)[value] || value || '未知'
+const statusLabel = (value: string) => ({ open: '待处理', queued: '排队中', printing: '打印中·待确认', pending: '待执行', processing: '处理中', submitted: '渠道处理中', failed: '失败', unknown: '物理结果未知·需人工确认', manual_review: '人工复核', retryable: '可重试', needs_review: '待复核', remote_succeeded: '平台已成功', confirm_pending: '本地待收尾', compensation_pending: '补偿待处理', disputed: '存在争议' } as Record<string, string>)[value] || value || '未知'
 const sourceLabel = (value: string) => ({ device_alert: '设备告警', print_job: '打印任务', digital_refund: '退款任务', payment_reconciliation: '支付查单', ctrip_outbound: '携程出站', channel_request: '渠道请求', channel_reconciliation: '渠道对账', xiaohongshu_booking: '小红书预约', xiaohongshu_order: '小红书订单', after_sale: '售后请求', settlement: '结算单' } as Record<string, string>)[value] || value
 
 onMounted(load)

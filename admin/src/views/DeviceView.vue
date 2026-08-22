@@ -4,7 +4,7 @@
       <h2 class="text-lg font-bold text-gray-900">设备管理</h2>
       <div class="flex items-center gap-2">
         <el-button :icon="Refresh" circle title="刷新设备列表" :loading="loading" @click="refreshDevices" />
-        <el-button type="primary" @click="handleAdd">
+        <el-button v-if="canManage" type="primary" @click="handleAdd">
           <el-icon class="mr-2"><Plus /></el-icon> 新增设备
         </el-button>
       </div>
@@ -42,11 +42,11 @@
       <el-table-column prop="ip_address" label="网络地址" width="140" />
       <el-table-column label="操作" width="430" fixed="right">
         <template #default="{ row }">
-          <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
-          <el-button link type="warning" size="small" @click="handleRotateKey(row)">轮换密钥</el-button>
+          <el-button v-if="canManage" link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
+          <el-button v-if="canManage" link type="warning" size="small" @click="handleRotateKey(row)">轮换密钥</el-button>
           <el-button v-if="isGateDevice(row) && canManage" link type="primary" size="small" @click="openProvisioning(row)">生成安装绑定</el-button>
           <el-button v-if="isGateDevice(row) && canMaintenance" link type="success" size="small" @click="openMaintenance(row)">远程维护</el-button>
-          <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
+           <el-button v-if="canManage" link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -72,20 +72,30 @@
           <el-input v-model="form.name" />
         </el-form-item>
         <el-form-item label="序列号" prop="serial_number">
-          <el-input v-model="form.serial_number" placeholder="请输入唯一序列号" />
+          <el-input v-model="form.serial_number" :disabled="isEdit" placeholder="请输入唯一序列号" />
+        </el-form-item>
+        <el-form-item label="所属景区" prop="scenic_area_id">
+          <el-select v-model="form.scenic_area_id" placeholder="请选择所属景区" class="w-full" @change="handleScenicAreaChange">
+            <el-option
+              v-for="area in scenicAreas"
+              :key="area.id"
+              :label="scenicAreaLabel(area)"
+              :value="area.id"
+            />
+          </el-select>
         </el-form-item>
         <el-form-item label="所属检票点" prop="check_point_id">
           <el-select v-model="form.check_point_id" placeholder="请选择检票点" class="w-full" clearable>
             <el-option
-              v-for="item in checkPoints"
+              v-for="item in availableCheckPoints"
               :key="item.id"
-              :label="item.name"
+              :label="checkpointLabel(item)"
               :value="item.id"
             />
           </el-select>
         </el-form-item>
         <el-form-item label="设备类型" prop="type">
-          <el-select v-model="form.type" placeholder="请选择类型" class="w-full">
+          <el-select v-model="form.type" :disabled="isEdit" placeholder="请选择类型" class="w-full">
             <el-option label="闸机" value="gate" />
             <el-option label="手持机" value="handheld" />
             <el-option label="桌面售票终端" value="pos" />
@@ -101,7 +111,7 @@
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="dialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="handleSubmit">确定</el-button>
+          <el-button v-if="canManage" type="primary" @click="handleSubmit">确定</el-button>
         </span>
       </template>
     </el-dialog>
@@ -267,6 +277,7 @@ const form = reactive({
   id: 0,
   name: '',
   serial_number: '',
+  scenic_area_id: undefined as number | undefined,
   check_point_id: undefined,
   type: 'gate',
   status: 'offline',
@@ -274,20 +285,54 @@ const form = reactive({
   mac_address: ''
 })
 
+const scenicAreas = ref<any[]>([])
 const checkPoints = ref<any[]>([])
+const availableCheckPoints = computed(() => {
+  if (!form.scenic_area_id) return checkPoints.value
+  return checkPoints.value.filter(item => Number(item.scenic_area_id) === Number(form.scenic_area_id))
+})
+let fetchSequence = 0
 
 const fetchCheckPoints = async () => {
-    try {
-        const res = await request.get('/checkpoints', { params: { page_size: 100 } })
-        checkPoints.value = res.data.data
-    } catch (error) {
-        console.error('Fetch CheckPoints Error', error)
-    }
+  try {
+    const rows: any[] = []
+    let page = 1
+    let total = 0
+    do {
+      const res = await request.get('/checkpoints', { params: { page, page_size: 100 } })
+      rows.push(...(res.data.data || []))
+      total = Number(res.data.total || rows.length)
+      page += 1
+    } while (rows.length < total && page <= 100)
+    checkPoints.value = rows
+  } catch (error) {
+    console.error('Fetch CheckPoints Error', error)
+    ElMessage.error((error as any)?.response?.data?.error || '获取检票点失败')
+  }
+}
+
+const fetchScenicAreas = async () => {
+  const response = await request.get('/scenic-areas')
+  scenicAreas.value = response.data.data || []
+}
+
+const checkpointLabel = (item: any) => {
+  const area = scenicAreas.value.find(value => Number(value.id) === Number(item.scenic_area_id))
+  return area ? `${area.name} / ${item.name}` : item.name
+}
+
+const scenicAreaLabel = (area: any) => area.status === 'active' ? area.name : `${area.name}（${area.status}）`
+
+const handleScenicAreaChange = () => {
+  if (form.check_point_id && !availableCheckPoints.value.some(item => Number(item.id) === Number(form.check_point_id))) {
+    form.check_point_id = undefined
+  }
 }
 
 const rules = {
   name: [{ required: true, message: '请输入设备名称', trigger: 'blur' }],
   serial_number: [{ required: true, message: '请输入序列号', trigger: 'blur' }],
+  scenic_area_id: [{ required: true, message: '请选择所属景区', trigger: 'change' }],
   type: [{ required: true, message: '请选择类型', trigger: 'change' }]
 }
 
@@ -312,18 +357,20 @@ const getDeviceTypeTag = (type: string) => {
 const isGateDevice = (device: any) => String(device?.type || '').trim().toLowerCase() === 'gate'
 
 const fetchData = async () => {
+  const sequence = ++fetchSequence
   loading.value = true
   try {
     const type = activeDeviceType.value === 'all' ? undefined : activeDeviceType.value
     const res = await request.get('/devices', {
       params: { page: currentPage.value, page_size: pageSize.value, type }
     })
+    if (sequence !== fetchSequence) return
     tableData.value = res.data.data
     total.value = res.data.total
-  } catch (error) {
-    ElMessage.error('获取数据失败')
+  } catch (error: any) {
+    if (sequence === fetchSequence) ElMessage.error(error.response?.data?.error || '获取数据失败')
   } finally {
-    loading.value = false
+    if (sequence === fetchSequence) loading.value = false
   }
 }
 
@@ -338,7 +385,7 @@ const refreshDevices = () => {
 
 const handleAdd = () => {
   isEdit.value = false
-  Object.assign(form, { id: 0, name: '', serial_number: '', check_point_id: undefined, type: 'gate', status: 'offline', ip_address: '', mac_address: '' })
+  Object.assign(form, { id: 0, name: '', serial_number: '', scenic_area_id: scenicAreas.value.length === 1 ? scenicAreas.value[0].id : undefined, check_point_id: undefined, type: 'gate', status: 'offline', ip_address: '', mac_address: '' })
   dialogVisible.value = true
 }
 
@@ -346,6 +393,7 @@ const handleEdit = (row: any) => {
   isEdit.value = true
   Object.assign(form, {
     id: row.id, name: row.name || '', serial_number: row.serial_number || '',
+    scenic_area_id: row.scenic_area_id || undefined,
     check_point_id: row.check_point_id || undefined, type: row.type || 'gate',
     status: row.status || 'offline', ip_address: row.ip_address || '', mac_address: row.mac_address || '',
   })
@@ -550,9 +598,13 @@ const handleSubmit = async () => {
   await formRef.value.validate(async (valid: boolean) => {
     if (valid) {
       try {
-        const payload = {
-          name: form.name.trim(), serial_number: form.serial_number.trim(), check_point_id: form.check_point_id,
-          type: form.type, status: form.status, ip_address: form.ip_address.trim(), mac_address: form.mac_address.trim(),
+        const payload: Record<string, any> = {
+          name: form.name.trim(), scenic_area_id: form.scenic_area_id, check_point_id: form.check_point_id,
+          ip_address: form.ip_address.trim(), mac_address: form.mac_address.trim(),
+        }
+        if (!isEdit.value) {
+          payload.serial_number = form.serial_number.trim()
+          payload.type = form.type
         }
         if (isEdit.value) {
           await request.put(`/devices/${form.id}`, payload)
@@ -563,8 +615,8 @@ const handleSubmit = async () => {
         ElMessage.success(isEdit.value ? '更新成功' : '创建成功')
         dialogVisible.value = false
         fetchData()
-      } catch (error) {
-        ElMessage.error('操作失败')
+      } catch (error: any) {
+        ElMessage.error(error.response?.data?.error || '操作失败')
       }
     }
   })
@@ -572,6 +624,8 @@ const handleSubmit = async () => {
 
 onMounted(() => {
   fetchData()
-  fetchCheckPoints()
+  Promise.all([fetchScenicAreas(), fetchCheckPoints()]).catch(error => {
+    ElMessage.error(error.response?.data?.error || '加载设备归属选项失败')
+  })
 })
 </script>

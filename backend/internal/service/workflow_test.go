@@ -131,8 +131,12 @@ func TestPlatformWorklistsRespectTargetTenantFilter(t *testing.T) {
 	if err := (&OrderService{}).Create(&secondOrder); err != nil {
 		t.Fatal(err)
 	}
+	var firstDevice model.Device
+	if err := model.DB.Where("tenant_id = ?", firstTenant).First(&firstDevice).Error; err != nil {
+		t.Fatal(err)
+	}
 	if err := model.Write(func(tx *gorm.DB) error {
-		return tx.Create(&model.DeviceAlert{TenantID: firstTenant, DeviceID: 1, Type: "offline", Status: "open", Message: "test alert", OpenedAt: time.Now()}).Error
+		return tx.Create(&model.DeviceAlert{TenantID: firstTenant, ScenicAreaID: firstDevice.ScenicAreaID, DeviceID: firstDevice.ID, Type: "offline", Status: "open", Message: "test alert", OpenedAt: time.Now()}).Error
 	}); err != nil {
 		t.Fatal(err)
 	}

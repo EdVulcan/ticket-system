@@ -1282,6 +1282,73 @@ func TestPostgresOwnershipGuardsRejectCrossTenantRows(t *testing.T) {
 	}
 }
 
+func TestPostgresHardwareOwnershipGuardsRejectCrossTenantFacts(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	first := Tenant{Name: "Hardware Guard A", SystemCode: "HARDWARE-GUARD-A", SecretKey: "hardware-a", Status: "active"}
+	second := Tenant{Name: "Hardware Guard B", SystemCode: "HARDWARE-GUARD-B", SecretKey: "hardware-b", Status: "active"}
+	if err := db.Create(&first).Create(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	firstArea := ScenicArea{TenantID: first.ID, Code: "HARDWARE-A", Name: "Hardware A", Status: "active"}
+	secondArea := ScenicArea{TenantID: second.ID, Code: "HARDWARE-B", Name: "Hardware B", Status: "active"}
+	if err := db.Create(&firstArea).Create(&secondArea).Error; err != nil {
+		t.Fatal(err)
+	}
+	firstDevice := Device{TenantID: first.ID, ScenicAreaID: firstArea.ID, Name: "Hardware Gate A", SerialNumber: "HARDWARE-GATE-A", Type: "gate", Status: "online"}
+	secondDevice := Device{TenantID: second.ID, ScenicAreaID: secondArea.ID, Name: "Hardware Gate B", SerialNumber: "HARDWARE-GATE-B", Type: "gate", Status: "online"}
+	if err := db.Create(&firstDevice).Create(&secondDevice).Error; err != nil {
+		t.Fatal(err)
+	}
+	validVerification := DeviceVerification{TenantID: first.ID, ScenicAreaID: firstArea.ID, DeviceID: firstDevice.ID, RequestID: "hardware-scan", RequestHash: strings.Repeat("a", 64), TicketCode: "HARDWARE-TICKET", Status: "completed", Result: "allow", OpenStatus: "pending"}
+	if err := db.Create(&validVerification).Error; err != nil {
+		t.Fatalf("valid device verification rejected: %v", err)
+	}
+	invalidVerification := validVerification
+	invalidVerification.Base = Base{}
+	invalidVerification.RequestID = "hardware-cross-tenant"
+	invalidVerification.DeviceID = secondDevice.ID
+	invalidVerification.ScenicAreaID = secondArea.ID
+	if err := db.Create(&invalidVerification).Error; err == nil {
+		t.Fatal("cross-tenant device verification was accepted")
+	}
+	validNonce := DeviceRequestNonce{TenantID: first.ID, DeviceID: firstDevice.ID, Nonce: "hardware-nonce", RequestID: "hardware-request", Path: "/api/v1/hardware/verify", ExpiresAt: time.Now().Add(time.Minute)}
+	if err := db.Create(&validNonce).Error; err != nil {
+		t.Fatalf("valid device nonce rejected: %v", err)
+	}
+	invalidNonce := validNonce
+	invalidNonce.Base = Base{}
+	invalidNonce.Nonce = "hardware-cross-nonce"
+	invalidNonce.TenantID = first.ID
+	invalidNonce.DeviceID = secondDevice.ID
+	if err := db.Create(&invalidNonce).Error; err == nil {
+		t.Fatal("cross-tenant device nonce was accepted")
+	}
+	validCommand := HardwareCommand{TenantID: first.ID, ScenicAreaID: firstArea.ID, DeviceID: firstDevice.ID, CommandNo: "HARDWARE-CMD-1", Kind: "open_gate", AckToken: "ack", QueuedAt: time.Now(), ExpiresAt: time.Now().Add(time.Minute)}
+	if err := db.Create(&validCommand).Error; err != nil {
+		t.Fatalf("valid hardware command rejected: %v", err)
+	}
+	invalidCommand := validCommand
+	invalidCommand.Base = Base{}
+	invalidCommand.CommandNo = "HARDWARE-CMD-CROSS"
+	invalidCommand.ScenicAreaID = secondArea.ID
+	invalidCommand.DeviceID = secondDevice.ID
+	if err := db.Create(&invalidCommand).Error; err == nil {
+		t.Fatal("cross-tenant hardware command was accepted")
+	}
+	if err := db.Create(&HardwareEvent{TenantID: first.ID, DeviceID: firstDevice.ID, CommandNo: "VERIFY:" + validVerification.RequestID, EventType: "gate_open_unknown", Payload: "response lost"}).Error; err != nil {
+		t.Fatalf("verification hardware event rejected: %v", err)
+	}
+	if err := db.Create(&HardwareEvent{TenantID: first.ID, DeviceID: firstDevice.ID, CommandNo: "HARDWARE-UNKNOWN", EventType: "gate_opened"}).Error; err == nil {
+		t.Fatal("hardware event without an owned command or verification was accepted")
+	}
+	if err := db.Create(&DeviceAlert{TenantID: first.ID, ScenicAreaID: secondArea.ID, DeviceID: secondDevice.ID, Type: "offline", Status: "open", Message: "cross-tenant"}).Error; err == nil {
+		t.Fatal("cross-tenant device alert was accepted")
+	}
+}
+
 func TestPostgresSchema106MaintenanceOwnershipGuards(t *testing.T) {
 	db := testdb.Open(t)
 	if err := runMigrations(db); err != nil {

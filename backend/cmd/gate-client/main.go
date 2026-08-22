@@ -14,14 +14,19 @@ import (
 
 func main() {
 	serverURL := strings.TrimSpace(os.Getenv("GATE_SERVER_URL"))
-	if strings.HasPrefix(strings.ToLower(serverURL), "http://") && os.Getenv("GATE_ALLOW_INSECURE_HTTP") != "true" {
+	allowInsecure := os.Getenv("GATE_ALLOW_INSECURE_HTTP") == "true"
+	if strings.HasPrefix(strings.ToLower(serverURL), "http://") && !allowInsecure {
 		log.Fatal("生产环境 GATE_SERVER_URL 必须使用 HTTPS；本地调试可显式设置 GATE_ALLOW_INSECURE_HTTP=true")
+	}
+	maintenanceURL := strings.TrimSpace(os.Getenv("GATE_MAINTENANCE_URL"))
+	if strings.HasPrefix(strings.ToLower(maintenanceURL), "ws://") && !allowInsecure {
+		log.Fatal("生产环境维护连接必须使用 wss://；本地调试可显式设置 GATE_ALLOW_INSECURE_HTTP=true")
 	}
 	listen := strings.TrimSpace(os.Getenv("GATE_SCAN_LISTEN"))
 	if listen == "" {
 		listen = "127.0.0.1:19300"
 	}
-	client, err := gateclient.New(gateclient.Config{ServerURL: serverURL, SystemCode: os.Getenv("GATE_SYSTEM_CODE"), SerialNumber: os.Getenv("GATE_SERIAL_NUMBER"), DeviceKey: os.Getenv("GATE_DEVICE_KEY"), MaintenanceURL: os.Getenv("GATE_MAINTENANCE_URL"), MaintenanceSecret: os.Getenv("GATE_MAINTENANCE_SECRET"), DriverURL: os.Getenv("GATE_DRIVER_URL"), ListenAddr: listen, ScanToken: os.Getenv("GATE_SCAN_TOKEN"), StateFile: os.Getenv("GATE_STATE_FILE")})
+	client, err := gateclient.New(gateclient.Config{ServerURL: serverURL, SystemCode: os.Getenv("GATE_SYSTEM_CODE"), SerialNumber: os.Getenv("GATE_SERIAL_NUMBER"), DeviceKey: os.Getenv("GATE_DEVICE_KEY"), MaintenanceURL: maintenanceURL, MaintenanceSecret: os.Getenv("GATE_MAINTENANCE_SECRET"), DriverURL: os.Getenv("GATE_DRIVER_URL"), ListenAddr: listen, ScanToken: os.Getenv("GATE_SCAN_TOKEN"), StateFile: os.Getenv("GATE_STATE_FILE"), AllowInsecureHTTP: allowInsecure})
 	if err != nil {
 		log.Fatal(err)
 	}

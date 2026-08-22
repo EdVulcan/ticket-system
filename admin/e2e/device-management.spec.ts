@@ -53,6 +53,9 @@ test('设备管理按类型切换并支持刷新当前列表', async ({ page }) 
     return json(route, { data: rows, total: rows.length, page: 1 })
   })
   await page.route('**/api/v1/checkpoints?*', route => json(route, { data: [], total: 0 }))
+  await page.route('**/api/v1/scenic-areas', route => json(route, {
+    data: [{ id: 10, name: '示例景区', status: 'active' }],
+  }))
 
   await page.goto('/device')
   await expect(page.getByRole('heading', { name: '设备管理' })).toBeVisible()

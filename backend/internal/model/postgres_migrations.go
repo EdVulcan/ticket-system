@@ -1169,6 +1169,51 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 				  AND t.fulfillment_order_id = NEW.fulfillment_order_id AND t.tenant_id = NEW.sales_tenant_id
 				  AND t.fulfillment_tenant_id = NEW.supplier_tenant_id AND t.fulfillment_scenic_area_id = NEW.scenic_area_id
 			) THEN RAISE EXCEPTION 'ticket entitlement ownership mismatch'; END IF;
+		WHEN 'device_verifications' THEN
+			IF NEW.tenant_id = 0 OR NEW.scenic_area_id = 0 OR NOT EXISTS (
+				SELECT 1 FROM devices d
+				WHERE d.id = NEW.device_id AND d.tenant_id = NEW.tenant_id
+				  AND d.scenic_area_id = NEW.scenic_area_id AND d.type IN ('gate','handheld')
+				  AND d.deleted_at IS NULL
+			) OR (NEW.check_in_record_id <> 0 AND NOT EXISTS (
+				SELECT 1 FROM check_in_records c
+				WHERE c.id = NEW.check_in_record_id AND c.tenant_id = NEW.tenant_id
+				  AND c.scenic_area_id = NEW.scenic_area_id AND c.device_id = NEW.device_id
+			)) THEN RAISE EXCEPTION 'device verification ownership mismatch'; END IF;
+		WHEN 'device_request_nonces' THEN
+			IF NEW.tenant_id = 0 OR NOT EXISTS (
+				SELECT 1 FROM devices d
+				WHERE d.id = NEW.device_id AND d.tenant_id = NEW.tenant_id AND d.deleted_at IS NULL
+			) THEN RAISE EXCEPTION 'device request nonce ownership mismatch'; END IF;
+		WHEN 'hardware_commands' THEN
+			IF NEW.tenant_id = 0 OR NEW.scenic_area_id = 0
+			   OR NEW.kind NOT IN ('print','verify','open_gate','read_identity')
+			   OR NOT EXISTS (
+				SELECT 1 FROM devices d
+				WHERE d.id = NEW.device_id AND d.tenant_id = NEW.tenant_id
+				  AND d.scenic_area_id = NEW.scenic_area_id AND d.deleted_at IS NULL
+			   ) THEN RAISE EXCEPTION 'hardware command ownership mismatch'; END IF;
+		WHEN 'hardware_events' THEN
+			IF NEW.tenant_id = 0 OR NOT EXISTS (
+				SELECT 1 FROM devices d
+				WHERE d.id = NEW.device_id AND d.tenant_id = NEW.tenant_id AND d.deleted_at IS NULL
+			) OR (COALESCE(NEW.command_no, '') <> '' AND NOT (
+				EXISTS (
+					SELECT 1 FROM hardware_commands h
+					WHERE h.command_no = NEW.command_no AND h.tenant_id = NEW.tenant_id AND h.device_id = NEW.device_id
+				)
+				OR (NEW.command_no LIKE 'VERIFY:%' AND EXISTS (
+					SELECT 1 FROM device_verifications v
+					WHERE 'VERIFY:' || v.request_id = NEW.command_no
+					  AND v.tenant_id = NEW.tenant_id AND v.device_id = NEW.device_id
+				))
+			)) THEN RAISE EXCEPTION 'hardware event ownership mismatch'; END IF;
+		WHEN 'device_alerts' THEN
+			IF NEW.tenant_id = 0 OR NEW.scenic_area_id = 0 OR NOT EXISTS (
+				SELECT 1 FROM devices d
+				WHERE d.id = NEW.device_id AND d.tenant_id = NEW.tenant_id
+				  AND d.scenic_area_id = NEW.scenic_area_id AND d.deleted_at IS NULL
+			) THEN RAISE EXCEPTION 'device alert ownership mismatch'; END IF;
 		WHEN 'check_in_records' THEN
 			IF NEW.result = 'success' AND (NEW.scenic_area_id = 0 OR NOT EXISTS (
 				SELECT 1 FROM tickets t JOIN check_points c ON c.id = NEW.check_point_id JOIN devices d ON d.id = NEW.device_id
@@ -1273,7 +1318,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "device_maintenance_credentials", "device_maintenance_sessions", "device_provisioning_leases", "products", "product_inventories", "print_templates", "print_template_revisions", "print_jobs", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "ai_tenant_quota_policies", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_rate_plan_prices", "hotel_room_inventories", "hotel_products", "hotel_product_revisions", "hotel_product_calendar_prices", "hotel_product_entitlements", "hotel_product_reservations", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
+	for _, table := range []string{"check_points", "devices", "device_maintenance_credentials", "device_maintenance_sessions", "device_provisioning_leases", "device_verifications", "device_request_nonces", "hardware_commands", "hardware_events", "device_alerts", "products", "product_inventories", "print_templates", "print_template_revisions", "print_jobs", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "ai_tenant_quota_policies", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_rate_plan_prices", "hotel_room_inventories", "hotel_products", "hotel_product_revisions", "hotel_product_calendar_prices", "hotel_product_entitlements", "hotel_product_reservations", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_webhook_events"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

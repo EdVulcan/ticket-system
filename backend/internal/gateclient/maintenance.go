@@ -223,6 +223,9 @@ func (c *Client) maintenanceLocation() (string, string, error) {
 	if err != nil || (u.Scheme != "ws" && u.Scheme != "wss") || u.Host == "" {
 		return "", "", errors.New("GATE_MAINTENANCE_URL 必须是 ws/wss URL")
 	}
+	if u.Scheme == "ws" && !c.config.AllowInsecureHTTP {
+		return "", "", errors.New("生产环境维护连接必须使用 wss://；本地调试请显式设置 GATE_ALLOW_INSECURE_HTTP=true")
+	}
 	originScheme := "http"
 	if u.Scheme == "wss" {
 		originScheme = "https"

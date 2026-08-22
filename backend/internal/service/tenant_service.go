@@ -14,7 +14,9 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-type TenantService struct{}
+type TenantService struct {
+	Maintenance *DeviceMaintenanceService
+}
 
 var ErrTenantActivationBlocked = errors.New("tenant activation requires approved, unexpired qualification and contract")
 var ErrSupplierCapabilityRequired = errors.New("an active supplier capability is required before enabling a supplier business type")
@@ -136,7 +138,8 @@ func (s *TenantService) UpdateStatusAudited(id uint, status string, actorID uint
 	if !validTenantStatus(status) {
 		return errors.New("invalid tenant status")
 	}
-	return model.Write(func(tx *gorm.DB) error {
+	var disconnectDevices []uint
+	err := model.Write(func(tx *gorm.DB) error {
 		var tenant model.Tenant
 		if err := tx.Where("id = ?", id).First(&tenant).Error; err != nil {
 			return err
@@ -168,9 +171,20 @@ func (s *TenantService) UpdateStatusAudited(id uint, status string, actorID uint
 			if err := tx.Model(&model.Staff{}).Where("tenant_id = ?", id).UpdateColumn("token_version", gorm.Expr("token_version + 1")).Error; err != nil {
 				return err
 			}
+			if status != "active" {
+				var err error
+				disconnectDevices, err = revokeTenantMaintenanceFactsTx(tx, id, "租户状态已变更为"+status)
+				if err != nil {
+					return err
+				}
+			}
 		}
 		return recordAuditTx(tx, actorID, id, actorRole, "platform", "tenant.status.update", "tenant", id, "platform lifecycle change", string(before), string(after))
 	})
+	if err == nil {
+		s.disconnectMaintenanceDevices(disconnectDevices, "租户状态已变更")
+	}
+	return err
 }
 
 // TenantLifecycleUpdate is intentionally platform-scoped. Qualification,
@@ -266,7 +280,8 @@ func (s *TenantService) SetCapabilityAudited(id uint, capability, status, reason
 	if status != "pending" && status != "active" && status != "suspended" && status != "rejected" {
 		return errors.New("invalid capability status")
 	}
-	return model.Write(func(tx *gorm.DB) error {
+	var disconnectDevices []uint
+	err := model.Write(func(tx *gorm.DB) error {
 		var tenant model.Tenant
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&tenant, id).Error; err != nil {
 			return err
@@ -298,8 +313,19 @@ func (s *TenantService) SetCapabilityAudited(id uint, capability, status, reason
 			}
 		}
 		after, _ := json.Marshal(map[string]interface{}{"capability": capability, "status": status, "reason": strings.TrimSpace(reason)})
+		if capability == "supplier" && status != "active" {
+			var revokeErr error
+			disconnectDevices, revokeErr = revokeTenantMaintenanceFactsTx(tx, id, "供应商能力已暂停")
+			if revokeErr != nil {
+				return revokeErr
+			}
+		}
 		return recordAuditTx(tx, actorID, id, actorRole, "platform", "tenant.capability.update", "tenant_capability", capabilityRow.ID, reason, string(before), string(after))
 	})
+	if err == nil {
+		s.disconnectMaintenanceDevices(disconnectDevices, "供应商能力已暂停")
+	}
+	return err
 }
 
 // SetSupplierBusinessTypeAudited configures a supplier's fulfillment vertical
@@ -316,7 +342,8 @@ func (s *TenantService) SetSupplierBusinessTypeAudited(id uint, businessType, st
 	if reason == "" {
 		return ErrAuditReasonRequired
 	}
-	return model.Write(func(tx *gorm.DB) error {
+	var disconnectDevices []uint
+	err := model.Write(func(tx *gorm.DB) error {
 		var tenant model.Tenant
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").First(&tenant, id).Error; err != nil {
 			return err
@@ -366,9 +393,42 @@ func (s *TenantService) SetSupplierBusinessTypeAudited(id uint, businessType, st
 				return err
 			}
 		}
+		if businessType == "scenic" && status != "active" {
+			var revokeErr error
+			disconnectDevices, revokeErr = revokeTenantMaintenanceFactsTx(tx, id, "景区票务业态已暂停")
+			if revokeErr != nil {
+				return revokeErr
+			}
+		}
 		after, _ := json.Marshal(map[string]interface{}{"business_type": businessType, "status": status, "reason": reason})
 		return recordAuditTx(tx, actorID, id, actorRole, "platform", "tenant.supplier_business_type.update", "supplier_business_type", row.ID, reason, string(before), string(after))
 	})
+	if err == nil {
+		s.disconnectMaintenanceDevices(disconnectDevices, "景区票务业态已暂停")
+	}
+	return err
+}
+
+func revokeTenantMaintenanceFactsTx(tx *gorm.DB, tenantID uint, reason string) ([]uint, error) {
+	var deviceIDs []uint
+	if err := tx.Model(&model.Device{}).Where("tenant_id = ?", tenantID).Pluck("id", &deviceIDs).Error; err != nil {
+		return nil, err
+	}
+	for _, deviceID := range deviceIDs {
+		if err := revokeDeviceMaintenanceFactsTx(tx, tenantID, deviceID, reason); err != nil {
+			return nil, err
+		}
+	}
+	return deviceIDs, nil
+}
+
+func (s *TenantService) disconnectMaintenanceDevices(deviceIDs []uint, reason string) {
+	if s == nil || s.Maintenance == nil || s.Maintenance.Gateway == nil {
+		return
+	}
+	for _, deviceID := range deviceIDs {
+		s.Maintenance.Gateway.DisconnectDevice(deviceID, reason)
+	}
 }
 
 func (s *TenantService) Update(id uint, tenant *model.Tenant) error {

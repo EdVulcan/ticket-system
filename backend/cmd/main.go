@@ -86,7 +86,7 @@ func main() {
 	go runDigitalRefundWorker(refundContext)
 	deviceContext, stopDeviceWorker := context.WithCancel(context.Background())
 	defer stopDeviceWorker()
-	go runDeviceHealthWorker(deviceContext)
+	go runDeviceHealthWorker(deviceContext, maintenanceService)
 	maintenanceContext, stopMaintenanceWorker := context.WithCancel(context.Background())
 	defer stopMaintenanceWorker()
 	go runDeviceMaintenanceWorker(maintenanceContext, maintenanceService)
@@ -296,10 +296,13 @@ func runDigitalRefundWorker(ctx context.Context) {
 	}
 }
 
-func runDeviceHealthWorker(ctx context.Context) {
+func runDeviceHealthWorker(ctx context.Context, maintenanceService *service.DeviceMaintenanceService) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	deviceService := service.NewDeviceService(model.DB, &service.TicketService{})
+	if maintenanceService != nil {
+		deviceService.Maintenance = maintenanceService.Gateway
+	}
 	for {
 		select {
 		case <-ctx.Done():

@@ -86,7 +86,7 @@ func (s *ExecutionCenterService) List(tenantID uint, category, severity string, 
 	var gateVerifications []model.DeviceVerification
 	if err := model.DB.Model(&model.DeviceVerification{}).
 		Joins("JOIN devices ON devices.id = device_verifications.device_id AND devices.tenant_id = device_verifications.tenant_id AND devices.deleted_at IS NULL").
-		Where("device_verifications.tenant_id = ? AND device_verifications.result = ? AND device_verifications.open_status IN ? AND devices.type = ?", tenantID, "allow", []string{"pending", "failed"}, "gate").
+		Where("device_verifications.tenant_id = ? AND device_verifications.result = ? AND device_verifications.open_status IN ? AND devices.type = ?", tenantID, "allow", []string{"pending", "failed", "unknown"}, "gate").
 		Order("device_verifications.updated_at DESC").Limit(limit).Find(&gateVerifications).Error; err != nil {
 		return nil, err
 	}

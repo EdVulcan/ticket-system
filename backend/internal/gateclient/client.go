@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ type Config struct {
 	ListenAddr        string
 	ScanToken         string
 	StateFile         string
+	AllowInsecureHTTP bool
 	HTTPClient        *http.Client
 }
 
@@ -90,6 +92,12 @@ func New(config Config) (*Client, error) {
 	if strings.TrimSpace(config.StateFile) == "" {
 		return nil, errors.New("GATE_STATE_FILE 不能为空，闸机恢复状态必须持久化")
 	}
+	if (strings.EqualFold(base.Scheme, "http") || strings.EqualFold(base.Scheme, "ws")) && !config.AllowInsecureHTTP {
+		return nil, errors.New("生产环境 GATE_SERVER_URL 必须使用 HTTPS；本地调试可显式设置 GATE_ALLOW_INSECURE_HTTP=true")
+	}
+	if !strings.EqualFold(base.Scheme, "http") && !strings.EqualFold(base.Scheme, "https") {
+		return nil, errors.New("GATE_SERVER_URL 必须使用 http 或 https")
+	}
 	if config.HTTPClient == nil {
 		config.HTTPClient = &http.Client{Timeout: 8 * time.Second}
 	}
@@ -110,6 +118,9 @@ func New(config Config) (*Client, error) {
 		}
 	}
 	client := &Client{config: config, base: base, http: config.HTTPClient, key: deviceauth.DeriveKey(config.DeviceKey), driver: driver, driverConfigured: driverConfigured, pending: make(map[string]pendingScan)}
+	if _, _, err := client.maintenanceLocation(); err != nil {
+		return nil, err
+	}
 	if err := client.loadState(); err != nil {
 		return nil, fmt.Errorf("load gate recovery state: %w", err)
 	}
@@ -328,10 +339,36 @@ func (c *Client) saveStateLocked() error {
 		return err
 	}
 	temporary := path + ".tmp"
-	if err := os.WriteFile(temporary, data, 0o600); err != nil {
+	file, err := os.OpenFile(temporary, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
 		return err
 	}
-	return os.Rename(temporary, path)
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, path); err != nil {
+		return err
+	}
+	// The rename is only durable after the containing directory is synced. A
+	// directory fsync is not available on Windows, which is only used for local
+	// development; Linux gate-client deployments must not skip this step.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	directoryFile, err := os.Open(directory)
+	if err != nil {
+		return err
+	}
+	defer directoryFile.Close()
+	return directoryFile.Sync()
 }
 
 func (c *Client) Heartbeat(ctx context.Context, status string) error {

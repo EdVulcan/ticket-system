@@ -181,6 +181,7 @@ const configuredSupplierBusinessTypes = computed(() => configuredSupplierBusines
 const hasSupplierBusinessType = (value: string) => activeSupplierBusinessTypes.value.has(value)
 const hasConfiguredSupplierBusinessType = (value: string) => configuredSupplierBusinessTypes.value.has(value)
 const can = (permission: string) => hasPermission(user.value, permission)
+const canAny = (...permissions: string[]) => permissions.some(permission => can(permission))
 // The server remains authoritative for every registered AI tool. This only
 // controls whether a tenant user can discover the assistant: scenic suppliers
 // retain the existing catalog preview entry, while distributors and travel
@@ -237,7 +238,7 @@ const navGroups = computed<NavGroup[]>(() => {
   const operations: NavItem[] = []
   if ((scenicSupplier || hasCapability('distributor')) && can('operations.read')) operations.push({ path: '/operations', label: '运营工作台', icon: Operation })
   if (scenicSupplier && can('catalog.read')) operations.push({ path: '/policy', label: '政策知识库', icon: Reading })
-  if (scenicSupplier && can('onsite.manage')) operations.push({ path: '/device', label: '终端设备', icon: Monitor })
+  if (scenicSupplier && canAny('onsite.read', 'onsite.maintenance', 'onsite.manage')) operations.push({ path: '/device', label: '终端设备', icon: Monitor })
   if (scenicSupplier && can('onsite.read')) operations.push({ path: '/checkpoint', label: '检票点位', icon: Location })
   if (scenicSupplier && can('catalog.read')) operations.push({ path: '/product/batch', label: '批量规则操作', icon: Operation })
   if (scenicSupplier && can('catalog.read')) operations.push({ path: '/print-templates', label: '门票打印模板', icon: Tickets })
