@@ -32,7 +32,7 @@ go build -o gate-client ./cmd/gate-client
 
 ### 2.1 一键安装（推荐）
 
-发布包中的 `gate-client/` 目录包含 Linux amd64 的 `gate-client`、`gate-provision`、systemd 单元和安装脚本。安装脚本会创建受限的 `ticket-gate` 用户、状态目录和配置目录，随后只提示输入管理端生成的一次性绑定码：
+发布包中的 `gate-client/` 目录包含 Linux amd64 的 `gate-client`、`gate-provision`、systemd 单元和安装脚本；嵌入式 ARMv7/BusyBox 控制机使用旁边独立的 `gate-client-armv7/` 目录。对应安装脚本会创建受限的 `ticket-gate` 用户、状态目录和配置目录，随后只提示输入管理端生成的一次性绑定码：
 
 ```bash
 sudo bash ./install.sh --server-url https://tickets.example.com --package-dir .
@@ -40,9 +40,22 @@ sudo bash ./install.sh --server-url https://tickets.example.com --package-dir .
 
 绑定码只通过 HTTPS JSON body 发送，安装器不会接受命令行参数或环境变量形式的绑定码，也不会把它写入日志。服务端从租约决定租户、景区、设备和序列号，安装器只能解密服务端返回的配置包。安装器会原子写入 `/etc/ticket-gate/gate-client.env`、生成本地扫码令牌、用新设备密钥确认完成，并启用 `ticket-gate.service`。网络中断时保留临时公私钥和配置，重新执行并输入同一绑定码即可恢复；确认完成后临时私钥自动删除。
 
+### 2.1.1 ARMv7/BusyBox 控制机
+
+部分现场闸机使用 i.MX6 ARMv7 和 BusyBox `init`，没有 `bash` 或 `systemd`。发布脚本会同时生成独立的 `gate-client-armv7/` 目录；该目录不能与 amd64 包混用。控制机应满足 `uname -m` 返回 `armv7l`，并提供 `adduser`、`start-stop-daemon` 和可写的 `/etc`、`/var`。
+
+在控制机上执行：
+
+```sh
+cd /path/to/gate-client-armv7
+sh ./install-busybox.sh --server-url https://tickets.example.com --package-dir .
+```
+
+安装器会把二进制放到 `/usr/local/lib/ticket-gate`，配置写入 `/etc/ticket-gate/gate-client.env`，创建受限 `ticket-gate` 用户，并安装 `/etc/init.d/S98-ticket-gate`。BusyBox 启动脚本只在网络初始化脚本之后启动客户端，不改写厂商已有的 `S99-fluidlauncher`；日志写入 `/var/lib/ticket-gate/gate-client.log`。现场检查使用 `ticket-gate status|doctor|logs`。如果设备没有 `adduser` 或 `start-stop-daemon`，安装器会拒绝以 root 长期运行客户端，需先按厂商系统提供受限服务账号或启动方式。
+
 ### 2.2 完整现场流程
 
-1. **准备控制机**：确认是 Linux amd64、已安装 `systemd`，控制机能访问云端 HTTPS；把发布包中的 `gate-client/` 目录通过 U 盘或受控 SCP 复制到控制机。当前发布包不包含真实三辊闸驱动，拿到控制板协议后还需单独安装对应适配器。
+1. **准备控制机**：amd64/systemd 控制机使用 `gate-client/`；i.MX6 ARMv7/BusyBox 控制机使用 `gate-client-armv7/`，分别确认对应架构、启动方式和可写目录，且控制机能访问云端 HTTPS；把对应目录通过 U 盘或受控 SCP 复制到控制机。当前发布包不包含真实三辊闸驱动，拿到控制板协议后还需单独安装对应适配器。
 2. **后台登记设备**：租户管理员进入“设备管理”，新增类型为“闸机”的设备，选择正确景区和（如已知）检票点，填入现场设备序列号，状态保持离线。新增设备时后台会自动生成设备密钥，不需要人工抄写密钥到闸机。
 3. **生成一次性绑定码**：在该设备的“生成安装绑定”中填写安装原因，生成有效期约 10 分钟的绑定码。绑定码只在页面显示一次；确认没有旧客户端在线后再复制。设备在线或故障（任何非明确 `offline` 状态）、租户被冻结、景区票务能力关闭或服务端没有 HTTPS 公网地址时，系统会拒绝生成/领取。
 4. **执行安装器**：在控制机执行下面的命令，只有服务器地址出现在命令行，绑定码会在交互提示中输入：

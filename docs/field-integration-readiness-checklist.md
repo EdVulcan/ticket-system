@@ -42,6 +42,8 @@
 
 云端直连接口和轻量 `gate-client` 已实现 HMAC 签名、时间窗、nonce 防重放、每设备限流、持久请求幂等、景区/检票点绑定校验、加密设备密钥、本机断线恢复状态，以及物理开闸结果回报。升级前已有设备需先轮换密钥；现场部署必须配置可持久写入的 `GATE_STATE_FILE`。部署与驱动边界见[闸机直连客户端部署说明](./direct-gate-client.md)。
 
+现场已确认一台 i.MX6 ARMv7/BusyBox 控制机没有 `bash` 或 `systemd`；此类设备必须使用发布包中的 `gate-client-armv7/` 和 `install-busybox.sh`，不能使用 amd64/systemd 目录。安装前需确认 `adduser`、`start-stop-daemon` 以及 `/etc`、`/var` 可写；安装器不满足受限账号条件时必须拒绝运行。
+
 需要准备闸机/手持机的品牌型号、厂商协议或 SDK、设备认证方式、开闸指令、返回码、
 心跳周期、离线缓存能力、固件版本，以及景区检票点与局域网拓扑。
 

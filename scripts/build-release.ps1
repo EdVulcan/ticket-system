@@ -45,7 +45,9 @@ $releaseBackend = Join-Path $releaseDirectory 'backend'
 $releaseConfig = Join-Path $releaseBackend 'config'
 $releaseAdmin = Join-Path $releaseDirectory 'admin\dist'
 $releaseGate = Join-Path $releaseDirectory 'gate-client'
+$releaseGateArmV7 = Join-Path $releaseDirectory 'gate-client-armv7'
 New-Item -ItemType Directory -Path $releaseConfig, $releaseAdmin, $releaseGate -Force | Out-Null
+New-Item -ItemType Directory -Path $releaseGateArmV7 -Force | Out-Null
 
 Push-Location $backendDirectory
 try {
@@ -63,6 +65,7 @@ Copy-Item -Path (Join-Path $adminDirectory 'dist\*') -Destination $releaseAdmin 
 # installer consumes these binaries without needing Go on the gate computer.
 $previousGoOS = $env:GOOS
 $previousGoArch = $env:GOARCH
+$previousGoARM = $env:GOARM
 try {
     $env:GOOS = 'linux'
     $env:GOARCH = 'amd64'
@@ -70,13 +73,29 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'gate-client linux build failed' }
     go build -trimpath -o (Join-Path $releaseGate 'gate-provision') ./cmd/gate-provision
     if ($LASTEXITCODE -ne 0) { throw 'gate-provision linux build failed' }
+
+    # The field controller may be an embedded i.MX6/BusyBox ARMv7 board
+    # without bash or systemd. Keep this package separate from the existing
+    # amd64/systemd package so a release cannot accidentally install the wrong
+    # architecture or init integration on a real gate.
+    $env:GOARCH = 'arm'
+    $env:GOARM = '7'
+    go build -trimpath -o (Join-Path $releaseGateArmV7 'gate-client') ./cmd/gate-client
+    if ($LASTEXITCODE -ne 0) { throw 'gate-client linux armv7 build failed' }
+    go build -trimpath -o (Join-Path $releaseGateArmV7 'gate-provision') ./cmd/gate-provision
+    if ($LASTEXITCODE -ne 0) { throw 'gate-provision linux armv7 build failed' }
 }
 finally {
     $env:GOOS = $previousGoOS
     $env:GOARCH = $previousGoArch
+    $env:GOARM = $previousGoARM
 }
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'scripts\gate-client\install.sh') -Destination $releaseGate
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'scripts\gate-client\ticket-gate.service') -Destination $releaseGate
 Copy-Item -LiteralPath (Join-Path $repositoryRoot 'scripts\gate-client\ticket-gate-cli.sh') -Destination $releaseGate
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'scripts\gate-client\install-busybox.sh') -Destination $releaseGateArmV7
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'scripts\gate-client\ticket-gate-busybox.init') -Destination $releaseGateArmV7
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'scripts\gate-client\ticket-gate-busybox-run.sh') -Destination $releaseGateArmV7
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'scripts\gate-client\ticket-gate-busybox-cli.sh') -Destination $releaseGateArmV7
 
 Write-Host "Release created at $releaseDirectory"
