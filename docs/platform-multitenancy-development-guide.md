@@ -717,6 +717,8 @@ flowchart LR
 更完整的现场盘点清单见配套产品研究文档第 8 节。
 可直接用于准备设备、凭据和样本的执行清单见[现场联调准备清单](./field-integration-readiness-checklist.md)。
 
+> **ARMv7/BusyBox 现场适配补充（2026-08-22）**：已确认一台真实 i.MX6 ARMv7 闸机控制机使用 BusyBox `init`，没有 `bash` 或 `systemd`。发布包保留 amd64/systemd 路径，同时提供独立 `gate-client-armv7/` ARMv7/BusyBox 安装包；该包使用 `/etc/init.d/S98-ticket-gate` 和受限 `ticket-gate` 用户，不改写厂商已有的 `S99-fluidlauncher`。架构、启动方式或受限账号能力不匹配时安装器必须拒绝运行，不能退回 root 常驻或假装已安装。
+
 ## 14. 文档维护记录
 
 | 日期 | 变更 | 原因 |

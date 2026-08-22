@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 	"ticket-backend/internal/gateclient"
 	"time"
 )
@@ -34,7 +35,11 @@ func main() {
 		log.Fatal("GATE_SCAN_TOKEN 不能为空")
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	// BusyBox init scripts stop services with SIGTERM, while an operator at a
+	// terminal normally uses SIGINT. Handle both so the same binary can run
+	// under systemd, BusyBox init, or a foreground diagnostic shell and still
+	// flush its HTTP server and persisted recovery state on shutdown.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	go client.RunHeartbeat(ctx, 20*time.Second)
 	go client.RunMaintenance(ctx, 5*time.Second)

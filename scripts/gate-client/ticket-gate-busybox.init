@@ -1,0 +1,81 @@
+#!/bin/sh
+
+APP_USER="ticket-gate"
+RUNNER="/usr/local/lib/ticket-gate/ticket-gate-busybox-run.sh"
+PID_FILE="/var/run/ticket-gate.pid"
+
+read_pid() {
+    [ -r "$PID_FILE" ] || return 1
+    pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    case "$pid" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    printf '%s' "$pid"
+}
+
+is_running() {
+    pid="$(read_pid || true)"
+    [ -n "$pid" ] || return 1
+    kill -0 "$pid" 2>/dev/null
+}
+
+start_service() {
+    if is_running; then
+        echo "ticket-gate 已在运行"
+        return 0
+    fi
+    rm -f "$PID_FILE"
+    [ -x "$RUNNER" ] || { echo "缺少或不可执行：$RUNNER" >&2; return 1; }
+    start-stop-daemon --start --background --make-pidfile \
+        --pidfile "$PID_FILE" --chuid "$APP_USER" --startas "$RUNNER"
+    sleep 1
+    if is_running; then
+        echo "ticket-gate 已启动"
+        return 0
+    fi
+    echo "ticket-gate 启动失败，请查看 /var/lib/ticket-gate/gate-client.log" >&2
+    return 1
+}
+
+stop_service() {
+    pid="$(read_pid || true)"
+    if [ -z "$pid" ]; then
+        rm -f "$PID_FILE"
+        echo "ticket-gate 未运行"
+        return 0
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -TERM "$pid" 2>/dev/null || true
+        attempt=0
+        while kill -0 "$pid" 2>/dev/null; do
+            attempt=$((attempt + 1))
+            [ "$attempt" -ge 10 ] && break
+            sleep 1
+        done
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -KILL "$pid" 2>/dev/null || true
+        fi
+    fi
+    rm -f "$PID_FILE"
+    echo "ticket-gate 已停止"
+}
+
+status_service() {
+    if is_running; then
+        echo "ticket-gate 运行中（PID $(read_pid)）"
+        return 0
+    fi
+    echo "ticket-gate 未运行"
+    return 1
+}
+
+case "${1:-status}" in
+    start) start_service ;;
+    stop) stop_service ;;
+    restart) stop_service; start_service ;;
+    status) status_service ;;
+    *)
+        echo "用法: $0 start|stop|restart|status" >&2
+        exit 2
+        ;;
+esac
