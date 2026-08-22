@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
 	"time"
@@ -175,7 +176,12 @@ func (c *DeviceController) Delete(ctx *gin.Context) {
 func (c *DeviceController) List(ctx *gin.Context) {
 	page, _ := strconv.Atoi(ctx.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "10"))
-	devices, total, err := c.Service.List(page, pageSize, ctx.GetUint("tenant_id"))
+	deviceType := strings.TrimSpace(ctx.Query("type"))
+	if deviceType != "" && deviceType != "gate" && deviceType != "handheld" && deviceType != "pos" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid device type"})
+		return
+	}
+	devices, total, err := c.Service.List(page, pageSize, ctx.GetUint("tenant_id"), deviceType)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

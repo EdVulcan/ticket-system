@@ -2,10 +2,17 @@
   <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
     <div class="flex justify-between items-center mb-6">
       <h2 class="text-lg font-bold text-gray-900">设备管理</h2>
-      <el-button type="primary" @click="handleAdd">
-        <el-icon class="mr-2"><Plus /></el-icon> 新增设备
-      </el-button>
+      <div class="flex items-center gap-2">
+        <el-button :icon="Refresh" circle title="刷新设备列表" :loading="loading" @click="refreshDevices" />
+        <el-button type="primary" @click="handleAdd">
+          <el-icon class="mr-2"><Plus /></el-icon> 新增设备
+        </el-button>
+      </div>
     </div>
+
+    <el-tabs v-model="activeDeviceType" class="mb-4" @tab-change="handleDeviceTypeChange">
+      <el-tab-pane v-for="tab in deviceTypeTabs" :key="tab.value" :label="tab.label" :name="tab.value" />
+    </el-tabs>
 
     <el-table :data="tableData" style="width: 100%" v-loading="loading">
       <el-table-column prop="id" label="编号" width="80" />
@@ -215,6 +222,7 @@
 
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
+import { Refresh } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { hasPermission } from '@/utils/permissions'
@@ -225,6 +233,13 @@ const tableData = ref([])
 const currentPage = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
+const activeDeviceType = ref('all')
+const deviceTypeTabs = [
+  { label: '全部设备', value: 'all' },
+  { label: '闸机', value: 'gate' },
+  { label: '手持机', value: 'handheld' },
+  { label: '桌面终端', value: 'pos' },
+]
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref()
@@ -299,8 +314,9 @@ const isGateDevice = (device: any) => String(device?.type || '').trim().toLowerC
 const fetchData = async () => {
   loading.value = true
   try {
+    const type = activeDeviceType.value === 'all' ? undefined : activeDeviceType.value
     const res = await request.get('/devices', {
-      params: { page: currentPage.value, page_size: pageSize.value }
+      params: { page: currentPage.value, page_size: pageSize.value, type }
     })
     tableData.value = res.data.data
     total.value = res.data.total
@@ -309,6 +325,15 @@ const fetchData = async () => {
   } finally {
     loading.value = false
   }
+}
+
+const handleDeviceTypeChange = () => {
+  currentPage.value = 1
+  fetchData()
+}
+
+const refreshDevices = () => {
+  fetchData()
 }
 
 const handleAdd = () => {

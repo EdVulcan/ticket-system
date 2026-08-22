@@ -680,7 +680,7 @@ func (s *DeviceService) GetByID(id, tenantID uint) (*model.Device, error) {
 	return &device, err
 }
 
-func (s *DeviceService) List(page, pageSize int, tenantID uint) ([]model.Device, int64, error) {
+func (s *DeviceService) List(page, pageSize int, tenantID uint, deviceTypes ...string) ([]model.Device, int64, error) {
 	var devices []model.Device
 	var total int64
 
@@ -700,6 +700,9 @@ func (s *DeviceService) List(page, pageSize int, tenantID uint) ([]model.Device,
 
 	query := s.DB.Model(&model.Device{})
 	query = query.Where("tenant_id = ?", tenantID)
+	if len(deviceTypes) > 0 && strings.TrimSpace(deviceTypes[0]) != "" {
+		query = query.Where("type = ?", strings.TrimSpace(deviceTypes[0]))
+	}
 
 	err := query.Count(&total).Error
 	if err != nil {
