@@ -44,3 +44,25 @@ func TestLoginRateLimitBlocksRepeatedIdentityFailures(t *testing.T) {
 		}
 	}
 }
+
+func TestProvisioningRateLimitUsesIPAndTokenWindows(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.POST("/api/v1/hardware/provision", ProvisioningRateLimit(), func(ctx *gin.Context) {
+		ctx.Status(http.StatusBadRequest)
+	})
+	body := `{"token":"one-time-binding-code"}`
+	for attempt := 1; attempt <= 9; attempt++ {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/hardware/provision", strings.NewReader(body))
+		request.RemoteAddr = "192.0.2.20:12345"
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, request)
+		if attempt <= 8 && response.Code != http.StatusBadRequest {
+			t.Fatalf("attempt %d status=%d, want %d", attempt, response.Code, http.StatusBadRequest)
+		}
+		if attempt == 9 && response.Code != http.StatusTooManyRequests {
+			t.Fatalf("attempt %d status=%d, want %d", attempt, response.Code, http.StatusTooManyRequests)
+		}
+	}
+}

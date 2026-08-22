@@ -33,11 +33,12 @@
         </template>
       </el-table-column>
       <el-table-column prop="ip_address" label="网络地址" width="140" />
-      <el-table-column label="操作" width="330" fixed="right">
+      <el-table-column label="操作" width="430" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
           <el-button link type="warning" size="small" @click="handleRotateKey(row)">轮换密钥</el-button>
-          <el-button v-if="row.type === 'gate' && canMaintenance" link type="success" size="small" @click="openMaintenance(row)">远程维护</el-button>
+          <el-button v-if="isGateDevice(row) && canManage" link type="primary" size="small" @click="openProvisioning(row)">生成安装绑定</el-button>
+          <el-button v-if="isGateDevice(row) && canMaintenance" link type="success" size="small" @click="openMaintenance(row)">远程维护</el-button>
           <el-button link type="danger" size="small" @click="handleDelete(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -100,14 +101,18 @@
 
     <el-dialog v-model="credentialVisible" :title="credentialIsMaintenance ? '闸机维护凭据' : '设备接入密钥'" width="520px" :close-on-click-modal="false">
       <el-alert type="warning" :closable="false" show-icon class="mb-4">
-        此密钥只显示一次。<template v-if="credentialIsMaintenance">请立即配置到 Linux gate-client 的 GATE_MAINTENANCE_SECRET；它与设备核销密钥不同。</template><template v-else>请立即配置到设备 {{ credentialDeviceName }}，系统不会保存明文。</template>
+        此密钥只显示一次。<template v-if="credentialIsMaintenance">请立即配置到 Linux gate-client 的 GATE_MAINTENANCE_SECRET；它与设备核销密钥不同。</template><template v-else><template v-if="isGateDevice(credentialDevice) && canManage">这是创建时生成的初始密钥；使用下一步安装绑定后会自动轮换，无需手工配置。</template><template v-else>请立即配置到设备 {{ credentialDeviceName }}，系统不会保存明文。</template></template>
       </el-alert>
       <el-input v-model="credentialKey" readonly>
         <template #append>
           <el-button @click="copyCredential">复制</el-button>
         </template>
       </el-input>
+      <el-alert v-if="!credentialIsMaintenance && isGateDevice(credentialDevice) && canManage" type="info" :closable="false" class="mt-3">
+        新闸机推荐使用一次性安装绑定，避免手工填写设备密钥。确认已了解下方密钥后，可直接进入下一步生成绑定码。
+      </el-alert>
       <template #footer>
+        <el-button v-if="!credentialIsMaintenance && isGateDevice(credentialDevice) && canManage" type="primary" @click="openProvisioningFromCredential">下一步：生成安装绑定</el-button>
         <el-button type="primary" @click="credentialVisible = false">我已保存</el-button>
       </template>
     </el-dialog>
@@ -149,7 +154,7 @@
         <template #title>会话已创建，令牌只显示本次</template>
         <div class="text-xs mt-2 break-all">WebSocket：{{ maintenanceSession.websocket_url }}</div>
         <div class="text-xs mt-1 break-all">令牌：{{ maintenanceSession.session_token }}</div>
-        <div class="text-xs mt-1">可在管理员电脑执行：<code>ssh -o ProxyCommand="gate-ssh --url '{{ maintenanceSession.websocket_url }}' --token '{{ maintenanceSession.session_token }}'" root@127.0.0.1</code></div>
+        <div class="text-xs mt-1">可在管理员电脑执行：<code>ssh -o ProxyCommand="gate-ssh --url '{{ maintenanceSession.websocket_url }}' --token '{{ maintenanceSession.session_token }}'" vmadmin@127.0.0.1</code></div>
         <div class="mt-2 flex gap-2">
           <el-button size="small" @click="copyMaintenanceText(maintenanceSession.websocket_url, '连接地址')">复制连接地址</el-button>
           <el-button size="small" @click="copyMaintenanceText(maintenanceSession.session_token, '会话令牌')">复制令牌</el-button>
@@ -167,6 +172,43 @@
           </template>
         </el-table-column>
       </el-table>
+    </el-dialog>
+
+    <el-dialog v-model="provisioningVisible" title="生成闸机安装绑定" width="620px" :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" show-icon class="mb-4">
+        <template #title>绑定码只显示一次，且不会展示设备密钥</template>
+        <div class="text-xs mt-1">请先停止在线闸机上的旧客户端。安装器会从服务端绑定当前设备、租户和景区，不能手工改写这些归属。</div>
+      </el-alert>
+      <el-descriptions v-if="provisioningDevice" :column="2" border class="mb-4">
+        <el-descriptions-item label="设备">{{ provisioningDevice.name }}</el-descriptions-item>
+        <el-descriptions-item label="序列号">{{ provisioningDevice.serial_number }}</el-descriptions-item>
+        <el-descriptions-item label="当前状态">
+          <el-tag :type="provisioningDevice.status === 'online' ? 'danger' : 'info'">{{ provisioningDevice.status === 'online' ? '在线（需先停止旧客户端）' : '离线' }}</el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="有效期">默认 10 分钟，最长 15 分钟</el-descriptions-item>
+      </el-descriptions>
+      <el-form label-width="100px" class="mb-2">
+        <el-form-item label="安装原因" required>
+          <el-input v-model="provisioningForm.reason" maxlength="255" show-word-limit placeholder="例如：现场部署新版本 gate-client" />
+        </el-form-item>
+        <el-form-item label="有效时长">
+          <el-input-number v-model="provisioningForm.ttl_seconds" :min="60" :max="900" :step="60" />
+          <span class="text-xs text-gray-500 ml-3">绑定码过期后不能恢复</span>
+        </el-form-item>
+      </el-form>
+      <el-alert v-if="provisioningResult" type="success" :closable="false" class="mt-4">
+        <template #title>绑定码已生成，请立即在闸机安装器中输入</template>
+        <div class="text-xs mt-2">过期时间：{{ provisioningResult.expires_at }}</div>
+        <el-input class="mt-2" :model-value="provisioningResult.activation_code" readonly>
+          <template #append><el-button @click="copyProvisioningCode">复制绑定码</el-button></template>
+        </el-input>
+        <div class="text-xs text-gray-500 mt-2">绑定码不会写入 URL、命令行、二维码或日志；安装确认后服务端会清除临时加密配置。</div>
+        <el-button class="mt-3" size="small" type="danger" plain @click="revokeProvisioningLease">立即撤销绑定码</el-button>
+      </el-alert>
+      <template #footer>
+        <el-button @click="provisioningVisible = false">关闭</el-button>
+        <el-button v-if="!provisioningResult" type="primary" :loading="provisioningLoading" :disabled="provisioningDevice?.status === 'online'" @click="createProvisioningLease">生成绑定码</el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
@@ -189,8 +231,10 @@ const formRef = ref()
 const credentialVisible = ref(false)
 const credentialKey = ref('')
 const credentialDeviceName = ref('')
+const credentialDevice = ref<any | null>(null)
 const credentialIsMaintenance = ref(false)
 const canMaintenance = computed(() => hasPermission(readStoredUser(), 'onsite.maintenance'))
+const canManage = computed(() => hasPermission(readStoredUser(), 'onsite.manage'))
 const maintenanceVisible = ref(false)
 const maintenanceLoading = ref(false)
 const maintenanceDevice = ref<any | null>(null)
@@ -198,6 +242,11 @@ const maintenanceCredential = ref<any | null>(null)
 const maintenanceSessions = ref<any[]>([])
 const maintenanceSession = ref<any | null>(null)
 const maintenanceForm = reactive({ reason: '', ttl_seconds: 900 })
+const provisioningVisible = ref(false)
+const provisioningLoading = ref(false)
+const provisioningDevice = ref<any | null>(null)
+const provisioningResult = ref<any | null>(null)
+const provisioningForm = reactive({ reason: '', ttl_seconds: 600 })
 
 const form = reactive({
   id: 0,
@@ -244,6 +293,8 @@ const getDeviceTypeTag = (type: string) => {
   }
   return map[type] || 'info'
 }
+
+const isGateDevice = (device: any) => String(device?.type || '').trim().toLowerCase() === 'gate'
 
 const fetchData = async () => {
   loading.value = true
@@ -292,8 +343,9 @@ const handleDelete = (row: any) => {
   })
 }
 
-const showCredential = (deviceName: string, key: string, maintenance = false) => {
+const showCredential = (deviceName: string, key: string, maintenance = false, device: any | null = null) => {
   credentialDeviceName.value = deviceName
+  credentialDevice.value = device
   credentialKey.value = key
   credentialIsMaintenance.value = maintenance
   credentialVisible.value = true
@@ -322,6 +374,16 @@ const handleRotateKey = async (row: any) => {
   }
 }
 
+const openProvisioningFromCredential = () => {
+  const device = credentialDevice.value
+  credentialVisible.value = false
+  if (!device?.id) {
+    ElMessage.error('设备信息未准备好，请在列表操作列中生成安装绑定')
+    return
+  }
+  openProvisioning(device)
+}
+
 const openMaintenance = async (row: any) => {
   maintenanceDevice.value = row
   maintenanceCredential.value = null
@@ -331,6 +393,55 @@ const openMaintenance = async (row: any) => {
   maintenanceForm.ttl_seconds = 900
   maintenanceVisible.value = true
   await loadMaintenance()
+}
+
+const openProvisioning = (row: any) => {
+  provisioningDevice.value = row
+  provisioningResult.value = null
+  provisioningForm.reason = ''
+  provisioningForm.ttl_seconds = 600
+  provisioningVisible.value = true
+}
+
+const createProvisioningLease = async () => {
+  if (!provisioningDevice.value || !provisioningForm.reason.trim()) {
+    ElMessage.warning('请先填写安装原因')
+    return
+  }
+  provisioningLoading.value = true
+  try {
+    const response = await request.post(`/devices/${provisioningDevice.value.id}/provisioning-leases`, provisioningForm)
+    provisioningResult.value = response.data
+    ElMessage.success('安装绑定码已生成')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '安装绑定码生成失败')
+  } finally {
+    provisioningLoading.value = false
+  }
+}
+
+const copyProvisioningCode = async () => {
+  if (!provisioningResult.value?.activation_code) return
+  try {
+    await navigator.clipboard.writeText(provisioningResult.value.activation_code)
+    ElMessage.success('绑定码已复制')
+  } catch {
+    ElMessage.error('复制失败，请手动选择绑定码')
+  }
+}
+
+const revokeProvisioningLease = async () => {
+  if (!provisioningDevice.value || !provisioningResult.value?.lease_id) return
+  try {
+    const result = await ElMessageBox.prompt('请输入撤销原因', '撤销安装绑定', {
+      confirmButtonText: '撤销', cancelButtonText: '取消', inputValidator: value => value.trim() ? true : '原因不能为空',
+    })
+    await request.post(`/devices/${provisioningDevice.value.id}/provisioning-leases/${provisioningResult.value.lease_id}/revoke`, { reason: result.value })
+    provisioningResult.value = null
+    ElMessage.success('安装绑定已撤销')
+  } catch (error: any) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error.response?.data?.error || '撤销安装绑定失败')
+  }
 }
 
 const loadMaintenance = async () => {
@@ -422,7 +533,7 @@ const handleSubmit = async () => {
           await request.put(`/devices/${form.id}`, payload)
         } else {
           const response = await request.post('/devices', payload)
-          showCredential(form.name, response.data.auth_key)
+          showCredential(form.name, response.data.auth_key, false, response.data)
         }
         ElMessage.success(isEdit.value ? '更新成功' : '创建成功')
         dialogVisible.value = false

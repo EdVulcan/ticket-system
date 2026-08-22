@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -57,6 +59,42 @@ func MiniappLoginRateLimit() gin.HandlerFunc {
 		if ctx.Writer.Status() == http.StatusUnauthorized {
 			limiter.record(key, now)
 		}
+	}
+}
+
+// ProvisioningRateLimit protects the public installer handshake before a
+// device has credentials. It deliberately keeps only a short-lived hash of
+// the activation token in memory; the raw binding code is never logged or
+// retained by the limiter. Limits are conservative because a legitimate
+// installer normally performs one claim plus, at most, a handful of retries.
+func ProvisioningRateLimit() gin.HandlerFunc {
+	limiter := &loginFailureLimiter{windows: make(map[string]loginFailureWindow)}
+	return func(ctx *gin.Context) {
+		body, err := io.ReadAll(io.LimitReader(ctx.Request.Body, maxLoginBodyBytes+1))
+		if err != nil || len(body) > maxLoginBodyBytes {
+			ctx.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{"error": "安装绑定请求内容过大"})
+			return
+		}
+		ctx.Request.Body = io.NopCloser(bytes.NewReader(body))
+		ipKey := "provision-ip:" + requestRemoteIP(ctx.Request)
+		tokenKey := ""
+		var input struct {
+			Token string `json:"token"`
+		}
+		if json.Unmarshal(body, &input) == nil && strings.TrimSpace(input.Token) != "" {
+			digest := sha256.Sum256([]byte(strings.TrimSpace(input.Token)))
+			tokenKey = "provision-token:" + hex.EncodeToString(digest[:])
+		}
+		now := time.Now()
+		if limiter.blocked(ipKey, 30, now) || (tokenKey != "" && limiter.blocked(tokenKey, 8, now)) {
+			ctx.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{"error": "安装绑定请求过于频繁，请稍后重试"})
+			return
+		}
+		limiter.record(ipKey, now)
+		if tokenKey != "" {
+			limiter.record(tokenKey, now)
+		}
+		ctx.Next()
 	}
 }
 

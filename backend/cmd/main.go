@@ -182,9 +182,13 @@ func runDeviceMaintenanceWorker(ctx context.Context, maintenanceService *service
 	if maintenanceService == nil {
 		return
 	}
+	provisioningService := service.NewDeviceProvisioningService(model.DB, maintenanceService)
 	process := func(now time.Time) {
 		if _, err := maintenanceService.ExpireSessions(now, 100); err != nil {
 			logger.Log.Error(fmt.Sprintf("device maintenance session expiry failed: %v", err))
+		}
+		if _, err := provisioningService.ExpireLeases(now, 100); err != nil {
+			logger.Log.Error(fmt.Sprintf("device provisioning lease expiry failed: %v", err))
 		}
 	}
 	process(time.Now())

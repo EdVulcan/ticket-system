@@ -68,14 +68,15 @@ type pendingScan struct {
 }
 
 type Client struct {
-	config  Config
-	base    *url.URL
-	http    *http.Client
-	key     []byte
-	driver  GateDriver
-	mu      sync.Mutex
-	stateMu sync.Mutex
-	pending map[string]pendingScan
+	config           Config
+	base             *url.URL
+	http             *http.Client
+	key              []byte
+	driver           GateDriver
+	driverConfigured bool
+	mu               sync.Mutex
+	stateMu          sync.Mutex
+	pending          map[string]pendingScan
 }
 
 func New(config Config) (*Client, error) {
@@ -93,13 +94,22 @@ func New(config Config) (*Client, error) {
 		config.HTTPClient = &http.Client{Timeout: 8 * time.Second}
 	}
 	driver := config.Driver
+	driverConfigured := true
 	if driver == nil {
-		driver, err = NewHTTPDriver(config.DriverURL, config.HTTPClient)
-		if err != nil {
-			return nil, err
+		if strings.TrimSpace(config.DriverURL) == "" {
+			// The client may still heartbeat and expose local diagnostics before
+			// the real turnstile protocol is integrated. Scans remain fail-closed
+			// because this driver always returns unknown.
+			driver = unavailableDriver{}
+			driverConfigured = false
+		} else {
+			driver, err = NewHTTPDriver(config.DriverURL, config.HTTPClient)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
-	client := &Client{config: config, base: base, http: config.HTTPClient, key: deviceauth.DeriveKey(config.DeviceKey), driver: driver, pending: make(map[string]pendingScan)}
+	client := &Client{config: config, base: base, http: config.HTTPClient, key: deviceauth.DeriveKey(config.DeviceKey), driver: driver, driverConfigured: driverConfigured, pending: make(map[string]pendingScan)}
 	if err := client.loadState(); err != nil {
 		return nil, fmt.Errorf("load gate recovery state: %w", err)
 	}
@@ -477,7 +487,7 @@ func (c *Client) statusSnapshot() map[string]interface{} {
 		"pending_count":         len(c.pending),
 		"pending_by_stage":      byStage,
 		"state_file_configured": strings.TrimSpace(c.config.StateFile) != "",
-		"driver_configured":     c.driver != nil,
+		"driver_configured":     c.driverConfigured,
 		"offline_mode_enabled":  false,
 	}
 }

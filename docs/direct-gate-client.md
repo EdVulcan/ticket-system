@@ -30,6 +30,43 @@ go build -o gate-client ./cmd/gate-client
 
 客户端仅使用 Go 标准库，不需要 CGO。
 
+### 2.1 一键安装（推荐）
+
+发布包中的 `gate-client/` 目录包含 Linux amd64 的 `gate-client`、`gate-provision`、systemd 单元和安装脚本。安装脚本会创建受限的 `ticket-gate` 用户、状态目录和配置目录，随后只提示输入管理端生成的一次性绑定码：
+
+```bash
+sudo bash ./install.sh --server-url https://tickets.example.com --package-dir .
+```
+
+绑定码只通过 HTTPS JSON body 发送，安装器不会接受命令行参数或环境变量形式的绑定码，也不会把它写入日志。服务端从租约决定租户、景区、设备和序列号，安装器只能解密服务端返回的配置包。安装器会原子写入 `/etc/ticket-gate/gate-client.env`、生成本地扫码令牌、用新设备密钥确认完成，并启用 `ticket-gate.service`。网络中断时保留临时公私钥和配置，重新执行并输入同一绑定码即可恢复；确认完成后临时私钥自动删除。
+
+### 2.2 完整现场流程
+
+1. **准备控制机**：确认是 Linux amd64、已安装 `systemd`，控制机能访问云端 HTTPS；把发布包中的 `gate-client/` 目录通过 U 盘或受控 SCP 复制到控制机。当前发布包不包含真实三辊闸驱动，拿到控制板协议后还需单独安装对应适配器。
+2. **后台登记设备**：租户管理员进入“设备管理”，新增类型为“闸机”的设备，选择正确景区和（如已知）检票点，填入现场设备序列号，状态保持离线。新增设备时后台会自动生成设备密钥，不需要人工抄写密钥到闸机。
+3. **生成一次性绑定码**：在该设备的“生成安装绑定”中填写安装原因，生成有效期约 10 分钟的绑定码。绑定码只在页面显示一次；确认没有旧客户端在线后再复制。设备在线、租户被冻结、景区票务能力关闭或服务端没有 HTTPS 公网地址时，系统会拒绝生成/领取。
+4. **执行安装器**：在控制机执行下面的命令，只有服务器地址出现在命令行，绑定码会在交互提示中输入：
+
+   ```bash
+   cd /path/to/gate-client
+   sudo bash ./install.sh --server-url https://tickets.example.com --package-dir .
+   ```
+
+   安装器会创建受限系统用户、申请加密安装配置、写入权限为 `0640` 的 `/etc/ticket-gate/gate-client.env`、启用并启动 systemd 服务。租户、景区、设备和序列号都由服务器租约决定，现场不能在安装命令中改写。
+5. **确认安装**：安装器显示“安装绑定完成”后执行 `sudo ticket-gate doctor` 和 `sudo ticket-gate status`。如果网络在最后确认阶段中断，安装器会提示“配置已安全写入但确认暂未完成”并退出；重新执行同一条安装命令，输入同一个绑定码即可继续，脚本会识别 `/var/lib/ticket-gate/.provisioning.json` 并恢复，不会重复生成设备密钥。
+6. **接入真实驱动**：在拿到三辊闸控制板的串口/网络协议、开闸脉冲和反馈定义后，配置独立驱动适配器，再重启服务并按正常票、重复票、退款票、网络中断和超时场景验收。`GATE_DRIVER_URL` 为空时只能做心跳/诊断，物理开闸结果固定为 `unknown`；不要用正式票做“试扫”，避免票权已核销但现场未放行。
+7. **轮换或撤销**：更换控制机或绑定错误时，先在后台撤销未完成绑定，再停止旧客户端；不要手工复制数据库中的密钥。已完成安装需要轮换设备密钥时，可在发布包目录执行 `sudo bash ./install.sh --server-url https://tickets.example.com --package-dir . --rebind`，脚本会停止 systemd 客户端、把旧配置移到 root-only 备份后重新绑定；现场手工启动的旧进程仍需先自行停止。
+
+现场自检命令：
+
+```bash
+ticket-gate doctor
+ticket-gate status
+ticket-gate logs
+```
+
+安装脚本不会创建或选择任何真实闸机驱动。`GATE_DRIVER_URL` 为空时客户端仍可发送心跳并提供诊断，但物理开闸结果始终为 `unknown`，绝不会使用 mock 返回 `opened`；此时不要扫描正式游客票，因为云端核销可能已经消耗票权而闸机不会动作。
+
 Linux 控制机建议以独立受限账号运行，并由 `systemd` 保持进程存活。状态文件目录只授予该账号读写权限；扫码入口仅监听本机回环地址。真实驱动适配器接入前，使用明确返回 `opened`/`failed`/`unknown` 的测试驱动完成恢复验收。
 
 ## 3. 配置
@@ -39,18 +76,24 @@ Linux 控制机建议以独立受限账号运行，并由 `systemd` 保持进程
 | `GATE_SERVER_URL` | 是 | 云端地址，生产环境必须为 HTTPS |
 | `GATE_SYSTEM_CODE` | 是 | 景区商户的系统编号 |
 | `GATE_SERIAL_NUMBER` | 是 | 后台登记的设备序列号 |
-| `GATE_DEVICE_KEY` | 是 | 后台创建设备或轮换密钥时仅显示一次的原始密钥 |
+| `GATE_DEVICE_KEY` | 是 | 后台创建设备或轮换密钥时仅显示一次的原始密钥；使用一键安装时由 `gate-provision` 自动写入，不需手工填写 |
 | `GATE_MAINTENANCE_SECRET` | 否 | 后台“远程维护”生成的独立维护凭据；为空则不建立维护通道 |
 | `GATE_MAINTENANCE_URL` | 启用维护时建议显式配置 | 后台返回的 `wss://.../api/v1/hardware/maintenance/ws` 地址；留空时从 `GATE_SERVER_URL` 的主机推导；不把令牌写进 URL |
 | `GATE_DRIVER_URL` | 生产必填 | 本机硬件适配器地址；拿到真实厂商协议前可指向测试驱动 |
-| `GATE_SCAN_TOKEN` | 是 | 本机扫码接口令牌，应使用高强度随机值 |
+| `GATE_SCAN_TOKEN` | 是 | 本机扫码接口令牌，应使用高强度随机值；使用一键安装时自动生成 |
 | `GATE_STATE_FILE` | 生产必填 | 待处理开闸状态文件，例如 `/var/lib/ticket-gate/state.json`，目录仅允许闸机程序账号访问 |
 | `GATE_SCAN_LISTEN` | 否 | 默认 `127.0.0.1:19300`，不应直接暴露公网 |
 | `GATE_ALLOW_INSECURE_HTTP` | 仅本地调试 | 设为 `true` 才允许使用 HTTP 云端地址 |
 
-密钥不写入请求正文，也不应写入日志、安装包或源码。云端数据库只保存加密后的设备密钥。升级前已经创建的设备必须在后台轮换一次密钥后才能使用新版直连接口；密钥泄露后也应立即轮换。
+### 3.1 管理端生成安装绑定
 
-## 3.1 服务器承载的临时 SSH 维护通道
+租户管理员在设备管理中为离线闸机填写安装原因并生成约 10 分钟的一次性绑定码。在线设备不能抢占绑定；旧客户端应先停止。绑定码过期、撤销、租户冻结、景区能力关闭或设备被禁用时服务端零凭据写入。服务端只保存绑定码哈希，claim 使用服务端 `SELECT FOR UPDATE`，同一 `installation_id` 和 X25519 公钥的网络重试返回同一加密包，其他安装器拒绝。安装确认通过新设备 HMAC 完成，确认后服务端清除加密包。
+
+安装接口为 `POST /api/v1/hardware/provision`，确认接口为设备签名保护的 `POST /api/v1/hardware/provision/confirm`；两者均不把长期密钥放入 URL、命令行、二维码或日志。数据库 schema 107 增加 `DeviceProvisioningLease` 及租户/景区/设备/操作者 ownership guard。
+
+原始设备密钥不写入安装器的 claim 请求正文，也不应写入日志、安装包或源码；它只在 HTTPS 返回的 X25519 加密配置包中传递。云端数据库只保存加密后的设备密钥。走安装绑定时，claim 会自动轮换该设备密钥；无法使用安装绑定的旧设备才需要先在后台手工轮换一次。任何密钥泄露都应立即轮换。
+
+### 3.2 服务器承载的临时 SSH 维护通道
 
 远程维护是一个独立的、默认关闭的运维能力，不参与票权核销、开闸命令或设备 HMAC。租户管理员在设备管理中先生成/轮换维护凭据，再按原因创建短时会话；凭据和会话令牌都只返回一次。Linux `gate-client` 通过 HTTPS 服务器建立 WSS 长连接，服务端只允许把管理端字节流转发到闸机控制机本机的固定 `127.0.0.1:22`，不接受服务端下发目标地址，也不提供通用 TCP、SOCKS、VPN 或横向内网代理。
 

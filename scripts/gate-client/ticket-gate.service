@@ -1,0 +1,22 @@
+[Unit]
+Description=悦聚游 gate-client
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ticket-gate
+Group=ticket-gate
+EnvironmentFile=/etc/ticket-gate/gate-client.env
+ExecStart=/usr/local/lib/ticket-gate/gate-client
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ticket-gate
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

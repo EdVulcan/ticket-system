@@ -134,8 +134,16 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	deviceService := service.NewDeviceService(model.DB, &service.TicketService{})
 	deviceController := api.NewDeviceController(deviceService)
 	deviceMaintenanceController := api.NewDeviceMaintenanceController(maintenanceService)
+	deviceProvisioningService := service.NewDeviceProvisioningService(model.DB, maintenanceService)
+	deviceProvisioningController := api.NewDeviceProvisioningController(deviceProvisioningService)
 
 	// Public Hardware APIs
+	// A fresh Linux controller has no device HMAC yet. The activation code is
+	// accepted only in the HTTPS JSON body and the server chooses all ownership
+	// fields from the lease.
+	provisioningGroup := apiGroup.Group("/hardware")
+	provisioningGroup.POST("/provision", middleware.ProvisioningRateLimit(), deviceProvisioningController.Claim)
+	provisioningGroup.POST("/provision/confirm", middleware.DeviceAuth(), deviceProvisioningController.Confirm)
 
 	hardwareGroup := apiGroup.Group("/hardware")
 	hardwareGroup.Use(middleware.DeviceAuth())
@@ -160,6 +168,8 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		deviceGroup.GET("/:id/maintenance-sessions", middleware.RequireTenantPermission(authz.PermissionOnsiteMaintenance), deviceMaintenanceController.ListSessions)
 		deviceGroup.POST("/:id/maintenance-sessions", middleware.RequireTenantPermission(authz.PermissionOnsiteMaintenance), deviceMaintenanceController.CreateSession)
 		deviceGroup.POST("/:id/maintenance-sessions/:sessionID/close", middleware.RequireTenantPermission(authz.PermissionOnsiteMaintenance), deviceMaintenanceController.CloseSession)
+		deviceGroup.POST("/:id/provisioning-leases", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), deviceProvisioningController.CreateLease)
+		deviceGroup.POST("/:id/provisioning-leases/:leaseID/revoke", middleware.RequireTenantPermission(authz.PermissionOnsiteManage), deviceProvisioningController.RevokeLease)
 	}
 	if maintenanceService != nil && maintenanceService.Gateway != nil {
 		path := strings.TrimSpace(config.GlobalConfig.Maintenance.Path)

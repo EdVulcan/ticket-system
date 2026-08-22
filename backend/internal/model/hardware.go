@@ -39,6 +39,30 @@ type DeviceMaintenanceSession struct {
 	ClosedReason      string     `gorm:"size:255" json:"closed_reason,omitempty"`
 }
 
+// DeviceProvisioningLease is a short-lived, single-use installation lease.
+// It binds an installer to a server-selected tenant/device identity without
+// placing long-lived credentials in a package, URL, or command line. The
+// encrypted bundle is retained only long enough for the same installer to
+// retry a lost HTTP response and is cleared after confirmation.
+type DeviceProvisioningLease struct {
+	Base
+	TenantID             uint       `gorm:"index;not null" json:"tenant_id"`
+	ScenicAreaID         uint       `gorm:"index;not null" json:"scenic_area_id"`
+	DeviceID             uint       `gorm:"index;not null" json:"device_id"`
+	ActorUserID          uint       `gorm:"index;not null" json:"actor_user_id"`
+	Reason               string     `gorm:"size:255;not null" json:"reason"`
+	TokenHash            string     `gorm:"size:64;uniqueIndex;not null" json:"-"`
+	Status               string     `gorm:"size:20;not null;default:'pending';index" json:"status"` // pending, claimed, completed, expired, revoked
+	ExpiresAt            time.Time  `gorm:"index;not null" json:"expires_at"`
+	InstallationID       string     `gorm:"size:128" json:"-"`
+	InstallerPublicKey   string     `gorm:"type:text" json:"-"`
+	InstallerFingerprint string     `gorm:"size:64" json:"-"`
+	EncryptedBundle      string     `gorm:"type:text" json:"-"`
+	ClaimedAt            *time.Time `json:"claimed_at,omitempty"`
+	CompletedAt          *time.Time `json:"completed_at,omitempty"`
+	RevokedAt            *time.Time `json:"revoked_at,omitempty"`
+}
+
 // HardwareCommand is a durable command sent to a printer, gate, scanner, or
 // identity reader. A command is never considered successful merely because a
 // browser requested it; the device must acknowledge it with the same token.

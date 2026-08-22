@@ -38,7 +38,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&PlatformAIConfig{}, &AITenantQuotaPolicy{}, &AIUsageMonth{},
 		&AgentTask{}, &AgentTaskEvent{},
 		&PrintTemplate{}, &PrintTemplateRevision{},
-		&DeviceMaintenanceCredential{}, &DeviceMaintenanceSession{},
+		&DeviceMaintenanceCredential{}, &DeviceMaintenanceSession{}, &DeviceProvisioningLease{},
 	} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("table for %T is missing", table)
@@ -67,6 +67,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		{&PrintJob{}, "idx_print_jobs_template_revision"},
 		{&DeviceMaintenanceCredential{}, "idx_device_maintenance_active_credential"},
 		{&DeviceMaintenanceSession{}, "idx_device_maintenance_session_active_device"},
+		{&DeviceProvisioningLease{}, "idx_device_provisioning_active_device"},
 	} {
 		if !db.Migrator().HasIndex(index.model, index.name) {
 			t.Fatalf("index %s is missing", index.name)
@@ -1407,5 +1408,62 @@ func TestPostgresSchema106UpgradeAddsMaintenanceFactsToSchema105(t *testing.T) {
 	}
 	if latest.Version != CurrentPostgresSchemaVersion {
 		t.Fatalf("latest schema=%d, want %d", latest.Version, CurrentPostgresSchemaVersion)
+	}
+}
+
+func TestPostgresSchema107ProvisioningOwnershipGuards(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	first := Tenant{Name: "Provision Guard A", SystemCode: "PROV-GUARD-A", SecretKey: "prov-a", Status: "active"}
+	second := Tenant{Name: "Provision Guard B", SystemCode: "PROV-GUARD-B", SecretKey: "prov-b", Status: "active"}
+	if err := db.Create(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	firstArea := ScenicArea{TenantID: first.ID, Code: "PROV-A", Name: "Provision A", Status: "active"}
+	secondArea := ScenicArea{TenantID: second.ID, Code: "PROV-B", Name: "Provision B", Status: "active"}
+	if err := db.Create(&firstArea).Create(&secondArea).Error; err != nil {
+		t.Fatal(err)
+	}
+	firstUser := User{TenantID: first.ID, Username: "prov-admin-a", Password: "hash", Role: "admin"}
+	secondUser := User{TenantID: second.ID, Username: "prov-admin-b", Password: "hash", Role: "admin"}
+	if err := db.Create(&firstUser).Create(&secondUser).Error; err != nil {
+		t.Fatal(err)
+	}
+	firstDevice := Device{TenantID: first.ID, ScenicAreaID: firstArea.ID, Name: "Provision Gate A", SerialNumber: "PROV-GATE-A", Type: "gate", Status: "offline"}
+	secondDevice := Device{TenantID: second.ID, ScenicAreaID: secondArea.ID, Name: "Provision Gate B", SerialNumber: "PROV-GATE-B", Type: "gate", Status: "offline"}
+	if err := db.Create(&firstDevice).Create(&secondDevice).Error; err != nil {
+		t.Fatal(err)
+	}
+	valid := DeviceProvisioningLease{TenantID: first.ID, ScenicAreaID: firstArea.ID, DeviceID: firstDevice.ID, ActorUserID: firstUser.ID, Reason: "ownership", TokenHash: strings.Repeat("a", 64), Status: "pending", ExpiresAt: time.Now().Add(time.Minute)}
+	if err := db.Create(&valid).Error; err != nil {
+		t.Fatalf("valid provisioning lease rejected: %v", err)
+	}
+	invalid := valid
+	invalid.Base = Base{}
+	invalid.TokenHash = strings.Repeat("b", 64)
+	invalid.ScenicAreaID = secondArea.ID
+	invalid.DeviceID = secondDevice.ID
+	if err := db.Create(&invalid).Error; err == nil {
+		t.Fatal("cross-tenant provisioning lease was accepted")
+	}
+	if err := db.Model(&valid).Update("tenant_id", second.ID).Error; err == nil {
+		t.Fatal("provisioning lease identity was mutable")
+	}
+	if err := db.Model(&valid).Updates(map[string]interface{}{"status": "claimed", "installation_id": "install-guard", "installer_public_key": "pub", "installer_fingerprint": strings.Repeat("c", 64), "encrypted_bundle": "sealed", "claimed_at": time.Now()}).Error; err != nil {
+		t.Fatalf("valid provisioning state update rejected: %v", err)
+	}
+	if err := db.Delete(&firstDevice).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete(&firstUser).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&valid).Updates(map[string]interface{}{"status": "expired", "encrypted_bundle": "", "installer_public_key": ""}).Error; err != nil {
+		t.Fatalf("historical provisioning lease could not expire: %v", err)
 	}
 }

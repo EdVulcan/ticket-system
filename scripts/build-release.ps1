@@ -44,7 +44,8 @@ if (Test-Path -LiteralPath $releaseDirectory) {
 $releaseBackend = Join-Path $releaseDirectory 'backend'
 $releaseConfig = Join-Path $releaseBackend 'config'
 $releaseAdmin = Join-Path $releaseDirectory 'admin\dist'
-New-Item -ItemType Directory -Path $releaseConfig, $releaseAdmin -Force | Out-Null
+$releaseGate = Join-Path $releaseDirectory 'gate-client'
+New-Item -ItemType Directory -Path $releaseConfig, $releaseAdmin, $releaseGate -Force | Out-Null
 
 Push-Location $backendDirectory
 try {
@@ -57,5 +58,25 @@ finally {
 
 Copy-Item -LiteralPath (Join-Path $backendDirectory 'config\config.yaml') -Destination $releaseConfig
 Copy-Item -Path (Join-Path $adminDirectory 'dist\*') -Destination $releaseAdmin -Recurse -Force
+
+# The field controller is Linux. Build a glibc-independent amd64 pair; the
+# installer consumes these binaries without needing Go on the gate computer.
+$previousGoOS = $env:GOOS
+$previousGoArch = $env:GOARCH
+try {
+    $env:GOOS = 'linux'
+    $env:GOARCH = 'amd64'
+    go build -trimpath -o (Join-Path $releaseGate 'gate-client') ./cmd/gate-client
+    if ($LASTEXITCODE -ne 0) { throw 'gate-client linux build failed' }
+    go build -trimpath -o (Join-Path $releaseGate 'gate-provision') ./cmd/gate-provision
+    if ($LASTEXITCODE -ne 0) { throw 'gate-provision linux build failed' }
+}
+finally {
+    $env:GOOS = $previousGoOS
+    $env:GOARCH = $previousGoArch
+}
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'scripts\gate-client\install.sh') -Destination $releaseGate
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'scripts\gate-client\ticket-gate.service') -Destination $releaseGate
+Copy-Item -LiteralPath (Join-Path $repositoryRoot 'scripts\gate-client\ticket-gate-cli.sh') -Destination $releaseGate
 
 Write-Host "Release created at $releaseDirectory"

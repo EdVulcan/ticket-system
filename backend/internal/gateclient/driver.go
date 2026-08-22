@@ -44,6 +44,14 @@ type OpenResult struct {
 	ElapsedMS  int64
 }
 
+// unavailableDriver keeps the runtime and heartbeat available while the real
+// turnstile protocol is still being commissioned. It never opens a gate.
+type unavailableDriver struct{}
+
+func (unavailableDriver) Open(context.Context, OpenRequest) (OpenResult, error) {
+	return OpenResult{Status: DriverUnknown, Error: "真实闸机驱动未配置"}, nil
+}
+
 // GateDriver is the seam between the protocol-independent gate runtime and a
 // concrete turnstile adapter. A real adapter may use a relay, serial port,
 // RS485, TCP or a vendor SDK without changing the ticket workflow.

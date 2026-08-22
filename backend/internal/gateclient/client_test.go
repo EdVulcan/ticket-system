@@ -228,6 +228,23 @@ func TestStateFileIsRequired(t *testing.T) {
 	}
 }
 
+func TestMissingDriverStartsFailClosed(t *testing.T) {
+	client, err := New(Config{ServerURL: "https://example.invalid", SystemCode: "S", SerialNumber: "G", DeviceKey: "K", StateFile: t.TempDir() + "/state.json", ScanToken: "local-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := client.statusSnapshot()
+	if snapshot["driver_configured"] != false {
+		t.Fatalf("missing driver was reported configured: %+v", snapshot)
+	}
+	result := client.openVerified(t.Context(), "qr:T-DRIVER-MISSING", pendingScan{
+		RequestID: "req-driver-missing", Stage: "verified", Verification: VerifyResponse{Result: "allow", OpenDuration: 1000},
+	}, ScanResult{RequestID: "req-driver-missing", Allowed: true})
+	if result.PhysicalStatus != "unknown" || result.Opened {
+		t.Fatalf("missing driver did not fail closed: %+v", result)
+	}
+}
+
 func TestScanReloadsRecoveryStateAfterProcessRestart(t *testing.T) {
 	verifyCalls, openReports, driverCalls := 0, 0, 0
 	driverStatus := "unknown"
