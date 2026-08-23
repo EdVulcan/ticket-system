@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -385,8 +386,22 @@ func (c *Client) RunHeartbeat(ctx context.Context, interval time.Duration) {
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+	lastError := ""
 	for {
-		_ = c.Heartbeat(ctx, "online")
+		err := c.Heartbeat(ctx, "online")
+		if err != nil {
+			// Keep the process alive and make transport, clock, TLS, and
+			// server-side authentication failures diagnosable on headless
+			// embedded controllers. Do not include signed headers or secrets.
+			message := err.Error()
+			if message != lastError {
+				log.Printf("闸机心跳失败: %s", message)
+				lastError = message
+			}
+		} else if lastError != "" {
+			log.Printf("闸机心跳已恢复")
+			lastError = ""
+		}
 		select {
 		case <-ctx.Done():
 			return

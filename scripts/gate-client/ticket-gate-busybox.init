@@ -19,6 +19,48 @@ is_running() {
     kill -0 "$pid" 2>/dev/null
 }
 
+ensure_random_device() {
+    # Some embedded BusyBox images recreate /dev/urandom as 0660 root:root on
+    # every boot. The client deliberately runs as the restricted
+    # ticket-gate user, so make the standard random device readable before
+    # dropping privileges. This is the normal permission for /dev/urandom and
+    # does not grant the client any additional device-control capability.
+    [ "$(id -u)" -eq 0 ] || {
+        echo "ticket-gate 启动需要 root 初始化 /dev/urandom 权限" >&2
+        return 1
+    }
+    [ -e /dev/urandom ] || {
+        echo "系统缺少 /dev/urandom，拒绝启动 ticket-gate" >&2
+        return 1
+    }
+    chmod 0666 /dev/urandom 2>/dev/null || {
+        echo "无法设置 /dev/urandom 读取权限，拒绝启动 ticket-gate" >&2
+        return 1
+    }
+}
+
+sync_local_rtc() {
+    # The i.MX6 BusyBox image used in the field stores local time in its RTC.
+    # Only apply this correction when the vendor hwclock script explicitly
+    # declares that mode; UTC RTC images must not be shifted by assumption.
+    [ -r /etc/init.d/S06-hwclock ] || return 0
+    grep -q '^UTC=no' /etc/init.d/S06-hwclock 2>/dev/null || return 0
+    grep -q 'localtime' /etc/init.d/S06-hwclock 2>/dev/null || return 0
+    if [ -r /etc/timezone ]; then
+        TZ="$(cat /etc/timezone 2>/dev/null || true)"
+    elif [ -r /etc/TZ ]; then
+        TZ="$(cat /etc/TZ 2>/dev/null || true)"
+    else
+        TZ="CST-8"
+    fi
+    [ -n "$TZ" ] || TZ="CST-8"
+    export TZ
+    hwclock --hctosys --localtime 2>/dev/null || {
+        echo "无法按本地时区同步硬件时钟，拒绝启动 ticket-gate" >&2
+        return 1
+    }
+}
+
 start_service() {
     if is_running; then
         echo "ticket-gate 已在运行"
@@ -26,6 +68,8 @@ start_service() {
     fi
     rm -f "$PID_FILE"
     [ -x "$RUNNER" ] || { echo "缺少或不可执行：$RUNNER" >&2; return 1; }
+    sync_local_rtc || return 1
+    ensure_random_device || return 1
     start-stop-daemon --start --background --make-pidfile \
         --pidfile "$PID_FILE" --chuid "$APP_USER" --startas "$RUNNER"
     sleep 1
