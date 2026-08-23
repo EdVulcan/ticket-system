@@ -717,7 +717,7 @@ flowchart LR
 更完整的现场盘点清单见配套产品研究文档第 8 节。
 可直接用于准备设备、凭据和样本的执行清单见[现场联调准备清单](./field-integration-readiness-checklist.md)。
 
-> **ARMv7/BusyBox 现场适配补充（2026-08-22）**：已确认一台真实 i.MX6 ARMv7 闸机控制机使用 BusyBox `init`，没有 `bash` 或 `systemd`。发布包保留 amd64/systemd 路径，同时提供独立 `gate-client-armv7/` ARMv7/BusyBox 安装包；该包使用 `/etc/init.d/S98-ticket-gate` 和受限 `ticket-gate` 用户，不改写厂商已有的 `S99-fluidlauncher`。架构、启动方式或受限账号能力不匹配时安装器必须拒绝运行，不能退回 root 常驻或假装已安装。
+> **ARMv7/BusyBox 现场适配补充（2026-08-22，RTC/随机设备权限修复 2026-08-23）**：已确认一台真实 i.MX6 ARMv7 闸机控制机使用 BusyBox `init`，没有 `bash` 或 `systemd`。发布包保留 amd64/systemd 路径，同时提供独立 `gate-client-armv7/` ARMv7/BusyBox 安装包；该包使用 `/etc/init.d/S98-ticket-gate` 和受限 `ticket-gate` 用户，不改写厂商已有的 `S99-fluidlauncher`。部分固件把本地时间写入 RTC，重启后若按 UTC 读取会让心跳时间戳快 8 小时；当厂商 `S06-hwclock` 明确声明 `UTC=no` 和 `--localtime` 时，`S98-ticket-gate` 由 root 在降权前按本地时区重新加载 RTC。部分固件还会把 `/dev/urandom` 重建为 `root:root 0660`，客户端需要随机源生成心跳幂等标识；启动脚本恢复该设备的标准可读权限，若 RTC/随机设备修复失败则 fail-closed，不退回 root 常驻。架构、启动方式或受限账号能力不匹配时安装器必须拒绝运行，不能退回 root 常驻或假装已安装。
 
 ## 14. 文档维护记录
 
