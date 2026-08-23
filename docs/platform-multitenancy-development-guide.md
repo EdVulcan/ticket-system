@@ -1,5 +1,7 @@
 # 多租户景区票务平台开发基线与演进指南
 
+> **ARMv7/BusyBox 闸机现场修复补充（2026-08-23）**：部分 i.MX6 控制机的 RTC 保存本地时间，且重启后 `/dev/urandom` 可能恢复为 `root:root 0660`。BusyBox 启动脚本仅在厂商 `S06-hwclock` 明确为 `UTC=no`/`--localtime` 时同步本地 RTC，并在以 `ticket-gate` 用户启动前将随机设备调整为可读权限；客户端不会因此长期以 root 运行。该修复只保证系统时钟和客户端心跳基础，原厂桌面程序的独立显示时区仍需现场单独验收。
+
 > **租户 AI 额度治理补充（2026-08-18）**：PostgreSQL schema 已升级至 102。平台管理员在独立的“AI 租户额度”页面按账期查看各租户用量，并可为单个租户覆盖月请求/Token 上限或暂停 AI；未配置维度继承平台默认值。策略变更要求原因并与平台审计同事务写入，绝不清零或改写 `AIUsageMonth` 历史账本；额度下调低于已使用量时，后续请求 fail-closed。平台 API Key 仍只保存在统一平台配置，租户不能提交自己的密钥。
 
 > **门票打印模板补充（2026-08-19，横版能力补充）**：PostgreSQL schema 已升级至 105。景区供应商可在管理端按景区、票种或产品 revision 维护受限的结构化打印区块，并选择 58/80mm 纸宽及竖版/横版方向；服务端预览后保存草稿并发布不可变版本，`PrintDocument` 和打印任务快照同时保存方向。出票/补打任务在调用硬件前生成并持久化内容快照、模板版本和哈希；模板后续发布不会回写既有任务。混合订单若命中不同模板，POS 按票逐张排队；旧的整单快照调用 fail-closed。模板不接受任意 HTML、JavaScript、SQL 或渠道/结算敏感字段，真实打印机仍需现场协议和设备验收，未配置硬件时不得假成功。随后 schema 106 增加独立闸机维护凭据和短时维护会话表及租户/景区/设备/操作者归属保护。
@@ -717,7 +719,7 @@ flowchart LR
 更完整的现场盘点清单见配套产品研究文档第 8 节。
 可直接用于准备设备、凭据和样本的执行清单见[现场联调准备清单](./field-integration-readiness-checklist.md)。
 
-> **ARMv7/BusyBox 现场适配补充（2026-08-22，RTC/随机设备权限修复 2026-08-23）**：已确认一台真实 i.MX6 ARMv7 闸机控制机使用 BusyBox `init`，没有 `bash` 或 `systemd`。发布包保留 amd64/systemd 路径，同时提供独立 `gate-client-armv7/` ARMv7/BusyBox 安装包；该包使用 `/etc/init.d/S98-ticket-gate` 和受限 `ticket-gate` 用户，不改写厂商已有的 `S99-fluidlauncher`。部分固件把本地时间写入 RTC，重启后若按 UTC 读取会让心跳时间戳快 8 小时；当厂商 `S06-hwclock` 明确声明 `UTC=no` 和 `--localtime` 时，`S98-ticket-gate` 由 root 在降权前按本地时区重新加载 RTC。部分固件还会把 `/dev/urandom` 重建为 `root:root 0660`，客户端需要随机源生成心跳幂等标识；启动脚本恢复该设备的标准可读权限，若 RTC/随机设备修复失败则 fail-closed，不退回 root 常驻。架构、启动方式或受限账号能力不匹配时安装器必须拒绝运行，不能退回 root 常驻或假装已安装。
+> **ARMv7/BusyBox 现场适配补充（2026-08-22）**：已确认一台真实 i.MX6 ARMv7 闸机控制机使用 BusyBox `init`，没有 `bash` 或 `systemd`。发布包保留 amd64/systemd 路径，同时提供独立 `gate-client-armv7/` ARMv7/BusyBox 安装包；该包使用 `/etc/init.d/S98-ticket-gate` 和受限 `ticket-gate` 用户，不改写厂商已有的 `S99-fluidlauncher`。架构、启动方式或受限账号能力不匹配时安装器必须拒绝运行，不能退回 root 常驻或假装已安装。
 
 ## 14. 文档维护记录
 

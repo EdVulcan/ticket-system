@@ -51,7 +51,7 @@ cd /path/to/gate-client-armv7
 sh ./install-busybox.sh --server-url https://tickets.example.com --package-dir .
 ```
 
-安装器会把二进制放到 `/usr/local/lib/ticket-gate`，配置写入 `/etc/ticket-gate/gate-client.env`，创建受限 `ticket-gate` 用户，并安装 `/etc/init.d/S98-ticket-gate`。BusyBox 启动脚本只在网络初始化脚本之后启动客户端，不改写厂商已有的 `S99-fluidlauncher`；如果厂商的 `S06-hwclock` 明确声明 `UTC=no` 和 `--localtime`，启动前会按设备时区从 RTC 校准系统时间，避免心跳使用未来的 UTC 时间戳；随后由 root 将嵌入式系统可能在重启时恢复为 `root:root 0660` 的 `/dev/urandom` 调整为标准可读权限，再以受限 `ticket-gate` 用户启动，绝不让客户端长期以 root 运行。日志写入 `/var/lib/ticket-gate/gate-client.log`。现场检查使用 `ticket-gate status|doctor|logs`。如果设备没有 `adduser` 或 `start-stop-daemon`，安装器会拒绝以 root 长期运行客户端，需先按厂商系统提供受限服务账号或启动方式。
+安装器会把二进制放到 `/usr/local/lib/ticket-gate`，配置写入 `/etc/ticket-gate/gate-client.env`，创建受限 `ticket-gate` 用户，并安装 `/etc/init.d/S98-ticket-gate`。BusyBox 启动脚本只在网络初始化脚本之后启动客户端，不改写厂商已有的 `S99-fluidlauncher`；对于明确使用本地 RTC 的厂商脚本，会在启动前按 `UTC=no`/`--localtime` 从 RTC 校准系统时间，避免心跳使用未来的 UTC 时间戳；同时在降权前修正重启后可能恢复为 `root:root 0660` 的 `/dev/urandom` 权限，客户端仍以受限 `ticket-gate` 用户运行。日志写入 `/var/lib/ticket-gate/gate-client.log`。现场检查使用 `ticket-gate status|doctor|logs`。如果设备没有 `adduser` 或 `start-stop-daemon`，安装器会拒绝以 root 长期运行客户端，需先按厂商系统提供受限服务账号或启动方式。
 
 ### 2.2 完整现场流程
 
