@@ -96,6 +96,35 @@ type XiaohongshuVoucherLink struct {
 	VerifyID               string `gorm:"size:100" json:"verify_id,omitempty"`
 }
 
+// XiaohongshuVoucherVerification coordinates the external voucher consume
+// fact with the local ticket admission fact. A row is kept for the entire
+// lifecycle so a process restart can finish a confirmed external consume
+// locally without sending a second request to Xiaohongshu.
+type XiaohongshuVoucherVerification struct {
+	Base
+	TenantID             uint       `gorm:"index;not null" json:"tenant_id"`
+	ChannelAccountID     uint       `gorm:"index;not null" json:"channel_account_id"`
+	VoucherLinkID        uint       `gorm:"uniqueIndex;not null" json:"voucher_link_id"`
+	TicketID             uint       `gorm:"index;not null" json:"ticket_id"`
+	DeviceVerificationID uint       `gorm:"uniqueIndex;not null" json:"device_verification_id"`
+	DeviceID             uint       `gorm:"index;not null" json:"device_id"`
+	CheckPointID         uint       `gorm:"index;not null" json:"check_point_id"`
+	// Request identity is scoped by device. The composite unique index is
+	// created by the PostgreSQL migration because GORM cannot express the
+	// partial index used to retain only non-deleted coordination rows.
+	RequestID            string     `gorm:"size:100;not null" json:"request_id"`
+	RequestHash          string     `gorm:"size:64;not null" json:"-"`
+	State                string     `gorm:"size:30;not null;index;check:chk_xhs_voucher_verification_state,state IN ('prepared','external_in_flight','external_unknown','external_confirmed','local_pending','local_completed','external_rejected','local_rejected','manual_review')" json:"state"`
+	VerifyID             string     `gorm:"size:100;index" json:"verify_id,omitempty"`
+	CheckInRecordID      uint       `gorm:"index" json:"check_in_record_id,omitempty"`
+	AttemptCount         int        `gorm:"not null;default:0" json:"attempt_count"`
+	ExternalStartedAt    *time.Time `json:"external_started_at,omitempty"`
+	ExternalConfirmedAt  *time.Time `json:"external_confirmed_at,omitempty"`
+	LocalCompletedAt     *time.Time `json:"local_completed_at,omitempty"`
+	ManualReviewAt       *time.Time `json:"manual_review_at,omitempty"`
+	LastError            string     `gorm:"size:500" json:"last_error,omitempty"`
+}
+
 // CtripOutboundTask persists price and inventory notifications before any
 // network call. A failed call can be retried after a restart without changing
 // the supplier product or inventory facts.

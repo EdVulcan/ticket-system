@@ -78,17 +78,32 @@ func TestServeAdminUIExposesXiaohongshuValidationFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "74e84f27.txt"), []byte("74e84f27de41f119d9\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(directory, "6cc8262d.txt"), []byte("6cc8262d80a22c265e\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "not-a-validation.txt"), []byte("must not be exposed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	engine := gin.New()
 	serveAdminUI(engine, directory)
-	response := httptest.NewRecorder()
-	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/74e84f27.txt", nil))
-
-	if response.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+	for path, want := range map[string]string{
+		"/74e84f27.txt": "74e84f27de41f119d9",
+		"/6cc8262d.txt": "6cc8262d80a22c265e",
+	} {
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want %d", path, response.Code, http.StatusOK)
+		}
+		if response.Body.String() != want {
+			t.Fatalf("%s body = %q", path, response.Body.String())
+		}
 	}
-	if response.Body.String() != "74e84f27de41f119d9" {
-		t.Fatalf("body = %q", response.Body.String())
+	invalid := httptest.NewRecorder()
+	engine.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/not-a-validation.txt", nil))
+	if invalid.Code != http.StatusOK || invalid.Body.String() != "admin" {
+		t.Fatalf("unexpected non-validation response: status=%d body=%q", invalid.Code, invalid.Body.String())
 	}
 }
 

@@ -29,7 +29,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&ProductRevision{}, &LedgerEntry{}, &ChannelAccount{}, &TourGroup{}, &POSShift{},
 		&SettlementStatement{}, &AfterSaleRequest{}, &ChannelReservation{}, &FinancialDocument{},
 		&TeamSettlementStatement{}, &ChannelReconciliation{}, &OrderVisitor{}, &BundleProduct{},
-		&CtripOrderLink{}, &CtripOrderItem{}, &XiaohongshuWebhookEvent{}, &SupplierBusinessType{},
+		&CtripOrderLink{}, &CtripOrderItem{}, &XiaohongshuVoucherVerification{}, &XiaohongshuWebhookEvent{}, &SupplierBusinessType{},
 		&HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRatePlanPrice{}, &HotelRoomInventory{},
 		&HotelProduct{}, &HotelProductRevision{}, &HotelProductCalendarPrice{}, &HotelProductEntitlement{}, &HotelProductReservation{},
 		&ScenicHotelPackage{}, &ScenicHotelPackageEntitlement{}, &HotelReservation{},
@@ -68,9 +68,21 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		{&DeviceMaintenanceCredential{}, "idx_device_maintenance_active_credential"},
 		{&DeviceMaintenanceSession{}, "idx_device_maintenance_session_active_device"},
 		{&DeviceProvisioningLease{}, "idx_device_provisioning_active_device"},
+		{&XiaohongshuVoucherVerification{}, "idx_xhs_voucher_verification_link"},
+		{&XiaohongshuVoucherVerification{}, "idx_xhs_voucher_verification_request"},
+		{&XiaohongshuVoucherVerification{}, "idx_xhs_voucher_verification_verify"},
 	} {
 		if !db.Migrator().HasIndex(index.model, index.name) {
 			t.Fatalf("index %s is missing", index.name)
+		}
+	}
+	var voucherRequestIndex string
+	if err := db.Raw(`SELECT indexdef FROM pg_indexes WHERE schemaname = CURRENT_SCHEMA() AND indexname = 'idx_xhs_voucher_verification_request'`).Scan(&voucherRequestIndex).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, column := range []string{"device_id", "request_id"} {
+		if !strings.Contains(voucherRequestIndex, column) {
+			t.Fatalf("xiaohongshu voucher request index omitted %s: %s", column, voucherRequestIndex)
 		}
 	}
 	var channelRequestIndex string
@@ -1532,5 +1544,91 @@ func TestPostgresSchema107ProvisioningOwnershipGuards(t *testing.T) {
 	}
 	if err := db.Model(&valid).Updates(map[string]interface{}{"status": "expired", "encrypted_bundle": "", "installer_public_key": ""}).Error; err != nil {
 		t.Fatalf("historical provisioning lease could not expire: %v", err)
+	}
+}
+
+func TestPostgresSchema108XiaohongshuVoucherVerificationOwnershipGuards(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	first := Tenant{Name: "XHS Verification Guard A", SystemCode: "XHS-VERIFY-GUARD-A", SecretKey: "xhs-a", Status: "active"}
+	second := Tenant{Name: "XHS Verification Guard B", SystemCode: "XHS-VERIFY-GUARD-B", SecretKey: "xhs-b", Status: "active"}
+	if err := db.Create(&first).Create(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	area := ScenicArea{TenantID: first.ID, Code: "XHS-VERIFY-A", Name: "XHS Verify A", Status: "active"}
+	if err := db.Create(&area).Error; err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := CheckPoint{TenantID: first.ID, ScenicAreaID: area.ID, Name: "XHS Verify Entry"}
+	if err := db.Create(&checkpoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	checkpointID := checkpoint.ID
+	device := Device{TenantID: first.ID, ScenicAreaID: area.ID, CheckPointID: &checkpointID, Name: "XHS Verify Gate", SerialNumber: "XHS-VERIFY-GATE", Type: "gate", Status: "online"}
+	if err := db.Create(&device).Error; err != nil {
+		t.Fatal(err)
+	}
+	account := ChannelAccount{TenantID: first.ID, Code: "xhs-verify-guard", Type: "xiaohongshu", AppID: "xhs-verify-app", Status: "sandbox", Environment: "sandbox"}
+	if err := db.Create(&account).Error; err != nil {
+		t.Fatal(err)
+	}
+	customer := MiniappCustomer{
+		TenantID: first.ID, ChannelAccountID: account.ID, OpenIDHash: strings.Repeat("a", 64),
+		OpenIDCiphertext: "sealed-open-id", SessionKeyCiphertext: "sealed-session", SessionTokenHash: strings.Repeat("b", 64),
+		SessionExpiresAt: time.Now().Add(time.Hour), Status: "active", LastLoginAt: time.Now(),
+	}
+	if err := db.Create(&customer).Error; err != nil {
+		t.Fatal(err)
+	}
+	product := Product{TenantID: first.ID, ScenicAreaID: area.ID, Name: "XHS Verify Ticket", ProductKind: "ticket", Type: "online", Status: "online", Price: 1}
+	if err := db.Create(&product).Error; err != nil {
+		t.Fatal(err)
+	}
+	order := Order{TenantID: first.ID, OrderNo: "XHS-VERIFY-ORDER", Channel: "xiaohongshu", ChannelAccountID: account.ID, Status: "paid", Environment: "production"}
+	if err := db.Create(&order).Error; err != nil {
+		t.Fatal(err)
+	}
+	orderItem := OrderItem{OrderID: order.ID, ProductID: product.ID, ProductName: product.Name, Quantity: 1, Price: 1, FulfillmentProductID: product.ID, FulfillmentTenantID: first.ID, FulfillmentScenicAreaID: area.ID}
+	if err := db.Create(&orderItem).Error; err != nil {
+		t.Fatal(err)
+	}
+	ticket := Ticket{OrderItemID: orderItem.ID, OrderID: order.ID, TenantID: first.ID, ScenicAreaID: area.ID, FulfillmentProductID: product.ID, FulfillmentTenantID: first.ID, FulfillmentScenicAreaID: area.ID, TicketCode: "XHS-VERIFY-TICKET", Status: "unused", Environment: "production"}
+	if err := db.Create(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	orderLink := XiaohongshuOrderLink{TenantID: first.ID, ChannelAccountID: account.ID, MiniappCustomerID: customer.ID, OrderID: order.ID, ClientRequestID: "xhs-verify-request", ExternalOrderID: "XHS-VERIFY-EXTERNAL", State: "paid"}
+	if err := db.Create(&orderLink).Error; err != nil {
+		t.Fatal(err)
+	}
+	voucherLink := XiaohongshuVoucherLink{TenantID: first.ID, ChannelAccountID: account.ID, XiaohongshuOrderLinkID: orderLink.ID, TicketID: ticket.ID, VoucherCodeHash: strings.Repeat("c", 64), VoucherCodeCiphertext: "ciphertext", Status: 1}
+	if err := db.Create(&voucherLink).Error; err != nil {
+		t.Fatal(err)
+	}
+	verification := DeviceVerification{TenantID: first.ID, ScenicAreaID: area.ID, DeviceID: device.ID, RequestID: "xhs-verify-scan", RequestHash: strings.Repeat("d", 64), TicketCode: ticket.TicketCode, Status: "processing"}
+	if err := db.Create(&verification).Error; err != nil {
+		t.Fatal(err)
+	}
+	saga := XiaohongshuVoucherVerification{
+		TenantID: first.ID, ChannelAccountID: account.ID, VoucherLinkID: voucherLink.ID, TicketID: ticket.ID,
+		DeviceVerificationID: verification.ID, DeviceID: device.ID, CheckPointID: checkpoint.ID, RequestID: verification.RequestID,
+		RequestHash: verification.RequestHash, State: "prepared",
+	}
+	if err := db.Create(&saga).Error; err != nil {
+		t.Fatalf("valid xiaohongshu voucher verification rejected: %v", err)
+	}
+	if err := db.Model(&saga).Update("tenant_id", second.ID).Error; err == nil {
+		t.Fatal("cross-tenant xiaohongshu voucher verification was accepted")
+	}
+	checkIn := CheckInRecord{TenantID: first.ID, ScenicAreaID: area.ID, TicketID: ticket.ID, TicketCode: ticket.TicketCode, CheckPointID: checkpoint.ID, DeviceID: device.ID, DeviceRequestID: verification.RequestID, CheckInTime: time.Now(), Result: "success", Message: "verified"}
+	if err := db.Create(&checkIn).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&saga).Updates(map[string]interface{}{"state": "local_completed", "verify_id": "XHS-VERIFY-ID", "check_in_record_id": checkIn.ID, "local_completed_at": time.Now()}).Error; err != nil {
+		t.Fatalf("valid local completion rejected: %v", err)
+	}
+	if err := db.Model(&saga).Update("check_in_record_id", 999999).Error; err == nil {
+		t.Fatal("voucher verification accepted an unrelated check-in record")
 	}
 }

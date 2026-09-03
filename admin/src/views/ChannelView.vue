@@ -22,6 +22,7 @@
         <template #default="{row}">
           <el-button v-if="canActiveWrite && row.type === 'ctrip'" link type="primary" @click="openCtripConfig(row)">携程参数</el-button>
           <el-button v-if="canActiveWrite && row.type === 'xiaohongshu'" link type="primary" @click="openXiaohongshuConfig(row)">小红书参数</el-button>
+          <el-button v-if="row.type === 'xiaohongshu'" link type="primary" :icon="Connection" @click="diagnoseXiaohongshu(row)">连接测试</el-button>
           <el-button v-if="canActiveWrite" link type="primary" @click="openMapping(row)">商品映射</el-button>
           <el-button link type="primary" @click="openOrders(row)">渠道订单</el-button>
           <el-dropdown trigger="click" @command="handleAccountCommand($event, row)">
@@ -85,6 +86,30 @@
         <el-alert v-if="xiaohongshuConfigSaved" class="mt-4" type="success" :closable="false" title="参数已保存。现在将 URL、Token 和 EncodingAESKey 分别复制到小红书后台并提交校验。" />
       </el-form>
       <template #footer><el-button @click="xiaohongshuConfigDialog = false">关闭</el-button><el-button type="primary" :loading="xiaohongshuConfigSaving" @click="saveXiaohongshuConfig">保存参数</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="xiaohongshuDiagnosticDialog" title="小红书连接测试" width="620px" :close-on-click-modal="false">
+      <div v-loading="xiaohongshuDiagnosticLoading" class="min-h-48">
+        <template v-if="xiaohongshuDiagnostic">
+          <el-descriptions :column="2" border size="small">
+            <el-descriptions-item label="AppID">{{ xiaohongshuDiagnostic.app_id || '-' }}</el-descriptions-item>
+            <el-descriptions-item label="运行环境">{{ xiaohongshuDiagnostic.environment === 'sandbox' ? '测试环境' : '正式环境' }}</el-descriptions-item>
+            <el-descriptions-item label="账号状态">{{ accountStatusText(xiaohongshuDiagnostic.account_status) }}</el-descriptions-item>
+            <el-descriptions-item label="发布条件"><el-tag :type="xiaohongshuDiagnostic.ready ? 'success' : 'warning'">{{ xiaohongshuDiagnostic.ready ? '已满足' : '未满足' }}</el-tag></el-descriptions-item>
+          </el-descriptions>
+          <div class="mt-4 space-y-2">
+            <div v-for="check in diagnosticChecks(xiaohongshuDiagnostic)" :key="check.key" class="flex items-start justify-between gap-4 rounded border border-gray-200 px-3 py-2">
+              <div class="min-w-0">
+                <div class="font-medium text-gray-800">{{ check.label }}</div>
+                <div class="mt-1 text-sm text-gray-500">{{ check.message }}</div>
+              </div>
+              <el-tag class="shrink-0" :type="diagnosticStatusType(check.status)" effect="plain">{{ diagnosticStatusText(check.status) }}</el-tag>
+            </div>
+          </div>
+          <el-alert v-if="!xiaohongshuDiagnostic.ready" class="mt-4" type="info" :closable="false" title="完成所有检查后，再配置商品映射并同步商品。" />
+        </template>
+      </div>
+      <template #footer><el-button @click="xiaohongshuDiagnosticDialog = false">关闭</el-button><el-button type="primary" :loading="xiaohongshuDiagnosticLoading" @click="selectedAccount && diagnoseXiaohongshu(selectedAccount)">重新测试</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="ctripConfigDialog" title="携程订单接口参数" width="560px" :close-on-click-modal="false">
@@ -376,7 +401,7 @@
 
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
-import { MoreFilled, Plus, Refresh, UploadFilled } from '@element-plus/icons-vue'
+import { Connection, MoreFilled, Plus, Refresh, UploadFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadFile, type UploadInstance } from 'element-plus'
 import request from '@/utils/request'
 import { localizeDisplayText } from '@/utils/localize'
@@ -432,6 +457,9 @@ const xiaohongshuConfigDialog = ref(false)
 const xiaohongshuConfigSaving = ref(false)
 const xiaohongshuConfigSaved = ref(false)
 const xiaohongshuConfig = reactive({ app_id: '', app_secret: '', message_token: '', encoding_aes_key: '' })
+const xiaohongshuDiagnosticDialog = ref(false)
+const xiaohongshuDiagnosticLoading = ref(false)
+const xiaohongshuDiagnostic = ref<any>(null)
 const ctripSandboxConsumeDialog = ref(false)
 const ctripSandboxConsuming = ref(false)
 const ctripSandboxSupplierOrderID = ref('')
@@ -487,6 +515,26 @@ const openXiaohongshuConfig = (row: any) => {
   xiaohongshuConfigSaved.value = false
   xiaohongshuConfigDialog.value = true
 }
+const diagnoseXiaohongshu = async (row: any) => {
+  selectedAccount.value = row
+  xiaohongshuDiagnostic.value = null
+  xiaohongshuDiagnosticDialog.value = true
+  xiaohongshuDiagnosticLoading.value = true
+  try {
+    xiaohongshuDiagnostic.value = (await request.get(`/channel-accounts/${row.id}/xiaohongshu-diagnosis`, { skipErrorToast: true } as any)).data
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '小红书连接测试失败')
+  } finally {
+    xiaohongshuDiagnosticLoading.value = false
+  }
+}
+const diagnosticChecks = (diagnostic: any) => [
+  { key: 'credentials', label: '调用凭证', ...diagnostic.credentials },
+  { key: 'categories', label: '交易类目', ...diagnostic.categories },
+  { key: 'pois', label: '可用门店', ...diagnostic.pois },
+]
+const diagnosticStatusText = (status: string) => ({ passed: '通过', failed: '失败', skipped: '未检查' } as Record<string, string>)[status] || '未知'
+const diagnosticStatusType = (status: string) => status === 'passed' ? 'success' : status === 'failed' ? 'danger' : 'info'
 const randomAlphanumeric = (length: number) => {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
   const values = new Uint8Array(length)

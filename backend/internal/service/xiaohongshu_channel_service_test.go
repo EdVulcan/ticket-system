@@ -189,3 +189,79 @@ func TestXiaohongshuProductConfigAndSyncAreTenantScoped(t *testing.T) {
 		t.Fatal("another tenant configured the mapping")
 	}
 }
+
+func TestXiaohongshuDiagnosisChecksCredentialsTradeCategoriesAndPOIs(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	account := model.ChannelAccount{Code: "xiaohongshu-diagnosis", Status: "sandbox"}
+	if err := (&ChannelService{}).CreateXiaohongshuIntegration(tenantID, &account, "miniapp-diagnosis", "app-secret", "MessageToken123", "abcdefghijklmnopqrstuvwxyzABCDEFGH123456789"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/rmp/token":
+			_, _ = w.Write([]byte(`{"data":{"access_token":"ACCESS","expire_in":7200},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/apps/category":
+			_, _ = w.Write([]byte(`{"data":{"category_info":[{"category_id":"SCENIC","name":"景区门票","support_trade":true},{"category_id":"OTHER","name":"其他","support_trade":false}]},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/mp/deal/poi/list":
+			if r.URL.Query().Get("page_no") != "1" || r.URL.Query().Get("page_size") != "100" {
+				t.Fatalf("poi query=%s", r.URL.RawQuery)
+			}
+			_, _ = w.Write([]byte(`{"data":{"list":[{"poi_id":"POI-1","name":"测试景区"}],"total":1},"success":true,"msg":"success","code":0}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	productService := NewXiaohongshuProductService()
+	productService.NewClient = func(appID, secret, environment string) *xiaohongshu.Client {
+		if appID != "miniapp-diagnosis" || secret != "app-secret" || environment != "sandbox" {
+			t.Fatalf("client app=%q secret=%q environment=%q", appID, secret, environment)
+		}
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
+	}
+	diagnostic, err := productService.Diagnose(context.Background(), tenantID, account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !diagnostic.Ready || diagnostic.Credentials.Status != "passed" || diagnostic.Categories.Count != 2 || diagnostic.Categories.TradeCount != 1 || diagnostic.POIs.Count != 1 {
+		t.Fatalf("diagnostic=%+v", diagnostic)
+	}
+}
+
+func TestXiaohongshuDiagnosisFailsClosedForMissingTradeCategory(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	account := model.ChannelAccount{Code: "xiaohongshu-diagnosis-no-trade", Status: "sandbox"}
+	if err := (&ChannelService{}).CreateXiaohongshu(tenantID, &account, "miniapp-diagnosis-no-trade", "app-secret"); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/rmp/token":
+			_, _ = w.Write([]byte(`{"data":{"access_token":"ACCESS","expire_in":7200},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/apps/category":
+			_, _ = w.Write([]byte(`{"data":{"category_info":[{"category_id":"OTHER","name":"其他","support_trade":false}]},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/mp/deal/poi/list":
+			_, _ = w.Write([]byte(`{"data":{"list":[{"poi_id":"POI-1","name":"测试景区"}],"total":1},"success":true,"msg":"success","code":0}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	productService := NewXiaohongshuProductService()
+	productService.NewClient = func(appID, secret, environment string) *xiaohongshu.Client {
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
+	}
+	diagnostic, err := productService.Diagnose(context.Background(), tenantID, account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diagnostic.Ready || diagnostic.Categories.Status != "passed" || diagnostic.Categories.TradeCount != 0 {
+		t.Fatalf("diagnostic should not be ready=%+v", diagnostic)
+	}
+}

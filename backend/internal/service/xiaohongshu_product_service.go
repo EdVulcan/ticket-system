@@ -39,6 +39,25 @@ type XiaohongshuProductConfigView struct {
 	POIIDs []string `json:"poi_ids"`
 }
 
+type XiaohongshuDiagnosticCheck struct {
+	Status       string `json:"status"` // passed, failed, skipped
+	Message      string `json:"message"`
+	Count        int    `json:"count,omitempty"`
+	TradeCount   int    `json:"trade_count,omitempty"`
+	PlatformCode int    `json:"platform_code,omitempty"`
+}
+
+type XiaohongshuDiagnostic struct {
+	AccountID     uint                       `json:"account_id"`
+	AppID         string                     `json:"app_id"`
+	AccountStatus string                     `json:"account_status"`
+	Environment   string                     `json:"environment"`
+	Ready         bool                       `json:"ready"`
+	Credentials   XiaohongshuDiagnosticCheck `json:"credentials"`
+	Categories    XiaohongshuDiagnosticCheck `json:"categories"`
+	POIs          XiaohongshuDiagnosticCheck `json:"pois"`
+}
+
 func NewXiaohongshuProductService() XiaohongshuProductService {
 	return XiaohongshuProductService{NewClient: xiaohongshu.NewClient}
 }
@@ -57,6 +76,81 @@ func (s XiaohongshuProductService) ListPOIs(ctx context.Context, tenantID, accou
 		return nil, err
 	}
 	return client.ListPOIs(ctx, page, pageSize)
+}
+
+// Diagnose performs the minimum upstream checks needed before configuring a
+// product. It deliberately reports a safe summary instead of raw provider
+// responses or credentials.
+func (s XiaohongshuProductService) Diagnose(ctx context.Context, tenantID, accountID uint) (*XiaohongshuDiagnostic, error) {
+	var account model.ChannelAccount
+	if err := model.DB.Where("id = ? AND tenant_id = ? AND type = ?", accountID, tenantID, "xiaohongshu").First(&account).Error; err != nil {
+		return nil, err
+	}
+	diagnostic := &XiaohongshuDiagnostic{
+		AccountID: account.ID, AppID: account.AppID, AccountStatus: account.Status,
+		Environment: account.Environment,
+		Credentials: XiaohongshuDiagnosticCheck{Status: "skipped", Message: "未检查"},
+		Categories:  XiaohongshuDiagnosticCheck{Status: "skipped", Message: "凭据检查通过后再检查"},
+		POIs:        XiaohongshuDiagnosticCheck{Status: "skipped", Message: "凭据检查通过后再检查"},
+	}
+	if account.Status != "active" && account.Status != "sandbox" {
+		diagnostic.Credentials = XiaohongshuDiagnosticCheck{Status: "failed", Message: "渠道账号已停用"}
+		return diagnostic, nil
+	}
+	client, _, err := s.client(tenantID, accountID)
+	if err != nil {
+		diagnostic.Credentials = XiaohongshuDiagnosticCheck{Status: "failed", Message: "AppID 或 AppSecret 不可用，请重新保存小红书参数"}
+		return diagnostic, nil
+	}
+	if err := client.CheckCredentials(ctx); err != nil {
+		diagnostic.Credentials = xiaohongshuDiagnosticCheckError(err, "小红书调用凭证获取失败，请检查 AppID、AppSecret 和运行环境")
+		return diagnostic, nil
+	}
+	diagnostic.Credentials = XiaohongshuDiagnosticCheck{Status: "passed", Message: "调用凭证有效"}
+
+	categories, categoryErr := client.ListCategories(ctx)
+	if categoryErr != nil {
+		diagnostic.Categories = xiaohongshuDiagnosticCheckError(categoryErr, "类目读取失败，请检查小红书交易能力和当前环境配置")
+	} else {
+		tradeCount := 0
+		for _, category := range categories {
+			if category.SupportTrade {
+				tradeCount++
+			}
+		}
+		diagnostic.Categories = XiaohongshuDiagnosticCheck{
+			Status: "passed", Count: len(categories), TradeCount: tradeCount,
+			Message: fmt.Sprintf("已读取 %d 个类目，其中 %d 个支持交易", len(categories), tradeCount),
+		}
+	}
+
+	pois, poiErr := client.ListPOIs(ctx, 1, 100)
+	if poiErr != nil {
+		diagnostic.POIs = xiaohongshuDiagnosticCheckError(poiErr, "门店读取失败，请先在小红书后台认领或配置门店")
+	} else {
+		diagnostic.POIs = XiaohongshuDiagnosticCheck{
+			Status: "passed", Count: len(pois.List),
+			Message: fmt.Sprintf("已读取 %d 个可用门店", len(pois.List)),
+		}
+	}
+	diagnostic.Ready = diagnostic.Credentials.Status == "passed" && diagnostic.Categories.Status == "passed" && diagnostic.Categories.TradeCount > 0 && diagnostic.POIs.Status == "passed" && diagnostic.POIs.Count > 0
+	return diagnostic, nil
+}
+
+func xiaohongshuDiagnosticCheckError(err error, fallback string) XiaohongshuDiagnosticCheck {
+	check := XiaohongshuDiagnosticCheck{Status: "failed", Message: fallback}
+	var apiErr *xiaohongshu.APIError
+	if !errors.As(err, &apiErr) {
+		return check
+	}
+	check.PlatformCode = apiErr.Code
+	switch apiErr.Code {
+	case 420156:
+		check.Message = "当前小程序尚未开通本地生活交易能力"
+	case 12:
+		check.Message = "小红书接口繁忙，请稍后重试"
+	}
+	return check
 }
 
 func (s XiaohongshuProductService) GetConfig(tenantID, accountID, mappingID uint) (*XiaohongshuProductConfigView, error) {

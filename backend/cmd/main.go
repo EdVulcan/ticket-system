@@ -256,6 +256,10 @@ func runXiaohongshuPaymentWorker(ctx context.Context) {
 		if _, err := bookingSync.ProcessPendingXiaohongshuBookingSyncs(ctx, 20); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Log.Error(fmt.Sprintf("xiaohongshu booking status reconciliation failed: %v", err))
 		}
+		deviceService := service.NewDeviceService(model.DB, &service.TicketService{})
+		if _, err := deviceService.ProcessPendingXiaohongshuVoucherVerifications(ctx, now, 20); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Log.Error(fmt.Sprintf("xiaohongshu voucher verification recovery failed: %v", err))
+		}
 		if _, err := (service.PackageFulfillmentLifecycle{}).ExpirePendingEntitlements(now, 100); err != nil {
 			logger.Log.Error(fmt.Sprintf("package entitlement expiry processing failed: %v", err))
 		}
@@ -444,13 +448,7 @@ func serveAdminUI(engine *gin.Engine, directory string) {
 		return
 	}
 	engine.StaticFS("/assets", http.Dir(filepath.Join(absDirectory, "assets")))
-	xiaohongshuValidationPath := filepath.Join(absDirectory, "74e84f27.txt")
-	if validationContent, err := os.ReadFile(xiaohongshuValidationPath); err == nil {
-		validationContent = []byte(strings.TrimRight(string(validationContent), "\r\n"))
-		engine.GET("/74e84f27.txt", func(ctx *gin.Context) {
-			ctx.Data(http.StatusOK, "text/plain; charset=utf-8", validationContent)
-		})
-	}
+	serveXiaohongshuValidationFiles(engine, absDirectory)
 	downloadsDirectory := filepath.Join(absDirectory, "downloads")
 	if info, err := os.Stat(downloadsDirectory); err == nil && info.IsDir() {
 		engine.StaticFS("/downloads", http.Dir(downloadsDirectory))
@@ -463,6 +461,46 @@ func serveAdminUI(engine *gin.Engine, directory string) {
 		}
 		ctx.File(indexPath)
 	})
+}
+
+// serveXiaohongshuValidationFiles exposes only explicitly named hex .txt files
+// in the admin build root. Xiaohongshu may issue a different filename when an
+// app is changed, so the backend must not keep one app's filename in code.
+func serveXiaohongshuValidationFiles(engine *gin.Engine, directory string) {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		logger.Log.Info(fmt.Sprintf("Xiaohongshu validation files are unavailable at %s: %v", directory, err))
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !isXiaohongshuValidationFilename(entry.Name()) {
+			continue
+		}
+		path := filepath.Join(directory, entry.Name())
+		validationContent, err := os.ReadFile(path)
+		if err != nil {
+			logger.Log.Info(fmt.Sprintf("Failed to read Xiaohongshu validation file %s: %v", path, err))
+			continue
+		}
+		validationContent = []byte(strings.TrimRight(string(validationContent), "\r\n"))
+		filename := entry.Name()
+		content := append([]byte(nil), validationContent...)
+		engine.GET("/"+filename, func(ctx *gin.Context) {
+			ctx.Data(http.StatusOK, "text/plain; charset=utf-8", content)
+		})
+	}
+}
+
+func isXiaohongshuValidationFilename(filename string) bool {
+	if filepath.Ext(filename) != ".txt" {
+		return false
+	}
+	stem := strings.TrimSuffix(filename, ".txt")
+	if len(stem) < 8 || len(stem) > 64 {
+		return false
+	}
+	_, err := hex.DecodeString(stem)
+	return err == nil
 }
 
 func seedAdminUser() error {
