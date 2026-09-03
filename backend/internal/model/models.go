@@ -287,6 +287,10 @@ type Ticket struct {
 	GateVoiceCode   string `gorm:"size:100" json:"gate_voice_code"`
 	Environment     string `gorm:"size:20;not null;default:'production';index" json:"environment"`
 	PendingRefundID uint   `gorm:"not null;default:0;index" json:"-"`
+	// A non-zero value reserves this ticket while an external Xiaohongshu
+	// voucher consume is in flight. Ordinary verification fails closed until
+	// the coordinator commits or resolves that external result.
+	PendingXiaohongshuVerificationID uint `gorm:"not null;default:0;index" json:"-"`
 }
 
 // CheckInRecord 核销记录

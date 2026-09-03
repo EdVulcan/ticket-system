@@ -7,6 +7,7 @@ import (
 	"strings"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/utils"
+	"ticket-backend/internal/xiaohongshu"
 	"time"
 
 	"gorm.io/gorm"
@@ -17,6 +18,10 @@ type DeviceService struct {
 	DB            *gorm.DB
 	TicketService *TicketService
 	Maintenance   DeviceMaintenanceInvalidator
+	// NewXiaohongshuClient is injectable for protocol tests. Production uses
+	// the official merchant self-developed /mp client.
+	NewXiaohongshuClient func(appID, secret, environment string) *xiaohongshu.Client
+	Now                  func() time.Time
 }
 
 // DeviceMaintenanceInvalidator is the narrow control-plane seam used by the
@@ -75,7 +80,14 @@ func syncDeviceAlertTx(tx *gorm.DB, device *model.Device, status string, now tim
 }
 
 func NewDeviceService(db *gorm.DB, ts *TicketService) *DeviceService {
-	return &DeviceService{DB: db, TicketService: ts}
+	return &DeviceService{DB: db, TicketService: ts, NewXiaohongshuClient: xiaohongshu.NewClient}
+}
+
+func (s *DeviceService) now() time.Time {
+	if s != nil && s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 // --- Request/Response Types ---
@@ -452,6 +464,11 @@ func (s *DeviceService) VerifyDirect(req DirectVerifyRequest) (*VerifyResponse, 
 	}
 	if device.Type != "gate" && device.Type != "handheld" {
 		return denyResponse(ErrAccessDenied), nil
+	}
+	if voucherLink, localTicketCode, found, resolveErr := s.resolveXiaohongshuVoucher(req.TenantID, req.TicketCode); resolveErr != nil {
+		return nil, resolveErr
+	} else if found {
+		return s.verifyXiaohongshuVoucher(req, device, voucherLink, localTicketCode)
 	}
 
 	verification, replay, err := s.beginDeviceVerification(req, device.ScenicAreaID)

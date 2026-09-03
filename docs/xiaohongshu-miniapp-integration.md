@@ -13,6 +13,12 @@
 - 以上是外部配置状态，不等同于本项目已经完成联调或生产准入。下一步仍需实际验证消息推送 GET 验签、POST 加密事件入库幂等、商品同步、`0.1` 元以内下单支付和支付收敛。
 - 服务商组件授权凭据、酒景预售券预约、资金退款、售后/退款事件消费、凭证核销和结算仍按本文档的 fail-closed 边界处理；缺少真实凭据或协议验证时不得显示成功。
 
+### 2026-09-03 正式小程序域名校验
+
+- 当前正式小程序 AppID 由渠道账号配置维护，不写入代码或文档中的凭据字段。
+- 小红书下发的域名校验文件应放入管理端静态目录（源码对应 `admin/public/`），服务端会自动暴露根路径下符合十六进制文件名规则的 `.txt` 文件。当前校验文件为 `6cc8262d.txt`，内容由小红书提供，不能改写。
+- 旧的 `74e84f27.txt` 沙盒校验文件暂时保留以兼容已有测试；正式域名校验完成后，仍以正式小程序后台显示的文件为准。
+
 官方资料：
 
 - 小程序登录：`https://miniapp.xiaohongshu.com/doc/DC724193`
@@ -46,6 +52,8 @@
 - 本系统先创建外部订单，再将订单及小程序订单详情路径同步给小红书；小红书返回 `order_id`、`pay_token` 和支付类型。
 - 支付结果以小红书担保支付订单查询、支付回调和本地订单状态共同幂等收敛，不能仅凭前端支付成功页面出票。
 - 小红书返回的凭证码必须绑定到本项目既有票权；闸机扫码后，服务器调用小红书核销接口，取得 `verify_id` 后再完成可追溯核销。
+- 小红书券核销使用持久协调记录，不把外部 HTTP 调用放进本地票务事务。正常路径是“本地预校验/占用 -> 外部核销 -> 保存 `verify_id` -> 本地核销”；进程在 `prepared`、外部确认或本地待提交阶段退出时由 worker 恢复。超时、空响应、5xx、网络错误和无法判断的结果进入 `external_unknown`，不开闸且不自动重发；已确认外部核销但本地提交失败时只重试本地提交。
+- 同一设备的 `request_id` 按数据库唯一约束幂等；同一券只能有一条有效协调记录。不同请求号不能抢占正在处理的协调记录，已完成请求直接重放同一条本地核销事实。原始小红书券码只在服务端解密后发往官方接口，不写入设备核销记录或日志。
 - 官方公开规则中，普通团购券只支持核销前整单全额退款。小红书渠道订单不得套用本项目更宽松的部分退票规则。
 - “先购买、后预约入住”的酒景套餐必须使用预售券商品类型。购买时只产生担保支付订单和逐份预约权益；游客选定入住日期后，系统同时校验票库存和连续房晚，调用小红书预约接口，成功后才生成可核销票码。取消、改约、退款和过期必须保留平台预约状态同步事实。
 
@@ -80,7 +88,7 @@
 - 管理端已支持按租户创建小红书渠道账号，并配置商家 AppID、AppSecret、消息 Token 和 EncodingAESKey；敏感值加密保存且不会通过接口回显，组合型供应商/分销商租户仍按销售租户隔离凭据。服务商组件授权配置尚未接入管理端，预约客户端没有组件授权凭据时会在发网前拒绝。
 - 消息推送地址为 `https://<部署域名>/api/v1/integrations/xiaohongshu/events/<AppID>`。保存配置时的 GET 请求执行 SHA-1 验签并原样返回 `echostr`；POST 事件先验签、按官方 AES-CBC/PKCS#7 协议解密、校验明文 AppID，再加密且幂等入库后返回 `success`。无法验证或无法持久化的事件不会被确认。
 - 已在官方开发者工具中使用测试小程序完成真实 `xhs.login -> code2session` 和票种目录验证；商城五个页面已完整编译，并以长票名、多价格、待支付/已支付订单验证搜索、排序、状态筛选和窄屏布局。服务端按渠道环境自动选择正式或沙箱 API 基地址，不维护两套业务代码。
-- 先售券后预约页面、服务端库存事务、小红书预约/状态同步客户端及 PostgreSQL 持久重试已经完成代码和自动化。普通撤销预约使用平台状态 `3`，只有本地真实退款事实完成后才使用状态 `4` 通知预约链；这里的状态 `4` 是预约状态同步，不是资金退款接口。外部预约成功后先持久化平台预约号，再收尾本地权益，进程重启或本地写失败可以从对应阶段恢复。由于服务商组件授权尚未配置，当前预约调用会 fail-closed；小红书担保支付主动退款和平台售后/退款消息的业务消费也尚未实现，通用退款服务会明确拒绝 `xiaohongshu` 支付方式。真实沙箱仍需依次验证预售券商品同步、`0.01` 元担保支付、服务商授权、预约、取消预约、改约、平台售后退款、过期和结算；生产环境仍需重新验收。凭证核销、资金退款、结算请求和消息事件业务分发不得在未联调时显示为可用或模拟成功。
+- 先售券后预约页面、服务端库存事务、小红书预约/状态同步客户端及 PostgreSQL 持久重试已经完成代码和自动化。普通撤销预约使用平台状态 `3`，只有本地真实退款事实完成后才使用状态 `4` 通知预约链；这里的状态 `4` 是预约状态同步，不是资金退款接口。外部预约成功后先持久化平台预约号，再收尾本地权益，进程重启或本地写失败可以从对应阶段恢复。由于服务商组件授权尚未配置，当前预约调用会 fail-closed；小红书担保支付主动退款和平台售后/退款消息的业务消费也尚未实现，通用退款服务会明确拒绝 `xiaohongshu` 支付方式。普通门票券核销协调器已完成代码、数据库约束、未知结果 fail-closed 和 prepared 重启恢复自动化，但真实沙盒券核销仍未验收。真实沙盒仍需依次验证预售券商品同步、`0.01` 元担保支付、服务商授权、预约、取消预约、改约、平台售后退款、普通券核销、过期和结算；生产环境仍需重新验收。资金退款、结算请求和消息事件业务分发不得在未联调时显示为可用或模拟成功。
 
 ### Booking status and webhook boundary (schema 86)
 
@@ -88,6 +96,19 @@
 - Schema 86 migrates legacy `refund` booking operations and their conventional `xhs:refund:` operation keys to `refund_status_sync`. The migration protects the globally unique key before renaming, so durable legacy tasks are preserved.
 - Webhooks remain signature-verified, decrypted, encrypted at rest, and idempotently stored in the inbox. Only explicitly recognized non-financial events remain pending. After-sale/refund and unknown business events are stored as `manual_review`; they cannot change local payment, ticket, entitlement, inventory, or settlement facts.
 - Deferred booking commands and the admin/reconciliation worker use `XiaohongshuBookingService`; `MiniappService` remains only the HTTP compatibility facade for existing storefront routes. Payment/order reconciliation is kept separate from the booking Saga.
+
+### 2026-09-03 self-developed miniapp connection check
+
+- After a miniapp is unbound from a service provider, the merchant self-developed `/mp` path can be checked independently. The admin channel page now exposes “连接测试”, backed by `GET /api/v1/channel-accounts/:id/xiaohongshu-diagnosis`.
+- The diagnostic is tenant-scoped and read-only. It checks the encrypted merchant credentials, reads the current environment's categories and POIs, counts categories marked `support_trade`, and reports whether at least one trade-enabled category and one POI are available for product publishing.
+- The response never contains `AppSecret`, access tokens, message keys, or raw provider payloads. A failed check is classified as credentials, trade permission, provider temporary failure, or POI configuration without changing product, order, payment, ticket, or settlement facts.
+- A passing connection check is only a prerequisite for product mapping and synchronization. It does not prove that a real sandbox order, payment callback, voucher verification, refund, or settlement has completed.
+
+### 2026-09-03 voucher verification coordination
+
+- 普通门票核销已接入 `/mp/deal/voucher/verify`，并与既有设备核销事务通过持久协调记录衔接。`verify_id` 持久化成功后才提交本地核销，外部结果未知时设备保持拒绝/待确认，不会因网络超时而开闸。
+- PostgreSQL schema 108 增加 `xiaohongshu_voucher_verifications`、票权占用字段、`(device_id, request_id)`/券关联/`verify_id` 唯一索引及租户、景区、设备、票权归属触发器。服务层自动化已覆盖一次性外部调用、未知结果阻断普通核销、prepared 进程重启恢复和数据库跨租户拒绝。
+- 当前尚未在真实沙盒用平台券码完成核销、重复核销和外部查单验证；在该验收完成前，后台不得把小红书核销标记为生产可用。
 
 ## 5. 真实联调前需要的资料
 
@@ -99,6 +120,15 @@
 - 商品详情、订单详情和售后页面的小程序路径。
 - 小红书要求配置的服务器域名、业务域名、回调地址和 IP 白名单。
 - 一个只用于联调的低价测试商品及明确的退款、核销许可。
+
+### 真实沙盒执行顺序
+
+1. 在渠道管理页保存商家自研小程序的 `AppID/AppSecret`，运行环境选择测试环境，并先运行“连接测试”。
+2. 用诊断返回的可交易末级类目和 POI 配置门票映射，主动同步商品，确认小程序目录只展示已同步且仍在线的本租户产品。
+3. 在小程序完成真实登录、目录、`0.01` 元以内下单支付；确认后台 worker 将订单收敛为 `paid`、产生一条 `Payment`、履约单、票权和加密券码关联。
+4. 使用真实沙盒券码在所属景区/检票点核销；确认平台返回 `verify_id` 后本地票才变为已核销，并回报一次物理开闸结果。
+5. 对同一券重复扫码、不同请求号并发扫码、外部超时/空响应和进程重启恢复分别验证；未知结果必须不开闸且不重复调用平台。
+6. 同一订单重复查询、应用重启后查询、支付令牌过期三种情况都验证一次。
 
 ## 6. 生产验收门槛
 

@@ -330,6 +330,14 @@ func (c *Client) ListCategories(ctx context.Context) ([]Category, error) {
 	return response.Categories, nil
 }
 
+// CheckCredentials obtains (or reuses) the merchant miniapp access token
+// without exposing it to callers. It is used by diagnostics before making
+// capability-specific requests.
+func (c *Client) CheckCredentials(ctx context.Context) error {
+	_, err := c.getAccessToken(ctx)
+	return err
+}
+
 func (c *Client) ListPOIs(ctx context.Context, page, pageSize int) (*POIListResponse, error) {
 	if page <= 0 {
 		page = 1

@@ -462,6 +462,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		channelAdminGroup.POST("/:id/rotate-secret", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.RotateSecret)
 		channelAdminGroup.PUT("/:id/ctrip-config", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.ConfigureCtrip)
 		channelAdminGroup.PUT("/:id/xiaohongshu-config", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.ConfigureXiaohongshu)
+		channelAdminGroup.GET("/:id/xiaohongshu-diagnosis", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.DiagnoseXiaohongshu)
 		channelAdminGroup.GET("/mappings", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.ListMappings)
 		channelAdminGroup.POST("/mappings", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.AddMapping)
 		channelAdminGroup.PATCH("/:id/mappings/:mappingId", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.UpdateMapping)

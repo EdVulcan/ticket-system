@@ -243,6 +243,24 @@ func (c *ChannelController) ListXiaohongshuPOIs(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"data": result.List, "total": result.Total})
 }
 
+func (c *ChannelController) DiagnoseXiaohongshu(ctx *gin.Context) {
+	accountID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || accountID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	diagnostic, err := c.XiaohongshuProducts.Diagnose(ctx.Request.Context(), ctx.GetUint("tenant_id"), uint(accountID))
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "小红书渠道账号不存在"})
+			return
+		}
+		ctx.JSON(http.StatusInternalServerError, gin.H{"error": "读取小红书渠道配置失败"})
+		return
+	}
+	ctx.JSON(http.StatusOK, diagnostic)
+}
+
 func xiaohongshuUpstreamError(err error) (int, string) {
 	var apiError *xiaohongshu.APIError
 	if errors.As(err, &apiError) {

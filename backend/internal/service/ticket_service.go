@@ -31,6 +31,30 @@ func (s *TicketService) Verify(code string, checkPointID, deviceID, tenantID uin
 }
 
 func (s *TicketService) VerifyDeviceRequest(code string, checkPointID, deviceID, tenantID uint, deviceRequestID string) error {
+	return s.verifyDeviceRequestWithReservation(code, checkPointID, deviceID, tenantID, deviceRequestID, 0, false)
+}
+
+// PrepareDeviceRequest runs the complete local admission validation and
+// reserves the ticket for one external Xiaohongshu voucher verification. It
+// does not create a successful check-in record or consume the ticket.
+func (s *TicketService) PrepareDeviceRequest(code string, checkPointID, deviceID, tenantID, reservationID uint, deviceRequestID string) error {
+	if reservationID == 0 {
+		return errors.New("external verification reservation is required")
+	}
+	return s.verifyDeviceRequestWithReservation(code, checkPointID, deviceID, tenantID, deviceRequestID, reservationID, true)
+}
+
+// VerifyDeviceRequestReserved commits the local admission fact for a ticket
+// previously reserved by PrepareDeviceRequest. The reservation id is checked
+// inside the same ticket lock so another path cannot bypass the coordinator.
+func (s *TicketService) VerifyDeviceRequestReserved(code string, checkPointID, deviceID, tenantID uint, deviceRequestID string, reservationID uint) error {
+	if reservationID == 0 {
+		return errors.New("external verification reservation is required")
+	}
+	return s.verifyDeviceRequestWithReservation(code, checkPointID, deviceID, tenantID, deviceRequestID, reservationID, false)
+}
+
+func (s *TicketService) verifyDeviceRequestWithReservation(code string, checkPointID, deviceID, tenantID uint, deviceRequestID string, reservationID uint, prepareOnly bool) error {
 	var ticketID uint
 	var recordScenicAreaID uint
 	err := model.Write(func(tx *gorm.DB) error {
@@ -67,6 +91,12 @@ func (s *TicketService) VerifyDeviceRequest(code string, checkPointID, deviceID,
 			return err
 		}
 		ticketID = ticket.ID
+		if reservationID == 0 && ticket.PendingXiaohongshuVerificationID != 0 {
+			return fmt.Errorf("%w: external verification pending", ErrTicketUnavailable)
+		}
+		if reservationID != 0 && ticket.PendingXiaohongshuVerificationID != 0 && ticket.PendingXiaohongshuVerificationID != reservationID {
+			return fmt.Errorf("%w: external verification pending", ErrTicketUnavailable)
+		}
 		if ticket.Environment == "sandbox" {
 			return ErrInvalidTicket
 		}
@@ -159,6 +189,15 @@ func (s *TicketService) VerifyDeviceRequest(code string, checkPointID, deviceID,
 		if !groupAllowsCheckpoint(records, matchedGroup, checkPointID) {
 			return ErrGroupLimitReached
 		}
+		if prepareOnly {
+			if ticket.PendingXiaohongshuVerificationID != 0 && ticket.PendingXiaohongshuVerificationID != reservationID {
+				return fmt.Errorf("%w: external verification pending", ErrTicketUnavailable)
+			}
+			return tx.Model(&ticket).Update("pending_xiaohongshu_verification_id", reservationID).Error
+		}
+		if reservationID != 0 && ticket.PendingXiaohongshuVerificationID != reservationID {
+			return fmt.Errorf("%w: external verification reservation is missing", ErrTicketUnavailable)
+		}
 
 		record := model.CheckInRecord{
 			TicketID: ticket.ID, TicketCode: code, TenantID: tenantID, ScenicAreaID: checkpoint.ScenicAreaID,
@@ -174,6 +213,9 @@ func (s *TicketService) VerifyDeviceRequest(code string, checkPointID, deviceID,
 			ticket.Status = "active"
 		} else {
 			ticket.Status = "used"
+		}
+		if reservationID != 0 {
+			ticket.PendingXiaohongshuVerificationID = 0
 		}
 		if err := tx.Save(&ticket).Error; err != nil {
 			return err
@@ -209,7 +251,7 @@ func (s *TicketService) VerifyDeviceRequest(code string, checkPointID, deviceID,
 		return nil
 	})
 
-	if err != nil {
+	if err != nil && !prepareOnly {
 		_ = model.Write(func(tx *gorm.DB) error {
 			return tx.Create(&model.CheckInRecord{
 				TicketID: ticketID, TicketCode: code, TenantID: tenantID, ScenicAreaID: recordScenicAreaID,
