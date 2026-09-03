@@ -486,6 +486,11 @@ func serveXiaohongshuValidationFiles(engine *gin.Engine, directory string) {
 		filename := entry.Name()
 		content := append([]byte(nil), validationContent...)
 		engine.GET("/"+filename, func(ctx *gin.Context) {
+			// A missing validation file previously fell through to the SPA index.
+			// Do not let browsers or intermediaries cache that old HTML response.
+			ctx.Header("Cache-Control", "no-store, no-cache, must-revalidate")
+			ctx.Header("Pragma", "no-cache")
+			ctx.Header("Expires", "0")
 			ctx.Data(http.StatusOK, "text/plain; charset=utf-8", content)
 		})
 	}

@@ -99,6 +99,9 @@ func TestServeAdminUIExposesXiaohongshuValidationFile(t *testing.T) {
 		if response.Body.String() != want {
 			t.Fatalf("%s body = %q", path, response.Body.String())
 		}
+		if got := response.Header().Get("Cache-Control"); got != "no-store, no-cache, must-revalidate" {
+			t.Fatalf("%s Cache-Control = %q", path, got)
+		}
 	}
 	invalid := httptest.NewRecorder()
 	engine.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/not-a-validation.txt", nil))
