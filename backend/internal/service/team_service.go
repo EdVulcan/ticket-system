@@ -1398,6 +1398,9 @@ func (s *TeamService) EnterBatch(tenantID, groupID, deviceID, operatorID uint, m
 		if err := tx.Where("id = ? AND tenant_id = ? AND status IN ?", group.SalesOrderID, group.TenantID, []string{"paid", "completed", "partial_refunded"}).First(&order).Error; err != nil {
 			return errors.New("group sales order is not paid")
 		}
+		if err := EnsureNoXiaohongshuRefundHoldTx(tx, &order); err != nil {
+			return err
+		}
 		var device model.Device
 		if err := tx.Where("id = ? AND tenant_id = ? AND scenic_area_id = ? AND status = ? AND check_point_id IS NOT NULL", deviceID, group.SupplierTenantID, group.ScenicAreaID, "online").First(&device).Error; err != nil {
 			return errors.New("entry device does not belong to group scenic area")

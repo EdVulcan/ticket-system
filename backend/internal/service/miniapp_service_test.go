@@ -31,7 +31,7 @@ func TestXiaohongshuMiniappLoginAndCatalogAreChannelScoped(t *testing.T) {
 	if err := (&ChannelService{}).AddMapping(tenantID, &mapping); err != nil {
 		t.Fatal(err)
 	}
-	if err := model.DB.Create(&model.XiaohongshuProductConfig{TenantID: tenantID, ChannelAccountID: account.ID, ChannelProductMappingID: mapping.ID, ExternalSKUID: "XHS-SKU-1", CategoryID: "ticket", ImageURL: "https://example.com/ticket.png", Description: "景区门票", ProductPath: "/pages/index/index", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 1, SyncStatus: "synced"}).Error; err != nil {
+	if err := model.DB.Create(&model.XiaohongshuProductConfig{TenantID: tenantID, ChannelAccountID: account.ID, ChannelProductMappingID: mapping.ID, ExternalSKUID: "XHS-SKU-1", CategoryID: "ticket", ImageURL: "https://example.com/ticket.png", Description: "景区门票", ProductPath: "/pages/index/index", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 1, SyncStatus: "synced", AuditStatus: "approved"}).Error; err != nil {
 		t.Fatal(err)
 	}
 
@@ -94,6 +94,18 @@ func TestXiaohongshuMiniappLoginAndCatalogAreChannelScoped(t *testing.T) {
 		catalog.Products[0].ImageURL != "https://example.com/ticket.png" || catalog.Products[0].Description == "" || catalog.Products[0].ProductType != 1 {
 		t.Fatalf("catalog=%+v", catalog)
 	}
+	for _, auditStatus := range []string{"pending", "rejected", "offline"} {
+		if err := model.DB.Model(&model.XiaohongshuProductConfig{}).Where("channel_product_mapping_id = ?", mapping.ID).Update("audit_status", auditStatus).Error; err != nil {
+			t.Fatal(err)
+		}
+		catalog, err = miniapp.ListCatalog(authenticated)
+		if err != nil || len(catalog.Products) != 0 {
+			t.Fatalf("audit status %q catalog=%+v err=%v", auditStatus, catalog, err)
+		}
+		if _, err := miniapp.CreateXiaohongshuOrder(context.Background(), authenticated, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 1, ClientRequestID: "blocked-" + auditStatus}); err == nil || !strings.Contains(err.Error(), "审核") {
+			t.Fatalf("audit status %q order error=%v", auditStatus, err)
+		}
+	}
 }
 
 func TestXiaohongshuMiniappSessionFailsClosedWhenChannelIsDisabled(t *testing.T) {
@@ -132,7 +144,7 @@ func TestXiaohongshuMiniappOrderConvergesFromOfficialPaymentQuery(t *testing.T) 
 	if err := (&ChannelService{}).AddMapping(tenantID, &mapping); err != nil {
 		t.Fatal(err)
 	}
-	if err := model.DB.Create(&model.XiaohongshuProductConfig{TenantID: tenantID, ChannelAccountID: account.ID, ChannelProductMappingID: mapping.ID, ExternalSKUID: "XHS-SKU-1", CategoryID: "ticket", ImageURL: "https://example.com/ticket.png", Description: "景区门票", ProductPath: "/pages/index/index", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 1, SyncStatus: "synced"}).Error; err != nil {
+	if err := model.DB.Create(&model.XiaohongshuProductConfig{TenantID: tenantID, ChannelAccountID: account.ID, ChannelProductMappingID: mapping.ID, ExternalSKUID: "XHS-SKU-1", CategoryID: "ticket", ImageURL: "https://example.com/ticket.png", Description: "景区门票", ProductPath: "/pages/index/index", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 1, SyncStatus: "synced", AuditStatus: "approved"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	openID, _ := utils.EncryptAES("OPEN-ORDER")
@@ -281,7 +293,7 @@ func TestXiaohongshuSandboxOrderLimitIsServerEnforced(t *testing.T) {
 	if err := (&ChannelService{}).AddMapping(tenantID, &mapping); err != nil {
 		t.Fatal(err)
 	}
-	if err := model.DB.Create(&model.XiaohongshuProductConfig{TenantID: tenantID, ChannelAccountID: account.ID, ChannelProductMappingID: mapping.ID, ExternalSKUID: "SKU", CategoryID: "ticket", ImageURL: "https://example.com/ticket.png", Description: "票", ProductPath: "/pages/index/index", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 1, SyncStatus: "synced"}).Error; err != nil {
+	if err := model.DB.Create(&model.XiaohongshuProductConfig{TenantID: tenantID, ChannelAccountID: account.ID, ChannelProductMappingID: mapping.ID, ExternalSKUID: "SKU", CategoryID: "ticket", ImageURL: "https://example.com/ticket.png", Description: "票", ProductPath: "/pages/index/index", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 1, SyncStatus: "synced", AuditStatus: "approved"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	customer := model.MiniappCustomer{Base: model.Base{ID: 99}, TenantID: tenantID, ChannelAccountID: account.ID}
@@ -305,7 +317,7 @@ func TestXiaohongshuMiniappScenicHotelPackageRequiresStayDateAndCreatesReservati
 	if err := (&ChannelService{}).AddMapping(fixture.tenantID, &mapping); err != nil {
 		t.Fatal(err)
 	}
-	if err := model.DB.Create(&model.XiaohongshuProductConfig{TenantID: fixture.tenantID, ChannelAccountID: account.ID, ChannelProductMappingID: mapping.ID, ExternalSKUID: "XHS-PACKAGE-SKU-1", CategoryID: "package", ImageURL: "https://example.com/package.png", Description: "门票与住宿", ProductPath: "/pages/product/detail", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 1, SyncStatus: "synced"}).Error; err != nil {
+	if err := model.DB.Create(&model.XiaohongshuProductConfig{TenantID: fixture.tenantID, ChannelAccountID: account.ID, ChannelProductMappingID: mapping.ID, ExternalSKUID: "XHS-PACKAGE-SKU-1", CategoryID: "package", ImageURL: "https://example.com/package.png", Description: "门票与住宿", ProductPath: "/pages/product/detail", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 1, SyncStatus: "synced", AuditStatus: "approved"}).Error; err != nil {
 		t.Fatal(err)
 	}
 	openID, _ := utils.EncryptAES("OPEN-PACKAGE")
@@ -388,7 +400,7 @@ func TestXiaohongshuMiniappDeferredPackageBooksIdempotentlyAndCancels(t *testing
 		ExternalSKUID: "XHS-DEFERRED-SKU", CategoryID: "package", POIIDsJSON: string(poiJSON),
 		ImageURL: "https://example.com/package.png", Description: "购买后预约入住",
 		ProductPath: "/pages/product/detail", OrderPath: "/pages/order/detail",
-		ProductType: xiaohongshu.ProductTypePresaleVoucher, SettleType: 1, SyncStatus: "synced",
+		ProductType: xiaohongshu.ProductTypePresaleVoucher, SettleType: 1, SyncStatus: "synced", AuditStatus: "approved",
 	}).Error; err != nil {
 		t.Fatal(err)
 	}

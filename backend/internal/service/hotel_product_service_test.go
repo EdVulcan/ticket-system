@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"ticket-backend/internal/model"
@@ -201,9 +202,8 @@ func TestHotelProductRejectsExternalChannelOrdersUntilProtocolIsEnabled(t *testi
 	tenant := seedHotelSupplier(t, "HOTEL-PRODUCT-CHANNEL")
 	hotel, room, rate := seedHotelProductResources(t, tenant.ID, "CHANNEL")
 	view, err := (&HotelProductService{}).Create(tenant.ID, 11, HotelProductInput{
-		Name: "Channel Presale Room", HotelID: hotel.ID, RoomTypeID: room.ID, RatePlanID: rate.ID,
-		SaleMode: "presale_room", BaseRetailPriceCents: 50000, BaseSettlementPriceCents: 40000,
-		VoucherValidityDays: 30, Status: "online",
+		Name: "Channel Calendar Room", HotelID: hotel.ID, RoomTypeID: room.ID, RatePlanID: rate.ID,
+		SaleMode: "calendar_room", BaseRetailPriceCents: 50000, BaseSettlementPriceCents: 40000, Status: "online",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -219,5 +219,67 @@ func TestHotelProductRejectsExternalChannelOrdersUntilProtocolIsEnabled(t *testi
 	})
 	if err == nil || !strings.Contains(err.Error(), "not available through external channels") {
 		t.Fatalf("external hotel order error=%v", err)
+	}
+}
+
+func TestHotelProductRejectsOnlinePresaleAndDirectSalesUntilLifecycleExists(t *testing.T) {
+	resetBusinessData(t)
+	tenant := seedHotelSupplier(t, "HOTEL-PRODUCT-P0-SALES")
+	hotel, room, rate := seedHotelProductResources(t, tenant.ID, "P0-SALES")
+	service := &HotelProductService{}
+
+	if _, err := service.Create(tenant.ID, 11, HotelProductInput{
+		Name: "Online Presale", HotelID: hotel.ID, RoomTypeID: room.ID, RatePlanID: rate.ID,
+		SaleMode: "presale_room", BaseRetailPriceCents: 50000, BaseSettlementPriceCents: 40000,
+		VoucherValidityDays: 30, Status: "online",
+	}); err == nil || !strings.Contains(err.Error(), "cannot be online") {
+		t.Fatalf("online presale create error=%v", err)
+	}
+
+	presale, err := service.Create(tenant.ID, 11, HotelProductInput{
+		Name: "Offline Presale", HotelID: hotel.ID, RoomTypeID: room.ID, RatePlanID: rate.ID,
+		SaleMode: "presale_room", BaseRetailPriceCents: 50000, BaseSettlementPriceCents: 40000,
+		VoucherValidityDays: 30,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Update(tenant.ID, presale.ID, 11, HotelProductInput{
+		Name: "Offline Presale", HotelID: hotel.ID, RoomTypeID: room.ID, RatePlanID: rate.ID,
+		SaleMode: "presale_room", BaseRetailPriceCents: 50000, BaseSettlementPriceCents: 40000,
+		VoucherValidityDays: 30, Status: "online",
+	}); err == nil || !strings.Contains(err.Error(), "cannot be online") {
+		t.Fatalf("online presale update error=%v", err)
+	}
+
+	calendar, err := service.Create(tenant.ID, 11, HotelProductInput{
+		Name: "Online Calendar", HotelID: hotel.ID, RoomTypeID: room.ID, RatePlanID: rate.ID,
+		SaleMode: "calendar_room", BaseRetailPriceCents: 50000, BaseSettlementPriceCents: 40000, Status: "online",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkIn := time.Now().AddDate(0, 0, 7)
+	err = (&OrderService{}).Create(&model.Order{
+		TenantID: tenant.ID, Channel: "online", Items: []model.OrderItem{{ProductID: calendar.Product.ID, Quantity: 1, UseDate: &checkIn}},
+	})
+	if !errors.Is(err, errStandaloneHotelProductSaleUnavailable) {
+		t.Fatalf("direct hotel sale error=%v", err)
+	}
+	for _, assertion := range []struct {
+		table interface{}
+		where string
+	}{
+		{&model.Order{}, "tenant_id = ?"},
+		{&model.HotelProductEntitlement{}, "sales_tenant_id = ?"},
+		{&model.HotelProductReservation{}, "sales_tenant_id = ?"},
+	} {
+		var count int64
+		if err := model.DB.Model(assertion.table).Where(assertion.where, tenant.ID).Count(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		if count != 0 {
+			t.Fatalf("blocked direct hotel sale left %T rows=%d", assertion.table, count)
+		}
 	}
 }

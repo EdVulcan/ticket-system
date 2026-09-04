@@ -3,6 +3,7 @@
 APP_USER="ticket-gate"
 RUNNER="/usr/local/lib/ticket-gate/ticket-gate-busybox-run.sh"
 PID_FILE="/var/run/ticket-gate.pid"
+LOG_FILE="/var/lib/ticket-gate/gate-client.log"
 
 read_pid() {
     [ -r "$PID_FILE" ] || return 1
@@ -61,6 +62,31 @@ sync_local_rtc() {
     }
 }
 
+# BusyBox has no service manager to respawn a crashed client. Keep a small
+# supervisor as the PID-file owner; it runs as ticket-gate, while the root-only
+# setup above is completed before the process drops privileges.
+supervise_service() {
+    child_pid=""
+    stop_supervisor() {
+        if [ -n "$child_pid" ]; then
+            kill -TERM "$child_pid" 2>/dev/null || true
+            wait "$child_pid" 2>/dev/null || true
+        fi
+        exit 0
+    }
+    trap stop_supervisor TERM INT
+
+    while :; do
+        "$RUNNER" &
+        child_pid="$!"
+        wait "$child_pid"
+        exit_code="$?"
+        child_pid=""
+        echo "$(date '+%Y-%m-%d %H:%M:%S') gate-client exited with code $exit_code; restarting in 2 seconds" >>"$LOG_FILE"
+        sleep 2
+    done
+}
+
 start_service() {
     if is_running; then
         echo "ticket-gate 已在运行"
@@ -71,7 +97,7 @@ start_service() {
     sync_local_rtc || return 1
     ensure_random_device || return 1
     start-stop-daemon --start --background --make-pidfile \
-        --pidfile "$PID_FILE" --chuid "$APP_USER" --startas "$RUNNER"
+        --pidfile "$PID_FILE" --chuid "$APP_USER" --startas "$0" -- supervise
     sleep 1
     if is_running; then
         echo "ticket-gate 已启动"
@@ -118,6 +144,7 @@ case "${1:-status}" in
     stop) stop_service ;;
     restart) stop_service; start_service ;;
     status) status_service ;;
+    supervise) supervise_service ;;
     *)
         echo "用法: $0 start|stop|restart|status" >&2
         exit 2

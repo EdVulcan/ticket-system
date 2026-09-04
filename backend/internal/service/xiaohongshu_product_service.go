@@ -212,11 +212,12 @@ func (s XiaohongshuProductService) SaveConfig(tenantID, accountID, mappingID, ac
 			ExternalSKUID: input.ExternalSKUID, CategoryID: input.CategoryID, POIIDsJSON: string(poiJSON),
 			ImageURL: input.ImageURL, Description: input.Description, ProductPath: input.ProductPath,
 			OrderPath: input.OrderPath, ProductType: input.ProductType, SettleType: input.SettleType,
-			SyncStatus: "pending", LastSyncError: "", LastSyncedAt: nil,
+			SyncStatus: "pending", AuditStatus: "pending", AuditMessage: "", AuditedAt: nil,
+			LastSyncError: "", LastSyncedAt: nil,
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "channel_product_mapping_id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"external_sku_id", "category_id", "poi_ids_json", "image_url", "description", "product_path", "order_path", "product_type", "settle_type", "sync_status", "last_sync_error", "last_synced_at", "updated_at"}),
+			DoUpdates: clause.AssignmentColumns([]string{"external_sku_id", "category_id", "poi_ids_json", "image_url", "description", "product_path", "order_path", "product_type", "settle_type", "sync_status", "audit_status", "audit_message", "audited_at", "last_sync_error", "last_synced_at", "updated_at"}),
 		}).Create(&config).Error; err != nil {
 			return err
 		}
@@ -254,6 +255,14 @@ func (s XiaohongshuProductService) Sync(ctx context.Context, tenantID, accountID
 	if err := model.DB.Where("tenant_id = ? AND channel_account_id = ? AND channel_product_mapping_id = ?", tenantID, accountID, mappingID).First(&config).Error; err != nil {
 		return errors.New("请先完成小红书商品发布配置")
 	}
+	// Any local change that is about to be published invalidates the previous
+	// approval until Xiaohongshu explicitly reviews this version again.
+	if err := model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&model.XiaohongshuProductConfig{}).Where("id = ? AND tenant_id = ?", config.ID, tenantID).
+			Updates(map[string]interface{}{"sync_status": "pending", "audit_status": "pending", "audit_message": "", "audited_at": nil, "last_sync_error": "", "last_synced_at": nil}).Error
+	}); err != nil {
+		return err
+	}
 	name := strings.TrimSpace(mapping.DisplayName)
 	if name == "" {
 		name = product.Name
@@ -278,13 +287,13 @@ func (s XiaohongshuProductService) Sync(ctx context.Context, tenantID, accountID
 	if err != nil {
 		_ = model.Write(func(tx *gorm.DB) error {
 			return tx.Model(&model.XiaohongshuProductConfig{}).Where("id = ? AND tenant_id = ?", config.ID, tenantID).
-				Updates(map[string]interface{}{"sync_status": "failed", "last_sync_error": truncateChannelError(err.Error())}).Error
+				Updates(map[string]interface{}{"sync_status": "failed", "audit_status": "pending", "last_sync_error": truncateChannelError(err.Error())}).Error
 		})
 		return err
 	}
 	return model.Write(func(tx *gorm.DB) error {
 		if err := tx.Model(&model.XiaohongshuProductConfig{}).Where("id = ? AND tenant_id = ?", config.ID, tenantID).
-			Updates(map[string]interface{}{"sync_status": "synced", "last_sync_error": "", "last_synced_at": now}).Error; err != nil {
+			Updates(map[string]interface{}{"sync_status": "submitted", "audit_status": "pending", "audit_message": "", "audited_at": nil, "last_sync_error": "", "last_synced_at": now}).Error; err != nil {
 			return err
 		}
 		return recordAuditTx(tx, actorUserID, tenantID, actorRole, "tenant", "xiaohongshu.product.sync", "channel_product_mapping", mappingID, "同步小红书商品", "", account.Environment)

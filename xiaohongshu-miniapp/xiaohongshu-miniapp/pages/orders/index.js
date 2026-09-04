@@ -5,14 +5,19 @@ Page({
     allOrders: [],
     orders: [],
     activeStatus: 'all',
+    statusCounts: { all: 0, unpaid: 0, paid: 0, closed: 0 },
     page: 1,
     total: 0,
     loading: true,
     loadingMore: false,
+    loadingStatus: '',
     error: ''
   },
 
-  onLoad() { this.loadOrders(true); },
+  onLoad() {
+    app.setNavigationTitle(app.globalData.storeName || '官方商城');
+    this.loadOrders(true);
+  },
   onShow() { if (this.data.allOrders.length) this.loadOrders(true); },
   onPullDownRefresh() { this.loadOrders(true).finally(() => xhs.stopPullDownRefresh()); },
   onReachBottom() {
@@ -22,7 +27,7 @@ Page({
   loadOrders(reset) {
     const page = reset ? 1 : this.data.page + 1;
     this.setData(reset ? { loading: true, error: '' } : { loadingMore: true, error: '' });
-    return app.request(`/orders?page=${page}&page_size=10`).then(result => {
+    return app.request(`/orders?page=${page}&page_size=40`).then(result => {
       const incoming = (result.items || []).map(order => ({
         ...order,
         isPackage: order.product_kind === 'scenic_hotel_package',
@@ -37,18 +42,50 @@ Page({
   },
 
   selectStatus(event) {
-    this.setData({ activeStatus: event.currentTarget.dataset.status }, () => this.applyStatus());
+    const activeStatus = event.currentTarget.dataset.status;
+    this.setData({ activeStatus }, () => {
+      if (activeStatus !== 'all' && this.data.total > this.data.allOrders.length) {
+        this.setData({ loadingStatus: '正在加载全部订单...' });
+        this.loadAllOrders().finally(() => this.setData({ loadingStatus: '' }, () => this.applyStatus()));
+        return;
+      }
+      this.applyStatus();
+    });
+  },
+
+  loadAllOrders() {
+    if (this.loadAllPromise) return this.loadAllPromise;
+    this.loadAllPromise = (async () => {
+      while (this.data.allOrders.length < this.data.total) {
+        const loadedBefore = this.data.allOrders.length;
+        await this.loadOrders(false);
+        if (this.data.allOrders.length <= loadedBefore) break;
+      }
+    })().finally(() => { this.loadAllPromise = null; });
+    return this.loadAllPromise;
   },
 
   applyStatus() {
     const active = this.data.activeStatus;
+    const complete = this.data.total === 0 || this.data.allOrders.length >= this.data.total;
+    const statusCounts = { all: this.data.total || this.data.allOrders.length, unpaid: null, paid: null, closed: null };
+    if (complete) {
+      statusCounts.unpaid = 0;
+      statusCounts.paid = 0;
+      statusCounts.closed = 0;
+      this.data.allOrders.forEach(order => {
+        if (order.status === 'unpaid') statusCounts.unpaid += 1;
+        else if (['paid', 'completed', 'partial_refunded'].indexOf(order.status) >= 0) statusCounts.paid += 1;
+        else statusCounts.closed += 1;
+      });
+    }
     const orders = this.data.allOrders.filter(order => {
       if (active === 'all') return true;
       if (active === 'closed') return ['cancelled', 'failed', 'refunded'].indexOf(order.status) >= 0;
       if (active === 'paid') return ['paid', 'completed', 'partial_refunded'].indexOf(order.status) >= 0;
       return order.status === active;
     });
-    this.setData({ orders });
+    this.setData({ orders, statusCounts });
   },
 
   openOrder(event) {

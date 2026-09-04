@@ -1,33 +1,34 @@
-.page { min-height: 100vh; background: #f5f7fb; color: #171923; }
-.hero-image { display: flex; width: 100%; height: 450rpx; background: #dff7ec; }
-.hero-image.fallback { align-items: flex-end; padding: 38rpx 30rpx; box-sizing: border-box; background: #3266f6; color: #fff; font-size: 38rpx; font-weight: 850; }
-.product-panel { padding: 27rpx 28rpx 26rpx; background: #fff; }
+page { min-height: 100%; background: #f5f7fa; color: #1f2937; }
+.page { min-height: 100vh; padding-bottom: 148rpx; box-sizing: border-box; background: #f5f7fa; color: #1f2937; }
+.hero-image { display: flex; width: 100%; height: 450rpx; background: #e9edf2; }
+.hero-image.fallback { align-items: flex-end; padding: 40rpx 30rpx; box-sizing: border-box; background: #27313f; color: #fff; font-size: 38rpx; font-weight: 800; }
+.product-panel { position: relative; z-index: 2; margin: -20rpx 20rpx 0; padding: 25rpx 24rpx 26rpx; border: 1rpx solid #edf0f4; border-radius: 20rpx; background: #fff; box-shadow: 0 10rpx 28rpx rgba(31, 41, 55, .07); }
 .product-meta { display: flex; align-items: center; gap: 12rpx; }
-.official-chip { padding: 5rpx 10rpx; border-radius: 4rpx; background: #e7f7f0; color: #176c52; font-size: 19rpx; font-weight: 700; }
-.scenic { overflow: hidden; color: #767985; font-size: 21rpx; text-overflow: ellipsis; white-space: nowrap; }
-.title { display: block; margin-top: 14rpx; font-size: 38rpx; font-weight: 820; line-height: 1.38; }
+.official-chip { padding: 5rpx 10rpx; border-radius: 6rpx; background: #fff0f2; color: #ff2442; font-size: 20rpx; font-weight: 750; }
+.scenic { overflow: hidden; color: #6b7280; font-size: 21rpx; text-overflow: ellipsis; white-space: nowrap; }
+.title { display: block; margin-top: 14rpx; color: #1f2937; font-size: 37rpx; font-weight: 800; line-height: 1.36; }
 .tags { display: flex; flex-wrap: wrap; gap: 8rpx; margin-top: 17rpx; }
-.tag { padding: 5rpx 10rpx; border-radius: 4rpx; background: #edf2ff; color: #315dca; font-size: 19rpx; }
-.tag:nth-child(2n) { background: #e7f7f0; color: #176c52; }
-.price { margin-top: 22rpx; color: #ff5563; }
+.tag { padding: 5rpx 10rpx; border-radius: 6rpx; background: #fff0f2; color: #ff2442; font-size: 19rpx; }
+.tag:nth-child(2n) { background: #fff4eb; color: #c35b1d; }
+.price { display: flex; align-items: baseline; margin-top: 22rpx; color: #ff2442; }
 .currency { font-size: 25rpx; }
-.amount { font-size: 50rpx; font-weight: 850; }
-.unit { margin-left: 5rpx; color: #9d6971; font-size: 20rpx; }
-.assurances { display: flex; justify-content: space-around; padding: 22rpx 18rpx; border-top: 1rpx solid #eceef3; background: #fff; color: #9295a0; font-size: 18rpx; text-align: center; }
+.amount { font-size: 52rpx; font-weight: 850; }
+.unit { margin-left: 5rpx; color: #9ca3af; font-size: 20rpx; }
+.assurances { display: flex; justify-content: space-around; margin: 16rpx 20rpx 0; padding: 20rpx 18rpx; border: 1rpx solid #ffd8de; border-radius: 16rpx; background: #fff0f2; color: #6b7280; font-size: 18rpx; text-align: center; }
 .assurances > view { display: flex; flex-direction: column; gap: 5rpx; }
-.assurance-title { color: #343642; font-size: 21rpx; font-weight: 700; }
-.section { margin-top: 16rpx; padding: 27rpx 28rpx; background: #fff; }
-.section-title { display: block; margin-bottom: 18rpx; font-size: 29rpx; font-weight: 800; }
-.info-row { display: flex; justify-content: space-between; gap: 32rpx; padding: 14rpx 0; border-bottom: 1rpx solid #f0f1f4; font-size: 23rpx; }
+.assurance-title { color: #ff2442; font-size: 21rpx; font-weight: 700; }
+.section { margin: 16rpx 20rpx 0; padding: 24rpx 22rpx; border: 1rpx solid #edf0f4; border-radius: 16rpx; background: #fff; box-shadow: 0 5rpx 16rpx rgba(31, 41, 55, .035); }
+.section-title { display: block; margin-bottom: 16rpx; color: #1f2937; font-size: 29rpx; font-weight: 800; }
+.info-row { display: flex; justify-content: space-between; gap: 32rpx; padding: 14rpx 0; border-bottom: 1rpx solid #edf0f4; font-size: 23rpx; }
 .info-row:last-child { border-bottom: 0; }
-.info-label { flex-shrink: 0; color: #858894; }
-.info-value { color: #2c2e39; text-align: right; }
-.description { color: #525560; font-size: 24rpx; line-height: 1.75; white-space: pre-wrap; }
-.state { display: flex; align-items: center; flex-direction: column; justify-content: center; min-height: 60vh; color: #777a86; font-size: 25rpx; }
-.state.error { color: #dc3f4c; }
-.state button { width: 210rpx; height: 68rpx; margin-top: 24rpx; border-radius: 8rpx; background: #171923; color: #fff; font-size: 24rpx; line-height: 68rpx; }
+.info-label { flex-shrink: 0; color: #6b7280; }
+.info-value { color: #374151; text-align: right; }
+.description { color: #4b5563; font-size: 24rpx; line-height: 1.75; white-space: pre-wrap; }
+.state { display: flex; align-items: center; flex-direction: column; justify-content: center; min-height: 60vh; color: #6b7280; font-size: 25rpx; }
+.state.error { color: #c35b1d; }
+.state button { width: 210rpx; height: 68rpx; margin-top: 24rpx; border-radius: 16rpx; background: #ff2442; color: #fff; font-size: 24rpx; line-height: 68rpx; box-shadow: 0 8rpx 18rpx rgba(255, 36, 66, .18); }
 .page-spacer { height: 148rpx; }
-.purchase-bar { position: fixed; right: 0; bottom: 0; left: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; height: calc(116rpx + env(safe-area-inset-bottom)); padding: 14rpx 26rpx calc(14rpx + env(safe-area-inset-bottom)); box-sizing: border-box; border-top: 1rpx solid #e3e6ed; background: rgba(255,255,255,.98); }
-.bar-label { margin-right: 9rpx; color: #777a86; font-size: 20rpx; }
-.bar-price { color: #ff5563; font-size: 38rpx; font-weight: 850; }
-.buy-button { width: 300rpx; height: 80rpx; margin: 0; padding: 0; border-radius: 8rpx; background: #ff5563; color: #fff; font-size: 28rpx; font-weight: 750; line-height: 80rpx; box-shadow: 0 8rpx 20rpx rgba(255,85,99,.24); }
+.purchase-bar { position: fixed; right: 0; bottom: 0; left: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; height: calc(116rpx + env(safe-area-inset-bottom)); padding: 14rpx 24rpx calc(14rpx + env(safe-area-inset-bottom)); box-sizing: border-box; border-top: 1rpx solid #e5e7eb; background: rgba(255, 255, 255, .98); }
+.bar-label { margin-right: 9rpx; color: #6b7280; font-size: 20rpx; }
+.bar-price { color: #ff2442; font-size: 38rpx; font-weight: 850; }
+.buy-button { width: 300rpx; height: 80rpx; margin: 0; padding: 0; border-radius: 16rpx; background: #ff2442; color: #fff; font-size: 28rpx; font-weight: 750; line-height: 80rpx; box-shadow: 0 8rpx 20rpx rgba(255, 36, 66, .2); }

@@ -57,6 +57,32 @@ func TestClientCachesTokenAndUsesSelfDevelopedEndpoints(t *testing.T) {
 	}
 }
 
+func TestShortLivedClientsShareTokenCacheByCredentialContext(t *testing.T) {
+	var tokenCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/api/rmp/token" {
+			http.NotFound(w, r)
+			return
+		}
+		tokenCalls++
+		_, _ = w.Write([]byte(`{"data":{"access_token":"shared-token","expire_in":7200},"success":true,"msg":"success","code":0}`))
+	}))
+	defer server.Close()
+
+	first := Client{AppID: "shared-app", Secret: "shared-secret", BaseURL: server.URL, HTTP: server.Client(), Now: func() time.Time { return time.Unix(1786298400, 0) }}
+	second := Client{AppID: "shared-app", Secret: "shared-secret", BaseURL: server.URL, HTTP: server.Client(), Now: func() time.Time { return time.Unix(1786298400, 0) }}
+	if err := first.CheckCredentials(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.CheckCredentials(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if tokenCalls != 1 {
+		t.Fatalf("token endpoint calls=%d, want 1", tokenCalls)
+	}
+}
+
 func TestGetGuaranteeOrderAndVerifyVoucher(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -3,6 +3,8 @@ package xiaohongshu
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +53,20 @@ type Client struct {
 	accessToken    string
 	tokenExpiresAt time.Time
 }
+
+type sharedToken struct {
+	value     string
+	expiresAt time.Time
+}
+
+// Clients are intentionally short-lived in service code, so an instance-only
+// token cache causes every order/product operation to request a new token.
+// Keep a small process-local cache keyed by the complete credential context;
+// the secret itself is hashed and never retained as part of the key.
+var sharedTokenCache = struct {
+	sync.Mutex
+	entries map[string]sharedToken
+}{entries: make(map[string]sharedToken)}
 
 func NewClient(appID, secret, environment string) *Client {
 	return &Client{
@@ -567,6 +583,14 @@ func (c *Client) getAccessToken(ctx context.Context) (string, error) {
 	if strings.TrimSpace(c.AppID) == "" || strings.TrimSpace(c.Secret) == "" {
 		return "", errors.New("xiaohongshu miniapp appid and secret are required")
 	}
+	cacheKey := c.tokenCacheKey()
+	sharedTokenCache.Lock()
+	if cached, ok := sharedTokenCache.entries[cacheKey]; ok && now.Add(time.Minute).Before(cached.expiresAt) {
+		c.accessToken, c.tokenExpiresAt = cached.value, cached.expiresAt
+		sharedTokenCache.Unlock()
+		return c.accessToken, nil
+	}
+	sharedTokenCache.Unlock()
 	var data tokenData
 	if err := c.post(ctx, c.baseURL()+"/api/rmp/token", map[string]string{"appid": strings.TrimSpace(c.AppID), "secret": strings.TrimSpace(c.Secret)}, &data); err != nil {
 		return "", err
@@ -576,7 +600,20 @@ func (c *Client) getAccessToken(ctx context.Context) (string, error) {
 	}
 	c.accessToken = data.AccessToken
 	c.tokenExpiresAt = now.Add(time.Duration(data.ExpireIn) * time.Second)
+	sharedTokenCache.Lock()
+	sharedTokenCache.entries[cacheKey] = sharedToken{value: c.accessToken, expiresAt: c.tokenExpiresAt}
+	sharedTokenCache.Unlock()
 	return c.accessToken, nil
+}
+
+func (c *Client) tokenCacheKey() string {
+	secretHash := sha256.Sum256([]byte(c.Secret))
+	return strings.Join([]string{
+		strings.TrimSpace(c.AppID),
+		strings.TrimSpace(c.BaseURL),
+		strings.TrimSpace(c.ComponentAppID),
+		hex.EncodeToString(secretHash[:]),
+	}, "|")
 }
 
 func (c *Client) post(ctx context.Context, endpoint string, payload, response any) error {

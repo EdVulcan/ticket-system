@@ -10,7 +10,7 @@
       <view class="tags" xhs:if="{{product.tags.length}}"><text class="tag" xhs:for="{{product.tags}}" xhs:key="*this">{{item}}</text></view>
       <view class="price"><text class="currency">¥</text><text class="amount">{{product.priceText}}</text><text class="unit">起</text></view>
     </view>
-    <view class="assurances"><view><text class="assurance-title">小红书担保</text><text>平台交易</text></view><view><text class="assurance-title">官方履约</text><text>订单可查</text></view><view><text class="assurance-title">{{product.isPackage ? '门票与住宿' : '票码入园'}}</text><text>{{product.isPackage ? '一单预订' : '方便快捷'}}</text></view></view>
+    <view class="assurances"><view><text class="assurance-title">小红书担保</text><text>平台交易</text></view><view><text class="assurance-title">景区履约</text><text>订单可查</text></view><view><text class="assurance-title">{{product.isPackage ? '门票与住宿' : '票码入园'}}</text><text>{{product.isPackage ? '一单预订' : '方便快捷'}}</text></view></view>
     <view class="section" xhs:if="{{product.isPackage}}">
       <text class="section-title">套餐包含</text>
       <view class="info-row"><text class="info-label">住宿酒店</text><text class="info-value">{{product.hotel_name}}</text></view>
@@ -31,7 +31,7 @@
     <view class="page-spacer"></view>
     <view class="purchase-bar">
       <view><text class="bar-label">售价</text><text class="bar-price">¥{{product.priceText}}</text></view>
-      <button class="buy-button" bindtap="buy">立即选购</button>
+      <button class="buy-button" loading="{{navigating}}" disabled="{{navigating}}" bindtap="buy">{{navigating ? '正在打开' : '立即选购'}}</button>
     </view>
   </view>
 </view>

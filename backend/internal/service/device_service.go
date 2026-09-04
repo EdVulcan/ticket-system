@@ -138,6 +138,11 @@ type OpenResultRequest struct {
 
 var ErrVerificationProcessing = errors.New("verification request is processing")
 
+// ErrHardwareCommandExpired is returned when a device tries to acknowledge a
+// command after its delivery window. Expired commands are terminal and must
+// never become an execution acknowledgement later.
+var ErrHardwareCommandExpired = errors.New("hardware command expired")
+
 const deviceVerificationProcessingTTL = 5 * time.Minute
 
 type HardwareCommandRequest struct {
@@ -221,11 +226,12 @@ func (s *DeviceService) QueueHardwareCommand(req HardwareCommandRequest) (*model
 		if !hardwareCommandAllowed(device.Type, strings.TrimSpace(req.Kind)) {
 			return errors.New("command is not allowed for this device type")
 		}
+		now := s.now()
 		command = model.HardwareCommand{
 			TenantID: req.TenantID, ScenicAreaID: device.ScenicAreaID, DeviceID: req.DeviceID,
-			CommandNo: fmt.Sprintf("CMD%d", time.Now().UnixNano()), Kind: strings.TrimSpace(req.Kind),
+			CommandNo: fmt.Sprintf("CMD%d", now.UnixNano()), Kind: strings.TrimSpace(req.Kind),
 			PayloadJSON: req.PayloadJSON, Status: "queued", AckToken: utils.GenerateRandomString(32),
-			QueuedAt: time.Now(), ExpiresAt: time.Now().Add(req.TTL),
+			QueuedAt: now, ExpiresAt: now.Add(req.TTL),
 		}
 		return tx.Create(&command).Error
 	})
@@ -233,6 +239,68 @@ func (s *DeviceService) QueueHardwareCommand(req HardwareCommandRequest) (*model
 		return nil, err
 	}
 	return &command, nil
+}
+
+// expireHardwareCommandsTx materializes expiry instead of merely hiding old
+// commands from polls. Keeping delivered commands in the predicate matters:
+// a response can be lost after dispatch, but it must still become terminal
+// once the command's execution window has passed.
+func expireHardwareCommandsTx(tx *gorm.DB, tenantID, deviceID uint, now time.Time) error {
+	return tx.Model(&model.HardwareCommand{}).
+		Where("tenant_id = ? AND device_id = ? AND status IN ? AND expires_at <= ?", tenantID, deviceID, []string{"queued", "delivered"}, now).
+		Updates(map[string]interface{}{"status": "expired", "last_error": ErrHardwareCommandExpired.Error()}).Error
+}
+
+// dequeueHardwareCommandTx performs a safety-first, one-time dispatch. The
+// API response contains CommandNo so the device can persist it before
+// physical execution and make acknowledgement retries idempotent.
+func dequeueHardwareCommandTx(tx *gorm.DB, tenantID, deviceID uint, now time.Time, command *model.HardwareCommand) error {
+	if err := expireHardwareCommandsTx(tx, tenantID, deviceID, now); err != nil {
+		return err
+	}
+	result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("tenant_id = ? AND device_id = ? AND status = ? AND expires_at > ?", tenantID, deviceID, "queued", now).
+		Order("id").
+		First(command)
+	if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if result.Error != nil {
+		return result.Error
+	}
+	command.Status = "delivered"
+	command.AttemptCount++
+	command.DeliveredAt = &now
+	return tx.Model(command).Updates(map[string]interface{}{
+		"status":        command.Status,
+		"attempt_count": command.AttemptCount,
+		"delivered_at":  now,
+	}).Error
+}
+
+func acknowledgeHardwareCommandTx(tx *gorm.DB, command *model.HardwareCommand, status, errorMessage, payload string, now time.Time) error {
+	if command.Status == "expired" || !command.ExpiresAt.After(now) {
+		if command.Status != "expired" {
+			if err := tx.Model(command).Updates(map[string]interface{}{"status": "expired", "last_error": ErrHardwareCommandExpired.Error()}).Error; err != nil {
+				return err
+			}
+		}
+		return ErrHardwareCommandExpired
+	}
+	if command.Status == "acknowledged" || command.Status == "failed" {
+		if command.Status == status {
+			return nil
+		}
+		return errors.New("hardware command already has a different terminal acknowledgement")
+	}
+	if command.Status != "delivered" {
+		return errors.New("hardware command has not been delivered")
+	}
+	updates := map[string]interface{}{"status": status, "acked_at": now, "last_error": strings.TrimSpace(errorMessage)}
+	if err := tx.Model(command).Updates(updates).Error; err != nil {
+		return err
+	}
+	return tx.Create(&model.HardwareEvent{TenantID: command.TenantID, DeviceID: command.DeviceID, CommandNo: command.CommandNo, EventType: status, Payload: payload}).Error
 }
 
 func (s *DeviceService) PollHardwareCommand(systemCode, serialNumber, deviceKey string) (*model.HardwareCommand, error) {
@@ -252,18 +320,7 @@ func (s *DeviceService) PollHardwareCommand(systemCode, serialNumber, deviceKey 
 		if device.Status != "online" {
 			return errors.New("device is unavailable")
 		}
-		now := time.Now()
-		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND device_id = ? AND status IN ? AND expires_at > ?", tenant.ID, device.ID, []string{"queued", "delivered"}, now).Order("id").First(&command)
-		if result.Error != nil {
-			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-				return nil
-			}
-			return result.Error
-		}
-		command.Status = "delivered"
-		command.AttemptCount++
-		command.DeliveredAt = &now
-		return tx.Model(&command).Updates(map[string]interface{}{"status": command.Status, "attempt_count": command.AttemptCount, "delivered_at": now}).Error
+		return dequeueHardwareCommandTx(tx, tenant.ID, device.ID, s.now(), &command)
 	})
 	if err != nil {
 		return nil, err
@@ -281,7 +338,8 @@ func (s *DeviceService) AckHardwareCommand(req HardwareAckRequest) error {
 	if req.Status != "acknowledged" && req.Status != "failed" {
 		return errors.New("invalid hardware acknowledgement status")
 	}
-	return model.Write(func(tx *gorm.DB) error {
+	expired := false
+	err := model.Write(func(tx *gorm.DB) error {
 		var tenant model.Tenant
 		if err := tx.Where("system_code = ? AND status = ?", strings.TrimSpace(req.SystemCode), "active").First(&tenant).Error; err != nil {
 			return errors.New("invalid system_code")
@@ -297,16 +355,22 @@ func (s *DeviceService) AckHardwareCommand(req HardwareAckRequest) error {
 		if command.AckToken != req.AckToken {
 			return errors.New("invalid acknowledgement token")
 		}
-		if command.Status == "acknowledged" || command.Status == "failed" {
+		err := acknowledgeHardwareCommandTx(tx, &command, req.Status, req.Error, req.Payload, s.now())
+		if errors.Is(err, ErrHardwareCommandExpired) {
+			expired = true
+			// The expiry update is a durable safety fact. Commit it even though
+			// the caller still needs the explicit expired error below.
 			return nil
 		}
-		now := time.Now()
-		updates := map[string]interface{}{"status": req.Status, "acked_at": now, "last_error": strings.TrimSpace(req.Error)}
-		if err := tx.Model(&command).Updates(updates).Error; err != nil {
-			return err
-		}
-		return tx.Create(&model.HardwareEvent{TenantID: tenant.ID, DeviceID: device.ID, CommandNo: command.CommandNo, EventType: req.Status, Payload: req.Payload}).Error
+		return err
 	})
+	if err != nil {
+		return err
+	}
+	if expired {
+		return ErrHardwareCommandExpired
+	}
+	return nil
 }
 
 func (s *DeviceService) PollHardwareCommandByDevice(tenantID, deviceID uint) (*model.HardwareCommand, error) {
@@ -316,16 +380,7 @@ func (s *DeviceService) PollHardwareCommandByDevice(tenantID, deviceID uint) (*m
 		if err := tx.Where("id = ? AND tenant_id = ? AND status = ?", deviceID, tenantID, "online").First(&device).Error; err != nil {
 			return errors.New("device is unavailable")
 		}
-		now := time.Now()
-		result := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND device_id = ? AND status IN ? AND expires_at > ?", tenantID, deviceID, []string{"queued", "delivered"}, now).Order("id").First(&command)
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			return nil
-		}
-		if result.Error != nil {
-			return result.Error
-		}
-		command.Status, command.AttemptCount, command.DeliveredAt = "delivered", command.AttemptCount+1, &now
-		return tx.Model(&command).Updates(map[string]interface{}{"status": command.Status, "attempt_count": command.AttemptCount, "delivered_at": now}).Error
+		return dequeueHardwareCommandTx(tx, tenantID, deviceID, s.now(), &command)
 	})
 	if err != nil || command.ID == 0 {
 		return nil, err
@@ -337,7 +392,8 @@ func (s *DeviceService) AckHardwareCommandByDevice(tenantID, deviceID uint, req 
 	if req.Status != "acknowledged" && req.Status != "failed" {
 		return errors.New("invalid hardware acknowledgement status")
 	}
-	return model.Write(func(tx *gorm.DB) error {
+	expired := false
+	err := model.Write(func(tx *gorm.DB) error {
 		var command model.HardwareCommand
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("command_no = ? AND tenant_id = ? AND device_id = ?", req.CommandNo, tenantID, deviceID).First(&command).Error; err != nil {
 			return err
@@ -345,15 +401,20 @@ func (s *DeviceService) AckHardwareCommandByDevice(tenantID, deviceID uint, req 
 		if command.AckToken != req.AckToken {
 			return errors.New("invalid acknowledgement token")
 		}
-		if command.Status == "acknowledged" || command.Status == "failed" {
+		err := acknowledgeHardwareCommandTx(tx, &command, req.Status, req.Error, req.Payload, s.now())
+		if errors.Is(err, ErrHardwareCommandExpired) {
+			expired = true
 			return nil
 		}
-		now := time.Now()
-		if err := tx.Model(&command).Updates(map[string]interface{}{"status": req.Status, "acked_at": now, "last_error": strings.TrimSpace(req.Error)}).Error; err != nil {
-			return err
-		}
-		return tx.Create(&model.HardwareEvent{TenantID: tenantID, DeviceID: deviceID, CommandNo: command.CommandNo, EventType: req.Status, Payload: req.Payload}).Error
+		return err
 	})
+	if err != nil {
+		return err
+	}
+	if expired {
+		return ErrHardwareCommandExpired
+	}
+	return nil
 }
 
 // --- Hardware API Methods ---
@@ -625,6 +686,8 @@ func denyResponse(err error) *VerifyResponse {
 	}
 	message := err.Error()
 	switch {
+	case errors.Is(err, ErrXiaohongshuRefundHold):
+		resp.DisplayText, resp.VoiceCode = "渠道售后待核对", "manual_review"
 	case errors.Is(err, ErrInvalidTicket) || strings.Contains(message, ErrInvalidTicket.Error()):
 		resp.DisplayText = "无效票"
 	case errors.Is(err, ErrTicketExpired) || strings.Contains(message, ErrTicketExpired.Error()):

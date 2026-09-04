@@ -134,6 +134,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	deviceService := service.NewDeviceService(model.DB, &service.TicketService{})
 	deviceService.Maintenance = maintenanceService.Gateway
 	deviceController := api.NewDeviceController(deviceService)
+	xiaohongshuVoucherVerificationController := api.NewXiaohongshuVoucherVerificationController(deviceService)
 	deviceMaintenanceController := api.NewDeviceMaintenanceController(maintenanceService)
 	deviceProvisioningService := service.NewDeviceProvisioningService(model.DB, maintenanceService)
 	deviceProvisioningController := api.NewDeviceProvisioningController(deviceProvisioningService)
@@ -188,6 +189,25 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	hardwareCommandGroup.Use(middleware.RequireTenantPermission(authz.PermissionOnsiteManage), middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
 	{
 		hardwareCommandGroup.POST("", deviceController.QueueCommand)
+	}
+	xiaohongshuVoucherVerificationGroup := protected.Group("/xiaohongshu-voucher-verifications")
+	xiaohongshuVoucherVerificationGroup.Use(middleware.RequireTenantPermission(authz.PermissionXiaohongshuVoucherResolve), middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
+	{
+		xiaohongshuVoucherVerificationGroup.POST("/:id/resolve", xiaohongshuVoucherVerificationController.Resolve)
+	}
+	// Authenticated Xiaohongshu after-sale callbacks create a fulfillment hold
+	// until an administrator can reconcile the provider evidence. The route is
+	// available to supplier and distributor tenants because either may own the
+	// channel account; it is intentionally not narrowed to the scenic vertical.
+	xiaohongshuRefundCoordinationController := api.XiaohongshuRefundCoordinationController{}
+	xiaohongshuRefundCoordinationGroup := protected.Group("/xiaohongshu-refund-coordinations")
+	xiaohongshuRefundCoordinationGroup.Use(
+		middleware.RequireAnyTenantCapability("supplier", "distributor"),
+		middleware.RequireTenantPermission(authz.PermissionXiaohongshuRefundRead),
+	)
+	{
+		xiaohongshuRefundCoordinationGroup.GET("", xiaohongshuRefundCoordinationController.List)
+		xiaohongshuRefundCoordinationGroup.POST("/:id/resolve", middleware.RequireTenantPermission(authz.PermissionXiaohongshuRefundResolve), xiaohongshuRefundCoordinationController.Resolve)
 	}
 
 	// Product Routes

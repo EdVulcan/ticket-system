@@ -166,7 +166,7 @@ func TestXiaohongshuProductConfigAndSyncAreTenantScoped(t *testing.T) {
 	}
 	input := XiaohongshuProductConfigInput{ExternalSKUID: "XHS-SKU", CategoryID: "SCENIC", POIIDs: []string{"POI-1"}, ImageURL: "https://example.com/ticket.png", Description: "测试景区门票", ProductPath: "/pages/index/index", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 2}
 	config, err := service.SaveConfig(tenantID, account.ID, mapping.ID, 1, "admin", input)
-	if err != nil || config.SyncStatus != "pending" || len(config.POIIDs) != 1 {
+	if err != nil || config.SyncStatus != "pending" || config.AuditStatus != "pending" || len(config.POIIDs) != 1 {
 		t.Fatalf("config=%+v err=%v", config, err)
 	}
 	categories, err := service.ListCategories(context.Background(), tenantID, account.ID)
@@ -181,7 +181,7 @@ func TestXiaohongshuProductConfigAndSyncAreTenantScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored, err := service.GetConfig(tenantID, account.ID, mapping.ID)
-	if err != nil || stored.SyncStatus != "synced" || stored.LastSyncedAt == nil {
+	if err != nil || stored.SyncStatus != "submitted" || stored.AuditStatus != "pending" || stored.LastSyncedAt == nil {
 		t.Fatalf("stored=%+v err=%v", stored, err)
 	}
 	otherTenantID, _ := seedSellableProduct(t, "unlimited", 0)

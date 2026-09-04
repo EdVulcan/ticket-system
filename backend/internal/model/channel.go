@@ -44,21 +44,27 @@ type ChannelProductMapping struct {
 // inventory or fulfillment rights.
 type XiaohongshuProductConfig struct {
 	Base
-	TenantID                uint       `gorm:"index;not null" json:"tenant_id"`
-	ChannelAccountID        uint       `gorm:"index;not null" json:"channel_account_id"`
-	ChannelProductMappingID uint       `gorm:"uniqueIndex;not null" json:"channel_product_mapping_id"`
-	ExternalSKUID           string     `gorm:"column:external_sku_id;size:120;not null" json:"external_sku_id"`
-	CategoryID              string     `gorm:"size:120;not null" json:"category_id"`
-	POIIDsJSON              string     `gorm:"column:poi_ids_json;type:text" json:"poi_ids_json"`
-	ImageURL                string     `gorm:"size:500;not null" json:"image_url"`
-	Description             string     `gorm:"type:text;not null" json:"description"`
-	ProductPath             string     `gorm:"size:255;not null" json:"product_path"`
-	OrderPath               string     `gorm:"size:255;not null" json:"order_path"`
-	ProductType             int        `gorm:"not null;default:1" json:"product_type"`
-	SettleType              int        `gorm:"not null;default:1" json:"settle_type"`
-	SyncStatus              string     `gorm:"size:20;not null;default:'pending';index" json:"sync_status"`
-	LastSyncError           string     `gorm:"size:500" json:"last_sync_error,omitempty"`
-	LastSyncedAt            *time.Time `json:"last_synced_at,omitempty"`
+	TenantID                uint   `gorm:"index;not null" json:"tenant_id"`
+	ChannelAccountID        uint   `gorm:"index;not null" json:"channel_account_id"`
+	ChannelProductMappingID uint   `gorm:"uniqueIndex;not null" json:"channel_product_mapping_id"`
+	ExternalSKUID           string `gorm:"column:external_sku_id;size:120;not null" json:"external_sku_id"`
+	CategoryID              string `gorm:"size:120;not null" json:"category_id"`
+	POIIDsJSON              string `gorm:"column:poi_ids_json;type:text" json:"poi_ids_json"`
+	ImageURL                string `gorm:"size:500;not null" json:"image_url"`
+	Description             string `gorm:"type:text;not null" json:"description"`
+	ProductPath             string `gorm:"size:255;not null" json:"product_path"`
+	OrderPath               string `gorm:"size:255;not null" json:"order_path"`
+	ProductType             int    `gorm:"not null;default:1" json:"product_type"`
+	SettleType              int    `gorm:"not null;default:1" json:"settle_type"`
+	SyncStatus              string `gorm:"size:20;not null;default:'pending';index" json:"sync_status"`
+	// SyncStatus describes delivery to Xiaohongshu. AuditStatus is the separate
+	// provider review decision and is the only status that can make a mapping
+	// sellable in the miniapp.
+	AuditStatus   string     `gorm:"size:20;not null;default:'pending';index;check:chk_xiaohongshu_product_configs_audit_status,audit_status IN ('pending','approved','rejected','offline')" json:"audit_status"`
+	AuditMessage  string     `gorm:"size:500" json:"audit_message,omitempty"`
+	AuditedAt     *time.Time `json:"audited_at,omitempty"`
+	LastSyncError string     `gorm:"size:500" json:"last_sync_error,omitempty"`
+	LastSyncedAt  *time.Time `json:"last_synced_at,omitempty"`
 }
 
 // XiaohongshuOrderLink keeps miniapp payment identifiers separate from the
@@ -102,27 +108,27 @@ type XiaohongshuVoucherLink struct {
 // locally without sending a second request to Xiaohongshu.
 type XiaohongshuVoucherVerification struct {
 	Base
-	TenantID             uint       `gorm:"index;not null" json:"tenant_id"`
-	ChannelAccountID     uint       `gorm:"index;not null" json:"channel_account_id"`
-	VoucherLinkID        uint       `gorm:"uniqueIndex;not null" json:"voucher_link_id"`
-	TicketID             uint       `gorm:"index;not null" json:"ticket_id"`
-	DeviceVerificationID uint       `gorm:"uniqueIndex;not null" json:"device_verification_id"`
-	DeviceID             uint       `gorm:"index;not null" json:"device_id"`
-	CheckPointID         uint       `gorm:"index;not null" json:"check_point_id"`
+	TenantID             uint `gorm:"index;not null" json:"tenant_id"`
+	ChannelAccountID     uint `gorm:"index;not null" json:"channel_account_id"`
+	VoucherLinkID        uint `gorm:"uniqueIndex;not null" json:"voucher_link_id"`
+	TicketID             uint `gorm:"index;not null" json:"ticket_id"`
+	DeviceVerificationID uint `gorm:"uniqueIndex;not null" json:"device_verification_id"`
+	DeviceID             uint `gorm:"index;not null" json:"device_id"`
+	CheckPointID         uint `gorm:"index;not null" json:"check_point_id"`
 	// Request identity is scoped by device. The composite unique index is
 	// created by the PostgreSQL migration because GORM cannot express the
 	// partial index used to retain only non-deleted coordination rows.
-	RequestID            string     `gorm:"size:100;not null" json:"request_id"`
-	RequestHash          string     `gorm:"size:64;not null" json:"-"`
-	State                string     `gorm:"size:30;not null;index;check:chk_xhs_voucher_verification_state,state IN ('prepared','external_in_flight','external_unknown','external_confirmed','local_pending','local_completed','external_rejected','local_rejected','manual_review')" json:"state"`
-	VerifyID             string     `gorm:"size:100;index" json:"verify_id,omitempty"`
-	CheckInRecordID      uint       `gorm:"index" json:"check_in_record_id,omitempty"`
-	AttemptCount         int        `gorm:"not null;default:0" json:"attempt_count"`
-	ExternalStartedAt    *time.Time `json:"external_started_at,omitempty"`
-	ExternalConfirmedAt  *time.Time `json:"external_confirmed_at,omitempty"`
-	LocalCompletedAt     *time.Time `json:"local_completed_at,omitempty"`
-	ManualReviewAt       *time.Time `json:"manual_review_at,omitempty"`
-	LastError            string     `gorm:"size:500" json:"last_error,omitempty"`
+	RequestID           string     `gorm:"size:100;not null" json:"request_id"`
+	RequestHash         string     `gorm:"size:64;not null" json:"-"`
+	State               string     `gorm:"size:30;not null;index;check:chk_xhs_voucher_verification_state,state IN ('prepared','external_in_flight','external_unknown','external_confirmed','local_pending','local_completed','external_rejected','local_rejected','manual_review')" json:"state"`
+	VerifyID            string     `gorm:"size:100;index" json:"verify_id,omitempty"`
+	CheckInRecordID     uint       `gorm:"index" json:"check_in_record_id,omitempty"`
+	AttemptCount        int        `gorm:"not null;default:0" json:"attempt_count"`
+	ExternalStartedAt   *time.Time `json:"external_started_at,omitempty"`
+	ExternalConfirmedAt *time.Time `json:"external_confirmed_at,omitempty"`
+	LocalCompletedAt    *time.Time `json:"local_completed_at,omitempty"`
+	ManualReviewAt      *time.Time `json:"manual_review_at,omitempty"`
+	LastError           string     `gorm:"size:500" json:"last_error,omitempty"`
 }
 
 // CtripOutboundTask persists price and inventory notifications before any
@@ -163,6 +169,34 @@ type XiaohongshuWebhookEvent struct {
 	ReceivedAt  time.Time  `gorm:"not null;index" json:"received_at"`
 	ProcessedAt *time.Time `json:"processed_at,omitempty"`
 	LastError   string     `gorm:"size:500" json:"last_error,omitempty"`
+}
+
+// XiaohongshuRefundCoordination is a fail-closed fulfillment hold for an
+// authenticated Xiaohongshu after-sale signal. It deliberately does not
+// represent a local refund, payment transition, or ticket mutation: until the
+// provider's refund protocol and item-level semantics are verified, the only
+// safe automatic action is to pause fulfillment and require evidence-backed
+// operator resolution.
+type XiaohongshuRefundCoordination struct {
+	Base
+	TenantID               uint       `gorm:"index;not null" json:"tenant_id"`
+	ChannelAccountID       uint       `gorm:"index;not null" json:"channel_account_id"`
+	WebhookEventID         uint       `gorm:"uniqueIndex;not null" json:"webhook_event_id"`
+	XiaohongshuOrderLinkID uint       `gorm:"index" json:"xiaohongshu_order_link_id,omitempty"`
+	ExternalOrderID        string     `gorm:"size:100;index" json:"external_order_id,omitempty"`
+	ExternalAfterSaleID    string     `gorm:"size:100;index" json:"external_after_sale_id,omitempty"`
+	ExternalRefundID       string     `gorm:"size:100;index" json:"external_refund_id,omitempty"`
+	Scope                  string     `gorm:"size:20;not null;default:'account';index" json:"scope"` // account, order
+	State                  string     `gorm:"size:30;not null;default:'received_unmapped';index" json:"state"` // received_unmapped, order_held, external_refund_confirmed, dismissed_no_refund, reconciled
+	RequestHash            string     `gorm:"size:64;not null" json:"-"`
+	Reason                 string     `gorm:"size:500" json:"reason,omitempty"`
+	EvidenceCiphertext     string     `gorm:"type:text" json:"-"`
+	EvidenceHash           string     `gorm:"size:64" json:"evidence_hash,omitempty"`
+	ResolvedBy             uint       `gorm:"index" json:"resolved_by,omitempty"`
+	ResolvedAt             *time.Time `json:"resolved_at,omitempty"`
+	ResolutionIdempotencyKey string    `gorm:"size:120" json:"-"`
+	ResolutionRequestHash    string    `gorm:"size:64" json:"-"`
+	LastError              string     `gorm:"size:500" json:"last_error,omitempty"`
 }
 
 // ChannelRequest records the first body hash for an external endpoint and

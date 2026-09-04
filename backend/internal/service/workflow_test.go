@@ -1331,6 +1331,91 @@ func TestHardwareCommandRequiresDeviceAndAckToken(t *testing.T) {
 	}
 }
 
+func TestHardwareCommandIsDeliveredOnceAndExpiresDurably(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	var tenant model.Tenant
+	var device model.Device
+	if err := model.DB.First(&tenant, tenantID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&device).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 4, 9, 0, 0, 0, time.UTC)
+	service := &DeviceService{Now: func() time.Time { return now }}
+	command, err := service.QueueHardwareCommand(HardwareCommandRequest{TenantID: tenantID, DeviceID: device.ID, Kind: "open_gate", TTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := service.PollHardwareCommand(tenant.SystemCode, device.SerialNumber, "test-device-key")
+	if err != nil || first == nil || first.ID != command.ID || first.AttemptCount != 1 {
+		t.Fatalf("first poll=%+v err=%v", first, err)
+	}
+	second, err := service.PollHardwareCommand(tenant.SystemCode, device.SerialNumber, "test-device-key")
+	if err != nil || second != nil {
+		t.Fatalf("duplicate delivery poll=%+v err=%v", second, err)
+	}
+
+	now = now.Add(2 * time.Minute)
+	if err := service.AckHardwareCommand(HardwareAckRequest{SystemCode: tenant.SystemCode, SerialNumber: device.SerialNumber, DeviceKey: "test-device-key", CommandNo: command.CommandNo, AckToken: command.AckToken, Status: "acknowledged"}); !errors.Is(err, ErrHardwareCommandExpired) {
+		t.Fatalf("expired acknowledgement err=%v, want %v", err, ErrHardwareCommandExpired)
+	}
+	var stored model.HardwareCommand
+	if err := model.DB.First(&stored, command.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "expired" || stored.LastError != ErrHardwareCommandExpired.Error() {
+		t.Fatalf("expired command=%+v", stored)
+	}
+	var events int64
+	if err := model.DB.Model(&model.HardwareEvent{}).Where("command_no = ?", command.CommandNo).Count(&events).Error; err != nil {
+		t.Fatal(err)
+	}
+	if events != 0 {
+		t.Fatalf("expired command wrote acknowledgement events=%d", events)
+	}
+}
+
+func TestHardwareCommandRejectsConflictingTerminalAcknowledgements(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	var tenant model.Tenant
+	var device model.Device
+	if err := model.DB.First(&tenant, tenantID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&device).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := &DeviceService{}
+	command, err := service.QueueHardwareCommand(HardwareCommandRequest{TenantID: tenantID, DeviceID: device.ID, Kind: "open_gate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PollHardwareCommand(tenant.SystemCode, device.SerialNumber, "test-device-key"); err != nil {
+		t.Fatal(err)
+	}
+	req := HardwareAckRequest{SystemCode: tenant.SystemCode, SerialNumber: device.SerialNumber, DeviceKey: "test-device-key", CommandNo: command.CommandNo, AckToken: command.AckToken, Status: "acknowledged"}
+	if err := service.AckHardwareCommand(req); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.AckHardwareCommand(req); err != nil {
+		t.Fatalf("same acknowledgement was not idempotent: %v", err)
+	}
+	req.Status = "failed"
+	if err := service.AckHardwareCommand(req); err == nil {
+		t.Fatal("conflicting terminal acknowledgement was accepted")
+	}
+	var events int64
+	if err := model.DB.Model(&model.HardwareEvent{}).Where("command_no = ?", command.CommandNo).Count(&events).Error; err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 {
+		t.Fatalf("acknowledgement events=%d, want 1", events)
+	}
+}
+
 func TestDeviceKeyRotationStoresOnlyEncryptedCredential(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, _ := seedSellableProduct(t, "unlimited", 0)

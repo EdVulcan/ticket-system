@@ -16,6 +16,7 @@ Page({
   },
 
   onLoad(options) {
+    app.setNavigationTitle(app.globalData.storeName || '官方商城');
     this.orderNo = options.order_no || '';
     this.entitlementNo = options.entitlement_no || '';
     this.bookingRequestId = `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
@@ -44,9 +45,9 @@ Page({
     }).catch(error => this.setData({ loading: false, error: error.message || '预约信息加载失败' }));
   },
 
-  onDateChange(event) { this.setData({ checkInDate: event.detail.value || '' }); },
-  onGuestNameInput(event) { this.setData({ guestName: event.detail.value || '' }); },
-  onContactPhoneInput(event) { this.setData({ contactPhone: event.detail.value || '' }); },
+  onDateChange(event) { this.setData({ checkInDate: event.detail.value || '', error: '' }); },
+  onGuestNameInput(event) { this.setData({ guestName: event.detail.value || '', error: '' }); },
+  onContactPhoneInput(event) { this.setData({ contactPhone: event.detail.value || '', error: '' }); },
 
   submit() {
     if (this.data.submitting) return;

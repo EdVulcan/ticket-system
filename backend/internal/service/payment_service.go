@@ -617,7 +617,7 @@ func (s *PaymentService) CompleteNotification(tenantID uint, paymentNo, method, 
 		if storedAmountCents != moneyCents(amount) {
 			return fmt.Errorf("payment amount mismatch")
 		}
-		if payment.Status == "paid" {
+		if isCollectedPaymentStatus(payment.Status) {
 			if transactionID != "" && payment.TransactionID != "" && payment.TransactionID != transactionID {
 				return fmt.Errorf("payment transaction mismatch")
 			}
@@ -659,8 +659,11 @@ func (s *PaymentService) FailNotification(tenantID uint, paymentNo, method, reas
 		if payment.Status == "failed" {
 			return nil
 		}
-		if payment.Status == "paid" {
-			return fmt.Errorf("paid payment cannot be failed")
+		if isCollectedPaymentStatus(payment.Status) {
+			// A delayed provider failure must never overwrite a successful
+			// collection fact, including one that has since been partly or fully
+			// refunded. Returning success stops the provider from retrying it.
+			return nil
 		}
 		if err := tx.Model(&payment).Updates(map[string]interface{}{"status": "failed", "error_message": reason}).Error; err != nil {
 			return err
@@ -684,6 +687,10 @@ func (s *PaymentService) FailNotification(tenantID uint, paymentNo, method, reas
 		}
 		return nil
 	})
+}
+
+func isCollectedPaymentStatus(status string) bool {
+	return status == "paid" || status == "partial_refunded" || status == "refunded"
 }
 
 func (s *PaymentService) GetOrderPaymentProgress(tenantID uint, orderNo string) (*OrderPaymentProgress, error) {

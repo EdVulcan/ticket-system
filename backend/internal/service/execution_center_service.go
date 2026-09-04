@@ -104,6 +104,60 @@ func (s *ExecutionCenterService) List(tenantID uint, category, severity string, 
 			ActionRoute: "/operations?tab=alerts", ActionLabel: "处理闸机结果",
 			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt})
 	}
+
+	// An unknown external Xiaohongshu consume is intentionally not retryable:
+	// the provider request may already have succeeded. Surface it in the same
+	// attention list so an authorized operator can use the explicit resolution
+	// endpoint with channel evidence instead of bypassing the lock in SQL.
+	var xiaohongshuVerifications []model.XiaohongshuVoucherVerification
+	if err := model.DB.Where("tenant_id = ? AND state IN ?", tenantID, []string{"external_unknown", "manual_review"}).Order("updated_at DESC").Limit(limit).Find(&xiaohongshuVerifications).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range xiaohongshuVerifications {
+		description := strings.TrimSpace(row.LastError)
+		if description == "" {
+			description = "小红书券核销结果未知，需要渠道证据确认"
+		}
+		if row.State == "manual_review" && row.VerifyID != "" {
+			description += " · 渠道核销号：" + row.VerifyID
+		}
+		appendItem(ExecutionCenterItem{Source: "xiaohongshu_voucher_verification", Category: "渠道核销", ID: row.ID,
+			Title: "小红书券核销待人工处置", Description: description, Status: row.State,
+			Severity: "critical", Retryable: false,
+			ActionRoute: fmt.Sprintf("/xiaohongshu-voucher-verifications/%d/resolve", row.ID), ActionLabel: "处置渠道核销",
+			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt})
+	}
+
+	// An authenticated Xiaohongshu after-sale callback pauses fulfillment until
+	// an administrator can reconcile it. Keep all active scopes visible in the
+	// same critical worklist; dismissed and fully reconciled rows are historical
+	// facts and do not need another action here.
+	var refundCoordinations []model.XiaohongshuRefundCoordination
+	if err := model.DB.Where("tenant_id = ? AND state IN ? AND deleted_at IS NULL", tenantID,
+		[]string{"received_unmapped", "order_held", "external_refund_confirmed"}).
+		Order("updated_at DESC").Limit(limit).Find(&refundCoordinations).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range refundCoordinations {
+		description := strings.TrimSpace(row.LastError)
+		if description == "" {
+			description = "已收到小红书售后信号，履约暂缓，等待证据核对"
+		}
+		if row.ExternalAfterSaleID != "" {
+			description += " · 售后号：" + row.ExternalAfterSaleID
+		}
+		if row.ExternalOrderID != "" {
+			description += " · 外部订单：" + row.ExternalOrderID
+		}
+		title := "小红书售后待人工处置"
+		if row.Scope == "order" {
+			title = "小红书订单售后待人工处置"
+		}
+		appendItem(ExecutionCenterItem{Source: "xiaohongshu_refund_coordination", Category: "渠道售后", ID: row.ID,
+			Title: title, Description: description, Status: row.State, Severity: "critical", Retryable: false,
+			ActionRoute: fmt.Sprintf("/xiaohongshu-refund-coordinations/%d/resolve", row.ID), ActionLabel: "处置渠道售后",
+			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt})
+	}
 	var printJobs []model.PrintJob
 	if err := model.DB.Where("tenant_id = ? AND status IN ?", tenantID, []string{"queued", "printing", "failed"}).Order("updated_at DESC").Limit(limit).Find(&printJobs).Error; err != nil {
 		return nil, err

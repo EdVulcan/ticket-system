@@ -9,9 +9,9 @@
   ],
   "window": {
     "navigationBarTextStyle": "black",
-    "navigationBarTitleText": "景区购票",
-    "navigationBarBackgroundColor": "#ffffff",
-    "backgroundColor": "#f4f6f3",
+    "navigationBarTitleText": "官方商城",
+    "navigationBarBackgroundColor": "#f5f7fa",
+    "backgroundColor": "#f5f7fa",
     "enablePullDownRefresh": true
   },
   "style": "v2",

@@ -1,33 +1,37 @@
-.page { min-height: 100vh; padding: 34rpx 23rpx 48rpx; box-sizing: border-box; background: #f5f7fb; color: #171923; }
-.result { display: flex; align-items: center; flex-direction: column; padding: 37rpx 27rpx; border: 1rpx solid #e5e8ef; border-radius: 11rpx; background: #fff; text-align: center; box-shadow: 0 8rpx 26rpx rgba(28,34,55,.05); }
-.status-chip { padding: 7rpx 14rpx; border-radius: 5rpx; background: #e7f7f0; color: #176c52; font-size: 20rpx; font-weight: 750; }
-.cancelled .status-chip, .failed .status-chip { background: #fff0f1; color: #dc3f4c; }
-.unpaid .status-chip { background: #edf2ff; color: #315dca; }
-.refunded .status-chip { background: #edeef2; color: #666976; }
-.title { margin-top: 18rpx; font-size: 35rpx; font-weight: 820; }
-.detail { margin-top: 8rpx; color: #777a86; font-size: 21rpx; }
-.order-card { display: flex; gap: 19rpx; margin-top: 16rpx; padding: 21rpx; border: 1rpx solid #e5e8ef; border-radius: 10rpx; background: #fff; }
-.order-image { display: flex; align-items: center; justify-content: center; width: 164rpx; height: 130rpx; flex-shrink: 0; border-radius: 8rpx; background: #e7f7f0; color: #176c52; font-size: 21rpx; }
+page { min-height: 100%; background: #f5f7fa; color: #1f2937; }
+.page { min-height: 100vh; padding: 20rpx 24rpx 48rpx; box-sizing: border-box; background: #f5f7fa; color: #1f2937; }
+.result { display: flex; align-items: flex-start; flex-direction: column; margin-bottom: 16rpx; padding: 28rpx 24rpx; border: 1rpx solid #ffd8de; border-left: 7rpx solid #ff2442; border-radius: 18rpx; background: #fff; box-shadow: 0 8rpx 22rpx rgba(31, 41, 55, .055); }
+.result.unpaid { border-color: #ffe0c7; border-left-color: #ff7a00; }
+.result.cancelled, .result.failed, .result.refunded { border-color: #e5e7eb; border-left-color: #9ca3af; }
+.status-chip { color: #ff2442; font-size: 20rpx; font-weight: 750; }
+.unpaid .status-chip { color: #ff7a00; }
+.cancelled .status-chip, .failed .status-chip, .refunded .status-chip { color: #6b7280; }
+.title { margin-top: 13rpx; color: #1f2937; font-size: 35rpx; font-weight: 820; }
+.detail { margin-top: 8rpx; color: #6b7280; font-size: 21rpx; line-height: 1.45; }
+.refresh-hint { margin-top: 15rpx; color: #ff2442; font-size: 19rpx; }
+.error { margin-bottom: 16rpx; padding: 20rpx; border: 1rpx solid #ffe0c7; border-radius: 14rpx; background: #fff4eb; color: #c35b1d; text-align: center; }
+.error button { width: 190rpx; height: 62rpx; margin-top: 16rpx; padding: 0; border-radius: 14rpx; background: #ff2442; color: #fff; font-size: 23rpx; line-height: 62rpx; }
+.order-card { display: flex; gap: 18rpx; padding: 18rpx; border: 1rpx solid #edf0f4; border-radius: 18rpx; background: #fff; box-shadow: 0 8rpx 22rpx rgba(31, 41, 55, .05); }
+.order-image { display: flex; align-items: center; justify-content: center; width: 164rpx; height: 130rpx; flex-shrink: 0; border-radius: 14rpx; background: #eef0f3; color: #ff2442; font-size: 21rpx; }
+.order-image.fallback { background: #fff0f2; color: #ff2442; }
 .order-info { display: flex; min-width: 0; flex: 1; flex-direction: column; }
-.order-name { display: -webkit-box; overflow: hidden; font-size: 27rpx; font-weight: 760; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.quantity { margin-top: 8rpx; color: #777a86; font-size: 20rpx; }
-.price { margin-top: auto; color: #ff5563; font-size: 28rpx; font-weight: 850; }
-.tickets { margin-top: 16rpx; padding: 25rpx; border: 1rpx solid #e5e8ef; border-radius: 10rpx; background: #fff; }
-.section-title { display: block; font-size: 27rpx; font-weight: 760; }
-.ticket-hint { display: block; margin-top: 6rpx; color: #858894; font-size: 20rpx; line-height: 1.5; }
-.ticket-code { display: flex; align-items: center; flex-direction: column; margin-top: 15rpx; padding: 20rpx 18rpx; border: 1rpx dashed #64b69a; border-radius: 8rpx; background: #f0fbf7; color: #145f49; text-align: center; }
-.ticket-index { color: #5e8b7c; font-size: 18rpx; }
+.order-name { display: -webkit-box; overflow: hidden; color: #1f2937; font-size: 27rpx; font-weight: 760; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.quantity { margin-top: 8rpx; color: #6b7280; font-size: 20rpx; }
+.price { margin-top: auto; color: #ff2442; font-size: 28rpx; font-weight: 850; }
+.tickets { margin-top: 16rpx; padding: 24rpx 22rpx; border: 1rpx solid #edf0f4; border-radius: 18rpx; background: #fff; box-shadow: 0 5rpx 16rpx rgba(31, 41, 55, .035); }
+.section-title { display: block; color: #1f2937; font-size: 27rpx; font-weight: 760; }
+.ticket-hint { display: block; margin-top: 6rpx; color: #6b7280; font-size: 20rpx; line-height: 1.5; }
+.ticket-code { display: flex; align-items: center; flex-direction: column; margin-top: 15rpx; padding: 20rpx 18rpx; border: 1rpx dashed #ff9eab; border-radius: 14rpx; background: #fff8f9; color: #ff2442; text-align: center; }
+.ticket-index { color: #6b7280; font-size: 18rpx; }
 .ticket-value { margin-top: 7rpx; font-family: monospace; font-size: 27rpx; font-weight: 750; word-break: break-all; }
-.stay-row { display: flex; justify-content: space-between; gap: 24rpx; padding: 14rpx 0; border-bottom: 1rpx solid #eef0f4; color: #858894; font-size: 21rpx; }
+.stay-row { display: flex; justify-content: space-between; gap: 24rpx; padding: 14rpx 0; border-bottom: 1rpx solid #edf0f4; color: #6b7280; font-size: 21rpx; }
 .stay-row:last-child { border-bottom: 0; }
-.stay-row text:last-child { color: #272934; text-align: right; }
-.package-booking { margin-top: 18rpx; padding: 18rpx; border: 1rpx solid #e8eaf0; border-radius: 9rpx; background: #fafbfc; }
+.stay-row text:last-child { color: #374151; text-align: right; }
+.package-booking { margin-top: 18rpx; padding: 18rpx; border: 1rpx solid #e5e7eb; border-radius: 15rpx; background: #f8fafc; }
 .package-booking + .package-booking { margin-top: 14rpx; }
 .compact { height: 66rpx; margin-top: 13rpx; font-size: 22rpx; line-height: 64rpx; }
-.order-meta { display: flex; justify-content: space-between; gap: 20rpx; margin-top: 16rpx; padding: 19rpx 7rpx; color: #858894; font-size: 19rpx; }
-.order-meta text:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.primary-button { height: 80rpx; margin-top: 15rpx; border-radius: 8rpx; background: #ff5563; color: #fff; font-size: 27rpx; font-weight: 750; line-height: 80rpx; box-shadow: 0 8rpx 20rpx rgba(255,85,99,.22); }
+.order-meta { display: flex; justify-content: space-between; gap: 20rpx; margin-top: 16rpx; padding: 19rpx 7rpx; color: #6b7280; font-size: 19rpx; }
+.order-meta text:last-child { overflow: hidden; color: #4b5563; text-overflow: ellipsis; white-space: nowrap; }
+.primary-button { height: 80rpx; margin-top: 15rpx; border-radius: 16rpx; background: #ff2442; color: #fff; font-size: 27rpx; font-weight: 750; line-height: 80rpx; box-shadow: 0 8rpx 20rpx rgba(255, 36, 66, .2); }
+.secondary-button { height: 72rpx; flex: 1; margin: 0; border: 1rpx solid #e5e7eb; border-radius: 16rpx; background: #fff; color: #ff2442; font-size: 23rpx; line-height: 70rpx; }
 .action-row { display: flex; gap: 15rpx; margin-top: 15rpx; }
-.secondary-button { height: 72rpx; flex: 1; margin: 0; border: 1rpx solid #d9dde5; border-radius: 8rpx; background: #fff; color: #353743; font-size: 23rpx; line-height: 70rpx; }
-.error { margin-top: 16rpx; padding: 21rpx; border-radius: 8rpx; background: #fff0f1; color: #dc3f4c; text-align: center; }
-.error button { width: 190rpx; height: 62rpx; margin-top: 16rpx; padding: 0; border-radius: 7rpx; background: #171923; color: #fff; font-size: 23rpx; line-height: 62rpx; }

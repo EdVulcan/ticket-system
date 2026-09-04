@@ -1,6 +1,7 @@
 <view class="page">
   <view class="result {{status}}">
     <text class="status-chip">{{statusLabel}}</text><text class="title">{{statusTitle}}</text><text class="detail">{{statusDetail}}</text>
+    <text class="refresh-hint" xhs:if="{{status === 'unpaid' && order && order.pay_token && !paying}}">支付完成后会自动更新状态</text>
   </view>
   <view class="error" xhs:if="{{error}}"><text>{{error}}</text><button bindtap="retry">重新查询</button></view>
   <view class="order-card" xhs:if="{{order}}">

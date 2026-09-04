@@ -112,6 +112,9 @@ func (s *TicketService) verifyDeviceRequestWithReservation(code string, checkPoi
 		if order.Status != "paid" && order.Status != "completed" && order.Status != "partial_refunded" {
 			return ErrOrderNotPaid
 		}
+		if err := EnsureNoXiaohongshuRefundHoldTx(tx, &order); err != nil {
+			return err
+		}
 		if ticket.Status != "unused" && ticket.Status != "active" {
 			return fmt.Errorf("%w: %s", ErrTicketUnavailable, ticket.Status)
 		}

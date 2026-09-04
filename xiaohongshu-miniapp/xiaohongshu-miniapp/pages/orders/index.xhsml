@@ -1,14 +1,16 @@
 <view class="page">
   <view class="header"><text class="title">我的订单</text><text class="subtitle">查看支付结果和电子票码</text></view>
   <view class="tabs">
-    <text class="tab {{activeStatus === 'all' ? 'active' : ''}}" data-status="all" bindtap="selectStatus">全部</text>
-    <text class="tab {{activeStatus === 'unpaid' ? 'active' : ''}}" data-status="unpaid" bindtap="selectStatus">待支付</text>
-    <text class="tab {{activeStatus === 'paid' ? 'active' : ''}}" data-status="paid" bindtap="selectStatus">已支付</text>
-    <text class="tab {{activeStatus === 'closed' ? 'active' : ''}}" data-status="closed" bindtap="selectStatus">已关闭</text>
+    <view class="tab {{activeStatus === 'all' ? 'active' : ''}}" data-status="all" bindtap="selectStatus"><text>全部</text><text class="tab-count" xhs:if="{{statusCounts.all}}">{{statusCounts.all}}</text></view>
+    <view class="tab {{activeStatus === 'unpaid' ? 'active' : ''}}" data-status="unpaid" bindtap="selectStatus"><text>待支付</text><text class="tab-count warning" xhs:if="{{statusCounts.unpaid}}">{{statusCounts.unpaid}}</text></view>
+    <view class="tab {{activeStatus === 'paid' ? 'active' : ''}}" data-status="paid" bindtap="selectStatus"><text>已支付</text><text class="tab-count" xhs:if="{{statusCounts.paid}}">{{statusCounts.paid}}</text></view>
+    <view class="tab {{activeStatus === 'closed' ? 'active' : ''}}" data-status="closed" bindtap="selectStatus"><text>已关闭</text><text class="tab-count" xhs:if="{{statusCounts.closed}}">{{statusCounts.closed}}</text></view>
   </view>
   <view class="content">
+    <view class="list-loading" xhs:if="{{loadingStatus}}">{{loadingStatus}}</view>
     <view class="state" xhs:if="{{loading}}">正在加载订单...</view>
     <view class="state error" xhs:elif="{{error && !allOrders.length}}"><text>{{error}}</text><button bindtap="retry">重新加载</button></view>
+    <view class="list-error" xhs:elif="{{error}}"><text>{{error}}</text><text class="list-error-action" bindtap="retry">重新加载</text></view>
     <view class="state" xhs:elif="{{!orders.length}}"><text class="state-title">暂无相关订单</text><text class="state-detail">购买门票后可在这里查看</text></view>
     <view class="order-list" xhs:else>
       <view class="order-card" xhs:for="{{orders}}" xhs:key="order_no" data-no="{{item.order_no}}" bindtap="openOrder">
@@ -18,7 +20,7 @@
           <view class="order-image fallback" xhs:else>{{item.isPackage ? '酒景套餐' : '门票'}}</view>
           <view class="order-info"><text class="order-name">{{item.product_name}}</text><text class="quantity">共 {{item.quantity}} {{item.isPackage ? '份' : '张'}}</text><text class="order-no">订单号 {{item.order_no}}</text></view>
         </view>
-        <view class="order-foot"><view><text>实付</text><text class="amount">¥{{item.amountText}}</text></view><text class="detail-link">查看详情</text></view>
+        <view class="order-foot"><view><text>实付</text><text class="amount">¥{{item.amountText}}</text></view><text class="detail-link">{{item.status === 'unpaid' ? '去支付' : '查看详情'}}</text></view>
       </view>
       <text class="load-more" xhs:if="{{loadingMore}}">正在加载...</text>
       <text class="load-more" xhs:elif="{{allOrders.length >= total && total > 0}}">已经到底了</text>
@@ -26,7 +28,7 @@
     <view class="content-spacer"></view>
   </view>
   <view class="bottom-nav">
-    <view class="nav-item" bindtap="goHome"><text class="nav-mark"></text><text>购票</text></view>
-    <view class="nav-item active" bindtap="goOrders"><text class="nav-mark"></text><text>订单</text></view>
+    <view class="nav-item" bindtap="goHome"><text class="nav-icon">票</text><text class="nav-label">购票</text></view>
+    <view class="nav-item active" bindtap="goOrders"><text class="nav-icon">单</text><text class="nav-label">订单</text></view>
   </view>
 </view>

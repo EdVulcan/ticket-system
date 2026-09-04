@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
+	"ticket-backend/internal/authz"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/utils"
 	"ticket-backend/internal/xiaohongshu"
@@ -17,6 +19,219 @@ import (
 const xiaohongshuVoucherVerificationLease = 60 * time.Second
 
 var errXiaohongshuVoucherVerificationUnknown = errors.New("小红书券核销结果未知，请人工确认")
+
+var (
+	ErrXiaohongshuVoucherResolutionInvalid       = errors.New("小红书券人工处理参数无效")
+	ErrXiaohongshuVoucherResolutionNotResolvable = errors.New("小红书券核销记录当前不可人工处理")
+	ErrXiaohongshuVoucherResolutionPermission    = errors.New("无权人工处理小红书券核销记录")
+)
+
+const (
+	xiaohongshuVoucherResolutionConfirm = "confirm_external"
+	xiaohongshuVoucherResolutionRelease = "release_external"
+)
+
+// XiaohongshuVoucherVerificationResolutionRequest deliberately contains no
+// ticket, order, device, checkpoint, tenant, or amount selected by a client.
+// The coordinator row is the sole source of those protected facts.
+type XiaohongshuVoucherVerificationResolutionRequest struct {
+	TenantID         uint
+	SagaID           uint
+	ActorUserID      uint
+	ActorRole        string
+	Decision         string
+	Reason           string
+	Evidence         string
+	ExternalVerifyID string
+}
+
+func normalizeXiaohongshuVoucherResolution(request *XiaohongshuVoucherVerificationResolutionRequest) error {
+	if request == nil || request.TenantID == 0 || request.SagaID == 0 || request.ActorUserID == 0 {
+		return ErrXiaohongshuVoucherResolutionInvalid
+	}
+	request.Decision = strings.TrimSpace(request.Decision)
+	request.Reason = strings.TrimSpace(request.Reason)
+	request.Evidence = strings.TrimSpace(request.Evidence)
+	request.ExternalVerifyID = strings.TrimSpace(request.ExternalVerifyID)
+	if request.Decision != xiaohongshuVoucherResolutionConfirm && request.Decision != xiaohongshuVoucherResolutionRelease {
+		return ErrXiaohongshuVoucherResolutionInvalid
+	}
+	if request.Reason == "" || request.Evidence == "" || len(request.Reason) > 500 || len(request.Evidence) > 2000 {
+		return ErrXiaohongshuVoucherResolutionInvalid
+	}
+	if request.Decision == xiaohongshuVoucherResolutionConfirm && (request.ExternalVerifyID == "" || len(request.ExternalVerifyID) > 100) {
+		return ErrXiaohongshuVoucherResolutionInvalid
+	}
+	if request.Decision == xiaohongshuVoucherResolutionRelease && request.ExternalVerifyID != "" {
+		return ErrXiaohongshuVoucherResolutionInvalid
+	}
+	return nil
+}
+
+// ResolveXiaohongshuVoucherVerification closes an external_unknown state only
+// after an authorized operator has supplied a reason and auditable evidence.
+// It never invokes Xiaohongshu. confirm_external records the externally
+// confirmed verify ID and resumes only the local, already-reserved admission;
+// release_external clears that reservation while leaving the coordinator in a
+// terminal rejected state, so the unknown provider request cannot be retried.
+func (s *DeviceService) ResolveXiaohongshuVoucherVerification(request XiaohongshuVoucherVerificationResolutionRequest) (*model.XiaohongshuVoucherVerification, error) {
+	if s == nil || s.DB == nil || s.TicketService == nil {
+		return nil, errors.New("小红书券人工处理服务不可用")
+	}
+	if err := normalizeXiaohongshuVoucherResolution(&request); err != nil {
+		return nil, err
+	}
+	if !authz.HasTenantPermission(request.ActorRole, authz.PermissionXiaohongshuVoucherResolve) {
+		return nil, ErrXiaohongshuVoucherResolutionPermission
+	}
+
+	var resolved model.XiaohongshuVoucherVerification
+	shouldFinishLocal := false
+	now := s.now()
+	err := model.Write(func(tx *gorm.DB) error {
+		var saga model.XiaohongshuVoucherVerification
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", request.SagaID, request.TenantID).First(&saga).Error; err != nil {
+			return err
+		}
+		if err := validateXiaohongshuVoucherResolutionOwnershipTx(tx, &saga); err != nil {
+			return err
+		}
+
+		beforeJSON := xiaohongshuVoucherResolutionAuditJSON(&saga, "", "", "")
+		switch request.Decision {
+		case xiaohongshuVoucherResolutionConfirm:
+			if saga.State == "external_unknown" || saga.State == "manual_review" {
+				var link model.XiaohongshuVoucherLink
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", saga.VoucherLinkID, saga.TenantID).First(&link).Error; err != nil {
+					return err
+				}
+				if (saga.VerifyID != "" && saga.VerifyID != request.ExternalVerifyID) || (link.VerifyID != "" && link.VerifyID != request.ExternalVerifyID) {
+					return ErrXiaohongshuVoucherResolutionNotResolvable
+				}
+				if err := tx.Model(&link).Update("verify_id", request.ExternalVerifyID).Error; err != nil {
+					return err
+				}
+				updates := map[string]interface{}{
+					"state": "external_confirmed", "verify_id": request.ExternalVerifyID,
+					"external_confirmed_at": now, "last_error": "",
+				}
+				if err := tx.Model(&saga).Updates(updates).Error; err != nil {
+					return err
+				}
+				saga.State, saga.VerifyID, saga.ExternalConfirmedAt, saga.LastError = "external_confirmed", request.ExternalVerifyID, &now, ""
+				shouldFinishLocal = true
+			} else if (saga.State == "external_confirmed" || saga.State == "local_pending" || saga.State == "local_completed") && saga.VerifyID == request.ExternalVerifyID {
+				// Retrying the same operator action is safe. It cannot write a
+				// second audit row or create another external verification.
+				shouldFinishLocal = saga.State != "local_completed"
+				resolved = saga
+				return nil
+			} else {
+				return ErrXiaohongshuVoucherResolutionNotResolvable
+			}
+		case xiaohongshuVoucherResolutionRelease:
+			if saga.State == "external_rejected" && saga.VerifyID == "" {
+				// An exact retry after a release is idempotent. The ticket was
+				// already unlocked and the upstream request remains permanently
+				// non-retryable.
+				resolved = saga
+				return nil
+			}
+			if saga.State != "external_unknown" {
+				return ErrXiaohongshuVoucherResolutionNotResolvable
+			}
+			if err := tx.Model(&model.Ticket{}).
+				Where("id = ? AND tenant_id = ? AND pending_xiaohongshu_verification_id = ?", saga.TicketID, saga.TenantID, saga.ID).
+				Update("pending_xiaohongshu_verification_id", 0).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&saga).Updates(map[string]interface{}{
+				"state": "external_rejected", "last_error": "人工确认渠道未核销，已释放本地票权",
+			}).Error; err != nil {
+				return err
+			}
+			saga.State, saga.LastError = "external_rejected", "人工确认渠道未核销，已释放本地票权"
+		}
+
+		afterJSON := xiaohongshuVoucherResolutionAuditJSON(&saga, request.Decision, request.Evidence, request.ExternalVerifyID)
+		if err := recordAuditTx(tx, request.ActorUserID, request.TenantID, request.ActorRole, "tenant", "xiaohongshu.voucher_verification.resolve", "xiaohongshu_voucher_verification", saga.ID, request.Reason, beforeJSON, afterJSON); err != nil {
+			return err
+		}
+		resolved = saga
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if shouldFinishLocal && resolved.State != "local_completed" {
+		// This resumes only the local transaction. It deliberately ignores a
+		// transient local error because the durable external_confirmed state is
+		// recoverable by ProcessPendingXiaohongshuVoucherVerifications.
+		var ticket model.Ticket
+		if err := s.DB.Where("id = ? AND tenant_id = ?", resolved.TicketID, resolved.TenantID).First(&ticket).Error; err == nil {
+			_, _ = s.finishXiaohongshuVoucherLocal(DirectVerifyRequest{
+				TenantID: resolved.TenantID, DeviceID: resolved.DeviceID, CheckPointID: resolved.CheckPointID,
+				RequestID: resolved.RequestID, RequestHash: resolved.RequestHash, TicketCode: ticket.TicketCode,
+			}, &resolved, resolved.DeviceVerificationID)
+		}
+	}
+	if err := s.DB.Where("id = ? AND tenant_id = ?", request.SagaID, request.TenantID).First(&resolved).Error; err != nil {
+		return nil, err
+	}
+	return &resolved, nil
+}
+
+func validateXiaohongshuVoucherResolutionOwnershipTx(tx *gorm.DB, saga *model.XiaohongshuVoucherVerification) error {
+	if saga == nil || saga.TenantID == 0 || saga.TicketID == 0 || saga.VoucherLinkID == 0 || saga.DeviceID == 0 || saga.CheckPointID == 0 {
+		return ErrXiaohongshuVoucherResolutionNotResolvable
+	}
+	var link model.XiaohongshuVoucherLink
+	if err := tx.Where("id = ? AND tenant_id = ? AND channel_account_id = ? AND ticket_id = ?", saga.VoucherLinkID, saga.TenantID, saga.ChannelAccountID, saga.TicketID).First(&link).Error; err != nil {
+		return ErrXiaohongshuVoucherResolutionNotResolvable
+	}
+	if saga.VerifyID != "" && link.VerifyID != "" && saga.VerifyID != link.VerifyID {
+		return ErrXiaohongshuVoucherResolutionNotResolvable
+	}
+	var orderLink model.XiaohongshuOrderLink
+	if err := tx.Where("id = ? AND tenant_id = ? AND channel_account_id = ?", link.XiaohongshuOrderLinkID, saga.TenantID, saga.ChannelAccountID).First(&orderLink).Error; err != nil {
+		return ErrXiaohongshuVoucherResolutionNotResolvable
+	}
+	var ticket model.Ticket
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND order_id = ?", saga.TicketID, saga.TenantID, orderLink.OrderID).First(&ticket).Error; err != nil {
+		return ErrXiaohongshuVoucherResolutionNotResolvable
+	}
+	if saga.State == "external_unknown" && ticket.PendingXiaohongshuVerificationID != saga.ID {
+		return ErrXiaohongshuVoucherResolutionNotResolvable
+	}
+	var checkpoint model.CheckPoint
+	if err := tx.Where("id = ? AND tenant_id = ?", saga.CheckPointID, saga.TenantID).First(&checkpoint).Error; err != nil {
+		return ErrXiaohongshuVoucherResolutionNotResolvable
+	}
+	var device model.Device
+	if err := tx.Where("id = ? AND tenant_id = ? AND scenic_area_id = ? AND check_point_id = ?", saga.DeviceID, saga.TenantID, checkpoint.ScenicAreaID, checkpoint.ID).First(&device).Error; err != nil {
+		return ErrXiaohongshuVoucherResolutionNotResolvable
+	}
+	var verification model.DeviceVerification
+	if err := tx.Where("id = ? AND tenant_id = ? AND device_id = ? AND scenic_area_id = ? AND request_id = ?", saga.DeviceVerificationID, saga.TenantID, saga.DeviceID, checkpoint.ScenicAreaID, saga.RequestID).First(&verification).Error; err != nil {
+		return ErrXiaohongshuVoucherResolutionNotResolvable
+	}
+	return nil
+}
+
+func xiaohongshuVoucherResolutionAuditJSON(saga *model.XiaohongshuVoucherVerification, decision, evidence, externalVerifyID string) string {
+	if saga == nil {
+		return "{}"
+	}
+	payload, err := json.Marshal(map[string]string{
+		"state": saga.State, "verify_id": saga.VerifyID, "decision": decision,
+		"evidence": evidence, "external_verify_id": externalVerifyID,
+	})
+	if err != nil {
+		return "{}"
+	}
+	return string(payload)
+}
 
 // resolveXiaohongshuVoucher accepts either the provider voucher scanned by a
 // gate or the local ticket code shown by the existing ticketing workflow. The

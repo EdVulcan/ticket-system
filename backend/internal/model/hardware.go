@@ -66,6 +66,13 @@ type DeviceProvisioningLease struct {
 // HardwareCommand is a durable command sent to a printer, gate, scanner, or
 // identity reader. A command is never considered successful merely because a
 // browser requested it; the device must acknowledge it with the same token.
+//
+// Delivery is intentionally one-way: a poll atomically changes queued to
+// delivered and must not dispatch that command number again. Devices must
+// treat CommandNo as their execution idempotency key and acknowledge the
+// original command after a lost acknowledgement response. This favors a
+// missed command that can be investigated over a duplicate physical action
+// such as opening a gate twice.
 type HardwareCommand struct {
 	Base
 	TenantID     uint       `gorm:"index;not null" json:"tenant_id"`

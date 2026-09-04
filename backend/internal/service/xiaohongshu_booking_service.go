@@ -79,7 +79,7 @@ func (s XiaohongshuBookingService) BookXiaohongshuPackage(ctx context.Context, c
 			return errors.New("小红书套餐映射不可用")
 		}
 		var config model.XiaohongshuProductConfig
-		if err := tx.Where("channel_product_mapping_id = ? AND product_type = ? AND sync_status = ?", mapping.ID, xiaohongshu.ProductTypePresaleVoucher, "synced").First(&config).Error; err != nil {
+		if err := tx.Where("channel_product_mapping_id = ? AND product_type = ? AND sync_status IN ? AND audit_status = ?", mapping.ID, xiaohongshu.ProductTypePresaleVoucher, []string{"submitted", "synced"}, "approved").First(&config).Error; err != nil {
 			return errors.New("该套餐尚未配置为小红书预售券")
 		}
 		openID, decryptErr := utils.DecryptAES(customer.OpenIDCiphertext)

@@ -1,10 +1,29 @@
 const API_ROOT = 'https://ymsq.edvulcan.top/api/v1/storefront/xiaohongshu';
-const APP_ID = '6a79580901ada500017dac60';
+// The storefront is now bound to the production Xiaohongshu mini-program.
+// Keep this value aligned with project.config.json and the production channel account.
+const APP_ID = '672997dc4889610001aa80b2';
 const SESSION_STORAGE_KEY = 'ticket-miniapp-session';
+const STORE_NAME_STORAGE_KEY = 'ticket-miniapp-store-name';
 
 App({
   onLaunch() {
+    const cachedStoreName = xhs.getStorageSync(STORE_NAME_STORAGE_KEY);
+    if (cachedStoreName) this.setStoreName(cachedStoreName, false);
     this.ensureSession().catch(() => {});
+  },
+
+  setStoreName(name, persist) {
+    const storeName = String(name || '').trim();
+    if (!storeName) return;
+    this.globalData.storeName = storeName;
+    if (persist !== false) xhs.setStorageSync(STORE_NAME_STORAGE_KEY, storeName);
+    this.setNavigationTitle(storeName);
+  },
+
+  setNavigationTitle(title) {
+    if (typeof xhs.setNavigationBarTitle === 'function') {
+      xhs.setNavigationBarTitle({ title: String(title || '官方商城') });
+    }
   },
 
   ensureSession(forceRefresh) {
@@ -95,5 +114,5 @@ App({
     return response && response.data && response.data.error ? response.data.error : fallback;
   },
 
-  globalData: { session: null, sessionPromise: null }
+  globalData: { session: null, sessionPromise: null, storeName: '官方商城' }
 });

@@ -6,17 +6,23 @@ Page({
     allProducts: [],
     products: [],
     featuredProduct: null,
+    resultCount: 0,
     scenicOptions: [],
     activeScenic: '全部',
     kindOptions: [],
     activeKind: 'all',
     keyword: '',
     sort: 'default',
+    hasActiveFilters: false,
+    emptyStateDetail: '换个关键词或分类试试',
     loading: true,
     error: ''
   },
 
-  onLoad() { this.loadCatalog(); },
+  onLoad() {
+    app.setNavigationTitle(app.globalData.storeName || '官方商城');
+    this.loadCatalog();
+  },
 
   onShow() {
     if (this.data.allProducts.length) this.applyFilters();
@@ -50,12 +56,18 @@ Page({
       this.setData({
         storeName: catalog.store_name || '官方商城',
         allProducts: products,
-        featuredProduct: products.length ? products[0] : null,
+        featuredProduct: products.length > 1 ? products[0] : null,
+        resultCount: products.length,
         scenicOptions,
         kindOptions,
         activeKind: kindOptions.length ? kindOptions[0].value : 'all',
+        hasActiveFilters: false,
+        emptyStateDetail: '换个关键词或分类试试',
         loading: false
-      }, () => this.applyFilters());
+      }, () => {
+        app.setStoreName(catalog.store_name || '官方商城');
+        this.applyFilters();
+      });
     }).catch(error => {
       this.setData({ loading: false, error: error.message || '票种加载失败，请稍后重试' });
     });
@@ -67,6 +79,11 @@ Page({
 
   clearKeyword() {
     this.setData({ keyword: '' }, () => this.applyFilters());
+  },
+
+  resetFilters() {
+    const defaultKind = this.data.kindOptions.length ? this.data.kindOptions[0].value : 'all';
+    this.setData({ keyword: '', activeScenic: '全部', activeKind: defaultKind, sort: 'default' }, () => this.applyFilters());
   },
 
   selectScenic(event) {
@@ -92,7 +109,15 @@ Page({
     });
     if (this.data.sort === 'priceAsc') products.sort((a, b) => a.price_cents - b.price_cents);
     if (this.data.sort === 'priceDesc') products.sort((a, b) => b.price_cents - a.price_cents);
-    this.setData({ products });
+    const hasActiveFilters = Boolean(keyword || this.data.activeScenic !== '全部' || (this.data.kindOptions.length > 1 && this.data.activeKind !== 'all') || this.data.sort !== 'default');
+    let emptyStateDetail = '换个关键词或分类试试';
+    if (keyword && this.data.activeScenic !== '全部') emptyStateDetail = '换个关键词或景区试试';
+    else if (keyword) emptyStateDetail = '换个关键词试试';
+    else if (this.data.activeScenic !== '全部' || (this.data.kindOptions.length > 1 && this.data.activeKind !== 'all')) emptyStateDetail = '换个分类或景区试试';
+    const visibleProducts = !hasActiveFilters && this.data.featuredProduct
+      ? products.filter(product => product.id !== this.data.featuredProduct.id)
+      : products;
+    this.setData({ products: visibleProducts, resultCount: products.length, hasActiveFilters, emptyStateDetail });
   },
 
   openProduct(event) {

@@ -5,7 +5,7 @@
   <view class="content" xhs:elif="{{entitlement}}">
     <view class="notice"><text class="notice-title">预约说明</text><text>本次预约不额外收费。预约成功后才会生成对应日期的有效门票；实际可订日期以房量和门票库存为准。</text></view>
     <picker mode="date" value="{{checkInDate}}" start="{{minDate}}" end="{{maxDate}}" bindchange="onDateChange">
-      <view class="date-row"><view><text class="label">入住日期</text><text class="hint">请选择计划入住日期</text></view><text class="date-value {{checkInDate ? 'selected' : ''}}">{{checkInDate || '请选择'}}</text></view>
+      <view class="date-row"><view><text class="label">入住日期</text><text class="hint">可选 {{minDate}} 至 {{maxDate}}</text></view><text class="date-value {{checkInDate ? 'selected' : ''}}">{{checkInDate || '请选择'}}</text></view>
     </picker>
     <view class="guest-card">
       <text class="label">入住联系人</text><text class="hint">仅用于本次套餐履约确认</text>

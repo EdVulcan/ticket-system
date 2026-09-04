@@ -34,6 +34,7 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&HotelProduct{}, &HotelProductRevision{}, &HotelProductCalendarPrice{}, &HotelProductEntitlement{}, &HotelProductReservation{},
 		&ScenicHotelPackage{}, &ScenicHotelPackageEntitlement{}, &HotelReservation{},
 		&XiaohongshuBookingOperation{}, &XiaohongshuOrderOperation{},
+		&XiaohongshuRefundCoordination{},
 		&CatalogBatchChangePlan{}, &CatalogBatchChangeLine{},
 		&PlatformAIConfig{}, &AITenantQuotaPolicy{}, &AIUsageMonth{},
 		&AgentTask{}, &AgentTaskEvent{},
@@ -71,6 +72,9 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		{&XiaohongshuVoucherVerification{}, "idx_xhs_voucher_verification_link"},
 		{&XiaohongshuVoucherVerification{}, "idx_xhs_voucher_verification_request"},
 		{&XiaohongshuVoucherVerification{}, "idx_xhs_voucher_verification_verify"},
+		{&XiaohongshuRefundCoordination{}, "idx_xhs_refund_coordination_event"},
+		{&XiaohongshuRefundCoordination{}, "idx_xhs_refund_coordination_after_sale"},
+		{&XiaohongshuRefundCoordination{}, "idx_xhs_refund_coordination_account_state"},
 	} {
 		if !db.Migrator().HasIndex(index.model, index.name) {
 			t.Fatalf("index %s is missing", index.name)

@@ -1,11 +1,16 @@
 const app = getApp();
 
 Page({
-  data: { product: null, storeName: '', loading: true, error: '' },
+  data: { product: null, storeName: '官方商城', loading: true, navigating: false, error: '' },
 
   onLoad(options) {
+    app.setNavigationTitle(app.globalData.storeName || '官方商城');
     this.mappingId = Number(options.mapping_id || 0);
     this.loadProduct();
+  },
+
+  onUnload() {
+    if (this.navigateTimer) clearTimeout(this.navigateTimer);
   },
 
   loadProduct() {
@@ -20,11 +25,18 @@ Page({
       product.kindLabel = product.isPackage ? '酒景套餐' : '景区门票';
       product.stayText = product.isPackage ? `${product.nights}晚 · 每份${product.rooms_per_package}间房` : '';
       this.setData({ product, storeName: catalog.store_name || '官方商城', loading: false });
+      app.setStoreName(catalog.store_name || '官方商城');
     }).catch(error => this.setData({ loading: false, error: error.message || '票种加载失败' }));
   },
 
   buy() {
-    if (this.data.product) xhs.navigateTo({ url: `/pages/order/confirm?mapping_id=${this.data.product.id}` });
+    if (!this.data.product || this.data.navigating) return;
+    this.setData({ navigating: true });
+    this.navigateTimer = setTimeout(() => this.setData({ navigating: false }), 1200);
+    xhs.navigateTo({
+      url: `/pages/order/confirm?mapping_id=${this.data.product.id}`,
+      fail: () => this.setData({ navigating: false })
+    });
   },
 
   retry() { this.loadProduct(); },

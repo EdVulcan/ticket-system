@@ -93,3 +93,35 @@ func TestExecutionCenterProjectsOnlyGateRecoveryForCurrentTenant(t *testing.T) {
 		t.Fatalf("non-gate or foreign verification leaked: %+v", view.Items[0])
 	}
 }
+
+func TestExecutionCenterProjectsXiaohongshuVoucherResolution(t *testing.T) {
+	fixture, _, saga, _ := seedXiaohongshuVoucherUnknownSaga(t)
+	view, err := (&ExecutionCenterService{}).List(fixture.tenantID, "渠道核销", "critical", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Items) != 1 {
+		t.Fatalf("unexpected xiaohongshu resolution items: %+v", view.Items)
+	}
+	item := view.Items[0]
+	if item.Source != "xiaohongshu_voucher_verification" || item.Category != "渠道核销" || item.Status != "external_unknown" || item.Retryable {
+		t.Fatalf("unexpected xiaohongshu resolution projection: %+v", item)
+	}
+	if !strings.Contains(item.Description, "provider timeout") {
+		t.Fatalf("provider reason missing from projection: %+v", item)
+	}
+
+	now := time.Now()
+	if err := model.DB.Model(&model.XiaohongshuVoucherVerification{}).Where("id = ?", saga.ID).Updates(map[string]interface{}{
+		"state": "manual_review", "verify_id": "VERIFY-CENTER-1", "last_error": "本地核销收尾待处理", "manual_review_at": now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	view, err = (&ExecutionCenterService{}).List(fixture.tenantID, "渠道核销", "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Items) != 1 || !strings.Contains(view.Items[0].Description, "VERIFY-CENTER-1") {
+		t.Fatalf("manual review verify id missing from projection: %+v", view.Items)
+	}
+}

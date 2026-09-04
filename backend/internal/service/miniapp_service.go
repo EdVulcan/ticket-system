@@ -315,7 +315,7 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 			AND supplier_capability.capability = 'supplier' AND supplier_capability.status = 'active' AND supplier_capability.deleted_at IS NULL`).
 		Joins(`LEFT JOIN supplier_business_types AS supplier_business ON supplier_business.tenant_id = fulfillment_tenant.id
 			AND supplier_business.business_type = 'scenic' AND supplier_business.status = 'active' AND supplier_business.deleted_at IS NULL`).
-		Joins("JOIN xiaohongshu_product_configs AS xhs_config ON xhs_config.channel_product_mapping_id = mapping.id AND xhs_config.tenant_id = ? AND xhs_config.sync_status = ? AND xhs_config.deleted_at IS NULL", customer.TenantID, "synced").
+		Joins("JOIN xiaohongshu_product_configs AS xhs_config ON xhs_config.channel_product_mapping_id = mapping.id AND xhs_config.tenant_id = ? AND xhs_config.sync_status IN ? AND xhs_config.audit_status = ? AND xhs_config.deleted_at IS NULL", customer.TenantID, []string{"submitted", "synced"}, "approved").
 		Joins(`LEFT JOIN scenic_areas AS scenic ON scenic.id = CASE
 			WHEN product.fulfillment_scenic_area_id != 0 THEN product.fulfillment_scenic_area_id ELSE product.scenic_area_id END
 			AND scenic.tenant_id = CASE WHEN product.fulfillment_tenant_id != 0 THEN product.fulfillment_tenant_id ELSE product.tenant_id END

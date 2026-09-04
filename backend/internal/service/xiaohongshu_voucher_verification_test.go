@@ -14,6 +14,8 @@ import (
 	"ticket-backend/internal/utils"
 	"ticket-backend/internal/xiaohongshu"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 type xiaohongshuVoucherFixture struct {
@@ -264,6 +266,157 @@ func TestXiaohongshuVoucherVerificationUnknownFailsClosedAndBlocksBypass(t *test
 	var ticket model.Ticket
 	if err := model.DB.First(&ticket, fixture.ticket.ID).Error; err != nil || ticket.PendingXiaohongshuVerificationID == 0 || ticket.Status != "unused" {
 		t.Fatalf("unknown ticket=%+v err=%v", ticket, err)
+	}
+}
+
+func seedXiaohongshuVoucherUnknownSaga(t *testing.T) (xiaohongshuVoucherFixture, *DeviceService, model.XiaohongshuVoucherVerification, model.User) {
+	t.Helper()
+	fixture := seedXiaohongshuVoucherFixture(t)
+	svc := NewDeviceService(model.DB, &TicketService{})
+	request := DirectVerifyRequest{
+		TenantID: fixture.tenantID, DeviceID: fixture.device.ID, CheckPointID: fixture.checkpoint.ID,
+		RequestID: "xhs-manual-resolution", RequestHash: "xhs-manual-resolution-hash", TicketCode: fixture.ticket.TicketCode,
+	}
+	verification, replay, err := svc.beginDeviceVerification(request, fixture.device.ScenicAreaID)
+	if err != nil || replay != nil {
+		t.Fatalf("begin verification=%+v replay=%+v err=%v", verification, replay, err)
+	}
+	saga, err := svc.ensureXiaohongshuVoucherVerification(request, &fixture.link, verification.ID)
+	if err != nil {
+		t.Fatalf("create saga: %v", err)
+	}
+	if err := svc.TicketService.PrepareDeviceRequest(fixture.ticket.TicketCode, fixture.checkpoint.ID, fixture.device.ID, fixture.tenantID, saga.ID, request.RequestID); err != nil {
+		t.Fatalf("reserve ticket: %v", err)
+	}
+	if err := svc.setXiaohongshuVoucherState(saga.ID, "external_unknown", "provider timeout", false, time.Now()); err != nil {
+		t.Fatalf("set unknown state: %v", err)
+	}
+	if err := svc.completeXiaohongshuDeviceVerification(verification.ID, xiaohongshuVoucherUnknownResponse(), 0); err != nil {
+		t.Fatalf("complete original denial: %v", err)
+	}
+	if err := model.DB.First(&saga, saga.ID).Error; err != nil {
+		t.Fatalf("reload saga: %v", err)
+	}
+	actor := model.User{TenantID: fixture.tenantID, Username: fmt.Sprintf("xhs-resolution-%d", time.Now().UnixNano()), Password: "hash", Role: "admin"}
+	if err := model.DB.Create(&actor).Error; err != nil {
+		t.Fatalf("create actor: %v", err)
+	}
+	return fixture, svc, *saga, actor
+}
+
+func TestResolveXiaohongshuVoucherVerificationConfirmExternalCompletesOnlyLocalFact(t *testing.T) {
+	fixture, svc, saga, actor := seedXiaohongshuVoucherUnknownSaga(t)
+	svc.NewXiaohongshuClient = func(string, string, string) *xiaohongshu.Client {
+		t.Fatal("manual resolution must never call Xiaohongshu")
+		return nil
+	}
+
+	resolved, err := svc.ResolveXiaohongshuVoucherVerification(XiaohongshuVoucherVerificationResolutionRequest{
+		TenantID: fixture.tenantID, SagaID: saga.ID, ActorUserID: actor.ID, ActorRole: actor.Role,
+		Decision: xiaohongshuVoucherResolutionConfirm, Reason: "已在渠道运营后台核对", Evidence: "小红书后台截图工单 XHS-42", ExternalVerifyID: "VERIFY-MANUAL-42",
+	})
+	if err != nil || resolved.State != "local_completed" || resolved.VerifyID != "VERIFY-MANUAL-42" || resolved.CheckInRecordID == 0 {
+		t.Fatalf("resolved=%+v err=%v", resolved, err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.First(&ticket, fixture.ticket.ID).Error; err != nil || ticket.Status != "used" || ticket.PendingXiaohongshuVerificationID != 0 {
+		t.Fatalf("ticket=%+v err=%v", ticket, err)
+	}
+	var original model.DeviceVerification
+	if err := model.DB.First(&original, saga.DeviceVerificationID).Error; err != nil || original.Result != "deny" || original.OpenStatus != "" {
+		t.Fatalf("original device response was changed by manual resolution: %+v err=%v", original, err)
+	}
+	var audit model.AuditLog
+	if err := model.DB.Where("tenant_id = ? AND action = ? AND target_id = ?", fixture.tenantID, "xiaohongshu.voucher_verification.resolve", saga.ID).First(&audit).Error; err != nil {
+		t.Fatalf("manual resolution audit missing: %v", err)
+	}
+	if audit.ActorUserID != actor.ID || audit.Reason != "已在渠道运营后台核对" || !strings.Contains(audit.AfterJSON, "VERIFY-MANUAL-42") || !strings.Contains(audit.AfterJSON, "XHS-42") {
+		t.Fatalf("unexpected audit=%+v", audit)
+	}
+}
+
+func TestResolveXiaohongshuVoucherVerificationRetriesLocalFactAfterManualReview(t *testing.T) {
+	fixture, svc, saga, actor := seedXiaohongshuVoucherUnknownSaga(t)
+	if err := model.DB.Model(&model.XiaohongshuVoucherVerification{}).Where("id = ?", saga.ID).Updates(map[string]interface{}{
+		"state": "manual_review", "verify_id": "VERIFY-LOCAL-45", "last_error": "本地核销收尾暂时失败", "manual_review_at": time.Now(),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc.NewXiaohongshuClient = func(string, string, string) *xiaohongshu.Client {
+		t.Fatal("retrying a locally failed verification must never call Xiaohongshu")
+		return nil
+	}
+
+	resolved, err := svc.ResolveXiaohongshuVoucherVerification(XiaohongshuVoucherVerificationResolutionRequest{
+		TenantID: fixture.tenantID, SagaID: saga.ID, ActorUserID: actor.ID, ActorRole: actor.Role,
+		Decision: xiaohongshuVoucherResolutionConfirm, Reason: "重新执行本地核销收尾", Evidence: "渠道后台核销号 VERIFY-LOCAL-45", ExternalVerifyID: "VERIFY-LOCAL-45",
+	})
+	if err != nil || resolved.State != "local_completed" {
+		t.Fatalf("resolved=%+v err=%v", resolved, err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.First(&ticket, fixture.ticket.ID).Error; err != nil || ticket.Status != "used" || ticket.PendingXiaohongshuVerificationID != 0 {
+		t.Fatalf("ticket=%+v err=%v", ticket, err)
+	}
+}
+
+func TestResolveXiaohongshuVoucherVerificationReleaseExternalUnlocksButCannotResend(t *testing.T) {
+	fixture, svc, saga, actor := seedXiaohongshuVoucherUnknownSaga(t)
+	resolved, err := svc.ResolveXiaohongshuVoucherVerification(XiaohongshuVoucherVerificationResolutionRequest{
+		TenantID: fixture.tenantID, SagaID: saga.ID, ActorUserID: actor.ID, ActorRole: actor.Role,
+		Decision: xiaohongshuVoucherResolutionRelease, Reason: "渠道后台确认未核销", Evidence: "客服工单 XHS-43",
+	})
+	if err != nil || resolved.State != "external_rejected" {
+		t.Fatalf("resolved=%+v err=%v", resolved, err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.First(&ticket, fixture.ticket.ID).Error; err != nil || ticket.PendingXiaohongshuVerificationID != 0 || ticket.Status != "unused" {
+		t.Fatalf("ticket=%+v err=%v", ticket, err)
+	}
+	var calls atomic.Int32
+	svc.NewXiaohongshuClient = func(string, string, string) *xiaohongshu.Client {
+		calls.Add(1)
+		return nil
+	}
+	response, err := svc.VerifyDirect(DirectVerifyRequest{
+		TenantID: fixture.tenantID, DeviceID: fixture.device.ID, CheckPointID: fixture.checkpoint.ID,
+		RequestID: "xhs-manual-release-retry", RequestHash: "xhs-manual-release-retry-hash", TicketCode: fixture.ticket.TicketCode,
+	})
+	if err != nil || response.Result != "deny" || calls.Load() != 0 {
+		t.Fatalf("released saga resent upstream response=%+v calls=%d err=%v", response, calls.Load(), err)
+	}
+}
+
+func TestResolveXiaohongshuVoucherVerificationRejectsCrossTenantAndMissingEvidence(t *testing.T) {
+	fixture, svc, saga, actor := seedXiaohongshuVoucherUnknownSaga(t)
+	_, err := svc.ResolveXiaohongshuVoucherVerification(XiaohongshuVoucherVerificationResolutionRequest{
+		TenantID: fixture.tenantID, SagaID: saga.ID, ActorUserID: actor.ID, ActorRole: actor.Role,
+		Decision: xiaohongshuVoucherResolutionConfirm, Reason: "已核对", Evidence: "", ExternalVerifyID: "VERIFY-MANUAL-44",
+	})
+	if !errors.Is(err, ErrXiaohongshuVoucherResolutionInvalid) {
+		t.Fatalf("missing evidence err=%v", err)
+	}
+	_, err = svc.ResolveXiaohongshuVoucherVerification(XiaohongshuVoucherVerificationResolutionRequest{
+		TenantID: fixture.tenantID, SagaID: saga.ID, ActorUserID: actor.ID, ActorRole: "product_operator",
+		Decision: xiaohongshuVoucherResolutionRelease, Reason: "已核对", Evidence: "工单 XHS-44",
+	})
+	if !errors.Is(err, ErrXiaohongshuVoucherResolutionPermission) {
+		t.Fatalf("non-admin resolution err=%v", err)
+	}
+	otherTenant := model.Tenant{Name: "xhs resolution other", SystemCode: fmt.Sprintf("XHS-RES-OTHER-%d", time.Now().UnixNano()), SecretKey: "other", Status: "active"}
+	if err := model.DB.Create(&otherTenant).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.ResolveXiaohongshuVoucherVerification(XiaohongshuVoucherVerificationResolutionRequest{
+		TenantID: otherTenant.ID, SagaID: saga.ID, ActorUserID: actor.ID, ActorRole: actor.Role,
+		Decision: xiaohongshuVoucherResolutionRelease, Reason: "not ours", Evidence: "not ours",
+	})
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("cross-tenant err=%v", err)
+	}
+	var unchanged model.XiaohongshuVoucherVerification
+	if err := model.DB.First(&unchanged, saga.ID).Error; err != nil || unchanged.State != "external_unknown" {
+		t.Fatalf("cross-tenant request changed saga=%+v err=%v", unchanged, err)
 	}
 }
 

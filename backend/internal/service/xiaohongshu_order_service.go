@@ -283,6 +283,11 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 	if err := model.DB.Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", customer.ChannelAccountID, customer.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
 		return nil, ErrMiniappUnavailable
 	}
+	if held, err := HasXiaohongshuRefundAccountHoldTx(model.DB, customer.TenantID, account.ID); err != nil {
+		return nil, err
+	} else if held {
+		return nil, ErrXiaohongshuRefundHold
+	}
 	if err := model.DB.Where("id = ? AND channel_account_id = ? AND status = ?", input.MappingID, account.ID, "active").First(&mapping).Error; err != nil {
 		return nil, errors.New("票种当前不可购买")
 	}
@@ -295,8 +300,8 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 		// order and reservation protocol is enabled for this channel.
 		return nil, errors.New("酒店产品暂未开放小红书交易，请先完成住宿订单协议联调")
 	}
-	if err := model.DB.Where("channel_product_mapping_id = ? AND tenant_id = ? AND channel_account_id = ? AND sync_status = ?", mapping.ID, customer.TenantID, account.ID, "synced").First(&config).Error; err != nil {
-		return nil, errors.New("票种尚未完成小红书商品同步")
+	if err := model.DB.Where("channel_product_mapping_id = ? AND tenant_id = ? AND channel_account_id = ? AND sync_status IN ? AND audit_status = ?", mapping.ID, customer.TenantID, account.ID, []string{"submitted", "synced"}, "approved").First(&config).Error; err != nil {
+		return nil, errors.New("票种尚未通过小红书商品审核")
 	}
 	var hotelPackage model.ScenicHotelPackage
 	hasHotelPackage := false

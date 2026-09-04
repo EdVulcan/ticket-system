@@ -287,7 +287,7 @@ func (s *RefundService) CreateDigitalRefundAs(actor RefundActor, orderNo, idempo
 		}
 		var payment model.Payment
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
-			"tenant_id = ? AND order_no = ? AND method IN ? AND status = ?", tenantID, orderNo, []string{"wechat", "alipay"}, "paid",
+			"tenant_id = ? AND order_no = ? AND method IN ? AND status IN ?", tenantID, orderNo, []string{"wechat", "alipay"}, []string{"paid", "partial_refunded"},
 		).Order("created_at asc").First(&payment).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return errors.New("paid digital payment not found")
@@ -464,7 +464,15 @@ func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempote
 				paymentCents = moneyCents(payment.Amount)
 			}
 			var reserved int64
-			if err := tx.Model(&model.Refund{}).Where("payment_id = ? AND (status IN ? OR (parent_refund_id != 0 AND status = ?))", payment.ID, []string{"pending", "succeeded"}, "failed").
+			if err := tx.Model(&model.Refund{}).Where(`payment_id = ? AND (
+				status IN ? OR (
+					parent_refund_id != 0 AND status = ? AND EXISTS (
+						SELECT 1 FROM refunds AS root_refunds
+						WHERE root_refunds.id = refunds.parent_refund_id
+						  AND root_refunds.status IN ?
+					)
+				)
+			)`, payment.ID, []string{"pending", "succeeded"}, "failed", []string{"group_pending", "group_manual_review"}).
 				Select("COALESCE(SUM(CASE WHEN amount_cents != 0 THEN amount_cents ELSE CAST(ROUND(amount * 100.0) AS INTEGER) END), 0)").Scan(&reserved).Error; err != nil {
 				return err
 			}
@@ -879,6 +887,8 @@ func (s *RefundService) processDigitalRefundTask(ctx context.Context, taskID uin
 				if err := releaseRefundTicketsTx(tx, refund.ID); err != nil {
 					return err
 				}
+			} else if err := markMixedRefundGroupManualReviewTx(tx, refund.TenantID, refund.ParentRefundID); err != nil {
+				return err
 			}
 			return updateClaimedDigitalRefundTask(tx, task.ID, task.LockedAt, map[string]interface{}{
 				"status": "failed", "locked_at": nil, "provider_refund": result.ProviderRefundID,
@@ -897,12 +907,15 @@ func (s *RefundService) processDigitalRefundTask(ctx context.Context, taskID uin
 				return err
 			}
 			if attempt >= maxAttempts {
-				return updateClaimedDigitalRefundTask(tx, task.ID, task.LockedAt, map[string]interface{}{
+				if err := updateClaimedDigitalRefundTask(tx, task.ID, task.LockedAt, map[string]interface{}{
 					"status": "manual_review", "provider_refund": result.ProviderRefundID,
 					"attempt_count": attempt, "max_attempts": maxAttempts, "next_attempt_at": nil,
 					"locked_at":  nil,
 					"last_error": "provider did not reach a terminal refund state", "failure_code": "provider_pending_timeout", "manual_review_at": now,
-				})
+				}); err != nil {
+					return err
+				}
+				return markMixedRefundGroupManualReviewTx(tx, refund.TenantID, refund.ParentRefundID)
 			}
 			return updateClaimedDigitalRefundTask(tx, task.ID, task.LockedAt, map[string]interface{}{
 				"status": "submitted", "provider_refund": result.ProviderRefundID,
@@ -941,7 +954,10 @@ func (s *RefundService) deferClaimedDigitalRefundTask(taskID uint, lockedAt *tim
 			updates["last_error"] = message
 			updates["failure_code"] = failureCode
 			updates["manual_review_at"] = now
-			return updateClaimedDigitalRefundTask(tx, task.ID, lockedAt, updates)
+			if err := updateClaimedDigitalRefundTask(tx, task.ID, lockedAt, updates); err != nil {
+				return err
+			}
+			return markMixedRefundGroupManualReviewForTaskTx(tx, task.TenantID, task.RefundID)
 		}
 		delay := time.Duration(1<<minInt(attempt, 6)) * 30 * time.Second
 		next := now.Add(delay)
@@ -1038,6 +1054,126 @@ func (s *RefundService) RetryDigitalRefundTask(tenantID, taskID, operatorID uint
 		}
 		return recordAuditTx(tx, operatorID, tenantID, operatorRole, "tenant", "payment.refund.retry", "digital_refund_task", task.ID, strings.TrimSpace(reason), `{"status":"`+previousStatus+`"}`, `{"status":"pending"}`)
 	})
+}
+
+// ResolveMixedRefundGroup is the audited operator decision point for a mixed
+// refund whose provider allocation cannot progress automatically. Retrying
+// preserves the original provider refund identifiers and ticket reservation.
+// Closing is deliberately narrower: it is allowed only before any allocation
+// has succeeded, so already-returned money can never be detached from ticket
+// and inventory facts.
+func (s *RefundService) ResolveMixedRefundGroup(tenantID, rootRefundID, operatorID uint, operatorRole, decision, reason string) error {
+	if tenantID == 0 || rootRefundID == 0 || operatorID == 0 || strings.TrimSpace(reason) == "" {
+		return errors.New("tenant, refund group, operator and reason are required")
+	}
+	decision = strings.ToLower(strings.TrimSpace(decision))
+	if decision != "retry" && decision != "close_failed" {
+		return errors.New("unsupported mixed refund group decision")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var root model.Refund
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+			"id = ? AND tenant_id = ? AND parent_refund_id = 0", rootRefundID, tenantID,
+		).First(&root).Error; err != nil {
+			return err
+		}
+		if root.Method != "mixed" || root.Status != "group_manual_review" {
+			return fmt.Errorf("refund group cannot be resolved from status %s", root.Status)
+		}
+		var allocations []model.Refund
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+			"tenant_id = ? AND parent_refund_id = ?", tenantID, root.ID,
+		).Order("allocation_seq ASC").Find(&allocations).Error; err != nil {
+			return err
+		}
+		if len(allocations) == 0 {
+			return errors.New("mixed refund group has no allocations")
+		}
+		allocationIDs := make([]uint, 0, len(allocations))
+		for i := range allocations {
+			allocationIDs = append(allocationIDs, allocations[i].ID)
+		}
+		var tasks []model.DigitalRefundTask
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+			"tenant_id = ? AND refund_id IN ?", tenantID, allocationIDs,
+		).Order("id ASC").Find(&tasks).Error; err != nil {
+			return err
+		}
+		before := fmt.Sprintf(`{"status":%q}`, root.Status)
+		now := time.Now()
+		switch decision {
+		case "retry":
+			changed := false
+			for i := range tasks {
+				if tasks[i].Status != "failed" && tasks[i].Status != "manual_review" {
+					continue
+				}
+				changed = true
+				if err := tx.Model(&tasks[i]).Updates(map[string]interface{}{
+					"status": "pending", "next_attempt_at": now, "locked_at": nil,
+					"last_error": "", "failure_code": "", "manual_review_at": nil,
+					"attempt_count": 0,
+				}).Error; err != nil {
+					return err
+				}
+			}
+			if !changed {
+				return errors.New("mixed refund group has no failed provider task to retry")
+			}
+			if err := tx.Model(&model.Refund{}).Where("tenant_id = ? AND parent_refund_id = ? AND status = ?", tenantID, root.ID, "failed").Update("status", "pending").Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&root).Update("status", "group_pending").Error; err != nil {
+				return err
+			}
+			return recordAuditTx(tx, operatorID, tenantID, operatorRole, "tenant", "payment.refund.group.retry", "refund", root.ID, strings.TrimSpace(reason), before, `{"status":"group_pending"}`)
+		case "close_failed":
+			for i := range allocations {
+				if allocations[i].Status == "succeeded" {
+					return errors.New("mixed refund group has a completed allocation and must remain under manual review")
+				}
+			}
+			for i := range tasks {
+				if tasks[i].Status != "failed" && tasks[i].Status != "manual_review" {
+					return errors.New("mixed refund group still has a non-terminal provider task")
+				}
+				if err := tx.Model(&tasks[i]).Updates(map[string]interface{}{
+					"status": "failed", "next_attempt_at": nil, "locked_at": nil,
+					"failure_code": "operator_closed", "last_error": "operator closed unresolved mixed refund group",
+				}).Error; err != nil {
+					return err
+				}
+			}
+			if err := tx.Model(&model.Refund{}).Where("tenant_id = ? AND parent_refund_id = ? AND status != ?", tenantID, root.ID, "succeeded").Update("status", "failed").Error; err != nil {
+				return err
+			}
+			if err := releaseRefundTicketsTx(tx, root.ID); err != nil {
+				return err
+			}
+			if err := tx.Model(&root).Update("status", "group_failed").Error; err != nil {
+				return err
+			}
+			return recordAuditTx(tx, operatorID, tenantID, operatorRole, "tenant", "payment.refund.group.close_failed", "refund", root.ID, strings.TrimSpace(reason), before, `{"status":"group_failed"}`)
+		}
+		return nil
+	})
+}
+
+func markMixedRefundGroupManualReviewTx(tx *gorm.DB, tenantID, parentRefundID uint) error {
+	if parentRefundID == 0 {
+		return nil
+	}
+	return tx.Model(&model.Refund{}).Where(
+		"id = ? AND tenant_id = ? AND parent_refund_id = 0 AND status IN ?", parentRefundID, tenantID, []string{"group_pending", "group_manual_review"},
+	).Update("status", "group_manual_review").Error
+}
+
+func markMixedRefundGroupManualReviewForTaskTx(tx *gorm.DB, tenantID, refundID uint) error {
+	var allocation model.Refund
+	if err := tx.Select("parent_refund_id").Where("id = ? AND tenant_id = ?", refundID, tenantID).First(&allocation).Error; err != nil {
+		return err
+	}
+	return markMixedRefundGroupManualReviewTx(tx, tenantID, allocation.ParentRefundID)
 }
 
 func (s *RefundService) completeDigitalRefund(taskID uint, lockedAt *time.Time, refund *model.Refund, payment *model.Payment, providerRefundID string) error {

@@ -28,7 +28,7 @@
       <view><text class="label">{{product.quantityLabel}}</text><text class="hint">{{product.quantityHint}}</text></view>
       <view class="stepper"><button bindtap="decrease" disabled="{{quantity <= 1}}">−</button><text>{{quantity}}</text><button bindtap="increase" disabled="{{quantity >= maxQuantity}}">+</button></view>
     </view>
-    <text class="limit" xhs:if="{{maxQuantity < 100}}">测试环境本票种最多购买 {{maxQuantity}} 张</text>
+    <text class="limit" xhs:if="{{maxQuantity < 100}}">单次最多购买 {{maxQuantity}} {{product.isPackage ? '份' : '张'}}</text>
     <view class="notice"><text class="notice-title">购买须知</text><text>{{product.isDeferredPackage ? '支付成功后获得套餐预约权益，实际入住日期以预约时的可用房量为准；预约成功后才生成可用门票。' : (product.isPackage ? '每份套餐同时锁定门票和住宿房量，退改按整份套餐处理。' : '支付结果以小红书担保交易为准，支付成功后系统自动出票。退改按票种实际规则执行。')}}</text></view>
     <view class="summary"><view><text class="summary-label">单价</text><text>¥{{product.priceText}} × {{quantity}}</text></view><view class="summary-total"><text>合计</text><text class="total">¥{{totalText}}</text></view></view>
     <text class="inline-error" xhs:if="{{error}}">{{error}}</text>

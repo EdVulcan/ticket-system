@@ -28,11 +28,28 @@ type hotelProductSaleFacts struct {
 	CheckInDate *time.Time
 }
 
+var errStandaloneHotelProductSaleUnavailable = errors.New("standalone hotel orders are unavailable until the hotel refund and after-sale lifecycle is enabled")
+
+// independentHotelProductSalesEnabled is deliberately a server-side P0 gate.
+// It may be opened only with a transactionally verified accommodation refund
+// and after-sale coordinator; catalog publication is not authorization to sell.
+func independentHotelProductSalesEnabled() bool {
+	return false
+}
+
 func loadHotelProductSaleFactsTx(tx *gorm.DB, tenantID, productID uint, useDate *time.Time, now time.Time) (*hotelProductSaleFacts, error) {
 	var product model.HotelProduct
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND product_id = ? AND status = ?", tenantID, productID, "online").First(&product).Error; err != nil {
 		return nil, errors.New("hotel product is unavailable")
 	}
+	// Independent hotel products currently create room reservations and payment
+	// facts, but their ticket-oriented refund/after-sale APIs cannot atomically
+	// reverse those accommodation facts. Refuse new sales until that coordinator
+	// exists rather than creating paid reservations that cannot safely unwind.
+	if !independentHotelProductSalesEnabled() {
+		return nil, errStandaloneHotelProductSaleUnavailable
+	}
+
 	if err := requireHotelProductResourcesTx(tx, tenantID, product.HotelID, product.RoomTypeID, product.RatePlanID); err != nil {
 		return nil, err
 	}

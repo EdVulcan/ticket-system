@@ -89,6 +89,13 @@ func normalizeHotelProductInput(input HotelProductInput) (HotelProductInput, err
 		return input, errors.New("hotel product status must be online or offline")
 	}
 	if input.SaleMode == "presale_room" {
+		// Presale rooms require a later booking, cancellation and refund
+		// coordinator. That lifecycle is not available for independent hotel
+		// products yet, so publishing one would create paid rights with no safe
+		// exit path.
+		if input.Status == "online" {
+			return input, errors.New("presale hotel products cannot be online until the booking and refund lifecycle is enabled")
+		}
 		if input.VoucherValidityDays < 1 || input.VoucherValidityDays > 730 {
 			return input, errors.New("presale hotel product voucher validity must be between 1 and 730 days")
 		}

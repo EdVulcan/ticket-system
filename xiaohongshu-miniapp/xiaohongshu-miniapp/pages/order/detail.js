@@ -15,6 +15,7 @@ Page({
   },
 
   onLoad(options) {
+    app.setNavigationTitle(app.globalData.storeName || '官方商城');
     this.orderNo = options.order_no || '';
     this.setData({ orderNo: this.orderNo });
     this.pollCount = 0;
@@ -25,6 +26,10 @@ Page({
   onUnload() { if (this.timer) clearTimeout(this.timer); },
 
   loadOrder() {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
     if (!this.orderNo) {
       this.setData({ loading: false, error: '订单编号无效' });
       return;
@@ -49,7 +54,7 @@ Page({
 		canBook: canUsePaidEntitlements && item.status === 'pending_booking',
         canCancel: item.status === 'booked' && Number(item.reschedule_count || 0) < Number(item.max_reschedules || 0)
       }));
-	  const view = this.statusView(coreStatus, order.product_kind);
+	  const view = this.statusView(coreStatus, order.product_kind, Boolean(order.pay_token));
       order.amountText = (Number(order.amount_cents || 0) / 100).toFixed(2);
       this.setData({
         order,
@@ -104,8 +109,10 @@ Page({
     });
   },
 
-  statusView(status, productKind) {
+  statusView(status, productKind, hasPayToken) {
     const isPackage = productKind === 'scenic_hotel_package';
+    if (status === 'unpaid' && !hasPayToken) return { label: '确认中', title: '正在准备支付', detail: '支付信息正在确认，请稍候再试' };
+    if (status === 'unpaid') return { label: '待支付', title: '订单待支付', detail: '完成支付后才会出票，请勿重复创建订单' };
     if (status === 'paid') return { label: '已支付', title: '支付成功', detail: isPackage ? '请在下方查看或完成每份套餐的入住预约' : '门票已经出票，请妥善保管票码' };
     if (status === 'completed') return { label: '已使用', title: '门票已使用', detail: '本次入园记录已经完成' };
     if (status === 'partial_refunded') return { label: '部分退款', title: '订单部分退款', detail: '剩余有效票码仍可按规则使用' };

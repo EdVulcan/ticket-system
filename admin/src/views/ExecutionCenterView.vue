@@ -64,10 +64,53 @@
         <el-table-column label="说明" min-width="300" show-overflow-tooltip><template #default="{ row }">{{ row.description || '暂无补充说明' }}</template></el-table-column>
         <el-table-column label="更新时间" width="180"><template #default="{ row }">{{ formatTime(row.updated_at || row.created_at) }}</template></el-table-column>
         <el-table-column label="处理" width="150" fixed="right">
-          <template #default="{ row }"><el-button v-if="row.action_route" link type="primary" @click="goTo(row.action_route)">{{ row.action_label || '进入处理' }}</el-button><span v-else class="muted">-</span></template>
+          <template #default="{ row }">
+            <el-button v-if="row.source === 'xiaohongshu_voucher_verification'" link type="primary" @click="openResolution(row)">人工处置</el-button>
+            <el-button v-else-if="row.source === 'xiaohongshu_refund_coordination'" link type="primary" @click="openRefundResolution(row)">人工处置</el-button>
+            <el-button v-else-if="row.action_route" link type="primary" @click="goTo(row.action_route)">{{ row.action_label || '进入处理' }}</el-button>
+            <span v-else class="muted">-</span>
+          </template>
         </el-table-column>
       </el-table>
     </section>
+
+    <el-dialog v-model="resolution.visible" :title="resolution.kind === 'refund' ? '小红书售后人工处置' : '小红书核销人工处置'" width="540px" :close-on-click-modal="false">
+      <div v-if="resolution.item" class="resolution-context">
+        <div class="resolution-context-title">{{ resolution.item.title }}</div>
+        <div class="resolution-context-detail">{{ resolution.item.description || '渠道返回结果未知，票权已暂时锁定' }}</div>
+      </div>
+      <el-form label-position="top" @submit.prevent>
+        <el-form-item label="处置决定">
+          <el-radio-group v-model="resolution.decision">
+            <template v-if="resolution.kind === 'refund'">
+              <el-radio-button value="dismiss_no_refund">确认无退款并解除隔离</el-radio-button>
+              <el-radio-button value="bind_order_hold">绑定外部订单并保持整单隔离</el-radio-button>
+              <el-radio-button value="confirm_external_refund">确认外部退款并继续锁定</el-radio-button>
+            </template>
+            <template v-else>
+              <el-radio-button value="confirm_external">确认渠道已核销</el-radio-button>
+              <el-radio-button v-if="resolution.item?.status === 'external_unknown'" value="release_external">确认未核销并释放</el-radio-button>
+            </template>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="处理原因" required>
+          <el-input v-model="resolution.reason" type="textarea" :rows="3" maxlength="500" show-word-limit placeholder="填写核对依据和处理原因" />
+        </el-form-item>
+        <el-form-item label="证据引用" required>
+          <el-input v-model="resolution.evidence" type="textarea" :rows="2" maxlength="2000" show-word-limit placeholder="填写渠道后台记录、工单号或截图编号" />
+        </el-form-item>
+        <el-form-item v-if="resolution.decision === 'confirm_external'" label="渠道核销编号" required>
+          <el-input v-model="resolution.externalVerifyID" maxlength="100" placeholder="填写小红书返回或后台显示的核销编号" />
+        </el-form-item>
+        <el-form-item v-if="resolution.kind === 'refund' && resolution.decision === 'bind_order_hold'" label="小红书外部订单号" required>
+          <el-input v-model="resolution.externalOrderID" maxlength="100" placeholder="仅用于当前渠道账号内查找订单" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="resolution.visible = false">取消</el-button>
+        <el-button type="primary" :loading="resolution.loading" @click="submitResolution">提交处置</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -98,7 +141,19 @@ const items = ref<ExecutionItem[]>([])
 const generatedAt = ref('')
 const summary = reactive({ total: 0, critical: 0, warning: 0, info: 0 })
 const filters = reactive({ category: '', severity: '' })
-const categoryOptions = ['现场设备', '打印', '退款', '支付', '渠道', '对账', '住宿预约', '售后', '结算']
+const resolution = reactive({
+  visible: false,
+  loading: false,
+  item: null as ExecutionItem | null,
+  kind: 'voucher' as 'voucher' | 'refund',
+  decision: 'confirm_external',
+  reason: '',
+  evidence: '',
+  externalVerifyID: '',
+  externalOrderID: '',
+  idempotencyKey: '',
+})
+const categoryOptions = ['现场设备', '打印', '退款', '支付', '渠道', '渠道核销', '渠道售后', '对账', '住宿预约', '售后', '结算']
 
 const load = async () => {
   loading.value = true
@@ -115,11 +170,68 @@ const load = async () => {
 }
 
 const goTo = (path: string) => router.push(path)
+const openResolution = (item: ExecutionItem) => {
+  resolution.item = item
+  resolution.kind = 'voucher'
+  resolution.visible = true
+  resolution.loading = false
+  resolution.decision = 'confirm_external'
+  resolution.reason = ''
+  resolution.evidence = ''
+  resolution.externalVerifyID = ''
+  resolution.externalOrderID = ''
+  resolution.idempotencyKey = ''
+}
+const openRefundResolution = (item: ExecutionItem) => {
+  resolution.item = item
+  resolution.kind = 'refund'
+  resolution.visible = true
+  resolution.loading = false
+  resolution.decision = 'dismiss_no_refund'
+  resolution.reason = ''
+  resolution.evidence = ''
+  resolution.externalVerifyID = ''
+  resolution.externalOrderID = ''
+  resolution.idempotencyKey = `xhs-refund-resolution-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+const submitResolution = async () => {
+  if (!resolution.item) return
+  if (!resolution.reason.trim() || !resolution.evidence.trim() || (resolution.kind === 'voucher' && resolution.decision === 'confirm_external' && !resolution.externalVerifyID.trim()) || (resolution.kind === 'refund' && resolution.decision === 'bind_order_hold' && !resolution.externalOrderID.trim())) {
+    ElMessage.warning(resolution.kind === 'refund' ? '请完整填写处置决定、原因和证据' : '请完整填写处置决定、原因、证据和渠道核销编号')
+    return
+  }
+  resolution.loading = true
+  try {
+    if (resolution.kind === 'voucher') {
+      await request.post(`/xiaohongshu-voucher-verifications/${resolution.item.id}/resolve`, {
+        decision: resolution.decision,
+        reason: resolution.reason.trim(),
+        evidence: resolution.evidence.trim(),
+        external_verify_id: resolution.decision === 'confirm_external' ? resolution.externalVerifyID.trim() : undefined,
+      })
+    } else {
+      await request.post(`/xiaohongshu-refund-coordinations/${resolution.item.id}/resolve`, {
+        action: resolution.decision,
+        external_order_id: resolution.decision === 'bind_order_hold' ? resolution.externalOrderID.trim() : undefined,
+        reason: resolution.reason.trim(),
+        evidence: resolution.evidence.trim(),
+        idempotency_key: resolution.idempotencyKey,
+      })
+    }
+    ElMessage.success('人工处置已提交')
+    resolution.visible = false
+    await load()
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '人工处置失败，请稍后重试')
+  } finally {
+    resolution.loading = false
+  }
+}
 const formatTime = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
 const severityLabel = (value: string) => ({ critical: '立即处理', warning: '等待收敛', info: '待关注' } as Record<string, string>)[value] || value || '未知'
 const severityType = (value: string) => value === 'critical' ? 'danger' : value === 'warning' ? 'warning' : 'info'
-const statusLabel = (value: string) => ({ open: '待处理', queued: '排队中', printing: '打印中·待确认', pending: '待执行', processing: '处理中', submitted: '渠道处理中', failed: '失败', unknown: '物理结果未知·需人工确认', manual_review: '人工复核', retryable: '可重试', needs_review: '待复核', remote_succeeded: '平台已成功', confirm_pending: '本地待收尾', compensation_pending: '补偿待处理', disputed: '存在争议' } as Record<string, string>)[value] || value || '未知'
-const sourceLabel = (value: string) => ({ device_alert: '设备告警', print_job: '打印任务', digital_refund: '退款任务', payment_reconciliation: '支付查单', ctrip_outbound: '携程出站', channel_request: '渠道请求', channel_reconciliation: '渠道对账', xiaohongshu_booking: '小红书预约', xiaohongshu_order: '小红书订单', after_sale: '售后请求', settlement: '结算单' } as Record<string, string>)[value] || value
+const statusLabel = (value: string) => ({ open: '待处理', queued: '排队中', printing: '打印中·待确认', pending: '待执行', processing: '处理中', submitted: '渠道处理中', failed: '失败', unknown: '物理结果未知·需人工确认', external_unknown: '渠道结果未知·需人工确认', external_confirmed: '渠道已确认·待本地收尾', external_rejected: '渠道未核销·已释放', received_unmapped: '售后待匹配', order_held: '整单隔离', external_refund_confirmed: '外部退款已确认·继续锁定', local_completed: '已完成', manual_review: '人工复核', retryable: '可重试', needs_review: '待复核', remote_succeeded: '平台已成功', confirm_pending: '本地待收尾', compensation_pending: '补偿待处理', disputed: '存在争议' } as Record<string, string>)[value] || value || '未知'
+const sourceLabel = (value: string) => ({ device_alert: '设备告警', device_verification: '闸机核验', print_job: '打印任务', digital_refund: '退款任务', payment_reconciliation: '支付查单', ctrip_outbound: '携程出站', channel_request: '渠道请求', channel_reconciliation: '渠道对账', xiaohongshu_voucher_verification: '小红书核销', xiaohongshu_refund_coordination: '小红书售后', xiaohongshu_booking: '小红书预约', xiaohongshu_order: '小红书订单', after_sale: '售后请求', settlement: '结算单' } as Record<string, string>)[value] || value
 
 onMounted(load)
 </script>
@@ -145,6 +257,9 @@ onMounted(load)
 .filters .el-select { width: 145px; }
 .item-title { color: #172033; font-weight: 600; }
 .item-source { margin-top: 4px; color: #9aa3b2; font-size: 12px; }
+.resolution-context { margin-bottom: 18px; padding: 12px 14px; border: 1px solid #e6eaf0; border-radius: 8px; background: #f8fafc; }
+.resolution-context-title { color: #172033; font-weight: 600; }
+.resolution-context-detail { margin-top: 5px; color: #6b7280; font-size: 13px; line-height: 1.5; }
 .muted { color: #a0a8b5; }
 @media (max-width: 900px) {
   .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

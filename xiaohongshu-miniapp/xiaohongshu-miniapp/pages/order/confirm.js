@@ -3,6 +3,7 @@ const app = getApp();
 Page({
   data: {
     product: null,
+    storeName: '官方商城',
     quantity: 1,
     maxQuantity: 10,
     useDate: '',
@@ -17,7 +18,10 @@ Page({
   },
 
   onLoad(options) {
+    app.setNavigationTitle(app.globalData.storeName || '官方商城');
     this.mappingId = Number(options.mapping_id || 0);
+    // Reuse one idempotency key if the network drops after order creation.
+    this.orderRequestId = `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
     const today = new Date();
     const max = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
     this.setData({ minDate: this.formatDate(today), maxDate: this.formatDate(max) });
@@ -42,30 +46,33 @@ Page({
       const maxQuantity = catalog.max_order_cents
         ? Math.max(1, Math.floor(Number(catalog.max_order_cents) / Number(product.price_cents)))
         : 100;
-      this.setData({ product, maxQuantity, loading: false }, () => this.updateTotal());
+      this.setData({ product, storeName: catalog.store_name || '官方商城', maxQuantity, loading: false }, () => {
+        app.setStoreName(catalog.store_name || '官方商城');
+        this.updateTotal();
+      });
     }).catch(error => this.setData({ loading: false, error: error.message || '票种加载失败' }));
   },
 
   decrease() {
     if (this.data.quantity <= 1) return;
-    this.setData({ quantity: this.data.quantity - 1 }, () => this.updateTotal());
+    this.setData({ quantity: this.data.quantity - 1, error: '' }, () => this.updateTotal());
   },
 
   increase() {
     if (this.data.quantity >= this.data.maxQuantity) return;
-    this.setData({ quantity: this.data.quantity + 1 }, () => this.updateTotal());
+    this.setData({ quantity: this.data.quantity + 1, error: '' }, () => this.updateTotal());
   },
 
   onDateChange(event) {
-    this.setData({ useDate: event.detail.value || '' });
+    this.setData({ useDate: event.detail.value || '', error: '' });
   },
 
   onGuestNameInput(event) {
-    this.setData({ guestName: event.detail.value || '' });
+    this.setData({ guestName: event.detail.value || '', error: '' });
   },
 
   onContactPhoneInput(event) {
-    this.setData({ contactPhone: event.detail.value || '' });
+    this.setData({ contactPhone: event.detail.value || '', error: '' });
   },
 
   updateTotal() {
@@ -88,13 +95,12 @@ Page({
       return;
     }
     this.setData({ submitting: true, error: '' });
-    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
     app.request('/orders', {
       method: 'POST',
       data: {
         mapping_id: this.data.product.id,
         quantity: this.data.quantity,
-        request_id: requestId,
+        request_id: this.orderRequestId,
         use_date: this.data.useDate,
         guest_name: this.data.guestName.trim(),
         contact_phone: this.data.contactPhone.trim()
