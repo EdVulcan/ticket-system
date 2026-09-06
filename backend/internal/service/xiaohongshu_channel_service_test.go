@@ -184,6 +184,17 @@ func TestXiaohongshuProductConfigAndSyncAreTenantScoped(t *testing.T) {
 	if err != nil || stored.SyncStatus != "submitted" || stored.AuditStatus != "pending" || stored.LastSyncedAt == nil {
 		t.Fatalf("stored=%+v err=%v", stored, err)
 	}
+	// Editing a published mapping changes the upstream product payload. The
+	// previous review must no longer make the edited version sellable.
+	if err := (&ChannelService{}).UpdateMapping(tenantID, account.ID, mapping.ID, ChannelMappingUpdate{
+		ExternalCode: "XHS-PRODUCT-EDITED", DisplayName: "编辑后的门票", ChannelSaleCents: 1, ChannelCostCents: 0, Status: "active",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = service.GetConfig(tenantID, account.ID, mapping.ID)
+	if err != nil || stored.SyncStatus != "pending" || stored.AuditStatus != "pending" || stored.AuditedAt != nil {
+		t.Fatalf("edited mapping left stale approval: config=%+v err=%v", stored, err)
+	}
 	otherTenantID, _ := seedSellableProduct(t, "unlimited", 0)
 	if _, err := service.SaveConfig(otherTenantID, account.ID, mapping.ID, 1, "admin", input); err == nil {
 		t.Fatal("another tenant configured the mapping")

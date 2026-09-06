@@ -239,7 +239,10 @@
           <el-form-item label="小程序订单页路径"><el-input v-model="xiaohongshuMapping.order_path" /></el-form-item>
         </div>
         <el-form-item label="映射状态"><el-radio-group v-model="xiaohongshuMapping.status"><el-radio-button label="active">启用</el-radio-button><el-radio-button label="disabled">停用</el-radio-button></el-radio-group></el-form-item>
-        <el-alert v-if="xiaohongshuMapping.sync_status" :type="xiaohongshuMapping.sync_status === 'synced' ? 'success' : xiaohongshuMapping.sync_status === 'failed' ? 'error' : 'warning'" :closable="false" :title="xiaohongshuMapping.sync_status === 'synced' ? '商品已同步到当前小红书环境' : xiaohongshuMapping.last_sync_error || '配置已保存，尚未同步商品'" />
+        <el-alert v-if="xiaohongshuMapping.sync_status" :type="xiaohongshuSyncAlertType" :closable="false" :title="xiaohongshuSyncAlertTitle" />
+        <el-alert v-if="xiaohongshuMapping.audit_status" class="mt-3" :type="xiaohongshuAuditAlertType" :closable="false" :title="xiaohongshuAuditAlertTitle">
+          <template v-if="xiaohongshuMapping.audit_message" #default>{{ xiaohongshuMapping.audit_message }}</template>
+        </el-alert>
       </el-form>
       <template #footer><el-button @click="xiaohongshuMappingDialog = false">关闭</el-button><el-button :loading="xiaohongshuMappingSaving" @click="saveXiaohongshuMapping(false)">保存配置</el-button><el-button type="primary" :loading="xiaohongshuMappingSyncing" @click="saveXiaohongshuMapping(true)">保存并同步</el-button></template>
     </el-dialog>
@@ -400,7 +403,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { Connection, MoreFilled, Plus, Refresh, UploadFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadFile, type UploadInstance } from 'element-plus'
 import request from '@/utils/request'
@@ -479,7 +482,7 @@ const xiaohongshuCategoryError = ref('')
 const xiaohongshuPOIError = ref('')
 const xiaohongshuCategories = ref<any[]>([])
 const xiaohongshuPOIs = ref<any[]>([])
-const xiaohongshuMapping = reactive({ mapping_id: 0, external_code: '', external_sku_id: '', display_name: '', channel_sale_yuan: 0, category_id: '', poi_ids: [] as string[], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, status: 'active', sync_status: '', last_sync_error: '' })
+const xiaohongshuMapping = reactive({ mapping_id: 0, external_code: '', external_sku_id: '', display_name: '', channel_sale_yuan: 0, category_id: '', poi_ids: [] as string[], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, status: 'active', sync_status: '', last_sync_error: '', audit_status: '', audit_message: '', audited_at: '' })
 const pricingDialog = ref(false)
 const pricingSaving = ref(false)
 const pricing = reactive({ mapping_id: 0, channel_sale_yuan: 0, channel_cost_yuan: 0 })
@@ -639,7 +642,7 @@ const loadXiaohongshuResources = async () => {
 }
 const openXiaohongshuMappingEdit = async (row: any) => {
   if (!selectedAccount.value) return
-  Object.assign(xiaohongshuMapping, { mapping_id: row.id, external_code: row.external_code || '', external_sku_id: `${row.external_code || 'XHS'}_SKU`, display_name: row.display_name || '', channel_sale_yuan: Number(row.channel_sale_cents || 0) / 100, category_id: '', poi_ids: [], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, status: row.status || 'active', sync_status: '', last_sync_error: '' })
+  Object.assign(xiaohongshuMapping, { mapping_id: row.id, external_code: row.external_code || '', external_sku_id: `${row.external_code || 'XHS'}_SKU`, display_name: row.display_name || '', channel_sale_yuan: Number(row.channel_sale_cents || 0) / 100, category_id: '', poi_ids: [], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, status: row.status || 'active', sync_status: '', last_sync_error: '', audit_status: '', audit_message: '', audited_at: '' })
   xiaohongshuMappingDialog.value = true
   xiaohongshuMappingLoading.value = true
   xiaohongshuCategoryError.value = ''
@@ -651,7 +654,7 @@ const openXiaohongshuMappingEdit = async (row: any) => {
     ])
     if (configResult.status === 'fulfilled') {
       const config = configResult.value.data
-      Object.assign(xiaohongshuMapping, { external_sku_id: config.external_sku_id || xiaohongshuMapping.external_sku_id, category_id: config.category_id || '', poi_ids: config.poi_ids || [], image_url: config.image_url || '', description: config.description || '', product_path: config.product_path || '/pages/index/index', order_path: config.order_path || '/pages/order/detail', product_type: config.product_type || 1, settle_type: config.settle_type || 1, sync_status: config.sync_status || '', last_sync_error: config.last_sync_error || '' })
+      Object.assign(xiaohongshuMapping, { external_sku_id: config.external_sku_id || xiaohongshuMapping.external_sku_id, category_id: config.category_id || '', poi_ids: config.poi_ids || [], image_url: config.image_url || '', description: config.description || '', product_path: config.product_path || '/pages/index/index', order_path: config.order_path || '/pages/order/detail', product_type: config.product_type || 1, settle_type: config.settle_type || 1, sync_status: config.sync_status || '', last_sync_error: config.last_sync_error || '', audit_status: config.audit_status || '', audit_message: config.audit_message || '', audited_at: config.audited_at || '' })
     }
     if (resourceResult.status === 'rejected') {
       xiaohongshuCategoryError.value = xiaohongshuResourceError(resourceResult.reason)
@@ -700,13 +703,17 @@ const saveXiaohongshuMapping = async (syncAfterSave: boolean) => {
     const config = (await request.put(`/channel-accounts/${selectedAccount.value.id}/mappings/${xiaohongshuMapping.mapping_id}/xiaohongshu-product`, { external_sku_id: xiaohongshuMapping.external_sku_id.trim(), category_id: xiaohongshuMapping.category_id, poi_ids: xiaohongshuMapping.poi_ids, image_url: xiaohongshuMapping.image_url.trim(), description: xiaohongshuMapping.description.trim(), product_path: xiaohongshuMapping.product_path.trim(), order_path: xiaohongshuMapping.order_path.trim(), product_type: xiaohongshuMapping.product_type, settle_type: xiaohongshuMapping.settle_type })).data
     const row = mappings.value.find((item: any) => item.id === xiaohongshuMapping.mapping_id)
     if (row) Object.assign(row, { external_code: xiaohongshuMapping.external_code.trim(), display_name: xiaohongshuMapping.display_name.trim(), channel_sale_cents: Math.round(xiaohongshuMapping.channel_sale_yuan * 100), channel_cost_cents: 0, status: xiaohongshuMapping.status })
-    xiaohongshuMapping.sync_status = config.sync_status || 'pending'
-    xiaohongshuMapping.last_sync_error = ''
+    Object.assign(xiaohongshuMapping, { sync_status: config.sync_status || 'pending', last_sync_error: config.last_sync_error || '', audit_status: config.audit_status || 'pending', audit_message: config.audit_message || '', audited_at: config.audited_at || '' })
     if (syncAfterSave) {
       xiaohongshuMappingSyncing.value = true
       await request.post(`/channel-accounts/${selectedAccount.value.id}/mappings/${xiaohongshuMapping.mapping_id}/xiaohongshu-sync`)
-      xiaohongshuMapping.sync_status = 'synced'
-      ElMessage.success('商品已同步到小红书当前环境')
+      // The provider accepts the upsert before review. Keep the local state at
+      // submitted/pending until an authenticated PRODUCT_AUDIT callback arrives.
+      xiaohongshuMapping.sync_status = 'submitted'
+      xiaohongshuMapping.audit_status = 'pending'
+      xiaohongshuMapping.audit_message = ''
+      xiaohongshuMapping.audited_at = ''
+      ElMessage.success('商品已提交小红书审核，审核通过后才会进入目录')
     } else {
       ElMessage.success('小红书商品发布配置已保存')
     }
@@ -738,6 +745,31 @@ const savePricing = async () => {
   } finally { pricingSaving.value = false }
 }
 const dateTime = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
+const xiaohongshuSyncAlertType = computed(() => {
+  if (xiaohongshuMapping.sync_status === 'failed') return 'error'
+  if (xiaohongshuMapping.sync_status === 'synced') return 'success'
+  return 'warning'
+})
+const xiaohongshuSyncAlertTitle = computed(() => {
+  if (xiaohongshuMapping.sync_status === 'failed') return xiaohongshuMapping.last_sync_error || '商品同步失败'
+  if (xiaohongshuMapping.sync_status === 'synced') return '商品已同步到当前小红书环境，仍需确认审核状态'
+  if (xiaohongshuMapping.sync_status === 'submitted') return '商品已提交小红书审核，审核通过前不可售'
+  return xiaohongshuMapping.last_sync_error || '配置已保存，尚未同步商品'
+})
+const xiaohongshuAuditAlertType = computed(() => {
+  if (xiaohongshuMapping.audit_status === 'approved') return 'success'
+  if (['rejected', 'offline'].includes(xiaohongshuMapping.audit_status)) return 'error'
+  return 'warning'
+})
+const xiaohongshuAuditAlertTitle = computed(() => {
+  switch (xiaohongshuMapping.audit_status) {
+    case 'approved': return `审核已通过${xiaohongshuMapping.audited_at ? `（${dateTime(xiaohongshuMapping.audited_at)}）` : ''}`
+    case 'rejected': return '审核未通过，商品不可售'
+    case 'offline': return '商品已下架，商品不可售'
+    case 'pending': return '等待小红书审核回调，商品暂不可售'
+    default: return '尚未收到小红书审核结果'
+  }
+})
 const cents = (value: number) => (Number(value || 0) / 100).toFixed(2)
 const signedCents = (value: number) => `${Number(value || 0) > 0 ? '+' : Number(value || 0) < 0 ? '-' : ''}¥${cents(Math.abs(Number(value || 0)))}`
 const accountStatusText = (status: string) => ({ active: '正式启用', sandbox: '测试中', disabled: '已停用' } as Record<string, string>)[status] || '未知状态'

@@ -454,13 +454,27 @@ func (s *ChannelService) UpdateMapping(tenantID, accountID, mappingID uint, inpu
 			}
 			return tx.Model(&mapping).Update("status", "disabled").Error
 		}
-		return tx.Model(&mapping).Updates(map[string]interface{}{
+		publishFieldsChanged := account.Type == "xiaohongshu" && (mapping.ExternalCode != input.ExternalCode || mapping.DisplayName != input.DisplayName || mapping.ChannelSaleCents != input.ChannelSaleCents)
+		if err := tx.Model(&mapping).Updates(map[string]interface{}{
 			"external_code":      input.ExternalCode,
 			"display_name":       input.DisplayName,
 			"channel_sale_cents": input.ChannelSaleCents,
 			"channel_cost_cents": input.ChannelCostCents,
 			"status":             input.Status,
-		}).Error
+		}).Error; err != nil {
+			return err
+		}
+		if publishFieldsChanged {
+			// A mapping edit changes the payload that was reviewed upstream. Do not
+			// leave the old approval usable until the new product is submitted and
+			// explicitly approved again.
+			return tx.Exec(`UPDATE xiaohongshu_product_configs
+				SET sync_status = 'pending', audit_status = 'pending', audit_message = '',
+					audited_at = NULL, last_sync_error = '', last_synced_at = NULL, updated_at = CURRENT_TIMESTAMP
+				WHERE tenant_id = ? AND channel_account_id = ? AND channel_product_mapping_id = ?`,
+				tenantID, account.ID, mapping.ID).Error
+		}
+		return nil
 	})
 }
 
