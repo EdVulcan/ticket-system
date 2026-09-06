@@ -157,6 +157,12 @@ const router = createRouter({
             meta: { title: '商户登录' }
         },
         {
+            path: '/mobile',
+            name: 'mobile-verify',
+            component: () => import('../views/MobileVerifyView.vue'),
+            meta: { title: '手机核销', standalone: true }
+        },
+        {
             path: '/hotel',
             name: 'hotel',
             component: () => import('../views/HotelView.vue'),
@@ -216,6 +222,10 @@ const router = createRouter({
 router.beforeEach(async (to, _from, next) => {
     const token = localStorage.getItem('token')
     const isLoginRoute = to.name === 'login' || to.name === 'platform-login'
+    if (to.name === 'mobile-verify') {
+        next()
+        return
+    }
     if (!isLoginRoute && !token) {
         next({ name: to.meta.scope === 'platform' ? 'platform-login' : 'login' })
     } else if (isLoginRoute) {

@@ -82,7 +82,7 @@ func TestScanFailsClosedWhenPhysicalOpenIsUnknown(t *testing.T) {
 	defer cloud.Close()
 	client := testClient(t, Config{ServerURL: cloud.URL, SystemCode: "S", SerialNumber: "G", DeviceKey: "K", DriverURL: driver.URL})
 	result := client.Scan(t.Context(), ScanRequest{TicketCode: "T1"})
-	if !result.Allowed || result.Opened || result.PhysicalStatus != "unknown" || result.Error == "" || reportedStatus != "" {
+	if !result.Allowed || result.Opened || result.PhysicalStatus != "unknown" || result.Error == "" || reportedStatus != "unknown" {
 		t.Fatalf("unexpected result: %+v reported=%s", result, reportedStatus)
 	}
 	retry := client.Scan(t.Context(), ScanRequest{TicketCode: "T1"})
@@ -317,7 +317,7 @@ func TestScanReloadsRecoveryStateAfterProcessRestart(t *testing.T) {
 	}
 	driverStatus = "opened"
 	final := secondClient.Scan(t.Context(), ScanRequest{TicketCode: "T-RESTART"})
-	if !final.Opened || final.PhysicalStatus != "opened" || final.Error != "" || verifyCalls != 1 || driverCalls != 2 || openReports != 1 {
+	if !final.Opened || final.PhysicalStatus != "opened" || final.Error != "" || verifyCalls != 1 || driverCalls != 2 || openReports != 2 {
 		t.Fatalf("restart recovery did not complete: final=%+v verify=%d driver=%d reports=%d", final, verifyCalls, driverCalls, openReports)
 	}
 }

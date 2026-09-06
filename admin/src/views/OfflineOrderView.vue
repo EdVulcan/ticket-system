@@ -105,7 +105,7 @@
             <el-table-column prop="status" label="状态" width="100">
               <template #default="{ row }">
                 <el-tag size="small" :type="row.status === 'used' ? 'info' : 'success'">
-                  {{ row.status === 'used' ? '已核销' : '未使用' }}
+                  {{ row.status === 'used' ? '已核销' : row.status === 'active' ? '可继续使用' : '未使用' }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -113,7 +113,8 @@
             <el-table-column label="操作" width="100" align="center">
               <template #default="{ row }">
                 <!-- Offline tickets usually printed, but allow verify for testing -->
-                <el-button link type="primary" size="small" @click="handleVerify(row)">手动核销</el-button>
+                <el-button v-if="canManualVerify && ['unused', 'active'].includes(row.status)" link type="primary" size="small" @click="handleVerify(row)">手动核销</el-button>
+                <span v-else class="text-xs text-gray-400">不可核销</span>
               </template>
             </el-table-column>
           </el-table>
@@ -128,9 +129,15 @@
           <el-input v-model="verifyForm.code" disabled />
         </el-form-item>
         <el-form-item label="检票点">
-          <el-select v-model="verifyForm.check_point_id" placeholder="选择检票点" class="w-full">
+          <el-select v-model="verifyForm.check_point_id" placeholder="选择检票点" class="w-full" @change="applyDefaultDevice">
             <el-option v-for="cp in checkpoints" :key="cp.id" :label="cp.name" :value="cp.id" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="核销设备">
+          <el-select v-model="verifyForm.device_id" placeholder="选择绑定到该检票点的设备" class="w-full">
+            <el-option v-for="device in verificationDevices" :key="device.id" :label="deviceLabel(device)" :value="device.id" />
+          </el-select>
+          <div v-if="verifyForm.check_point_id && verificationDevices.length === 0" class="text-xs text-red-500 mt-1">该检票点没有可用核销设备</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -145,11 +152,13 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
+import { hasPermission } from '@/utils/permissions'
 
 const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
+const canManualVerify = computed(() => hasPermission(currentUser, 'tickets.verify') && hasPermission(currentUser, 'onsite.read'))
 
 const loading = ref(false)
 const tableData = ref([])
@@ -166,7 +175,22 @@ const currentOrder = ref<any>(null)
 const verifyDialogVisible = ref(false)
 const verifying = ref(false)
 const checkpoints = ref<any[]>([])
-const verifyForm = reactive({ code: '', check_point_id: null })
+const devices = ref<any[]>([])
+const verifyForm = reactive({ code: '', check_point_id: null as number | null, device_id: null as number | null })
+
+const verificationDevices = computed(() => {
+  const checkPointID = Number(verifyForm.check_point_id || 0)
+  if (!checkPointID) return []
+  return devices.value.filter((device: any) => Number(device.check_point_id || 0) === checkPointID && ['gate', 'handheld', 'pos'].includes(device.type))
+})
+
+const deviceLabel = (device: any) => `${device.name}${device.serial_number ? `（${device.serial_number}）` : ''}${device.status === 'online' ? '' : ' · ' + (device.status || '未知状态')}`
+
+const applyDefaultDevice = () => {
+  if (!verificationDevices.value.some((device: any) => Number(device.id) === Number(verifyForm.device_id))) {
+    verifyForm.device_id = verificationDevices.value.length === 1 ? verificationDevices.value[0].id : null
+  }
+}
 
 const fetchCheckPoints = async () => {
     try {
@@ -177,9 +201,19 @@ const fetchCheckPoints = async () => {
     }
 }
 
+const fetchDevices = async () => {
+    try {
+        const res = await request.get('/devices', { params: { page_size: 100 } })
+        devices.value = res.data.data || []
+    } catch (error) {
+        console.error('Fetch Devices Error', error)
+    }
+}
+
 const handleVerify = (row: any) => {
   verifyForm.code = row.ticket_code
   verifyForm.check_point_id = null
+  verifyForm.device_id = null
   verifyDialogVisible.value = true
 }
 
@@ -188,11 +222,16 @@ const submitVerify = async () => {
     ElMessage.warning('请选择检票点')
     return
   }
+  if (!verifyForm.device_id) {
+    ElMessage.warning('请选择核销设备')
+    return
+  }
   verifying.value = true
   try {
     await request.post('/tickets/verify', {
       code: verifyForm.code,
-      check_point_id: verifyForm.check_point_id
+      check_point_id: verifyForm.check_point_id,
+      device_id: verifyForm.device_id
     })
     ElMessage.success('核销成功')
     verifyDialogVisible.value = false
@@ -300,5 +339,6 @@ const getStatusText = (status: string) => {
 onMounted(() => {
   fetchData()
   fetchCheckPoints()
+  fetchDevices()
 })
 </script>

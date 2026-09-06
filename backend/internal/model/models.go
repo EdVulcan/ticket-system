@@ -305,7 +305,7 @@ type CheckInRecord struct {
 	DeviceID         uint       `json:"device_id"`
 	DeviceRequestID  string     `gorm:"size:100;index" json:"device_request_id,omitempty"`
 	CheckInTime      time.Time  `json:"check_in_time"`
-	Result           string     `gorm:"size:20" json:"result"` // success, fail
+	Result           string     `gorm:"size:20" json:"result"` // success, deny (旧数据可能为 fail/failed)
 	Message          string     `gorm:"size:255" json:"message"`
 	ReversedAt       *time.Time `gorm:"index" json:"-"`
 	ReversedBy       uint       `gorm:"index" json:"-"`

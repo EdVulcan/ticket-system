@@ -322,6 +322,21 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		ticketGroup.POST("/verify", ticketController.Verify)
 	}
 
+	// Mobile web verification uses the same ticket rule engine as gates and
+	// manual verification, but binds every request to a short-lived staff
+	// session and a handheld device. It never creates a physical open task.
+	mobileVerificationService := service.NewMobileVerificationService(model.DB, deviceService)
+	mobileVerificationController := api.NewMobileVerificationController(mobileVerificationService)
+	mobileGroup := protected.Group("/mobile")
+	mobileGroup.Use(middleware.RequireTenantPermission(authz.PermissionTicketsVerify), middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
+	{
+		mobileGroup.GET("/targets", mobileVerificationController.Targets)
+		mobileGroup.POST("/sessions", mobileVerificationController.CreateSession)
+		mobileGroup.POST("/session/heartbeat", mobileVerificationController.Heartbeat)
+		mobileGroup.POST("/session/close", mobileVerificationController.Close)
+		mobileGroup.POST("/session/verify", mobileVerificationController.Verify)
+	}
+
 	// CheckPoint Routes
 	scenicAreaController := &api.ScenicAreaController{}
 	scenicAreaGroup := protected.Group("/scenic-areas")

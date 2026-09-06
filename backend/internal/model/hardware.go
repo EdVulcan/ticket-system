@@ -130,7 +130,7 @@ type DeviceVerification struct {
 	VoiceCode       string     `gorm:"size:100" json:"voice_code"`
 	OpenDuration    int        `json:"open_duration"`
 	CheckInRecordID uint       `gorm:"index" json:"check_in_record_id"`
-	OpenStatus      string     `gorm:"size:20;index" json:"open_status"` // pending, opened, failed, unknown
+	OpenStatus      string     `gorm:"size:20;index" json:"open_status"` // pending, opened, failed, unknown, not_required (handheld)
 	OpenError       string     `gorm:"size:500" json:"open_error,omitempty"`
 	OpenedAt        *time.Time `json:"opened_at,omitempty"`
 	OpenReportedAt  *time.Time `json:"open_reported_at,omitempty"`

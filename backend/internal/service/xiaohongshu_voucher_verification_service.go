@@ -24,6 +24,9 @@ var (
 	ErrXiaohongshuVoucherResolutionInvalid       = errors.New("小红书券人工处理参数无效")
 	ErrXiaohongshuVoucherResolutionNotResolvable = errors.New("小红书券核销记录当前不可人工处理")
 	ErrXiaohongshuVoucherResolutionPermission    = errors.New("无权人工处理小红书券核销记录")
+	// Channel vouchers must go through the external verification coordinator
+	// before their local ticket entitlement can be consumed.
+	ErrXiaohongshuVoucherRequiresDevice = errors.New("小红书券必须通过设备扫码核销")
 )
 
 const (

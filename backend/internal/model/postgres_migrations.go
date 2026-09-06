@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 110
+const CurrentPostgresSchemaVersion = 111
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -56,6 +56,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&POSShift{}, &POSShiftCorrection{}, &PrintJob{}, &PrintTemplate{}, &PrintTemplateRevision{}, &DeviceAlert{}, &POSHold{}, &POSHoldLine{},
 		&SettlementStatement{}, &SettlementLine{}, &SettlementAdjustment{}, &StaffResourceScope{},
 		&AfterSaleRequest{}, &AfterSaleEvent{}, &HardwareCommand{}, &HardwareEvent{}, &DeviceRequestNonce{}, &DeviceVerification{}, &DeviceMaintenanceCredential{}, &DeviceMaintenanceSession{}, &DeviceProvisioningLease{}, &MigrationAuditIssue{},
+		&MobileVerificationSession{},
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
@@ -431,6 +432,18 @@ func runPostgresMigrations(db *gorm.DB) error {
 			return fmt.Errorf("register xiaohongshu refund coordination: %w", err)
 		}
 	}
+	if previousSchemaVersion < 111 {
+		if err := db.Exec(`
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_mobile_verification_session_token
+				ON mobile_verification_sessions(token_hash)
+				WHERE deleted_at IS NULL;
+			CREATE INDEX IF NOT EXISTS idx_mobile_verification_session_scope
+				ON mobile_verification_sessions(tenant_id, staff_id, status, expires_at)
+				WHERE deleted_at IS NULL;
+		`).Error; err != nil {
+			return fmt.Errorf("register mobile verification sessions: %w", err)
+		}
+	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
 		if err := db.Exec(`
 			INSERT INTO supplier_business_types
@@ -579,7 +592,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "xiaohongshu product audit gate",
+		Name:      "mobile web verification sessions",
 		AppliedAt: time.Now(),
 	}).Error
 }

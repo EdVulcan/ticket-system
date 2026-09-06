@@ -94,6 +94,17 @@ func (s *TicketService) verifyDeviceRequestWithReservation(code string, checkPoi
 		if reservationID == 0 && ticket.PendingXiaohongshuVerificationID != 0 {
 			return fmt.Errorf("%w: external verification pending", ErrTicketUnavailable)
 		}
+		if reservationID == 0 {
+			var voucherLinks int64
+			if err := tx.Model(&model.XiaohongshuVoucherLink{}).
+				Where("tenant_id = ? AND ticket_id = ?", tenantID, ticket.ID).
+				Count(&voucherLinks).Error; err != nil {
+				return err
+			}
+			if voucherLinks > 0 {
+				return ErrXiaohongshuVoucherRequiresDevice
+			}
+		}
 		if reservationID != 0 && ticket.PendingXiaohongshuVerificationID != 0 && ticket.PendingXiaohongshuVerificationID != reservationID {
 			return fmt.Errorf("%w: external verification pending", ErrTicketUnavailable)
 		}

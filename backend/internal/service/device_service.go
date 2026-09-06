@@ -554,10 +554,11 @@ func (s *DeviceService) VerifyDirect(req DirectVerifyRequest) (*VerifyResponse, 
 		resp = responseFromCheckIn(s, &checkIn)
 	}
 	if err := model.Write(func(tx *gorm.DB) error {
+		openStatus := verificationOpenStatus(device.Type, resp.Result)
 		return tx.Model(&model.DeviceVerification{}).Where("id = ? AND status = ?", verification.ID, "processing").Updates(map[string]interface{}{
 			"status": "completed", "response_code": resp.Code, "result": resp.Result, "display_text": resp.DisplayText,
 			"voice_file": resp.VoiceFile, "voice_code": resp.VoiceCode, "open_duration": resp.OpenDuration, "check_in_record_id": checkIn.ID,
-			"open_status": map[bool]string{true: "pending", false: ""}[resp.Result == "allow"],
+			"open_status": openStatus,
 		}).Error
 	}); err != nil {
 		return nil, err
@@ -579,7 +580,7 @@ func (s *DeviceService) beginDeviceVerification(req DirectVerifyRequest, scenicA
 		if findErr := s.DB.Where("device_id = ? AND device_request_id = ?", req.DeviceID, req.RequestID).Order("id desc").First(&record).Error; findErr == nil {
 			resp := responseFromCheckIn(s, &record)
 			_ = model.Write(func(tx *gorm.DB) error {
-				return tx.Model(&existing).Updates(map[string]interface{}{"status": "completed", "response_code": resp.Code, "result": resp.Result, "display_text": resp.DisplayText, "voice_file": resp.VoiceFile, "voice_code": resp.VoiceCode, "open_duration": resp.OpenDuration, "check_in_record_id": record.ID, "open_status": map[bool]string{true: "pending", false: ""}[resp.Result == "allow"]}).Error
+				return tx.Model(&existing).Updates(map[string]interface{}{"status": "completed", "response_code": resp.Code, "result": resp.Result, "display_text": resp.DisplayText, "voice_file": resp.VoiceFile, "voice_code": resp.VoiceCode, "open_duration": resp.OpenDuration, "check_in_record_id": record.ID, "open_status": verificationOpenStatus(deviceTypeForVerification(s.DB, req.DeviceID), resp.Result)}).Error
 			})
 			return &existing, resp, nil
 		}
@@ -659,6 +660,27 @@ func responseFromVerification(row *model.DeviceVerification) *VerifyResponse {
 	return &VerifyResponse{Code: row.ResponseCode, Result: row.Result, DisplayText: row.DisplayText, VoiceFile: row.VoiceFile, VoiceCode: row.VoiceCode, OpenDuration: row.OpenDuration}
 }
 
+func verificationOpenStatus(deviceType, result string) string {
+	if result != "allow" {
+		return ""
+	}
+	if strings.TrimSpace(deviceType) == "handheld" {
+		return "not_required"
+	}
+	return "pending"
+}
+
+func deviceTypeForVerification(db *gorm.DB, deviceID uint) string {
+	if db == nil || deviceID == 0 {
+		return ""
+	}
+	var device model.Device
+	if err := db.Select("type").Where("id = ?", deviceID).First(&device).Error; err != nil {
+		return ""
+	}
+	return device.Type
+}
+
 func responseFromCheckIn(s *DeviceService, record *model.CheckInRecord) *VerifyResponse {
 	if record.Result == "success" {
 		return s.allowResponse(record.TicketCode)
@@ -688,6 +710,8 @@ func denyResponse(err error) *VerifyResponse {
 	switch {
 	case errors.Is(err, ErrXiaohongshuRefundHold):
 		resp.DisplayText, resp.VoiceCode = "渠道售后待核对", "manual_review"
+	case errors.Is(err, ErrXiaohongshuVoucherRequiresDevice):
+		resp.DisplayText, resp.VoiceCode = "请使用设备扫码核销渠道券", "manual_review"
 	case errors.Is(err, ErrInvalidTicket) || strings.Contains(message, ErrInvalidTicket.Error()):
 		resp.DisplayText = "无效票"
 	case errors.Is(err, ErrTicketExpired) || strings.Contains(message, ErrTicketExpired.Error()):

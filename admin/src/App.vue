@@ -171,7 +171,7 @@ const passwordDialogVisible = ref(false)
 const passwordSaving = ref(false)
 const passwordForm = reactive({ currentPassword: '', newPassword: '', confirmPassword: '' })
 
-const isLoginPage = computed(() => route.name === 'login' || route.name === 'platform-login')
+const isLoginPage = computed(() => route.name === 'login' || route.name === 'platform-login' || Boolean(route.meta.standalone))
 const activeCapabilities = computed(() => activeCapabilitySet(user.value))
 const configuredCapabilities = computed(() => configuredCapabilitySet(user.value))
 const hasCapability = (value: string) => activeCapabilities.value.has(value)

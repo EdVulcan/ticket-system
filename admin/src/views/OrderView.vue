@@ -133,7 +133,7 @@
               <el-table-column prop="check_in_count" label="核销次数" width="90" align="center" />
               <el-table-column v-if="isSupplier" label="操作" width="100" align="center">
                 <template #default="{ row }">
-                  <el-button v-if="fulfillment.can_verify && row.status === 'unused'" link type="primary" size="small" @click="handleVerify(row)">手动核销</el-button>
+                  <el-button v-if="canManualVerify && fulfillment.can_verify && ['unused', 'active'].includes(row.status)" link type="primary" size="small" @click="handleVerify(row)">手动核销</el-button>
                   <span v-else class="text-xs text-gray-400">不可核销</span>
                 </template>
               </el-table-column>
@@ -150,9 +150,15 @@
           <el-input v-model="verifyForm.code" disabled />
         </el-form-item>
         <el-form-item label="检票点">
-          <el-select v-model="verifyForm.check_point_id" placeholder="选择检票点" class="w-full">
+          <el-select v-model="verifyForm.check_point_id" placeholder="选择检票点" class="w-full" @change="applyDefaultDevice">
             <el-option v-for="cp in checkpoints" :key="cp.id" :label="cp.name" :value="cp.id" />
           </el-select>
+        </el-form-item>
+        <el-form-item label="核销设备">
+          <el-select v-model="verifyForm.device_id" placeholder="选择绑定到该检票点的设备" class="w-full">
+            <el-option v-for="device in verificationDevices" :key="device.id" :label="deviceLabel(device)" :value="device.id" />
+          </el-select>
+          <div v-if="verifyForm.check_point_id && verificationDevices.length === 0" class="text-xs text-red-500 mt-1">该检票点没有可用核销设备</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -170,6 +176,7 @@ import { computed, ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import request from '@/utils/request'
+import { hasPermission } from '@/utils/permissions'
 
 const loading = ref(false)
 const tableData = ref([])
@@ -188,12 +195,28 @@ const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user'
 const activeCapabilities = new Set((currentUser.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability))
 const isSupplier = computed(() => activeCapabilities.has('supplier'))
 const canDirectRefund = computed(() => isSupplier.value || activeCapabilities.has('distributor'))
+const canManualVerify = computed(() => isSupplier.value && hasPermission(currentUser, 'tickets.verify') && hasPermission(currentUser, 'onsite.read'))
 
 // Verify Logic
 const verifyDialogVisible = ref(false)
 const verifying = ref(false)
 const checkpoints = ref<any[]>([])
-const verifyForm = reactive({ code: '', check_point_id: null })
+const devices = ref<any[]>([])
+const verifyForm = reactive({ code: '', check_point_id: null as number | null, device_id: null as number | null })
+
+const verificationDevices = computed(() => {
+  const checkPointID = Number(verifyForm.check_point_id || 0)
+  if (!checkPointID) return []
+  return devices.value.filter((device: any) => Number(device.check_point_id || 0) === checkPointID && ['gate', 'handheld', 'pos'].includes(device.type))
+})
+
+const deviceLabel = (device: any) => `${device.name}${device.serial_number ? `（${device.serial_number}）` : ''}${device.status === 'online' ? '' : ' · ' + (device.status || '未知状态')}`
+
+const applyDefaultDevice = () => {
+  if (!verificationDevices.value.some((device: any) => Number(device.id) === Number(verifyForm.device_id))) {
+    verifyForm.device_id = verificationDevices.value.length === 1 ? verificationDevices.value[0].id : null
+  }
+}
 
 const fetchCheckPoints = async () => {
   try {
@@ -202,9 +225,17 @@ const fetchCheckPoints = async () => {
   } catch (e) { console.error(e) }
 }
 
+const fetchDevices = async () => {
+  try {
+    const res = await request.get('/devices', { params: { page_size: 100 } })
+    devices.value = res.data.data || []
+  } catch (e) { console.error(e) }
+}
+
 const handleVerify = (row: any) => {
   verifyForm.code = row.ticket_code
   verifyForm.check_point_id = null
+  verifyForm.device_id = null
   verifyDialogVisible.value = true
 }
 
@@ -213,11 +244,16 @@ const submitVerify = async () => {
     ElMessage.warning('请选择检票点')
     return
   }
+  if (!verifyForm.device_id) {
+    ElMessage.warning('请选择核销设备')
+    return
+  }
   verifying.value = true
   try {
     await request.post('/tickets/verify', {
       code: verifyForm.code,
-      check_point_id: verifyForm.check_point_id
+      check_point_id: verifyForm.check_point_id,
+      device_id: verifyForm.device_id
     })
     ElMessage.success('核销成功')
     verifyDialogVisible.value = false
@@ -308,12 +344,15 @@ const getStatusText = (status: string) => {
 const centsToYuan = (value: number) => ((value || 0) / 100).toFixed(2)
 const fulfillmentStatusText = (status: string) => ({ reserved: '已预占', paid: '待履约', fulfilled: '已履约', cancelled: '已取消' } as Record<string, string>)[status] || '未知状态'
 const settlementStatusText = (status: string) => ({ open: '待结算', draft: '待供应商确认', supplier_confirmed: '待分销商确认', confirmed: '待付款', disputed: '有争议', paid: '已结清' } as Record<string, string>)[status] || '待结算'
-const ticketStatusText = (status: string) => ({ unused: '未使用', used: '已核销', refunded: '已退款', expired: '已过期', void: '已作废' } as Record<string, string>)[status] || '未知状态'
-const ticketStatusType = (status: string) => ({ unused: 'success', used: 'info', refunded: 'warning', expired: 'info', void: 'danger' } as Record<string, string>)[status] || 'info'
+const ticketStatusText = (status: string) => ({ unused: '未使用', active: '可继续使用', used: '已核销', refunded: '已退款', expired: '已过期', void: '已作废' } as Record<string, string>)[status] || '未知状态'
+const ticketStatusType = (status: string) => ({ unused: 'success', active: 'success', used: 'info', refunded: 'warning', expired: 'info', void: 'danger' } as Record<string, string>)[status] || 'info'
 
 onMounted(() => {
   fetchData()
-  if (isSupplier.value) fetchCheckPoints()
+  if (canManualVerify.value) {
+    fetchCheckPoints()
+    fetchDevices()
+  }
 })
 </script>
 

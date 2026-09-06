@@ -1334,6 +1334,6 @@ func migrateInitialSchema(db *gorm.DB) error {
 		&DigitalRefundTask{}, &ChannelAccount{}, &ChannelProductMapping{}, &ChannelRequest{},
 		&TravelContract{}, &TravelAgent{}, &TourGuide{}, &TravelVehicle{}, &TourGroup{}, &TourGroupMember{}, &TourEntryBatch{},
 		&POSShift{}, &PrintJob{}, &DeviceAlert{}, &POSHold{}, &SettlementStatement{}, &SettlementLine{}, &StaffResourceScope{},
-		&MigrationAuditIssue{}, &HardwareCommand{}, &HardwareEvent{}, &DeviceRequestNonce{}, &DeviceVerification{},
+		&MigrationAuditIssue{}, &HardwareCommand{}, &HardwareEvent{}, &DeviceRequestNonce{}, &DeviceVerification{}, &MobileVerificationSession{},
 	)
 }

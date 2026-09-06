@@ -243,7 +243,9 @@ func (c *Client) openVerified(ctx context.Context, stateKey string, pending pend
 			result.Error = joinError(result.Error, err.Error())
 			return result
 		}
-		if result.Error == "" {
+		if reportErr := c.reportOpenResult(ctx, pending.RequestID, "unknown", driverResult.Error); reportErr != nil {
+			result.Error = joinError(result.Error, "开闸未知结果回报失败："+reportErr.Error())
+		} else if result.Error == "" {
 			result.Error = "开闸结果未知，请现场确认后处理"
 		}
 		return result

@@ -14,7 +14,7 @@ type TicketController struct {
 type VerifyRequest struct {
 	Code         string `json:"code" binding:"required"`
 	CheckPointID uint   `json:"check_point_id" binding:"required"`
-	DeviceID     uint   `json:"device_id"` // Optional
+	DeviceID     uint   `json:"device_id" binding:"required"`
 }
 
 func (c *TicketController) Verify(ctx *gin.Context) {

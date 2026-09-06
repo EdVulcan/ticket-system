@@ -269,6 +269,25 @@ func TestXiaohongshuVoucherVerificationUnknownFailsClosedAndBlocksBypass(t *test
 	}
 }
 
+func TestManualVerificationCannotBypassXiaohongshuCoordinator(t *testing.T) {
+	fixture := seedXiaohongshuVoucherFixture(t)
+	err := (&TicketService{}).Verify(fixture.ticket.TicketCode, fixture.checkpoint.ID, fixture.device.ID, fixture.tenantID)
+	if !errors.Is(err, ErrXiaohongshuVoucherRequiresDevice) {
+		t.Fatalf("manual verification error=%v, want coordinator guard", err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.First(&ticket, fixture.ticket.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ticket.Status != "unused" || ticket.CheckInCount != 0 || ticket.PendingXiaohongshuVerificationID != 0 {
+		t.Fatalf("manual verification changed ticket=%+v", ticket)
+	}
+	var successful int64
+	if err := model.DB.Model(&model.CheckInRecord{}).Where("ticket_id = ? AND result = ?", fixture.ticket.ID, "success").Count(&successful).Error; err != nil || successful != 0 {
+		t.Fatalf("manual verification created a successful check-in count=%d err=%v", successful, err)
+	}
+}
+
 func seedXiaohongshuVoucherUnknownSaga(t *testing.T) (xiaohongshuVoucherFixture, *DeviceService, model.XiaohongshuVoucherVerification, model.User) {
 	t.Helper()
 	fixture := seedXiaohongshuVoucherFixture(t)
