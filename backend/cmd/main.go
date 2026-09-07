@@ -81,6 +81,7 @@ func main() {
 	xiaohongshuPaymentContext, stopXiaohongshuPayment := context.WithCancel(context.Background())
 	defer stopXiaohongshuPayment()
 	go runXiaohongshuPaymentWorker(xiaohongshuPaymentContext)
+	go runXiaohongshuProductAuditWorker(xiaohongshuPaymentContext)
 	refundContext, stopRefundWorker := context.WithCancel(context.Background())
 	defer stopRefundWorker()
 	go runDigitalRefundWorker(refundContext)

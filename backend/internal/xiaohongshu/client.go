@@ -178,6 +178,20 @@ type LocalLifeProductRequest struct {
 	SettleType        int            `json:"settle_type,omitempty"`
 }
 
+// LocalLifeProductAudit is the documented product-review result returned by
+// /api/rmp/mp/deal/product/get. Provider timestamps are retained as epoch
+// seconds so callers never confuse a local polling time with an audit fact.
+type LocalLifeProductAudit struct {
+	ExternalProductID string `json:"out_product_id"`
+	BusinessUpdatedAt int64  `json:"biz_update_time"`
+	AuditStatus       string `json:"audit_status"`
+	AuditInfo         struct {
+		SubmittedAt  int64  `json:"submit_time"`
+		AuditedAt    int64  `json:"audit_time"`
+		RejectReason string `json:"reject_reason"`
+	} `json:"audit_info"`
+}
+
 type Discount struct {
 	Name  string `json:"name"`
 	Price int64  `json:"price"`
@@ -377,6 +391,24 @@ func (c *Client) UpsertLocalLifeProduct(ctx context.Context, request LocalLifePr
 	}
 	var response struct{}
 	return c.authenticatedPost(ctx, "/api/rmp/mp/deal/poi/product/upsert", request, &response)
+}
+
+// GetLocalLifeProductAudit reads the authoritative review state for one
+// merchant product. A successful upsert only submits a review; callers must
+// wait for this endpoint to explicitly return PASS before enabling sales.
+func (c *Client) GetLocalLifeProductAudit(ctx context.Context, externalProductID string) (*LocalLifeProductAudit, error) {
+	externalProductID = strings.TrimSpace(externalProductID)
+	if externalProductID == "" {
+		return nil, errors.New("xiaohongshu external product id is required")
+	}
+	var response LocalLifeProductAudit
+	if err := c.authenticatedPost(ctx, "/api/rmp/mp/deal/product/get", map[string]string{"out_product_id": externalProductID}, &response); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(response.ExternalProductID) == "" {
+		return nil, errors.New("xiaohongshu product audit response is missing out_product_id")
+	}
+	return &response, nil
 }
 
 func (c *Client) UpsertOrder(ctx context.Context, request OrderUpsertRequest) (*OrderUpsertResponse, error) {

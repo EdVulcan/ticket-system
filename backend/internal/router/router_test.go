@@ -11,17 +11,18 @@ func TestRoutesRegisterWithoutConflicts(t *testing.T) {
 	engine := gin.New()
 	InitRouter(engine)
 	wanted := map[string]bool{
-		"GET /api/v1/orders/:orderNo":                             false,
-		"GET /api/v1/settlements/:id/export":                      false,
-		"GET /api/v1/teams/settlements/:id/export":                false,
-		"PUT /api/v1/auth/password":                               false,
-		"GET /api/v1/platform-users":                              false,
-		"POST /api/v1/platform-users":                             false,
-		"POST /api/v1/distribution/fulfillments/:id/used-refunds": false,
-		"GET /api/v1/integrations/xiaohongshu/events/:appID":      false,
-		"POST /api/v1/integrations/xiaohongshu/events/:appID":     false,
-		"GET /api/v1/channel-accounts/:id/xiaohongshu-diagnosis":  false,
-		"PATCH /api/v1/channel-accounts/:id/mappings/:mappingId":  false,
+		"GET /api/v1/orders/:orderNo":                                                     false,
+		"GET /api/v1/settlements/:id/export":                                              false,
+		"GET /api/v1/teams/settlements/:id/export":                                        false,
+		"PUT /api/v1/auth/password":                                                       false,
+		"GET /api/v1/platform-users":                                                      false,
+		"POST /api/v1/platform-users":                                                     false,
+		"POST /api/v1/distribution/fulfillments/:id/used-refunds":                         false,
+		"GET /api/v1/integrations/xiaohongshu/events/:appID":                              false,
+		"POST /api/v1/integrations/xiaohongshu/events/:appID":                             false,
+		"GET /api/v1/channel-accounts/:id/xiaohongshu-diagnosis":                          false,
+		"POST /api/v1/channel-accounts/:id/mappings/:mappingId/xiaohongshu-audit-refresh": false,
+		"PATCH /api/v1/channel-accounts/:id/mappings/:mappingId":                          false,
 	}
 	for _, route := range engine.Routes() {
 		key := route.Method + " " + route.Path

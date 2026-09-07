@@ -43,7 +43,7 @@ func TestXiaohongshuWebhookVerifiesDecryptsAndPersistsIdempotently(t *testing.T)
 		t.Fatalf("echo=%q err=%v", echo, err)
 	}
 
-	payload := []byte(`{"Event":"PRODUCT_AUDIT","OutProductId":"P1","Status":"approved"}`)
+	payload := []byte(`{"Event":"PRODUCT_AUDIT","OutProductId":"P1","Status":2,"RejectTime":1700000001,"RejectReason":"missing document"}`)
 	encrypted := encryptXiaohongshuWebhookFixture(t, encodingAESKey, payload, appID)
 	message := XiaohongshuWebhookMessage{
 		Nonce: "event-nonce", Timestamp: 1700000001, Encrypt: encrypted,
@@ -67,7 +67,7 @@ func TestXiaohongshuWebhookVerifiesDecryptsAndPersistsIdempotently(t *testing.T)
 	if err := model.DB.Where("channel_product_mapping_id = ? AND tenant_id = ?", mapping.ID, tenantID).First(&config).Error; err != nil {
 		t.Fatal(err)
 	}
-	if config.AuditStatus != "approved" || config.AuditedAt == nil {
+	if config.AuditStatus != "rejected" || config.AuditMessage != "missing document" || config.AuditedAt == nil || config.AuditedAt.Unix() != 1700000001 {
 		t.Fatalf("config=%+v", config)
 	}
 	storedPayload, err := utils.DecryptAES(events[0].PayloadCiphertext)
@@ -190,29 +190,21 @@ func TestXiaohongshuProductAuditWebhookFailsClosedForRejectedOfflineAndUnknownSt
 			t.Fatal(err)
 		}
 	}
-	receive("rejected", []byte(`{"Event":"PRODUCT_AUDIT","out_product_id":"AUDIT-PRODUCT","audit_status":"rejected","reject_reason":"missing document"}`))
+	receive("rejected", []byte(`{"Event":"PRODUCT_AUDIT","out_product_id":"AUDIT-PRODUCT","Status":2,"RejectTime":1700000010,"RejectReason":"missing document"}`))
 	if err := model.DB.First(&config, config.ID).Error; err != nil || config.AuditStatus != "rejected" || config.AuditMessage != "missing document" {
 		t.Fatalf("rejected config=%+v err=%v", config, err)
 	}
 	if err := model.DB.First(&otherConfig, otherConfig.ID).Error; err != nil || otherConfig.AuditStatus != "approved" {
 		t.Fatalf("cross-tenant config=%+v err=%v", otherConfig, err)
 	}
-	receive("offline", []byte(`{"Event":"PRODUCT_AUDIT","OutProductId":"AUDIT-PRODUCT","Status":"offline","Message":"off shelf"}`))
-	if err := model.DB.First(&config, config.ID).Error; err != nil || config.AuditStatus != "offline" || config.AuditMessage != "off shelf" {
-		t.Fatalf("offline config=%+v err=%v", config, err)
-	}
-	receive("pending", []byte(`{"Event":"PRODUCT_AUDIT","OutProductId":"AUDIT-PRODUCT","Status":"auditing","Message":"under review"}`))
-	var pendingConfig model.XiaohongshuProductConfig
-	if err := model.DB.First(&pendingConfig, config.ID).Error; err != nil || pendingConfig.AuditStatus != "pending" || pendingConfig.AuditMessage != "under review" || pendingConfig.AuditedAt != nil {
-		t.Fatalf("pending audit should not set audited_at: config=%+v err=%v", pendingConfig, err)
-	}
-	receive("numeric", []byte(`{"Event":"PRODUCT_AUDIT","OutProductId":"AUDIT-PRODUCT","Status":2}`))
+	receive("approved", []byte(`{"Event":"PRODUCT_AUDIT","OutProductId":"AUDIT-PRODUCT","Status":"approved"}`))
 	if err := model.DB.First(&config, config.ID).Error; err != nil || config.AuditStatus != "pending" || config.AuditMessage != xiaohongshuProductAuditUnrecognizedReason {
-		t.Fatalf("numeric audit status was accepted: config=%+v err=%v", config, err)
+		t.Fatalf("undocumented approval changed config=%+v err=%v", config, err)
 	}
 	receive("unknown", []byte(`{"Event":"PRODUCT_AUDIT","OutProductId":"AUDIT-PRODUCT","Status":99}`))
-	if err := model.DB.First(&config, config.ID).Error; err != nil || config.AuditStatus != "pending" || config.AuditMessage != xiaohongshuProductAuditUnrecognizedReason {
-		t.Fatalf("unknown config=%+v err=%v", config, err)
+	var unknownConfig model.XiaohongshuProductConfig
+	if err := model.DB.First(&unknownConfig, config.ID).Error; err != nil || unknownConfig.AuditStatus != "pending" || unknownConfig.AuditMessage != xiaohongshuProductAuditUnrecognizedReason || unknownConfig.AuditedAt != nil {
+		t.Fatalf("unknown config=%+v err=%v", unknownConfig, err)
 	}
 	var unknownEvent model.XiaohongshuWebhookEvent
 	if err := model.DB.Where("event_type = ? AND status = ?", "PRODUCT_AUDIT", "manual_review").First(&unknownEvent).Error; err != nil || unknownEvent.LastError != xiaohongshuProductAuditUnrecognizedReason {

@@ -57,6 +57,35 @@ func TestClientCachesTokenAndUsesSelfDevelopedEndpoints(t *testing.T) {
 	}
 }
 
+func TestGetLocalLifeProductAuditUsesOfficialEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/rmp/token":
+			_, _ = w.Write([]byte(`{"data":{"access_token":"token-1","expire_in":7200},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/mp/deal/product/get":
+			if r.Method != http.MethodPost {
+				t.Fatalf("method=%s", r.Method)
+			}
+			assertAuthQuery(t, r)
+			var request map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request["out_product_id"] != "PRODUCT-1" {
+				t.Fatalf("request=%v err=%v", request, err)
+			}
+			_, _ = w.Write([]byte(`{"data":{"out_product_id":"PRODUCT-1","biz_update_time":1786298400,"audit_status":"REJECT","audit_info":{"submit_time":1786298300,"audit_time":1786298350,"reject_reason":"missing document"}},"success":true,"msg":"success","code":0}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := Client{AppID: "miniapp", Secret: "secret", BaseURL: server.URL, HTTP: server.Client()}
+	result, err := client.GetLocalLifeProductAudit(context.Background(), " PRODUCT-1 ")
+	if err != nil || result.ExternalProductID != "PRODUCT-1" || result.AuditStatus != "REJECT" || result.AuditInfo.AuditedAt != 1786298350 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+}
+
 func TestShortLivedClientsShareTokenCacheByCredentialContext(t *testing.T) {
 	var tokenCalls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

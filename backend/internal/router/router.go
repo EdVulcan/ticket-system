@@ -504,6 +504,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		channelAdminGroup.GET("/:id/xiaohongshu-categories", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.ListXiaohongshuCategories)
 		channelAdminGroup.GET("/:id/xiaohongshu-pois", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.ListXiaohongshuPOIs)
 		channelAdminGroup.GET("/:id/mappings/:mappingId/xiaohongshu-product", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.GetXiaohongshuProductConfig)
+		channelAdminGroup.POST("/:id/mappings/:mappingId/xiaohongshu-audit-refresh", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.RefreshXiaohongshuAudit)
 		channelAdminGroup.PUT("/:id/mappings/:mappingId/xiaohongshu-product", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SaveXiaohongshuProductConfig)
 		channelAdminGroup.POST("/:id/mappings/:mappingId/xiaohongshu-product-image", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.UploadXiaohongshuProductImage)
 		channelAdminGroup.POST("/:id/mappings/:mappingId/xiaohongshu-sync", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SyncXiaohongshuProduct)

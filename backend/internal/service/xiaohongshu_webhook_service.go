@@ -94,7 +94,7 @@ func (XiaohongshuWebhookService) Receive(ctx context.Context, appID string, mess
 			return nil
 		}
 
-		productCode, auditStatus, auditMessage := parseXiaohongshuProductAudit(payload)
+		productCode, auditStatus, auditMessage, rejectedAt := parseXiaohongshuProductAudit(payload)
 		var config model.XiaohongshuProductConfig
 		if productCode == "" {
 			return markXiaohongshuWebhookManualReview(tx, &event, xiaohongshuProductAuditUnrecognizedReason)
@@ -110,30 +110,36 @@ func (XiaohongshuWebhookService) Receive(ctx context.Context, appID string, mess
 			return err
 		}
 
-		if auditStatus == "" {
-			if err := tx.Model(&config).Updates(map[string]interface{}{
-				"audit_status": "pending", "audit_message": xiaohongshuProductAuditUnrecognizedReason, "audited_at": nil,
-			}).Error; err != nil {
-				return err
+		if auditStatus == "" || rejectedAt == nil {
+			// An authenticated but undocumented product state cannot safely leave a
+			// previously approved catalog item sellable. Keep the event for manual
+			// review and fail closed with a CAS so a concurrent re-submit wins.
+			now := time.Now()
+			updateResult := tx.Exec(`UPDATE xiaohongshu_product_configs
+				SET audit_status = ?, audit_message = ?, audited_at = NULL, updated_at = ?
+				WHERE id = ? AND tenant_id = ? AND channel_account_id = ? AND updated_at = ? AND deleted_at IS NULL`,
+				"pending", xiaohongshuProductAuditUnrecognizedReason, now,
+				config.ID, account.TenantID, account.ID, config.UpdatedAt)
+			if updateResult.Error != nil {
+				return updateResult.Error
 			}
 			return markXiaohongshuWebhookManualReview(tx, &event, xiaohongshuProductAuditUnrecognizedReason)
 		}
-
+		// PRODUCT_AUDIT is documented only as a rejection callback. Ignore a
+		// callback older than the most recent local submit, and make the write
+		// conditional so an in-flight reconfiguration cannot be overwritten.
+		if config.LastSyncedAt != nil && rejectedAt.Unix() < config.LastSyncedAt.Unix() {
+			return markXiaohongshuWebhookManualReview(tx, &event, "stale PRODUCT_AUDIT rejection; product remains under current review")
+		}
 		now := time.Now()
-		if auditStatus == "pending" {
-			// GORM can omit both nil pointers and SQL expressions supplied through
-			// Updates for nullable model fields. Use a parameterized statement so
-			// a re-review always clears a stale approval timestamp.
-			if err := tx.Exec(`UPDATE xiaohongshu_product_configs
-				SET audit_status = ?, audit_message = ?, audited_at = NULL, updated_at = ?
-				WHERE id = ? AND tenant_id = ? AND channel_account_id = ?`,
-				auditStatus, auditMessage, now, config.ID, account.TenantID, account.ID).Error; err != nil {
-				return err
-			}
-		} else if err := tx.Model(&config).Updates(map[string]interface{}{
-			"audit_status": auditStatus, "audit_message": auditMessage, "audited_at": now,
-		}).Error; err != nil {
-			return err
+		updateResult := tx.Model(&model.XiaohongshuProductConfig{}).
+			Where("id = ? AND tenant_id = ? AND channel_account_id = ? AND updated_at = ?", config.ID, account.TenantID, account.ID, config.UpdatedAt).
+			Updates(map[string]interface{}{"audit_status": auditStatus, "audit_message": auditMessage, "audited_at": rejectedAt})
+		if updateResult.Error != nil {
+			return updateResult.Error
+		}
+		if updateResult.RowsAffected == 0 {
+			return markXiaohongshuWebhookManualReview(tx, &event, "stale PRODUCT_AUDIT rejection; product remains under current review")
 		}
 		return tx.Model(&event).Updates(map[string]interface{}{
 			"status": "processed", "last_error": "", "processed_at": now,
@@ -147,15 +153,13 @@ func markXiaohongshuWebhookManualReview(tx *gorm.DB, event *model.XiaohongshuWeb
 	}).Error
 }
 
-// parseXiaohongshuProductAudit accepts the casing and naming variants used by
-// provider callbacks without assuming undocumented numeric states. Only
-// statuses with an explicit textual meaning can pass the catalog gate; numeric
-// values are intentionally left unresolved until the provider's production
-// webhook enum is verified from an official sample.
-func parseXiaohongshuProductAudit(payload []byte) (productCode, auditStatus, message string) {
+// parseXiaohongshuProductAudit accepts the documented rejection callback. The
+// provider only documents Status=2 for PRODUCT_AUDIT; approval is deliberately
+// absent here and can only come from the product-query PASS state.
+func parseXiaohongshuProductAudit(payload []byte) (productCode, auditStatus, message string, rejectedAt *time.Time) {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(payload, &fields) != nil {
-		return "", "", ""
+		return "", "", "", nil
 	}
 	value := func(names ...string) string {
 		for _, name := range names {
@@ -176,9 +180,16 @@ func parseXiaohongshuProductAudit(payload []byte) (productCode, auditStatus, mes
 		return ""
 	}
 	productCode = value("out_product_id", "out_product_code")
-	statusValue := value("audit_status", "audit_result", "status", "product_status")
-	message = truncateChannelError(value("reject_reason", "audit_reason", "reason", "message", "msg"))
-	return productCode, xiaohongshuProductAuditStatus(statusValue), message
+	if value("status") != "2" {
+		return productCode, "", "", nil
+	}
+	message = truncateChannelError(value("reject_reason", "rejectreason"))
+	rejectUnix, err := strconv.ParseInt(value("reject_time", "rejecttime"), 10, 64)
+	if err != nil || rejectUnix <= 0 {
+		return productCode, "", "", nil
+	}
+	valueAt := time.Unix(rejectUnix, 0)
+	return productCode, "rejected", message, &valueAt
 }
 
 func normalizeXiaohongshuWebhookField(value string) string {
@@ -186,24 +197,6 @@ func normalizeXiaohongshuWebhookField(value string) string {
 	value = strings.ReplaceAll(value, "_", "")
 	value = strings.ReplaceAll(value, "-", "")
 	return value
-}
-
-func xiaohongshuProductAuditStatus(value string) string {
-	normalized := strings.ToLower(strings.TrimSpace(value))
-	normalized = strings.ReplaceAll(normalized, "-", "_")
-	normalized = strings.ReplaceAll(normalized, " ", "_")
-	switch normalized {
-	case "pending", "submitted", "auditing", "reviewing", "under_review", "in_review":
-		return "pending"
-	case "approved", "approve", "passed", "pass", "success", "online", "on_sale", "onsale", "active":
-		return "approved"
-	case "rejected", "reject", "failed", "fail", "refused":
-		return "rejected"
-	case "offline", "off_shelf", "offshelf", "disabled", "removed", "deleted":
-		return "offline"
-	default:
-		return ""
-	}
 }
 
 // After-sale/refund and every unknown business event are safely retained but
