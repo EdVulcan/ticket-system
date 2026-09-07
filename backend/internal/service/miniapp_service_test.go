@@ -90,9 +90,19 @@ func TestXiaohongshuMiniappLoginAndCatalogAreChannelScoped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if catalog.StorefrontImageURL != "" {
+		t.Fatalf("catalog storefront image must not fall back to product image: %q", catalog.StorefrontImageURL)
+	}
 	if len(catalog.Products) != 1 || catalog.Products[0].Name != "小红书成人票" || catalog.Products[0].PriceCents != 7900 ||
 		catalog.Products[0].ImageURL != "https://example.com/ticket.png" || catalog.Products[0].Description == "" || catalog.Products[0].ProductType != 1 {
 		t.Fatalf("catalog=%+v", catalog)
+	}
+	if err := model.DB.Model(&model.ChannelAccount{}).Where("id = ?", account.ID).Update("storefront_image_url", "https://example.com/storefront.png").Error; err != nil {
+		t.Fatal(err)
+	}
+	catalog, err = miniapp.ListCatalog(authenticated)
+	if err != nil || catalog.StorefrontImageURL != "https://example.com/storefront.png" || catalog.Products[0].ImageURL != "https://example.com/ticket.png" {
+		t.Fatalf("storefront projection changed product image: catalog=%+v err=%v", catalog, err)
 	}
 	for _, auditStatus := range []string{"pending", "rejected", "offline"} {
 		if err := model.DB.Model(&model.XiaohongshuProductConfig{}).Where("channel_product_mapping_id = ?", mapping.ID).Update("audit_status", auditStatus).Error; err != nil {

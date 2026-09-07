@@ -38,6 +38,20 @@ func TestXiaohongshuImageStoreSavesValidatedImage(t *testing.T) {
 	if !bytes.Equal(stored, imageData.Bytes()) {
 		t.Fatal("stored image differs from upload")
 	}
+	if err := store.ValidateOwnedURL(3, 5, imageURL); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{
+		strings.Replace(imageURL, "https://", "http://", 1),
+		strings.Replace(imageURL, "https://", "https://user:password@", 1),
+		strings.Replace(imageURL, "tickets.example.com", "other.example.com", 1),
+		strings.Replace(imageURL, "/3/5/", "/3/6/", 1),
+		imageURL + "?extra=1",
+	} {
+		if err := store.ValidateOwnedURL(3, 5, invalid); err == nil {
+			t.Fatalf("accepted invalid owned image URL %q", invalid)
+		}
+	}
 }
 
 func TestXiaohongshuImageStoreRejectsNonImage(t *testing.T) {

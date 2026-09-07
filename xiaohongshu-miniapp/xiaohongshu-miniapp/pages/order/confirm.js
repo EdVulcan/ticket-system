@@ -1,9 +1,11 @@
 const app = getApp();
+const { requestGuaranteeOrderPayment } = require('../../utils/payment');
+const calendar = require('../../utils/calendar');
 
 Page({
   data: {
     product: null,
-    storeName: '官方商城',
+    storeName: '',
     quantity: 1,
     maxQuantity: 10,
     useDate: '',
@@ -11,6 +13,13 @@ Page({
     contactPhone: '',
     minDate: '',
     maxDate: '',
+    dateChips: [],
+    calendarOpen: false,
+    createdOrderNo: '',
+    calendarTitle: '',
+    calendarCells: [],
+    canPreviousMonth: false,
+    canNextMonth: false,
     totalText: '0.00',
     loading: true,
     submitting: false,
@@ -18,13 +27,12 @@ Page({
   },
 
   onLoad(options) {
-    app.setNavigationTitle(app.globalData.storeName || '官方商城');
+    app.setNavigationTitle(app.globalData.storeName || '确认订单');
     this.mappingId = Number(options.mapping_id || 0);
+    this.requestedQuantity = Number(options.quantity || 1);
+    this.requestedUseDate = options.use_date || '';
     // Reuse one idempotency key if the network drops after order creation.
     this.orderRequestId = `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-    const today = new Date();
-    const max = new Date(today.getFullYear() + 1, today.getMonth(), today.getDate());
-    this.setData({ minDate: this.formatDate(today), maxDate: this.formatDate(max) });
     this.loadProduct();
   },
 
@@ -35,43 +43,73 @@ Page({
       if (!product) throw new Error('票种当前不可购买');
       product.priceText = (Number(product.price_cents) / 100).toFixed(2);
       product.isPackage = product.product_kind === 'scenic_hotel_package';
-      product.kindLabel = product.isPackage ? '酒景套餐' : '景区门票';
+      product.kindLabel = product.isPackage ? '酒景套餐' : (product.product_kind === 'ticket' ? '景区门票' : '商品');
       product.quantityLabel = product.isPackage ? '套餐份数' : '购票数量';
       product.quantityHint = product.isPackage
         ? `每份含${product.rooms_per_package}间房住${product.nights}晚`
-        : '每人一票一码';
+        : '订单权益以服务端确认结果为准';
       product.isDeferredPackage = product.isPackage && product.booking_mode === 'after_purchase';
+      product.requiresUseDate = Boolean(product.requires_use_date) && !product.isDeferredPackage;
       product.useDateLabel = product.isPackage ? '入住日期' : '游玩日期';
       product.stayText = product.isPackage ? `${product.hotel_name} · ${product.room_type_name} · ${product.nights}晚` : '';
       const maxQuantity = catalog.max_order_cents
-        ? Math.max(1, Math.floor(Number(catalog.max_order_cents) / Number(product.price_cents)))
+        ? Math.min(100, Math.max(1, Math.floor(Number(catalog.max_order_cents) / Number(product.price_cents))))
         : 100;
-      this.setData({ product, storeName: catalog.store_name || '官方商城', maxQuantity, loading: false }, () => {
-        app.setStoreName(catalog.store_name || '官方商城');
+      const today = new Date();
+      const minDate = calendar.formatDate(calendar.addDays(today, product.isPackage ? Math.max(0, Number(product.min_advance_days || 0)) : 0));
+      const maxDate = calendar.formatDate(calendar.addDays(today, 365));
+      const quantity = Math.min(Math.max(1, Math.floor(this.requestedQuantity || 1)), maxQuantity);
+      const useDate = product.requiresUseDate && calendar.isDateWithin(this.requestedUseDate, minDate, maxDate) ? this.requestedUseDate : '';
+      this.calendarMonth = calendar.monthStart(useDate || today);
+      this.setData({ product, storeName: catalog.store_name || '', maxQuantity, quantity, useDate, minDate, maxDate, loading: false }, () => {
+        app.setStoreName(catalog.store_name || '');
         this.updateTotal();
+        this.refreshCalendar();
       });
     }).catch(error => this.setData({ loading: false, error: error.message || '票种加载失败' }));
   },
 
   decrease() {
+    if (this.data.submitting || this.data.createdOrderNo) return;
     if (this.data.quantity <= 1) return;
     this.setData({ quantity: this.data.quantity - 1, error: '' }, () => this.updateTotal());
   },
 
   increase() {
+    if (this.data.submitting || this.data.createdOrderNo) return;
     if (this.data.quantity >= this.data.maxQuantity) return;
     this.setData({ quantity: this.data.quantity + 1, error: '' }, () => this.updateTotal());
   },
 
-  onDateChange(event) {
-    this.setData({ useDate: event.detail.value || '', error: '' });
+  selectDate(event) {
+    if (this.data.submitting || this.data.createdOrderNo) return;
+    const useDate = event.currentTarget.dataset.date;
+    if (!calendar.isDateWithin(useDate, this.data.minDate, this.data.maxDate)) return;
+    this.setData({ useDate, error: '' });
+    this.refreshCalendar();
+  },
+
+  toggleCalendar() { this.setData({ calendarOpen: !this.data.calendarOpen }); },
+
+  previousMonth() {
+    if (!calendar.canMoveMonth(this.calendarMonth, -1, this.data.minDate, this.data.maxDate)) return;
+    this.calendarMonth = new Date(this.calendarMonth.getFullYear(), this.calendarMonth.getMonth() - 1, 1);
+    this.refreshCalendar();
+  },
+
+  nextMonth() {
+    if (!calendar.canMoveMonth(this.calendarMonth, 1, this.data.minDate, this.data.maxDate)) return;
+    this.calendarMonth = new Date(this.calendarMonth.getFullYear(), this.calendarMonth.getMonth() + 1, 1);
+    this.refreshCalendar();
   },
 
   onGuestNameInput(event) {
+    if (this.data.submitting || this.data.createdOrderNo) return;
     this.setData({ guestName: event.detail.value || '', error: '' });
   },
 
   onContactPhoneInput(event) {
+    if (this.data.submitting || this.data.createdOrderNo) return;
     this.setData({ contactPhone: event.detail.value || '', error: '' });
   },
 
@@ -82,7 +120,11 @@ Page({
 
   submit() {
     if (!this.data.product || this.data.submitting) return;
-    if (this.data.product.requires_use_date && !this.data.useDate) {
+    if (this.data.createdOrderNo) {
+      xhs.redirectTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(this.data.createdOrderNo)}` });
+      return;
+    }
+    if (this.data.product.requiresUseDate && !calendar.isDateWithin(this.data.useDate, this.data.minDate, this.data.maxDate)) {
       this.setData({ error: `请选择${this.data.product.useDateLabel}` });
       return;
     }
@@ -106,20 +148,39 @@ Page({
         contact_phone: this.data.contactPhone.trim()
       }
     }).then(order => {
-      if (!order.order_id || !order.pay_token) throw new Error('支付订单信息不完整');
-      xhs.requestGuaranteeOrderPayment({
-        orderInfo: { payToken: order.pay_token, orderId: order.order_id },
-        complete: () => xhs.redirectTo({ url: `/pages/order/detail?order_no=${order.order_no}` })
+      if (!order || !order.order_no) {
+        this.setData({ submitting: false, error: '订单信息不完整，订单已保留，请在订单列表中查看' });
+        return;
+      }
+      this.setData({ createdOrderNo: order.order_no, calendarOpen: false });
+      const started = requestGuaranteeOrderPayment(xhs, order, {
+        onSuccess: () => {
+          xhs.redirectTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(order.order_no || '')}` });
+        },
+        onFailure: result => {
+          this.setData({ submitting: false, error: result.message });
+        },
+        onComplete: result => {
+          if (result.outcome === 'unknown') {
+            this.setData({ submitting: false, error: '支付结果正在确认，订单已保留，请在订单详情继续查看' });
+          }
+        }
       });
+      if (!started) return;
     }).catch(error => {
       this.setData({ submitting: false, error: error.message || '订单创建失败，请稍后重试' });
     });
   },
 
-  formatDate(date) {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
+  refreshCalendar() {
+    const today = new Date();
+    const month = this.calendarMonth || calendar.monthStart(today);
+    this.setData({
+      dateChips: calendar.buildDateChips(today, this.data.minDate, this.data.maxDate, this.data.useDate),
+      calendarTitle: calendar.monthTitle(month),
+      calendarCells: calendar.buildCalendarCells(month, this.data.minDate, this.data.maxDate, this.data.useDate),
+      canPreviousMonth: calendar.canMoveMonth(month, -1, this.data.minDate, this.data.maxDate),
+      canNextMonth: calendar.canMoveMonth(month, 1, this.data.minDate, this.data.maxDate)
+    });
   }
 });

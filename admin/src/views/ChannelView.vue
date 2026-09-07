@@ -22,6 +22,7 @@
         <template #default="{row}">
           <el-button v-if="canActiveWrite && row.type === 'ctrip'" link type="primary" @click="openCtripConfig(row)">携程参数</el-button>
           <el-button v-if="canActiveWrite && row.type === 'xiaohongshu'" link type="primary" @click="openXiaohongshuConfig(row)">小红书参数</el-button>
+          <el-button v-if="row.type === 'xiaohongshu'" link type="primary" @click="openStorefront(row)">商城图片</el-button>
           <el-button v-if="row.type === 'xiaohongshu'" link type="primary" :icon="Connection" @click="diagnoseXiaohongshu(row)">连接测试</el-button>
           <el-button v-if="canActiveWrite" link type="primary" @click="openMapping(row)">商品映射</el-button>
           <el-button link type="primary" @click="openOrders(row)">渠道订单</el-button>
@@ -262,6 +263,8 @@
 
     <el-dialog v-model="secretDialog" title="新渠道密钥" width="460px"><el-alert type="warning" :closable="false" title="密钥只在本次显示，请立即交给渠道方并安全保存。"/><el-input class="mt-4" :model-value="newSecret" readonly /></el-dialog>
 
+    <ChannelStorefrontDialog v-model="storefrontDialog" :account-id="storefrontAccount?.id || null" :can-write="canActiveWrite" />
+
     <el-dialog v-model="requestsDialog" :title="`渠道请求日志：${selectedAccount?.code || ''}`" width="1060px" :close-on-click-modal="false">
       <div class="mb-3 flex items-center gap-2">
         <el-select v-model="requestStatus" clearable placeholder="全部状态" style="width: 180px" @change="loadRequests">
@@ -415,6 +418,7 @@ import request from '@/utils/request'
 import { localizeDisplayText } from '@/utils/localize'
 import { hasPermission } from '@/utils/permissions'
 import { activeCapabilitySet, isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
+import ChannelStorefrontDialog from '@/components/ChannelStorefrontDialog.vue'
 
 const currentUser = readStoredUser()
 const capabilities = activeCapabilitySet(currentUser)
@@ -435,6 +439,8 @@ const newSecret = ref('')
 const requestsDialog = ref(false)
 const requestsLoading = ref(false)
 const selectedAccount = ref<any>(null)
+const storefrontDialog = ref(false)
+const storefrontAccount = ref<any>(null)
 const channelRequests = ref<any[]>([])
 const requestStatus = ref('')
 const requestTotal = ref(0)
@@ -516,6 +522,7 @@ const create = async () => {
   } finally { saving.value = false }
 }
 const openCtripConfig = (row: any) => { selectedAccount.value = row; Object.assign(ctripConfig, { account_id: row.app_id || '', sign_key: '', aes_key: '', aes_iv: '' }); ctripConfigDialog.value = true }
+const openStorefront = (row: any) => { storefrontAccount.value = row; storefrontDialog.value = true }
 const saveCtripConfig = async () => {
   if (!selectedAccount.value || !ctripConfig.account_id.trim() || !ctripConfig.sign_key.trim() || ctripConfig.aes_key.length !== 16 || ctripConfig.aes_iv.length !== 16) { ElMessage.warning('请完整填写参数，AES 密钥和初始向量必须为 16 位'); return }
   ctripConfigSaving.value = true

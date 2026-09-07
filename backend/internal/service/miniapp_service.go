@@ -60,10 +60,11 @@ type MiniappCatalogProduct struct {
 }
 
 type MiniappCatalog struct {
-	StoreName     string                  `json:"store_name"`
-	Environment   string                  `json:"environment"`
-	MaxOrderCents int64                   `json:"max_order_cents,omitempty"`
-	Products      []MiniappCatalogProduct `json:"products"`
+	StoreName          string                  `json:"store_name"`
+	StorefrontImageURL string                  `json:"storefront_image_url"`
+	Environment        string                  `json:"environment"`
+	MaxOrderCents      int64                   `json:"max_order_cents,omitempty"`
+	Products           []MiniappCatalogProduct `json:"products"`
 }
 
 type MiniappOrderCreateInput struct {
@@ -261,7 +262,7 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 		return nil, ErrMiniappUnavailable
 	}
 	var account model.ChannelAccount
-	if err := model.DB.Select("id", "environment").Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", customer.ChannelAccountID, customer.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
+	if err := model.DB.Select("id", "environment", "storefront_image_url").Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", customer.ChannelAccountID, customer.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
 		return nil, ErrMiniappUnavailable
 	}
 	type catalogRow struct {
@@ -372,7 +373,7 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 			MaxReschedules: row.MaxReschedules,
 		})
 	}
-	catalog := &MiniappCatalog{StoreName: tenant.Name, Environment: account.Environment, Products: products}
+	catalog := &MiniappCatalog{StoreName: tenant.Name, StorefrontImageURL: account.StorefrontImageURL, Environment: account.Environment, Products: products}
 	if account.Environment == "sandbox" {
 		catalog.MaxOrderCents = 10
 	}

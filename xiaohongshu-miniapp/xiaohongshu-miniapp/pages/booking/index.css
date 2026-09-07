@@ -1,22 +1,40 @@
-page { min-height: 100%; background: #f5f7fa; color: #1f2937; }
-.page { min-height: 100vh; padding: 26rpx 24rpx 60rpx; box-sizing: border-box; background: #f5f7fa; color: #1f2937; }
+page { min-height: 100%; background: #f5f7f8; color: #20262b; }
+.page { min-height: 100vh; padding: 26rpx 38rpx 60rpx; box-sizing: border-box; background: #f5f7f8; color: #20262b; }
 .header { margin: 0 0 26rpx; display: flex; flex-direction: column; gap: 8rpx; }
-.title { color: #1f2937; font-size: 40rpx; font-weight: 820; }
-.header-hint, .hint { color: #6b7280; font-size: 23rpx; line-height: 1.6; }
+.title { color: #20262b; font-size: 40rpx; font-weight: 700; }
+.header-hint, .hint { color: #6e7b82; font-size: 23rpx; line-height: 1.6; }
 .content { display: flex; flex-direction: column; gap: 16rpx; }
-.notice, .date-row, .guest-card { border: 1rpx solid #edf0f4; border-radius: 17rpx; background: #fff; }
-.notice { display: flex; flex-direction: column; gap: 8rpx; padding: 24rpx; border-color: #ffe0c7; background: #fff4eb; color: #6b7280; font-size: 24rpx; line-height: 1.6; }
-.notice-title, .label { color: #1f2937; font-size: 28rpx; font-weight: 760; }
-.notice-title { color: #c35b1d; }
-.date-row { display: flex; align-items: center; justify-content: space-between; padding: 24rpx; }
+.notice, .date-card, .guest-card { background: #fff; }
+.notice { display: flex; flex-direction: column; gap: 8rpx; padding: 24rpx; background: #fff4eb; color: #6e7b82; font-size: 24rpx; line-height: 1.6; }
+.notice-title, .label { color: #20262b; font-size: 28rpx; font-weight: 650; }
+.notice-title { color: #d45d28; }
+.date-card { padding: 24rpx; }
+.date-row { display: flex; align-items: center; justify-content: space-between; }
 .date-row > view, .guest-card { display: flex; flex-direction: column; gap: 8rpx; }
 .date-value { color: #9ca3af; font-size: 24rpx; }
-.date-value.selected { color: #ff2442; font-weight: 700; }
+.date-value.selected { color: #087f8c; font-weight: 650; }
+.date-chips { display: flex; gap: 14rpx; margin-top: 20rpx; }
+.date-chip, .more-date { flex: 1; min-width: 0; height: 112rpx; margin: 0; padding: 18rpx 8rpx; border: 1rpx solid #dfe7e9; border-radius: 12rpx; background: #fff; color: #20262b; font-size: 25rpx; line-height: 36rpx; }
+.date-chip.selected { border-color: #087f8c; background: #edf7f8; color: #087f8c; }
+.date-chip.disabled { color: #a4afb4; }
+.more-date { color: #087f8c; }
+.date-chip text, .more-date text { display: block; }
+.date-chip .chip-date, .more-date .chip-date { font-size: 27rpx; font-weight: 600; }
+.calendar { margin-top: 18rpx; padding-top: 16rpx; border-top: 1rpx solid #edf0f2; }
+.calendar-header { display: flex; align-items: center; justify-content: space-between; }
+.calendar-header button { margin: 0; padding: 8rpx; background: transparent; color: #087f8c; font-size: 23rpx; }
+.calendar-header text { color: #20262b; font-size: 26rpx; font-weight: 650; }
+.weekdays, .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; }
+.weekdays { margin-top: 10rpx; color: #6e7b82; font-size: 20rpx; }
+.calendar-day { height: 68rpx; margin-top: 8rpx; border-radius: 10rpx; }
+.calendar-day.selected { background: #087f8c; color: #fff; }
+.calendar-day.disabled { color: #b3bdc1; }
+.calendar-day-button { width: 100%; height: 100%; margin: 0; padding: 0; background: transparent; color: inherit; font-size: 25rpx; line-height: 68rpx; }
 .guest-card { padding: 24rpx; }
-.field-row { min-height: 86rpx; display: flex; align-items: center; gap: 24rpx; border-top: 1rpx solid #edf0f4; }
+.field-row { min-height: 86rpx; display: flex; align-items: center; gap: 24rpx; border-top: 1rpx solid #edf0f2; }
 .field-row:first-of-type { margin-top: 10rpx; }
-.field-row > text { width: 130rpx; color: #6b7280; font-size: 25rpx; }
-.field-input { flex: 1; color: #1f2937; font-size: 27rpx; }
-.pay-button { height: 88rpx; margin-top: 2rpx; border-radius: 16rpx; background: #ff2442; color: #fff; font-size: 30rpx; font-weight: 750; line-height: 88rpx; box-shadow: 0 8rpx 20rpx rgba(255, 36, 66, .2); }
-.state, .inline-error { padding: 30rpx; text-align: center; color: #6b7280; }
-.error, .inline-error { color: #c35b1d; }
+.field-row > text { width: 130rpx; color: #6e7b82; font-size: 25rpx; }
+.field-input { flex: 1; color: #20262b; font-size: 27rpx; }
+.pay-button { height: 94rpx; margin-top: 2rpx; border-radius: 18rpx; background: #087f8c; color: #fff; font-size: 30rpx; font-weight: 650; line-height: 94rpx; }
+.state, .inline-error { padding: 30rpx; text-align: center; color: #6e7b82; }
+.error, .inline-error { color: #d45d28; }

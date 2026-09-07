@@ -15,11 +15,12 @@ import (
 )
 
 type ChannelController struct {
-	Service             service.ChannelService
-	Gateway             *service.ChannelGatewayService
-	CtripSync           service.CtripSyncService
-	XiaohongshuProducts service.XiaohongshuProductService
-	XiaohongshuImages   service.XiaohongshuImageStore
+	Service               service.ChannelService
+	Gateway               *service.ChannelGatewayService
+	CtripSync             service.CtripSyncService
+	XiaohongshuProducts   service.XiaohongshuProductService
+	XiaohongshuImages     service.XiaohongshuImageStore
+	XiaohongshuStorefront service.XiaohongshuStorefrontService
 }
 
 func (c *ChannelController) List(ctx *gin.Context) {
@@ -327,6 +328,83 @@ func (c *ChannelController) UploadXiaohongshuProductImage(ctx *gin.Context) {
 	}
 	imageURL, err := c.XiaohongshuImages.Save(tenantID, uint(accountID), data)
 	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusCreated, gin.H{"image_url": imageURL})
+}
+
+func (c *ChannelController) GetXiaohongshuStorefront(ctx *gin.Context) {
+	accountID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || accountID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	imageURL, err := c.XiaohongshuStorefront.Get(ctx.GetUint("tenant_id"), uint(accountID))
+	if err != nil {
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "小红书渠道账号不存在或不可用"})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"image_url": imageURL})
+}
+
+func (c *ChannelController) SaveXiaohongshuStorefront(ctx *gin.Context) {
+	accountID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || accountID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	var body struct {
+		ImageURL string `json:"image_url"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	imageURL, err := c.XiaohongshuStorefront.Set(ctx.GetUint("tenant_id"), uint(accountID), ctx.GetUint("user_id"), ctx.GetString("role"), body.ImageURL)
+	if err != nil {
+		if errors.Is(err, service.ErrXiaohongshuStorefrontUnavailable) {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "小红书渠道账号不存在或不可用"})
+			return
+		}
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"image_url": imageURL})
+}
+
+func (c *ChannelController) UploadXiaohongshuStorefrontImage(ctx *gin.Context) {
+	accountID, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || accountID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	header, err := ctx.FormFile("image")
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "请选择店铺首图"})
+		return
+	}
+	if header.Size <= 0 || header.Size > service.MaxXiaohongshuImageBytes {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "店铺首图必须小于 5 MB"})
+		return
+	}
+	file, err := header.Open()
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "读取店铺首图失败"})
+		return
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, service.MaxXiaohongshuImageBytes+1))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "读取店铺首图失败"})
+		return
+	}
+	imageURL, err := c.XiaohongshuStorefront.Upload(ctx.GetUint("tenant_id"), uint(accountID), data)
+	if err != nil {
+		if errors.Is(err, service.ErrXiaohongshuStorefrontUnavailable) {
+			ctx.JSON(http.StatusNotFound, gin.H{"error": "小红书渠道账号不存在或不可用"})
+			return
+		}
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

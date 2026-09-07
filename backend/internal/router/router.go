@@ -462,12 +462,14 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	channelRegistry := service.NewChannelAdapterRegistry(service.NewCoreChannelAdapter())
 	channelGateway := &service.ChannelGatewayService{Registry: channelRegistry}
 	otaController.Gateway = channelGateway
+	xiaohongshuImages := service.XiaohongshuImageStore{
+		Directory: config.GlobalConfig.Server.UploadDirectory, PublicBaseURL: config.GlobalConfig.Server.PublicBaseURL,
+	}
 	channelController := &api.ChannelController{
 		Service: service.ChannelService{}, Gateway: channelGateway, CtripSync: service.CtripSyncService{},
-		XiaohongshuProducts: service.NewXiaohongshuProductService(),
-		XiaohongshuImages: service.XiaohongshuImageStore{
-			Directory: config.GlobalConfig.Server.UploadDirectory, PublicBaseURL: config.GlobalConfig.Server.PublicBaseURL,
-		},
+		XiaohongshuProducts:   service.NewXiaohongshuProductService(),
+		XiaohongshuImages:     xiaohongshuImages,
+		XiaohongshuStorefront: service.XiaohongshuStorefrontService{Images: xiaohongshuImages},
 	}
 	ctripController := &api.CtripController{Service: service.CtripProtocolService{OrderService: service.OrderService{}}}
 	apiGroup.POST("/integrations/ctrip/order", ctripController.HandleOrder)
@@ -498,6 +500,9 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		channelAdminGroup.PUT("/:id/ctrip-config", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.ConfigureCtrip)
 		channelAdminGroup.PUT("/:id/xiaohongshu-config", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.ConfigureXiaohongshu)
 		channelAdminGroup.GET("/:id/xiaohongshu-diagnosis", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.DiagnoseXiaohongshu)
+		channelAdminGroup.GET("/:id/storefront", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.GetXiaohongshuStorefront)
+		channelAdminGroup.PUT("/:id/storefront", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SaveXiaohongshuStorefront)
+		channelAdminGroup.POST("/:id/storefront-image", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.UploadXiaohongshuStorefrontImage)
 		channelAdminGroup.GET("/mappings", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.ListMappings)
 		channelAdminGroup.POST("/mappings", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.AddMapping)
 		channelAdminGroup.PATCH("/:id/mappings/:mappingId", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.UpdateMapping)

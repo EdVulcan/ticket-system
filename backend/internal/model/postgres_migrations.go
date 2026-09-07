@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 112
+const CurrentPostgresSchemaVersion = 113
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -453,6 +453,14 @@ func runPostgresMigrations(db *gorm.DB) error {
 			return fmt.Errorf("register xiaohongshu product audit reconciliation: %w", err)
 		}
 	}
+	if previousSchemaVersion < 113 {
+		if err := db.Exec(`
+			ALTER TABLE channel_accounts
+				ADD COLUMN IF NOT EXISTS storefront_image_url varchar(500) NOT NULL DEFAULT '';
+		`).Error; err != nil {
+			return fmt.Errorf("register xiaohongshu storefront image: %w", err)
+		}
+	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
 		if err := db.Exec(`
 			INSERT INTO supplier_business_types
@@ -601,7 +609,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "xiaohongshu product audit reconciliation",
+		Name:      "xiaohongshu storefront image",
 		AppliedAt: time.Now(),
 	}).Error
 }

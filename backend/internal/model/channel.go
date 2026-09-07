@@ -23,7 +23,11 @@ type ChannelAccount struct {
 	LastUsedAt               *time.Time `json:"last_used_at,omitempty"`
 	RateLimitPerMin          int        `gorm:"not null;default:600" json:"rate_limit_per_min"`
 	AllowedIPsJSON           string     `gorm:"type:text" json:"allowed_ips_json,omitempty"`
-	ProtocolConfigured       bool       `gorm:"-" json:"protocol_configured"`
+	// StorefrontImageURL is independent storefront presentation. It is only
+	// writable through the dedicated Xiaohongshu storefront endpoint so generic
+	// channel-account create/update bindings cannot inject it.
+	StorefrontImageURL string `gorm:"size:500;not null;default:''" json:"-"`
+	ProtocolConfigured bool   `gorm:"-" json:"protocol_configured"`
 }
 
 // ChannelProductMapping maps a channel product identifier to a seller-owned

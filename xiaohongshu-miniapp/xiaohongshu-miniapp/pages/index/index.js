@@ -3,9 +3,9 @@ const app = getApp();
 Page({
   data: {
     storeName: '官方商城',
+    heroImage: '',
     allProducts: [],
     products: [],
-    featuredProduct: null,
     resultCount: 0,
     scenicOptions: [],
     activeScenic: '全部',
@@ -37,6 +37,7 @@ Page({
     return app.request('/catalog').then(catalog => {
       const products = (catalog.products || []).map(product => ({
         ...product,
+        tags: product.tags || [],
         priceText: this.formatPrice(product.price_cents),
         validityText: this.formatValidity(product),
         kindLabel: product.product_kind === 'scenic_hotel_package' ? '酒景套餐' : '景区门票',
@@ -55,8 +56,8 @@ Page({
       const kindOptions = kinds.length > 1 ? [{ value: 'all', label: '全部' }, ...kinds] : kinds;
       this.setData({
         storeName: catalog.store_name || '官方商城',
+        heroImage: catalog.storefront_image_url || '',
         allProducts: products,
-        featuredProduct: products.length > 1 ? products[0] : null,
         resultCount: products.length,
         scenicOptions,
         kindOptions,
@@ -114,10 +115,7 @@ Page({
     if (keyword && this.data.activeScenic !== '全部') emptyStateDetail = '换个关键词或景区试试';
     else if (keyword) emptyStateDetail = '换个关键词试试';
     else if (this.data.activeScenic !== '全部' || (this.data.kindOptions.length > 1 && this.data.activeKind !== 'all')) emptyStateDetail = '换个分类或景区试试';
-    const visibleProducts = !hasActiveFilters && this.data.featuredProduct
-      ? products.filter(product => product.id !== this.data.featuredProduct.id)
-      : products;
-    this.setData({ products: visibleProducts, resultCount: products.length, hasActiveFilters, emptyStateDetail });
+    this.setData({ products, resultCount: products.length, hasActiveFilters, emptyStateDetail });
   },
 
   openProduct(event) {

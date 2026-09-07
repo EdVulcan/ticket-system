@@ -69,6 +69,7 @@ func (s *ChannelService) Create(tenantID uint, account *model.ChannelAccount, se
 	}
 	account.Base = model.Base{}
 	account.TenantID = tenantID
+	account.StorefrontImageURL = ""
 	account.Status = normalizeChannelStatus(account.Status)
 	account.Environment = channelEnvironment(account.Status)
 	account.SecretCiphertext = ciphertext
@@ -109,6 +110,7 @@ func (s *ChannelService) CreateCtrip(tenantID uint, account *model.ChannelAccoun
 	}
 	account.Base = model.Base{}
 	account.TenantID = tenantID
+	account.StorefrontImageURL = ""
 	account.Type = "ctrip"
 	account.AppID = accountID
 	account.Status = normalizeChannelStatus(account.Status)
@@ -157,6 +159,7 @@ func (s *ChannelService) createXiaohongshu(tenantID uint, account *model.Channel
 	}
 	account.Base = model.Base{}
 	account.TenantID = tenantID
+	account.StorefrontImageURL = ""
 	account.Type = "xiaohongshu"
 	account.AppID = appID
 	account.Status = normalizeChannelStatus(account.Status)
