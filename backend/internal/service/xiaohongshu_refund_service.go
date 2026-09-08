@@ -60,8 +60,10 @@ func prepareXiaohongshuRefundTx(tx *gorm.DB, order *model.Order, payment *model.
 	}
 	item := order.Items[0]
 	item.Tickets = lockedTickets
-	if payload.ProductType != xiaohongshu.ProductTypeGroupVoucher ||
-		payload.Request.ExternalOrderID != link.ExternalOrderID || payload.Request.Price.OrderPrice != refund.AmountCents ||
+	if err := requireXiaohongshuRefundProductTypeTx(tx, order, &link, &original, payload); err != nil {
+		return err
+	}
+	if payload.Request.ExternalOrderID != link.ExternalOrderID || payload.Request.Price.OrderPrice != refund.AmountCents ||
 		len(payload.Request.Products) != 1 || payload.Request.Products[0].RealPrice != refund.AmountCents ||
 		payload.Request.Products[0].Count != item.Quantity {
 		return errors.New("小红书原始商品或金额与退款范围不匹配")
