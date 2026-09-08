@@ -183,7 +183,8 @@ test('canvas setup failure is reported so the page can show a retry prompt', () 
   assert.equal(reported, true);
 });
 
-test('native logical canvas bounds contain and decode compact and expanded ticket QR codes', async () => {
+test('native logical canvas bounds contain and decode compact and expanded ticket QR codes', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const compact = createRecordingContext();
   const expanded = createRecordingContext();
   const selectors = [];
@@ -214,7 +215,8 @@ test('native logical canvas bounds contain and decode compact and expanded ticke
     error => { throw error || new Error('QR render failed'); },
     api
   );
-  await flush();
+  // Run the render timer explicitly; setImmediate does not guarantee it has fired.
+  t.mock.timers.tick(1);
 
   assert.deepEqual(selectors, ['.ticket-qr', '.expanded-canvas']);
   for (const [context, size] of [[compact, 145], [expanded, 280]]) {
@@ -229,7 +231,8 @@ test('native logical canvas bounds contain and decode compact and expanded ticke
   assert.equal(decodeRecordedCanvas(expanded, 280), expandedCode);
 });
 
-test('a stale native canvas measurement cannot draw or report an error', async () => {
+test('a stale native canvas measurement cannot draw or report an error', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const context = createRecordingContext();
   let measured;
   let reported = false;
@@ -242,7 +245,8 @@ test('a stale native canvas measurement cannot draw or report an error', async (
       exec(callback) { measured = callback; }
     })
   });
-  await flush();
+  t.mock.timers.tick(1);
+  assert.equal(typeof measured, 'function');
   page.qrRenderVersion = 2;
   measured([[{ width: 145, height: 145 }]]);
   assert.equal(context.fills.length, 0);
