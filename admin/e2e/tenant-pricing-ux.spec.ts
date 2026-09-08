@@ -97,18 +97,18 @@ test('线上和窗口票种筛选会把查询条件传给服务端', async ({ pa
   })).toBe(true)
 
   await page.goto('/online-order')
-  await expect(page.getByRole('heading', { name: '订单管理' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '线上订单' })).toBeVisible()
   const onlineOrderFilters = page.locator('.filter-toolbar')
   await expect(onlineOrderFilters).toBeVisible({ timeout: 30000 })
   const onlineOrderSearch = onlineOrderFilters.locator('.el-input input').first()
   await expect(onlineOrderSearch).toBeVisible({ timeout: 30000 })
   await onlineOrderSearch.fill('ON-100')
   await onlineOrderSearch.press('Enter')
-  await onlineOrderFilters.locator('.el-select').click()
+  await onlineOrderFilters.locator('.el-select__wrapper').last().click()
   await page.getByRole('option', { name: '已退款' }).click()
   await expect.poll(() => orderRequests.some(url => {
     const params = url.searchParams
-    return params.get('channel') === 'online' && params.get('search') === 'ON-100' && params.get('status') === 'refunded' && params.get('page') === '1'
+    return params.get('sales_scope') === 'online' && !params.has('channel') && params.get('search') === 'ON-100' && params.get('status') === 'refunded' && params.get('page') === '1'
   })).toBe(true)
 
   await page.goto('/offline-order')
