@@ -287,6 +287,29 @@ func (s *ExecutionCenterService) List(tenantID uint, category, severity string, 
 	}
 
 	var orderOps []model.XiaohongshuOrderOperation
+	var issuances []struct {
+		ID                    uint
+		OrderNo               string
+		VoucherIssuanceStatus string
+		CreatedAt             time.Time
+		UpdatedAt             time.Time
+	}
+	if err := model.DB.Table("xiaohongshu_order_links AS link").
+		Select("link.id, orders.order_no, link.voucher_issuance_status, link.created_at, link.updated_at").
+		Joins("JOIN orders ON orders.id = link.order_id AND orders.tenant_id = link.tenant_id").
+		Where("link.tenant_id = ? AND link.deleted_at IS NULL AND link.state = ? AND link.voucher_issuance_status IN ?", tenantID, "paid", []string{"pending", "manual_review"}).
+		Order("link.updated_at DESC").Limit(limit).Scan(&issuances).Error; err != nil {
+		return nil, err
+	}
+	for _, row := range issuances {
+		description, level := "已支付，等待平台券完整签发，系统会继续查单", "warning"
+		if row.VoucherIssuanceStatus == "manual_review" {
+			description, level = "已支付，平台券关联异常，需核对后处理；请勿要求游客重复支付", "critical"
+		}
+		appendItem(ExecutionCenterItem{Source: "xiaohongshu_issuance", Category: "渠道", ID: row.ID, Title: "小红书出票待处理",
+			Description: row.OrderNo + " · " + description, Status: row.VoucherIssuanceStatus, Severity: level,
+			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt})
+	}
 	if err := model.DB.Where("tenant_id = ? AND status <> ?", tenantID, "completed").Order("updated_at DESC").Limit(limit).Find(&orderOps).Error; err != nil {
 		return nil, err
 	}

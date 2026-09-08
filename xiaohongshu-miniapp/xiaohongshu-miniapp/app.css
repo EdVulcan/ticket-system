@@ -11,6 +11,7 @@ button {
   box-sizing: border-box;
   padding: 0;
   font-family: inherit;
+  transition: background-color .15s ease, opacity .15s ease;
 }
 
 button::after {
@@ -19,6 +20,21 @@ button::after {
 
 image {
   display: block;
+}
+
+input { box-sizing: border-box; min-width: 0; border: 0; background: transparent; font-family: inherit; }
+button.is-disabled { opacity: .48; }
+button:active { opacity: .78; }
+.tap-feedback { opacity: .72; }
+
+/* Shared states follow the existing storefront palette, without new artwork. */
+.ui-state { padding: 64rpx 38rpx; text-align: center; }
+.ui-state-title { display: block; color: #20262b; font-size: 32rpx; font-weight: 600; line-height: 1.5; }
+.ui-state-detail { display: block; margin-top: 12rpx; color: #6e7b82; font-size: 26rpx; line-height: 1.7; word-break: break-word; }
+.ui-state-action { min-height: 88rpx; margin-top: 28rpx; padding: 0 30rpx; border-radius: 14rpx; background: #087f8c; color: #fff; font-size: 27rpx; line-height: 88rpx; }
+
+@media (prefers-reduced-motion: reduce) {
+  button { transition: none; }
 }
 
 .safe-bottom { height: calc(24rpx + env(safe-area-inset-bottom)); }

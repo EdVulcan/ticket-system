@@ -152,6 +152,9 @@ jobs:
           cache: npm
           cache-dependency-path: ${{ matrix.app }}/package-lock.json
       - run: npm ci
+      - name: Test native miniapp payment and ticket QR behavior
+        if: matrix.app == 'admin'
+        run: node --test ../xiaohongshu-miniapp/tests/*.test.cjs
       - run: npm run build
       - name: Upload admin artifact
         if: matrix.app == 'admin' && github.event_name == 'push' && github.ref == 'refs/heads/main'

@@ -1,6 +1,9 @@
 <view class="page">
-  <view class="state" xhs:if="{{loading}}">正在加载票种...</view>
-  <view class="state error" xhs:elif="{{error && !product}}"><text>{{error}}</text><button bindtap="retry">重新加载</button></view>
+  <view class="loading-state" xhs:if="{{loading}}">
+    <view class="loading-card"><view class="loading-media"></view><view class="loading-line wide"></view><view class="loading-line"></view><view class="loading-line short"></view></view>
+    <text class="loading-copy">正在加载商品...</text>
+  </view>
+  <view class="state error-state" xhs:elif="{{error && !product}}"><text class="state-title">暂时无法加载商品</text><text class="state-detail">{{error}}</text><button class="retry-button" bindtap="retry">重新加载</button></view>
   <view xhs:elif="{{product}}">
     <image class="hero-image" xhs:if="{{product.image_url}}" src="{{product.image_url}}" mode="aspectFill" />
     <view class="product-panel {{product.image_url ? '' : 'without-image'}}">
@@ -29,20 +32,7 @@
     <view class="page-spacer"></view>
     <view class="purchase-bar">
       <view><text class="bar-label">售价</text><text class="bar-price">¥{{product.priceText}}</text></view>
-      <button class="buy-button" loading="{{navigating}}" disabled="{{navigating}}" bindtap="buy">立即选购</button>
-    </view>
-    <view class="sheet-mask" xhs:if="{{purchaseOpen}}" bindtap="closePurchase"></view>
-    <view class="purchase-sheet" xhs:if="{{purchaseOpen}}">
-      <view class="sheet-heading"><text class="sheet-title">选择{{product.requiresUseDate ? product.useDateLabel : '数量'}}</text><button class="sheet-close" bindtap="closePurchase">关闭</button></view>
-      <view class="date-picker" xhs:if="{{product.requiresUseDate}}">
-        <text class="field-title">{{product.useDateLabel}}{{useDate ? ' · ' + useDate : ''}}</text>
-        <view class="date-chips"><button xhs:for="{{dateChips}}" xhs:for-item="chip" xhs:key="iso" class="{{chip.className}}" data-date="{{chip.iso}}" disabled="{{chip.isDisabled}}" bindtap="selectDate"><text>{{chip.label}}</text><text class="chip-date">{{chip.dateText}}</text></button><button class="more-date" bindtap="toggleCalendar"><text>{{calendarOpen ? '收起日历' : '更多日期'}}</text><text class="chip-date">选择日期</text></button></view>
-        <view class="calendar" xhs:if="{{calendarOpen}}"><view class="calendar-header"><button disabled="{{!canPreviousMonth}}" bindtap="previousMonth">上月</button><text>{{calendarTitle}}</text><button disabled="{{!canNextMonth}}" bindtap="nextMonth">下月</button></view><view class="weekdays"><text>一</text><text>二</text><text>三</text><text>四</text><text>五</text><text>六</text><text>日</text></view><view class="calendar-grid"><view xhs:for="{{calendarCells}}" xhs:for-item="cell" xhs:key="key" class="{{cell.className}}"><button xhs:if="{{cell.isDate}}" class="calendar-day-button" data-date="{{cell.iso}}" disabled="{{cell.isDisabled}}" bindtap="selectDate">{{cell.label}}</button></view></view></view>
-      </view>
-      <view class="sheet-quantity"><text>{{product.isPackage ? '套餐份数' : '购买数量'}}</text><view class="stepper"><button bindtap="decrease" disabled="{{quantity <= 1}}">−</button><text>{{quantity}}</text><button bindtap="increase" disabled="{{quantity >= maxQuantity}}">+</button></view></view>
-      <text class="limit" xhs:if="{{maxQuantity < 100}}">单次最多 {{maxQuantity}} {{product.isPackage ? '份' : '张'}}</text>
-      <text class="inline-error" xhs:if="{{error}}">{{error}}</text>
-      <button class="sheet-primary" loading="{{navigating}}" disabled="{{navigating}}" bindtap="continuePurchase">确认选择</button>
+      <button class="buy-button {{navigating ? 'is-disabled' : ''}}" loading="{{navigating}}" disabled="{{navigating}}" bindtap="buy">立即选购</button>
     </view>
   </view>
 </view>

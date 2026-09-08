@@ -257,8 +257,8 @@ func TestXiaohongshuMiniappOrderConvergesFromOfficialPaymentQuery(t *testing.T) 
 	if paid.CoreOrderStatus != "paid" || paid.PlatformPaymentState != "paid" {
 		t.Fatalf("paid order state contract=%+v", paid)
 	}
-	if _, err := (&RefundService{}).CreateDigitalRefund(tenantID, created.OrderNo, "xhs-money-refund-must-fail", 0.02, paid.TicketCodes, "customer request"); err == nil || !strings.Contains(err.Error(), "paid digital payment not found") {
-		t.Fatalf("xiaohongshu money refund was not fail-closed: %v", err)
+	if _, err := (&RefundService{}).CreateDigitalRefund(tenantID, created.OrderNo, "xhs-sandbox-refund-must-fail", 0.02, paid.TicketCodes, "customer request"); err == nil || !strings.Contains(err.Error(), "sandbox orders must be cancelled through the channel workflow") {
+		t.Fatalf("xiaohongshu sandbox money refund was not fail-closed: %v", err)
 	}
 	orders, err := miniapp.ListXiaohongshuOrders(&customer, 0, 99)
 	if err != nil {

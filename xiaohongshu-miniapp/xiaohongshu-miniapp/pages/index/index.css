@@ -6,7 +6,7 @@ page {
 
 .page {
   min-height: 100vh;
-  padding-bottom: 152rpx;
+  padding-bottom: calc(112rpx + env(safe-area-inset-bottom));
   box-sizing: border-box;
   background: #f5f7f8;
 }
@@ -18,7 +18,7 @@ page {
 }
 
 .catalog-header {
-  padding: 34rpx 38rpx 28rpx;
+  padding: 30rpx 38rpx 8rpx;
   background: #fff;
 }
 
@@ -66,9 +66,13 @@ page {
 
 .clear,
 .reset-link {
-  padding: 10rpx 0 10rpx 18rpx;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 14rpx 0 14rpx 18rpx;
+  background: transparent;
   color: #087f8c;
   font-size: 24rpx;
+  line-height: 1.5;
 }
 
 .selection-bar {
@@ -100,6 +104,7 @@ page {
 
 .kind-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 12rpx;
   margin: 0 38rpx 14rpx;
 }
@@ -155,6 +160,7 @@ page {
 }
 
 .sort-item {
+  padding: 14rpx 0;
   color: #6e7b82;
   font-size: 24rpx;
 }
@@ -291,9 +297,16 @@ page {
 }
 
 .loading {
-  min-height: 260rpx;
-  padding: 44rpx 0;
+  padding: 8rpx 0;
 }
+
+.skeleton-row { display: flex; gap: 24rpx; padding: 28rpx 0; border-bottom: 1rpx solid #edf0f2; }
+.skeleton-copy { flex: 1; padding-top: 8rpx; }
+.skeleton-line.short { width: 40%; margin-top: 62rpx; }
+.refresh-status { padding: 18rpx 0 0; color: #6e7b82; font-size: 24rpx; }
+.refresh-error { display: flex; align-items: center; gap: 16rpx; padding: 18rpx 0; color: #a9512b; font-size: 24rpx; line-height: 1.6; }
+.refresh-error text { flex: 1; }
+.refresh-error button { flex-shrink: 0; margin: 0; padding: 12rpx; background: transparent; color: #087f8c; font-size: 26rpx; }
 
 .skeleton-image,
 .skeleton-line {
@@ -352,6 +365,8 @@ page {
   margin-top: 10rpx;
   color: #6e7b82;
   font-size: 24rpx;
+  line-height: 1.7;
+  word-break: break-word;
 }
 
 .retry-button {
@@ -370,7 +385,7 @@ page {
 }
 
 .content-spacer {
-  height: 152rpx;
+  height: 36rpx;
 }
 
 .bottom-nav {
@@ -380,6 +395,7 @@ page {
   left: 0;
   z-index: 20;
   display: flex;
+  box-sizing: border-box;
   height: calc(112rpx + env(safe-area-inset-bottom));
   padding-bottom: env(safe-area-inset-bottom);
   border-top: 1rpx solid #edf0f2;

@@ -1,12 +1,36 @@
-<view class="page">
-  <view class="result {{status}}">
-    <image class="status-symbol" src="{{status === 'paid' || status === 'completed' ? '/assets/icons/check.svg' : '/assets/icons/clock.svg'}}" /><text class="title">{{statusTitle}}</text><text class="detail">{{statusDetail}}</text>
+<view class="page {{ticketCodes.length ? 'has-tickets' : ''}}">
+  <view class="ui-state" xhs:if="{{loading && !order}}"><text class="ui-state-title">正在加载订单</text><text class="ui-state-detail">正在获取最新订单信息，请稍候</text></view>
+  <view class="result {{status}} {{ticketCodes.length ? 'result-compact' : ''}}" xhs:elif="{{order}}">
+    <image class="status-symbol" src="{{!order.refund_pending && (status === 'paid' || status === 'completed') ? '/assets/icons/check.svg' : '/assets/icons/clock.svg'}}" /><text class="title">{{statusTitle}}</text><text class="ticket-document-label" xhs:if="{{ticketCodes.length}}">电子票</text><text class="detail" xhs:if="{{!ticketCodes.length || status !== 'paid' || order.isPackage}}">{{statusDetail}}</text>
   </view>
-  <view class="error" xhs:if="{{error}}"><text>{{error}}</text><button bindtap="retry">重新查询</button></view>
-  <view class="order-card {{status}}" xhs:if="{{order}}">
+  <view class="ui-state" xhs:if="{{error && !order && !loading}}"><text class="ui-state-title">暂时无法加载订单</text><text class="ui-state-detail">{{error}}</text><button class="ui-state-action" bindtap="retry">重新查询</button></view>
+  <view class="error" xhs:if="{{error && order}}"><text>{{error}}</text><button bindtap="retry">重新查询</button></view>
+  <view class="order-card {{status}}" xhs:if="{{order && !ticketCodes.length}}">
     <image class="order-image" xhs:if="{{order.image_url}}" src="{{order.image_url}}" mode="aspectFill" />
     <view class="order-image fallback" xhs:else><image class="ticket-icon" src="/assets/icons/ticket.svg" /></view>
     <view class="order-info"><text class="order-name">{{order.product_name}}</text><text class="quantity">{{order.isPackage ? '酒景套餐' : '景区门票'}} · {{order.quantity}} {{order.isPackage ? '份' : '张'}}</text></view>
+  </view>
+  <view class="keepsake-tickets" xhs:if="{{ticketCodes.length}}">
+    <view class="keepsake-ticket" xhs:for="{{ticketCodes}}" xhs:key="canvasId">
+      <view class="ticket-heading">
+        <text class="ticket-product">{{order.product_name}}</text>
+        <text class="ticket-merchant" xhs:if="{{storeName}}">{{storeName}}</text>
+      </view>
+      <image class="ticket-art" src="/assets/ticket-art.svg" mode="aspectFill" aria-hidden="true" />
+      <view class="ticket-admission">
+        <view class="ticket-entry-info">
+          <text class="ticket-entry-title">电子票</text>
+          <text class="ticket-usage {{item.used ? 'is-used' : ''}}">{{item.usageLabel}}</text>
+          <text class="ticket-instruction">请出示此码核验</text>
+          <text class="ticket-instruction">{{item.usageDetail}}</text>
+          <text class="ticket-edition">第 {{item.index}} 张 / 共 {{ticketCodes.length}} 张</text>
+        </view>
+        <button class="ticket-qr-button" data-canvas-id="{{item.canvasId}}" bindtap="showTicketQR" aria-label="放大票码"><canvas class="ticket-qr" canvas-id="{{item.canvasId}}" width="280" height="280"></canvas></button>
+      </view>
+      <view class="ticket-stub">
+        <text class="ticket-value">{{item.code}}</text><text class="ticket-privacy">请勿公开分享票码</text>
+      </view>
+    </view>
   </view>
   <view class="tickets" xhs:if="{{order && order.hotel_stay}}">
     <text class="section-title">住宿预订</text>
@@ -35,11 +59,27 @@
       <text class="ticket-hint" xhs:if="{{item.platform_sync_status === 'failed'}}">预约已经保留，平台状态正在重试同步</text>
     </view>
   </view>
-  <view class="tickets" xhs:if="{{ticketCodes.length}}">
-    <text class="section-title">票码</text><text class="ticket-hint">请向工作人员出示，按实际票规核验</text>
-    <view class="ticket-code" xhs:for="{{ticketCodes}}" xhs:key="code"><text class="ticket-index">第 {{item.index}} 张</text><text class="ticket-value">{{item.code}}</text></view>
+  <view class="issuance-pending" xhs:if="{{issuancePending}}"><text>支付已确认，票码正在生成。</text><button bindtap="retry">重新查询</button></view>
+  <view class="issuance-pending" xhs:if="{{issuanceManualReview}}"><text>票码正在人工核查，请联系商家确认。</text></view>
+  <view class="issuance-pending" xhs:if="{{qrRenderError}}"><text>二维码未能显示，可重新查询；也可向工作人员出示票码。</text><button bindtap="retry">重新查询</button></view>
+  <view class="ticket-after-sale" xhs:if="{{order && !order.refund_pending && status !== 'refunded' && (order.can_apply_refund || refundApplicationMessage || refundUnavailableMessage)}}">
+    <view class="after-sale-copy"><text class="after-sale-title">退票服务</text><text class="after-sale-hint">{{refundApplicationMessage || refundUnavailableMessage || '未使用且符合退票规则，系统自动办理原路退款'}}</text></view>
+    <button class="refund-apply {{applyingRefund ? 'is-disabled' : ''}}" xhs:if="{{order.can_apply_refund}}" disabled="{{applyingRefund}}" loading="{{applyingRefund}}" bindtap="applyRefund">申请退票</button>
+    <button class="refund-apply" xhs:elif="{{refundApplicationMessage}}" bindtap="retry">刷新进度</button>
   </view>
+  <button class="order-details-toggle" xhs:if="{{ticketCodes.length}}" bindtap="toggleOrderDetails" aria-expanded="{{orderDetailsExpanded}}">{{orderDetailsExpanded ? '收起订单信息' : '订单信息'}}<view class="details-chevron {{orderDetailsExpanded ? 'is-open' : ''}}"></view></button>
+  <view xhs:if="{{!ticketCodes.length || orderDetailsExpanded}}">
   <view class="due-amount" xhs:if="{{order}}"><text class="amount-label">{{status === 'unpaid' ? '待支付金额' : (status === 'cancelled' || status === 'failed' || status === 'refunded' ? '订单金额' : '实付金额')}}</text><view class="price"><text class="currency">¥</text>{{order.amountText}}</view></view>
-  <view class="order-meta"><text>订单号</text><text>{{orderNo}}</text></view>
-  <view class="action-footer"><button class="primary-button" xhs:if="{{status === 'unpaid' && order.pay_token}}" loading="{{paying}}" disabled="{{paying}}" bindtap="continuePayment">继续支付</button><view class="action-row"><button class="secondary-button" bindtap="goOrders">查看全部订单</button><button class="secondary-button" bindtap="goHome">继续购票</button></view></view>
+  <view class="order-meta" xhs:if="{{order}}"><text>订单号</text><text>{{orderNo}}</text></view>
+  <view class="action-footer"><button class="primary-button {{paying ? 'is-disabled' : ''}}" xhs:if="{{status === 'unpaid' && order.pay_token}}" loading="{{paying}}" disabled="{{paying}}" bindtap="continuePayment">继续支付</button><button class="primary-button" xhs:if="{{order.refund_pending}}" bindtap="retry">刷新退款状态</button><view class="action-row"><button class="secondary-button" bindtap="goOrders">查看全部订单</button><button class="secondary-button" bindtap="goHome">继续购票</button></view></view>
+  </view>
+  <view class="expanded-qr" xhs:if="{{expandedTicket}}">
+    <button class="expanded-close" bindtap="closeTicketQR" aria-label="关闭放大票码">关闭</button>
+    <text class="expanded-title">请出示此码核验</text>
+    <text class="expanded-product">{{order.product_name}} · 第 {{expandedTicket.index}} 张</text>
+    <canvas class="expanded-canvas" canvas-id="ticket-qr-expanded" width="280" height="280"></canvas>
+    <text class="ticket-value">{{expandedTicket.code}}</text>
+    <text class="ticket-privacy">票码可用于核验，请勿公开分享</text>
+    <text class="expanded-error" xhs:if="{{expandedQRError}}">二维码未能显示，请关闭后重试；也可向工作人员出示票码。</text>
+  </view>
 </view>

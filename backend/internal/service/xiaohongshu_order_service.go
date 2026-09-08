@@ -25,7 +25,10 @@ const (
 // remote order facts recoverable across process restarts.
 type XiaohongshuOrderService struct {
 	NewXiaohongshuClient func(appID, secret, environment string) *xiaohongshu.Client
-	Now                  func() time.Time
+	// EncryptVoucher is a test seam. Production uses EncryptAES through the
+	// nil fallback in the issuance service.
+	EncryptVoucher func(string) (string, error)
+	Now            func() time.Time
 }
 
 func (s MiniappService) orderService() XiaohongshuOrderService {
@@ -142,7 +145,7 @@ func (s XiaohongshuOrderService) GetXiaohongshuOrder(ctx context.Context, custom
 	if err := model.DB.Where("id = ? AND tenant_id = ?", link.OrderID, customer.TenantID).First(&order).Error; err != nil {
 		return nil, err
 	}
-	if link.State == "paid" || link.State == "cancelled" || link.State == "failed" {
+	if (link.State == "paid" && link.VoucherIssuanceStatus != "pending") || link.State == "cancelled" || link.State == "failed" {
 		return s.orderResult(&link, &order, false)
 	}
 	return s.refreshXiaohongshuOrder(ctx, customer, &link, &order)
@@ -163,7 +166,7 @@ func (s XiaohongshuOrderService) loadOrderResult(customer *model.MiniappCustomer
 func (s XiaohongshuOrderService) orderResult(link *model.XiaohongshuOrderLink, order *model.Order, includePayToken bool) (*MiniappOrderResult, error) {
 	result := &MiniappOrderResult{
 		OrderNo: order.OrderNo, PlatformOrderID: link.PlatformOrderID, AmountCents: moneyCents(order.TotalAmount),
-		Status: order.Status, CoreOrderStatus: order.Status, PlatformPaymentState: link.State, ExpiresAt: link.PayTokenExpiresAt,
+		Status: order.Status, CoreOrderStatus: order.Status, PlatformPaymentState: link.State, VoucherIssuanceStatus: link.VoucherIssuanceStatus, ExpiresAt: link.PayTokenExpiresAt,
 	}
 	type presentationRow struct {
 		ProductName string
@@ -236,6 +239,9 @@ func (s XiaohongshuOrderService) orderResult(link *model.XiaohongshuOrderLink, o
 			})
 		}
 	}
+	if err := populateMiniappRefundApplicationProjection(result, link, order); err != nil {
+		return nil, err
+	}
 	if includePayToken && link.PayTokenCiphertext != "" {
 		payToken, err := utils.DecryptAES(link.PayTokenCiphertext)
 		if err != nil {
@@ -243,13 +249,26 @@ func (s XiaohongshuOrderService) orderResult(link *model.XiaohongshuOrderLink, o
 		}
 		result.PayToken = payToken
 	}
-	if link.State == "paid" && order.Status != "refunded" && order.Status != "cancelled" {
+	if link.State == "paid" && link.VoucherIssuanceStatus == "ready" && order.Status != "refunded" && order.Status != "cancelled" {
+		var pendingRefunds int64
+		if err := model.DB.Model(&model.Refund{}).Where("tenant_id = ? AND order_no = ? AND method = ? AND status = ?", order.TenantID, order.OrderNo, "xiaohongshu", "pending").Count(&pendingRefunds).Error; err != nil {
+			return nil, err
+		}
+		result.RefundPending = pendingRefunds > 0
+		if result.RefundPending {
+			return result, nil
+		}
+		var tickets []model.Ticket
 		if err := model.DB.Model(&model.Ticket{}).
 			Where("order_id = ? AND tenant_id = ? AND status IN ?", order.ID, order.TenantID, []string{"unused", "active", "issued", "used"}).
 			Where(`NOT EXISTS (SELECT 1 FROM scenic_hotel_package_entitlements e WHERE e.order_id = ? AND e.deleted_at IS NULL)
 				OR EXISTS (SELECT 1 FROM scenic_hotel_package_entitlements e WHERE e.order_id = ? AND e.ticket_id = tickets.id AND e.status = 'booked' AND e.deleted_at IS NULL)`, order.ID, order.ID).
-			Order("id ASC").Pluck("ticket_code", &result.TicketCodes).Error; err != nil {
+			Order("id ASC").Find(&tickets).Error; err != nil {
 			return nil, err
+		}
+		for _, ticket := range tickets {
+			result.TicketCodes = append(result.TicketCodes, ticket.TicketCode)
+			result.Tickets = append(result.Tickets, MiniappTicket{Code: ticket.TicketCode, Status: ticket.Status, CheckInCount: ticket.CheckInCount})
 		}
 	}
 	return result, nil
@@ -299,6 +318,9 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 		// existing ticket order/Saga path fail-closed until a dedicated hotel
 		// order and reservation protocol is enabled for this channel.
 		return nil, errors.New("酒店产品暂未开放小红书交易，请先完成住宿订单协议联调")
+	}
+	if product.CodeMode == "order" && input.Quantity > 1 {
+		return nil, errors.New("该票种为整单一码，小红书暂只支持每单购买一份，请分次下单")
 	}
 	if err := model.DB.Where("channel_product_mapping_id = ? AND tenant_id = ? AND channel_account_id = ? AND sync_status IN ? AND audit_status = ?", mapping.ID, customer.TenantID, account.ID, []string{"submitted", "synced"}, "approved").First(&config).Error; err != nil {
 		return nil, errors.New("票种尚未通过小红书商品审核")
@@ -379,7 +401,7 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 		Products: []xiaohongshu.OrderProduct{{ExternalProductID: mapping.ExternalCode, ExternalSKUID: config.ExternalSKUID, Count: input.Quantity, SalePrice: mapping.ChannelSaleCents, RealPrice: totalCents}},
 		Price:    xiaohongshu.OrderPrice{OrderPrice: totalCents},
 	}
-	payloadCiphertext, err := encryptXiaohongshuOrderOperationPayload(request)
+	payloadCiphertext, err := encryptXiaohongshuOrderOperationPayload(request, config.ProductType)
 	if err != nil {
 		s.failXiaohongshuOrder(&link, &order, "xiaohongshu order request encryption failed")
 		return nil, err
@@ -440,8 +462,12 @@ func (s XiaohongshuOrderService) refreshXiaohongshuOrder(ctx context.Context, cu
 		if err := s.completeXiaohongshuOrder(link, order, platform); err != nil {
 			return nil, err
 		}
-		link.State = "paid"
-		order.Status = "paid"
+		if err := model.DB.Where("id = ? AND tenant_id = ?", link.ID, link.TenantID).First(link).Error; err != nil {
+			return nil, err
+		}
+		if err := model.DB.Where("id = ? AND tenant_id = ?", order.ID, order.TenantID).First(order).Error; err != nil {
+			return nil, err
+		}
 		return s.orderResult(link, order, false)
 	case 71, 998:
 		if order.Status == "unpaid" {
@@ -475,6 +501,24 @@ func (s XiaohongshuOrderService) refreshXiaohongshuOrder(ctx context.Context, cu
 }
 
 func (s XiaohongshuOrderService) completeXiaohongshuOrder(link *model.XiaohongshuOrderLink, order *model.Order, platform *xiaohongshu.GuaranteeOrderResponse) error {
+	if err := s.recordXiaohongshuPayment(link, order, platform); err != nil {
+		return err
+	}
+	if err := s.issueXiaohongshuVouchers(link, order, platform.Vouchers); err != nil {
+		// The provider payment is already durable. Preserve the issuance failure
+		// separately for reconciliation instead of rolling payment/order back.
+		if persistErr := s.recordXiaohongshuVoucherIssuanceFailure(link, err); persistErr != nil {
+			return errors.Join(err, persistErr)
+		}
+		return err
+	}
+	return nil
+}
+
+func (s XiaohongshuOrderService) recordXiaohongshuPayment(link *model.XiaohongshuOrderLink, order *model.Order, platform *xiaohongshu.GuaranteeOrderResponse) error {
+	if link == nil || order == nil || platform == nil {
+		return errors.New("xiaohongshu payment completion requires link, order, and provider response")
+	}
 	return model.Write(func(tx *gorm.DB) error {
 		var lockedLink model.XiaohongshuOrderLink
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", link.ID, link.TenantID).First(&lockedLink).Error; err != nil {
@@ -483,9 +527,6 @@ func (s XiaohongshuOrderService) completeXiaohongshuOrder(link *model.Xiaohongsh
 		var lockedOrder model.Order
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", order.ID, order.TenantID).First(&lockedOrder).Error; err != nil {
 			return err
-		}
-		if lockedLink.State == "paid" && lockedOrder.Status == "paid" {
-			return nil
 		}
 		amountCents := moneyCents(lockedOrder.TotalAmount)
 		var payment model.Payment
@@ -509,28 +550,39 @@ func (s XiaohongshuOrderService) completeXiaohongshuOrder(link *model.Xiaohongsh
 		if err := settleOrderIfFullyPaidTx(tx, &lockedOrder); err != nil {
 			return err
 		}
-		voucherError := ""
-		if len(platform.Vouchers) > 0 {
-			var tickets []model.Ticket
-			if err := tx.Where("order_id = ? AND tenant_id = ?", lockedOrder.ID, lockedOrder.TenantID).Order("id ASC").Find(&tickets).Error; err != nil {
-				return err
-			}
-			if len(tickets) != len(platform.Vouchers) {
-				voucherError = fmt.Sprintf("小红书券码数量 %d 与本地票数 %d 不一致", len(platform.Vouchers), len(tickets))
-			} else {
-				for index, voucher := range platform.Vouchers {
-					ciphertext, err := utils.EncryptAES(voucher.Code)
-					if err != nil {
-						return err
-					}
-					row := model.XiaohongshuVoucherLink{TenantID: lockedOrder.TenantID, ChannelAccountID: lockedLink.ChannelAccountID, XiaohongshuOrderLinkID: lockedLink.ID, TicketID: tickets[index].ID, VoucherCodeHash: hashMiniappValue(voucher.Code), VoucherCodeCiphertext: ciphertext, Status: voucher.Status}
-					if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "ticket_id"}}, DoUpdates: clause.AssignmentColumns([]string{"voucher_code_hash", "voucher_code_ciphertext", "status", "updated_at"})}).Create(&row).Error; err != nil {
-						return err
-					}
-				}
-			}
+		return tx.Model(&lockedLink).Updates(map[string]interface{}{"state": "paid", "trade_no": platform.TradeNo, "pay_channel": platform.PayChannel, "last_queried_at": s.now()}).Error
+	})
+}
+
+func (s XiaohongshuOrderService) issueXiaohongshuVouchers(link *model.XiaohongshuOrderLink, order *model.Order, vouchers []xiaohongshu.VoucherInfo) error {
+	if link == nil || order == nil {
+		return errors.New("xiaohongshu voucher issuance requires link and order")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		var lockedLink model.XiaohongshuOrderLink
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND state = ?", link.ID, link.TenantID, "paid").First(&lockedLink).Error; err != nil {
+			return err
 		}
-		return tx.Model(&lockedLink).Updates(map[string]interface{}{"state": "paid", "trade_no": platform.TradeNo, "pay_channel": platform.PayChannel, "last_queried_at": s.now(), "last_error": voucherError}).Error
+		var lockedOrder model.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND status = ?", order.ID, order.TenantID, "paid").First(&lockedOrder).Error; err != nil {
+			return err
+		}
+		return s.applyXiaohongshuVoucherIssuanceTx(tx, &lockedLink, &lockedOrder, vouchers)
+	})
+}
+
+func (s XiaohongshuOrderService) recordXiaohongshuVoucherIssuanceFailure(link *model.XiaohongshuOrderLink, cause error) error {
+	if link == nil || cause == nil {
+		return nil
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&model.XiaohongshuOrderLink{}).
+			Where("id = ? AND tenant_id = ? AND state = ? AND voucher_issuance_status = ?", link.ID, link.TenantID, "paid", "pending").
+			Updates(map[string]interface{}{
+				"voucher_issuance_attempt_count":   gorm.Expr("voucher_issuance_attempt_count + 1"),
+				"voucher_issuance_last_attempt_at": s.now(),
+				"voucher_issuance_last_error":      truncateChannelError(cause.Error()),
+			}).Error
 	})
 }
 
@@ -556,7 +608,7 @@ func (s XiaohongshuOrderService) ProcessPendingXiaohongshuOrders(ctx context.Con
 		}
 	}
 	var links []model.XiaohongshuOrderLink
-	if err := model.DB.Where("state IN ?", []string{"creating", "unpaid"}).Where("last_queried_at IS NULL OR last_queried_at < ?", now.Add(-20*time.Second)).Order("id ASC").Limit(limit).Find(&links).Error; err != nil {
+	if err := model.DB.Where("(state IN ? OR (state = ? AND voucher_issuance_status = ?))", []string{"creating", "unpaid"}, "paid", "pending").Where("last_queried_at IS NULL OR last_queried_at < ?", now.Add(-20*time.Second)).Order("id ASC").Limit(limit).Find(&links).Error; err != nil {
 		return 0, err
 	}
 	for i := range links {
@@ -602,11 +654,16 @@ func (s XiaohongshuOrderService) now() time.Time {
 }
 
 type xiaohongshuOrderOperationPayload struct {
-	Request xiaohongshu.OrderUpsertRequest `json:"request"`
+	Request     xiaohongshu.OrderUpsertRequest `json:"request"`
+	ProductType int                            `json:"product_type"`
 }
 
-func encryptXiaohongshuOrderOperationPayload(request xiaohongshu.OrderUpsertRequest) (string, error) {
-	raw, err := json.Marshal(xiaohongshuOrderOperationPayload{Request: request})
+func encryptXiaohongshuOrderOperationPayload(request xiaohongshu.OrderUpsertRequest, productTypes ...int) (string, error) {
+	productType := 0
+	if len(productTypes) == 1 {
+		productType = productTypes[0]
+	}
+	raw, err := json.Marshal(xiaohongshuOrderOperationPayload{Request: request, ProductType: productType})
 	if err != nil {
 		return "", err
 	}

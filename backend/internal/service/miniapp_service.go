@@ -44,6 +44,7 @@ type MiniappCatalogProduct struct {
 	ProductKind         string   `json:"product_kind"`
 	SaleMode            string   `json:"sale_mode,omitempty"`
 	PriceCents          int64    `json:"price_cents"`
+	MaxQuantity         int      `json:"max_quantity"`
 	Tags                []string `json:"tags"`
 	ValidityType        string   `json:"validity_type"`
 	ValidityDays        int      `json:"validity_days,omitempty"`
@@ -113,22 +114,36 @@ type MiniappPackageBookingInput struct {
 	ClientRequestID string `json:"request_id"`
 }
 
+// Usage is a projection of the shared ticket, not a channel-specific entitlement.
+type MiniappTicket struct {
+	Code         string `json:"code"`
+	Status       string `json:"status"`
+	CheckInCount int    `json:"check_in_count"`
+}
+
 type MiniappOrderResult struct {
-	OrderNo              string                      `json:"order_no"`
-	PlatformOrderID      string                      `json:"order_id,omitempty"`
-	ProductName          string                      `json:"product_name,omitempty"`
-	ImageURL             string                      `json:"image_url,omitempty"`
-	Quantity             int                         `json:"quantity"`
-	PayToken             string                      `json:"pay_token,omitempty"`
-	AmountCents          int64                       `json:"amount_cents"`
-	Status               string                      `json:"status"`
-	CoreOrderStatus      string                      `json:"core_order_status"`
-	PlatformPaymentState string                      `json:"platform_payment_state"`
-	ExpiresAt            *time.Time                  `json:"expires_at,omitempty"`
-	TicketCodes          []string                    `json:"ticket_codes,omitempty"`
-	ProductKind          string                      `json:"product_kind"`
-	HotelStay            *MiniappHotelStay           `json:"hotel_stay,omitempty"`
-	PackageEntitlements  []MiniappPackageEntitlement `json:"package_entitlements,omitempty"`
+	OrderNo                  string                      `json:"order_no"`
+	PlatformOrderID          string                      `json:"order_id,omitempty"`
+	ProductName              string                      `json:"product_name,omitempty"`
+	ImageURL                 string                      `json:"image_url,omitempty"`
+	Quantity                 int                         `json:"quantity"`
+	PayToken                 string                      `json:"pay_token,omitempty"`
+	AmountCents              int64                       `json:"amount_cents"`
+	Status                   string                      `json:"status"`
+	CoreOrderStatus          string                      `json:"core_order_status"`
+	PlatformPaymentState     string                      `json:"platform_payment_state"`
+	VoucherIssuanceStatus    string                      `json:"voucher_issuance_status"`
+	RefundPending            bool                        `json:"refund_pending"`
+	CanApplyRefund           bool                        `json:"can_apply_refund"`
+	RefundApplicationStatus  string                      `json:"refund_application_status"`
+	RefundApplicationNo      string                      `json:"refund_application_no"`
+	RefundApplicationMessage string                      `json:"refund_application_message"`
+	ExpiresAt                *time.Time                  `json:"expires_at,omitempty"`
+	TicketCodes              []string                    `json:"ticket_codes,omitempty"`
+	Tickets                  []MiniappTicket             `json:"tickets,omitempty"`
+	ProductKind              string                      `json:"product_kind"`
+	HotelStay                *MiniappHotelStay           `json:"hotel_stay,omitempty"`
+	PackageEntitlements      []MiniappPackageEntitlement `json:"package_entitlements,omitempty"`
 }
 
 type MiniappOrderSummary struct {
@@ -270,6 +285,7 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 		DisplayName             string
 		ProductName             string
 		ProductKind             string
+		CodeMode                string
 		ScenicAreaName          string
 		ChannelSaleCents        int64
 		ProductPrice            float64
@@ -300,7 +316,7 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 	err := model.DB.Table("channel_product_mappings AS mapping").
 		Select(`mapping.id AS mapping_id, mapping.display_name, product.name AS product_name, product.product_kind,
 			scenic.name AS scenic_area_name, mapping.channel_sale_cents, product.price AS product_price,
-			product.tags, product.validity_type, product.validity_days, product.stock_type,
+			product.tags, product.validity_type, product.validity_days, product.stock_type, product.code_mode,
 			xhs_config.image_url, xhs_config.description, xhs_config.product_type,
 			hotel_package.id AS package_id, hotel.name AS hotel_name, room.name AS room_type_name,
 			rate.name AS rate_plan_name, hotel_package.nights, hotel_package.rooms_per_package,
@@ -361,10 +377,14 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 		if kind == "hotel" {
 			nights, rooms = row.HotelProductNights, row.HotelProductRooms
 		}
+		maxQuantity := 100
+		if row.CodeMode == "order" {
+			maxQuantity = 1
+		}
 		products = append(products, MiniappCatalogProduct{
 			ID: row.MappingID, Name: name, ScenicAreaName: row.ScenicAreaName,
 			ImageURL: row.ImageURL, Description: row.Description, ProductType: row.ProductType,
-			ProductKind: kind, SaleMode: row.SaleMode, PriceCents: priceCents, Tags: parseProductTags(row.Tags),
+			ProductKind: kind, SaleMode: row.SaleMode, PriceCents: priceCents, MaxQuantity: maxQuantity, Tags: parseProductTags(row.Tags),
 			ValidityType: row.ValidityType, ValidityDays: row.ValidityDays,
 			RequiresUseDate: (row.PackageID != 0 && row.BookingMode != "after_purchase") || (row.PackageID == 0 && row.StockType == "daily") || (kind == "hotel" && row.SaleMode == "calendar_room"),
 			HotelName:       row.HotelName, RoomTypeName: row.RoomTypeName, RatePlanName: row.RatePlanName,

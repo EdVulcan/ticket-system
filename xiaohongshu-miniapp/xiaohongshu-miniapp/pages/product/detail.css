@@ -10,7 +10,7 @@ page { min-height: 100%; background: #f5f7f8; color: #20262b; }
 .tags { display: flex; flex-wrap: wrap; gap: 8rpx; margin-top: 17rpx; }
 .tag { padding: 5rpx 10rpx; border-radius: 6rpx; background: #f5f7f8; color: #6e7b82; font-size: 19rpx; }
 .tag:nth-child(2n) { background: #fff4eb; color: #d45d28; }
-.price { display: flex; align-items: baseline; margin-top: 22rpx; color: #d45d28; }
+.price { display: flex; align-items: baseline; margin-top: 22rpx; color: #d45d28; font-variant-numeric: tabular-nums; }
 .currency { font-size: 25rpx; }
 .amount { font-size: 52rpx; font-weight: 850; }
 .unit { margin-left: 5rpx; color: #9ca3af; font-size: 20rpx; }
@@ -24,41 +24,23 @@ page { min-height: 100%; background: #f5f7f8; color: #20262b; }
 .info-label { flex-shrink: 0; color: #6e7b82; }
 .info-value { color: #20262b; text-align: right; }
 .description { color: #6e7b82; font-size: 24rpx; line-height: 1.75; white-space: pre-wrap; }
-.state { display: flex; align-items: center; flex-direction: column; justify-content: center; min-height: 60vh; color: #6e7b82; font-size: 25rpx; }
-.state.error { color: #d45d28; }
-.state button { width: 210rpx; height: 68rpx; margin-top: 24rpx; border-radius: 12rpx; background: #087f8c; color: #fff; font-size: 24rpx; line-height: 68rpx; }
+.loading-state, .state { display: flex; align-items: center; flex-direction: column; justify-content: center; min-height: 60vh; padding: 44rpx 38rpx; box-sizing: border-box; text-align: center; }
+.loading-card { width: 100%; max-width: 560rpx; }
+.loading-media, .loading-line { border-radius: 14rpx; background: #e9eef0; }
+.loading-media { height: 280rpx; }
+.loading-line { width: 62%; height: 24rpx; margin-top: 22rpx; }
+.loading-line.wide { width: 86%; height: 34rpx; }
+.loading-line.short { width: 42%; }
+.loading-copy { display: block; margin-top: 26rpx; color: #6e7b82; font-size: 24rpx; }
+.state-title { color: #20262b; font-size: 30rpx; font-weight: 650; line-height: 1.5; }
+.state-detail { display: block; margin-top: 10rpx; color: #6e7b82; font-size: 24rpx; line-height: 1.65; word-break: break-word; }
+.retry-button { width: 220rpx; height: 90rpx; margin-top: 28rpx; border-radius: 18rpx; background: #087f8c; color: #fff; font-size: 26rpx; line-height: 90rpx; }
 .page-spacer { height: 148rpx; }
-.purchase-bar { position: fixed; right: 0; bottom: 0; left: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; height: calc(116rpx + env(safe-area-inset-bottom)); padding: 14rpx 38rpx calc(14rpx + env(safe-area-inset-bottom)); box-sizing: border-box; border-top: 1rpx solid #e5e7eb; background: rgba(255, 255, 255, .98); }
+.purchase-bar { position: fixed; right: 0; bottom: 0; left: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 24rpx; height: calc(116rpx + env(safe-area-inset-bottom)); padding: 14rpx 38rpx calc(14rpx + env(safe-area-inset-bottom)); box-sizing: border-box; border-top: 1rpx solid #e5e7eb; background: rgba(255, 255, 255, .98); }
+.purchase-bar > view { min-width: 0; }
 .bar-label { margin-right: 9rpx; color: #6e7b82; font-size: 20rpx; }
 .bar-price { color: #d45d28; font-size: 50rpx; font-weight: 700; }
-.buy-button, .sheet-primary { height: 94rpx; margin: 0; padding: 0; border-radius: 18rpx; background: #087f8c; color: #fff; font-size: 29rpx; font-weight: 650; line-height: 94rpx; }
+.buy-button { height: 94rpx; margin: 0; padding: 0; border-radius: 18rpx; background: #087f8c; color: #fff; font-size: 29rpx; font-weight: 650; line-height: 94rpx; }
 .buy-button { width: 300rpx; }
-.sheet-mask { position: fixed; inset: 0; z-index: 30; background: rgba(32, 38, 43, .42); }
-.purchase-sheet { position: fixed; right: 0; bottom: 0; left: 0; z-index: 31; max-height: 92vh; box-sizing: border-box; padding: 32rpx 38rpx calc(30rpx + env(safe-area-inset-bottom)); overflow-y: auto; border-radius: 28rpx 28rpx 0 0; background: #fff; }
-.sheet-heading, .sheet-quantity, .calendar-header { display: flex; align-items: center; justify-content: space-between; }
-.sheet-title { color: #20262b; font-size: 34rpx; font-weight: 700; }
-.sheet-close, .calendar-header button { margin: 0; padding: 8rpx; background: transparent; color: #087f8c; font-size: 23rpx; }
-.field-title { display: block; margin: 28rpx 0 18rpx; color: #20262b; font-size: 27rpx; font-weight: 650; }
-.date-chips { display: flex; gap: 14rpx; }
-.date-chip, .more-date { flex: 1; min-width: 0; height: 112rpx; margin: 0; padding: 18rpx 8rpx; border: 1rpx solid #dfe7e9; border-radius: 12rpx; background: #fff; color: #20262b; font-size: 25rpx; line-height: 36rpx; }
-.date-chip.selected { border-color: #087f8c; background: #edf7f8; color: #087f8c; }
-.date-chip.disabled { color: #a4afb4; }
-.more-date { color: #087f8c; }
-.date-chip text, .more-date text { display: block; }
-.date-chip .chip-date, .more-date .chip-date { font-size: 27rpx; font-weight: 600; }
-.calendar { margin-top: 18rpx; padding-top: 16rpx; border-top: 1rpx solid #edf0f2; }
-.calendar-header text { color: #20262b; font-size: 26rpx; font-weight: 650; }
-.weekdays, .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; }
-.weekdays { margin-top: 10rpx; color: #6e7b82; font-size: 20rpx; }
-.calendar-day { height: 68rpx; margin-top: 8rpx; border-radius: 10rpx; }
-.calendar-day.selected { background: #087f8c; color: #fff; }
-.calendar-day.disabled { color: #b3bdc1; }
-.calendar-day-button { width: 100%; height: 100%; margin: 0; padding: 0; background: transparent; color: inherit; font-size: 25rpx; line-height: 68rpx; }
-.sheet-quantity { margin-top: 28rpx; padding-top: 26rpx; border-top: 1rpx solid #edf0f2; color: #20262b; font-size: 27rpx; font-weight: 650; }
-.stepper { display: flex; align-items: center; gap: 18rpx; }
-.stepper button { width: 58rpx; height: 58rpx; margin: 0; padding: 0; border-radius: 10rpx; background: #f5f7f8; color: #20262b; font-size: 30rpx; line-height: 58rpx; }
-.stepper button[disabled] { color: #b3bdc1; }
-.stepper text { min-width: 36rpx; text-align: center; font-size: 27rpx; }
-.limit { display: block; margin-top: 12rpx; color: #d45d28; font-size: 20rpx; }
-.inline-error { display: block; margin-top: 16rpx; color: #d45d28; font-size: 22rpx; }
-.sheet-primary { display: block; width: 100%; margin-top: 28rpx; }
+.title, .description, .info-value, .inline-error { word-break: break-word; }
+.info-value { min-width: 0; }

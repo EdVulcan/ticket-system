@@ -319,8 +319,8 @@ func parseXiaohongshuAfterSaleIdentifiers(payload []byte) (externalOrderID, exte
 		}
 		return ""
 	}
-	return value("order_id", "order_no", "external_order_id", "orderid"),
-		value("after_sale_id", "aftersale_id", "after_sale_no", "aftersale_no", "service_id"),
+	return value("out_order_id", "order_id", "order_no", "external_order_id", "orderid"),
+		value("out_after_sales_order_id", "after_sale_id", "aftersale_id", "after_sale_no", "aftersale_no", "service_id"),
 		value("refund_id", "refund_no", "external_refund_id", "refundid")
 }
 

@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 113
+const CurrentPostgresSchemaVersion = 115
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -36,6 +36,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	models := []interface{}{
 		&SchemaMigration{},
+		&XiaohongshuRefundOperation{},
 		&Tenant{}, &TenantCapability{}, &SupplierBusinessType{}, &ScenicArea{}, &HotelProperty{}, &HotelRoomType{}, &HotelRatePlan{}, &HotelRatePlanPrice{}, &HotelRoomInventory{}, &HotelProduct{}, &HotelProductRevision{}, &HotelProductCalendarPrice{}, &HotelProductEntitlement{}, &HotelProductReservation{}, &ScenicHotelPackage{}, &ScenicHotelPackageEntitlement{}, &HotelReservation{}, &PlatformUser{}, &User{}, &Staff{},
 		&CheckPoint{}, &Device{}, &TicketRule{}, &RuleGroup{}, &RuleItem{},
 		&Product{}, &ProductRevision{}, &ProductOffer{}, &SellerListing{}, &ProductInventory{},
@@ -461,6 +462,58 @@ func runPostgresMigrations(db *gorm.DB) error {
 			return fmt.Errorf("register xiaohongshu storefront image: %w", err)
 		}
 	}
+	if previousSchemaVersion < 114 {
+		if err := db.Exec(`
+			ALTER TABLE xiaohongshu_order_links
+				ADD COLUMN IF NOT EXISTS voucher_issuance_status varchar(20) NOT NULL DEFAULT 'pending',
+				ADD COLUMN IF NOT EXISTS voucher_issuance_attempt_count integer NOT NULL DEFAULT 0,
+				ADD COLUMN IF NOT EXISTS voucher_issuance_last_attempt_at timestamptz,
+				ADD COLUMN IF NOT EXISTS voucher_issuance_last_error varchar(500) NOT NULL DEFAULT '';
+
+			-- Legacy paid links may only become ready where the database can prove
+			-- an exact, nonempty, one-to-one local ticket/voucher binding. Anything
+			-- else remains recoverable or is quarantined for operator review.
+			UPDATE xiaohongshu_order_links AS link
+			SET voucher_issuance_status = CASE
+				WHEN link.state <> 'paid' THEN 'pending'
+				WHEN EXISTS (
+					SELECT 1 FROM xiaohongshu_voucher_links voucher
+					WHERE voucher.xiaohongshu_order_link_id = link.id
+					  AND (BTRIM(voucher.voucher_code_hash) = '' OR BTRIM(voucher.voucher_code_ciphertext) = '')
+				) OR EXISTS (
+					SELECT 1 FROM xiaohongshu_voucher_links voucher
+					WHERE voucher.xiaohongshu_order_link_id = link.id
+					GROUP BY voucher.voucher_code_hash HAVING COUNT(*) > 1
+				) THEN 'manual_review'
+				WHEN EXISTS (SELECT 1 FROM tickets ticket WHERE ticket.order_id = link.order_id AND ticket.tenant_id = link.tenant_id AND ticket.deleted_at IS NULL)
+				 AND NOT EXISTS (
+					SELECT 1 FROM tickets ticket
+					WHERE ticket.order_id = link.order_id AND ticket.tenant_id = link.tenant_id AND ticket.deleted_at IS NULL
+					  AND NOT EXISTS (
+						SELECT 1 FROM xiaohongshu_voucher_links voucher
+						WHERE voucher.xiaohongshu_order_link_id = link.id AND voucher.ticket_id = ticket.id
+					  )
+				) AND NOT EXISTS (
+					SELECT 1 FROM xiaohongshu_voucher_links voucher
+					WHERE voucher.xiaohongshu_order_link_id = link.id
+					  AND NOT EXISTS (
+						SELECT 1 FROM tickets ticket
+						WHERE ticket.id = voucher.ticket_id AND ticket.order_id = link.order_id AND ticket.tenant_id = link.tenant_id AND ticket.deleted_at IS NULL
+					  )
+				) THEN 'ready'
+				ELSE 'pending'
+			END;
+
+			ALTER TABLE xiaohongshu_order_links DROP CONSTRAINT IF EXISTS chk_xhs_order_voucher_issuance_state;
+			ALTER TABLE xiaohongshu_order_links ADD CONSTRAINT chk_xhs_order_voucher_issuance_state
+				CHECK (voucher_issuance_status IN ('pending','ready','manual_review','not_required') AND voucher_issuance_attempt_count >= 0);
+			CREATE INDEX IF NOT EXISTS idx_xhs_order_voucher_issuance_pending
+				ON xiaohongshu_order_links(voucher_issuance_status, voucher_issuance_last_attempt_at, id)
+				WHERE deleted_at IS NULL AND state = 'paid' AND voucher_issuance_status = 'pending';
+		`).Error; err != nil {
+			return fmt.Errorf("register xiaohongshu voucher issuance readiness: %w", err)
+		}
+	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
 		if err := db.Exec(`
 			INSERT INTO supplier_business_types
@@ -609,7 +662,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "xiaohongshu storefront image",
+		Name:      "xiaohongshu voucher issuance readiness",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -1387,13 +1440,47 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 				  AND m.id = NEW.channel_product_mapping_id
 			) THEN RAISE EXCEPTION 'xiaohongshu product config ownership mismatch'; END IF;
 		WHEN 'xiaohongshu_order_links' THEN
-			IF NEW.tenant_id = 0 OR NOT EXISTS (
+			IF NEW.tenant_id = 0
+			   OR NEW.voucher_issuance_status NOT IN ('pending','ready','manual_review','not_required')
+			   OR NEW.voucher_issuance_attempt_count < 0
+			   OR (NEW.voucher_issuance_status = 'ready' AND (
+					NOT EXISTS (SELECT 1 FROM tickets ticket WHERE ticket.order_id = NEW.order_id AND ticket.tenant_id = NEW.tenant_id AND ticket.deleted_at IS NULL)
+					OR EXISTS (
+						SELECT 1 FROM tickets ticket
+						WHERE ticket.order_id = NEW.order_id AND ticket.tenant_id = NEW.tenant_id AND ticket.deleted_at IS NULL
+						  AND NOT EXISTS (SELECT 1 FROM xiaohongshu_voucher_links voucher WHERE voucher.xiaohongshu_order_link_id = NEW.id AND voucher.ticket_id = ticket.id)
+					) OR EXISTS (
+						SELECT 1 FROM xiaohongshu_voucher_links voucher
+						WHERE voucher.xiaohongshu_order_link_id = NEW.id
+						  AND (BTRIM(voucher.voucher_code_hash) = '' OR BTRIM(voucher.voucher_code_ciphertext) = ''
+						       OR NOT EXISTS (SELECT 1 FROM tickets ticket WHERE ticket.id = voucher.ticket_id AND ticket.order_id = NEW.order_id AND ticket.tenant_id = NEW.tenant_id AND ticket.deleted_at IS NULL))
+					)
+			   )) OR NOT EXISTS (
 				SELECT 1 FROM channel_accounts a JOIN miniapp_customers c ON c.channel_account_id = a.id
 				JOIN orders o ON o.id = NEW.order_id
 				WHERE a.id = NEW.channel_account_id AND a.tenant_id = NEW.tenant_id AND a.type = 'xiaohongshu'
 				  AND c.id = NEW.miniapp_customer_id AND c.tenant_id = NEW.tenant_id
 				  AND o.tenant_id = NEW.tenant_id AND o.channel_account_id = NEW.channel_account_id
 			) THEN RAISE EXCEPTION 'xiaohongshu order ownership mismatch'; END IF;
+		WHEN 'xiaohongshu_refund_operations' THEN
+			IF NEW.tenant_id = 0 OR NEW.request_payload_ciphertext = '' OR NEW.external_after_sales_order_id = ''
+			   OR NEW.state NOT IN ('prepared','querying','succeeded','failed')
+			   OR NOT EXISTS (
+				SELECT 1 FROM refunds r JOIN payments p ON p.id = r.payment_id
+				JOIN xiaohongshu_order_links l ON l.id = NEW.xiaohongshu_order_link_id
+				JOIN orders o ON o.id = l.order_id
+				WHERE r.id = NEW.refund_id AND r.tenant_id = NEW.tenant_id AND r.method = 'xiaohongshu'
+				  AND p.tenant_id = NEW.tenant_id AND p.method = 'xiaohongshu' AND p.order_no = r.order_no
+				  AND l.tenant_id = NEW.tenant_id AND l.channel_account_id = NEW.channel_account_id
+				  AND o.tenant_id = NEW.tenant_id AND o.order_no = r.order_no
+			   ) THEN RAISE EXCEPTION 'xiaohongshu refund operation ownership mismatch'; END IF;
+			IF TG_OP = 'UPDATE' AND (NEW.tenant_id <> OLD.tenant_id OR NEW.channel_account_id <> OLD.channel_account_id
+			   OR NEW.refund_id <> OLD.refund_id OR NEW.xiaohongshu_order_link_id <> OLD.xiaohongshu_order_link_id
+			   OR NEW.external_after_sales_order_id <> OLD.external_after_sales_order_id
+			   OR NEW.request_payload_ciphertext <> OLD.request_payload_ciphertext)
+   THEN RAISE EXCEPTION 'xiaohongshu refund identity is immutable'; END IF;
+   IF TG_OP = 'UPDATE' AND OLD.state <> 'prepared' AND NEW.state = 'prepared'
+   THEN RAISE EXCEPTION 'xiaohongshu refund cannot resubmit'; END IF;
 		WHEN 'xiaohongshu_order_operations' THEN
 			IF NEW.tenant_id = 0 OR COALESCE(NEW.request_payload_ciphertext, '') = ''
 			   OR NEW.attempt_count < 0
@@ -1431,7 +1518,14 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 				  AND (NEW.type <> 'refund_status_sync' OR (e.status = 'refunded' AND t.status = 'refunded'))
 			   ) THEN RAISE EXCEPTION 'xiaohongshu booking operation ownership mismatch'; END IF;
 		WHEN 'xiaohongshu_voucher_links' THEN
-			IF NEW.tenant_id = 0 OR NOT EXISTS (
+			IF NEW.tenant_id = 0 OR COALESCE(BTRIM(NEW.voucher_code_hash), '') = '' OR COALESCE(BTRIM(NEW.voucher_code_ciphertext), '') = ''
+			   OR (TG_OP = 'UPDATE' AND (NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+				OR NEW.channel_account_id IS DISTINCT FROM OLD.channel_account_id
+				OR NEW.xiaohongshu_order_link_id IS DISTINCT FROM OLD.xiaohongshu_order_link_id
+				OR NEW.ticket_id IS DISTINCT FROM OLD.ticket_id
+				OR NEW.voucher_code_hash IS DISTINCT FROM OLD.voucher_code_hash
+				OR NEW.voucher_code_ciphertext IS DISTINCT FROM OLD.voucher_code_ciphertext))
+			   OR NOT EXISTS (
 				SELECT 1 FROM xiaohongshu_order_links l JOIN tickets t ON t.id = NEW.ticket_id
 				WHERE l.id = NEW.xiaohongshu_order_link_id AND l.tenant_id = NEW.tenant_id
 				  AND l.channel_account_id = NEW.channel_account_id AND t.order_id = l.order_id
@@ -1482,7 +1576,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 	if err := db.Exec(function).Error; err != nil {
 		return fmt.Errorf("create PostgreSQL ownership function: %w", err)
 	}
-	for _, table := range []string{"check_points", "devices", "device_maintenance_credentials", "device_maintenance_sessions", "device_provisioning_leases", "device_verifications", "device_request_nonces", "hardware_commands", "hardware_events", "device_alerts", "products", "product_inventories", "print_templates", "print_template_revisions", "print_jobs", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "ai_tenant_quota_policies", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_rate_plan_prices", "hotel_room_inventories", "hotel_products", "hotel_product_revisions", "hotel_product_calendar_prices", "hotel_product_entitlements", "hotel_product_reservations", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_voucher_verifications", "xiaohongshu_webhook_events", "xiaohongshu_refund_coordinations"} {
+	for _, table := range []string{"check_points", "devices", "device_maintenance_credentials", "device_maintenance_sessions", "device_provisioning_leases", "device_verifications", "device_request_nonces", "hardware_commands", "hardware_events", "device_alerts", "products", "product_inventories", "print_templates", "print_template_revisions", "print_jobs", "catalog_batch_change_plans", "catalog_batch_change_lines", "ai_usage_months", "ai_tenant_quota_policies", "agent_tasks", "agent_task_events", "agent_business_aliases", "hotel_properties", "hotel_room_types", "hotel_rate_plans", "hotel_rate_plan_prices", "hotel_room_inventories", "hotel_products", "hotel_product_revisions", "hotel_product_calendar_prices", "hotel_product_entitlements", "hotel_product_reservations", "scenic_hotel_packages", "scenic_hotel_package_entitlements", "hotel_reservations", "order_items", "fulfillment_orders", "tickets", "ticket_entitlements", "check_in_records", "order_visitors", "ctrip_order_links", "ctrip_order_items", "ctrip_outbound_tasks", "miniapp_customers", "xiaohongshu_product_configs", "xiaohongshu_order_links", "xiaohongshu_order_operations", "xiaohongshu_refund_operations", "xiaohongshu_booking_operations", "xiaohongshu_voucher_links", "xiaohongshu_voucher_verifications", "xiaohongshu_webhook_events", "xiaohongshu_refund_coordinations"} {
 		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS ownership_guard ON %s; CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_ticket_ownership()`, table, table)).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL ownership trigger on %s: %w", table, err)
 		}

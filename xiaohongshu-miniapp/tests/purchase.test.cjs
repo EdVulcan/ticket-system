@@ -46,20 +46,14 @@ test('calendar rejects invalid days, changes year correctly and bounds month nav
   assert.equal(calendar.buildCalendarCells('2026-10-01').length, 35);
 });
 
-test('detail quantity limit respects the API maximum of 100', () => {
-  const page = loadPage('pages/product/detail.js', {}, {});
-  assert.equal(page.deriveMaxQuantity(80000, 1), 100);
-  assert.equal(page.deriveMaxQuantity(80000, 8000), 10);
-});
-
-test('detail carries a chosen date and quantity to confirmation without merchant demo fields', () => {
+test('detail opens confirmation directly without retaining date and quantity selection state', () => {
   let target = '';
   const app = { globalData: {}, setNavigationTitle() {}, setStoreName() {}, request: () => Promise.resolve({}) };
   const page = loadPage('pages/product/detail.js', app, { navigateTo: input => { target = input.url; } });
-  page.data.product = { id: 9, requiresUseDate: true, isPackage: false };
-  page.data.useDate = '2030-03-01'; page.data.quantity = 3; page.data.minDate = '2030-01-01'; page.data.maxDate = '2030-12-31';
-  page.continuePurchase();
-  assert.equal(target, '/pages/order/confirm?mapping_id=9&quantity=3&use_date=2030-03-01');
+  page.data.product = { id: 9 };
+  page.buy();
+  assert.equal(target, '/pages/order/confirm?mapping_id=9');
+  assert.equal(Object.hasOwn(page.data, 'purchaseOpen'), false);
   assert.equal(fs.readFileSync(path.join(miniappRoot, 'pages/product/detail.xhsml'), 'utf8').includes('云门'), false);
 });
 

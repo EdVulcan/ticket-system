@@ -140,6 +140,47 @@ func TestXiaohongshuWebhookVerifiesDecryptsAndPersistsIdempotently(t *testing.T)
 	}
 }
 
+func TestXiaohongshuOfficialRefundResultHoldsWithoutInventingFinancialSuccess(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	const appID, token, aesKey = "official-refund-app", "WebhookToken123", "abcdefghijklmnopqrstuvwxyzABCDEFGH123456789"
+	account := model.ChannelAccount{Code: "official-refund-channel"}
+	if err := (&ChannelService{}).CreateXiaohongshuIntegration(tenantID, &account, appID, "app-secret", token, aesKey); err != nil {
+		t.Fatal(err)
+	}
+	send := func(payload string) {
+		encrypted := encryptXiaohongshuWebhookFixture(t, aesKey, []byte(payload), appID)
+		message := XiaohongshuWebhookMessage{Nonce: "official-result", Timestamp: 1700000002, Encrypt: encrypted, MsgSignature: xiaohongshu.MessageSignature(token, "1700000002", "official-result", encrypted)}
+		if err := (XiaohongshuWebhookService{}).Receive(context.Background(), appID, message); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(`{"Event":"REFUND_RESULT","OutAfterSalesOrderId":"FAILED-1","Status":3}`)
+	var count int64
+	if err := model.DB.Model(&model.XiaohongshuRefundCoordination{}).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("failure created hold count=%d err=%v", count, err)
+	}
+	send(`{"Event":"REFUND_RESULT","OutAfterSalesOrderId":"REFUND-1","Status":2}`)
+	send(`{"Event":"REFUND_RESULT","OutAfterSalesOrderId":"REFUND-1","Status":2}`)
+	var hold model.XiaohongshuRefundCoordination
+	if err := model.DB.Where("tenant_id = ? AND channel_account_id = ?", tenantID, account.ID).First(&hold).Error; err != nil {
+		t.Fatal(err)
+	}
+	if hold.ExternalAfterSaleID != "REFUND-1" || hold.Scope != "account" || hold.State != "received_unmapped" {
+		t.Fatalf("official result not safely held: %+v", hold)
+	}
+	send(`{"Event":"REFUND_RESULT","OutAfterSalesOrderId":"REFUND-1","Status":3}`)
+	if err := model.DB.First(&hold, hold.ID).Error; err != nil || hold.State != "received_unmapped" {
+		t.Fatalf("late failure cleared success hold: %+v err=%v", hold, err)
+	}
+	if err := model.DB.Model(&model.XiaohongshuRefundCoordination{}).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("duplicate hold count=%d err=%v", count, err)
+	}
+	if err := model.DB.Model(&model.Refund{}).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("callback invented refund facts count=%d err=%v", count, err)
+	}
+}
+
 func TestXiaohongshuProductAuditWebhookFailsClosedForRejectedOfflineAndUnknownStatus(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)

@@ -16,6 +16,7 @@ Page({
     hasActiveFilters: false,
     emptyStateDetail: '换个关键词或分类试试',
     loading: true,
+    refreshing: false,
     error: ''
   },
 
@@ -33,8 +34,11 @@ Page({
   },
 
   loadCatalog() {
-    this.setData({ loading: true, error: '' });
+    const version = (this.catalogVersion || 0) + 1;
+    this.catalogVersion = version;
+    this.setData({ loading: !this.data.allProducts.length, refreshing: Boolean(this.data.allProducts.length), error: '' });
     return app.request('/catalog').then(catalog => {
+      if (version !== this.catalogVersion) return;
       const products = (catalog.products || []).map(product => ({
         ...product,
         tags: product.tags || [],
@@ -61,18 +65,23 @@ Page({
         resultCount: products.length,
         scenicOptions,
         kindOptions,
-        activeKind: kindOptions.length ? kindOptions[0].value : 'all',
+        activeKind: kindOptions.some(kind => kind.value === this.data.activeKind) ? this.data.activeKind : (kindOptions.length ? kindOptions[0].value : 'all'),
+        activeScenic: scenicOptions.indexOf(this.data.activeScenic) >= 0 ? this.data.activeScenic : '全部',
         hasActiveFilters: false,
         emptyStateDetail: '换个关键词或分类试试',
-        loading: false
+        loading: false,
+        refreshing: false
       }, () => {
         app.setStoreName(catalog.store_name || '官方商城');
         this.applyFilters();
       });
     }).catch(error => {
-      this.setData({ loading: false, error: error.message || '票种加载失败，请稍后重试' });
+      if (version !== this.catalogVersion) return;
+      this.setData({ loading: false, refreshing: false, error: error.message || '商品加载失败，请稍后重试' });
     });
   },
+
+  onUnload() { this.catalogVersion = (this.catalogVersion || 0) + 1; },
 
   onKeywordInput(event) {
     this.setData({ keyword: event.detail.value || '' }, () => this.applyFilters());
@@ -104,7 +113,7 @@ Page({
     let products = this.data.allProducts.filter(product => {
       const scenic = product.scenic_area_name || '其他景区';
       const scenicMatched = this.data.activeScenic === '全部' || scenic === this.data.activeScenic;
-      const kindMatched = this.data.activeKind === 'all' || product.product_kind === this.data.activeKind;
+      const kindMatched = this.data.activeKind === 'all' || (product.product_kind || 'ticket') === this.data.activeKind;
       const text = `${product.name || ''} ${scenic} ${product.hotel_name || ''} ${product.room_type_name || ''} ${product.priceText || ''} ${(product.tags || []).join(' ')}`.toLowerCase();
       return scenicMatched && kindMatched && (!keyword || text.indexOf(keyword) >= 0);
     });

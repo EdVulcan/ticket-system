@@ -326,6 +326,18 @@ func (s *DeviceService) ensureXiaohongshuVoucherVerification(req DirectVerifyReq
 			if saga.TenantID != req.TenantID || saga.TicketID != link.TicketID || saga.ChannelAccountID != link.ChannelAccountID {
 				return errors.New("小红书券核销协调归属不一致")
 			}
+			// A local preflight rejection has never contacted the provider. A new
+			// scan may try its own checkpoint; the old device response stays denied.
+			if saga.State == "local_rejected" && saga.AttemptCount == 0 && saga.ExternalStartedAt == nil && saga.VerifyID == "" &&
+				(saga.RequestID != req.RequestID || saga.DeviceID != req.DeviceID) {
+				if err := tx.Model(&saga).Updates(map[string]interface{}{
+					"state": "prepared", "device_verification_id": verificationID, "device_id": req.DeviceID,
+					"check_point_id": req.CheckPointID, "request_id": req.RequestID, "request_hash": req.RequestHash, "last_error": "",
+				}).Error; err != nil {
+					return err
+				}
+				return tx.First(&saga, saga.ID).Error
+			}
 			return nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
@@ -348,12 +360,15 @@ func (s *DeviceService) ensureXiaohongshuVoucherVerification(req DirectVerifyReq
 	return nil, err
 }
 
-func (s *DeviceService) claimXiaohongshuVoucherExternal(sagaID uint, now time.Time) (bool, error) {
+func (s *DeviceService) claimXiaohongshuVoucherExternal(sagaID uint, now time.Time, expectedVerificationID uint) (bool, error) {
 	claimed := false
 	err := model.Write(func(tx *gorm.DB) error {
 		var saga model.XiaohongshuVoucherVerification
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", sagaID).First(&saga).Error; err != nil {
 			return err
+		}
+		if saga.DeviceVerificationID != expectedVerificationID {
+			return nil
 		}
 		switch saga.State {
 		case "prepared":
@@ -371,6 +386,22 @@ func (s *DeviceService) claimXiaohongshuVoucherExternal(sagaID uint, now time.Ti
 		return nil
 	})
 	return claimed, err
+}
+
+// Ignore a stale preflight worker after a newer scan has taken ownership.
+func (s *DeviceService) rejectPreparedXiaohongshuVoucher(saga *model.XiaohongshuVoucherVerification, err error) error {
+	return model.Write(func(tx *gorm.DB) error {
+		result := tx.Model(&model.XiaohongshuVoucherVerification{}).
+			Where("id = ? AND state = ? AND device_verification_id = ?", saga.ID, "prepared", saga.DeviceVerificationID).
+			Updates(map[string]interface{}{"state": "local_rejected", "last_error": truncateChannelError(err.Error())})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		return tx.Model(&model.Ticket{}).Where("id = ? AND tenant_id = ? AND pending_xiaohongshu_verification_id = ?", saga.TicketID, saga.TenantID, saga.ID).Update("pending_xiaohongshu_verification_id", 0).Error
+	})
 }
 
 func (s *DeviceService) persistXiaohongshuVoucherExternalSuccess(sagaID uint, verifyID string, now time.Time) error {
@@ -431,11 +462,12 @@ func (s *DeviceService) completeXiaohongshuDeviceVerification(verificationID uin
 	if response == nil {
 		return errors.New("核销响应不能为空")
 	}
-	openStatus := ""
-	if response.Result == "allow" {
-		openStatus = "pending"
-	}
 	return model.Write(func(tx *gorm.DB) error {
+		var verification model.DeviceVerification
+		if err := tx.First(&verification, verificationID).Error; err != nil {
+			return err
+		}
+		openStatus := verificationOpenStatus(deviceTypeForVerification(tx, verification.DeviceID), response.Result)
 		return tx.Model(&model.DeviceVerification{}).Where("id = ? AND status = ?", verificationID, "processing").Updates(map[string]interface{}{
 			"status": "completed", "response_code": response.Code, "result": response.Result,
 			"display_text": response.DisplayText, "voice_file": response.VoiceFile, "voice_code": response.VoiceCode,
@@ -446,8 +478,8 @@ func (s *DeviceService) completeXiaohongshuDeviceVerification(verificationID uin
 
 // completedXiaohongshuVoucherResponse reconstructs the durable local result
 // instead of relying on the coordinator's original DeviceVerification row.
-// A retry may arrive with a different request id after another process has
-// completed the local admission, leaving that original row in processing.
+// Only the original device request can replay this admission. New scans must
+// evaluate the ticket's remaining local rights, even after provider consumption.
 func (s *DeviceService) completedXiaohongshuVoucherResponse(saga *model.XiaohongshuVoucherVerification, verificationID uint) (*VerifyResponse, error) {
 	if saga == nil {
 		return nil, errors.New("小红书核销协调记录不存在")
@@ -598,7 +630,7 @@ func (s *DeviceService) verifyXiaohongshuVoucher(req DirectVerifyRequest, device
 	if saga.RequestID != req.RequestID || saga.DeviceID != req.DeviceID {
 		switch saga.State {
 		case "local_completed":
-			return s.completedXiaohongshuVoucherResponse(saga, verification.ID)
+			return s.verifyActivatedXiaohongshuTicket(localReq, verification.ID)
 		case "external_rejected", "local_rejected":
 			response := xiaohongshuVoucherRejectedResponse(saga.LastError)
 			if err := s.completeXiaohongshuDeviceVerification(verification.ID, response, 0); err != nil {
@@ -640,14 +672,14 @@ func (s *DeviceService) verifyXiaohongshuVoucher(req DirectVerifyRequest, device
 			return s.finishXiaohongshuVoucherLocal(localReq, saga, verification.ID)
 		case "prepared":
 			if err := s.TicketService.PrepareDeviceRequest(localTicketCode, req.CheckPointID, req.DeviceID, req.TenantID, saga.ID, req.RequestID); err != nil {
-				_ = s.setXiaohongshuVoucherState(saga.ID, "local_rejected", err.Error(), true, s.now())
+				_ = s.rejectPreparedXiaohongshuVoucher(saga, err)
 				response := xiaohongshuVoucherRejectedResponse(err.Error())
 				if completeErr := s.completeXiaohongshuDeviceVerification(verification.ID, response, 0); completeErr != nil {
 					return nil, completeErr
 				}
 				return response, nil
 			}
-			claimed, err := s.claimXiaohongshuVoucherExternal(saga.ID, s.now())
+			claimed, err := s.claimXiaohongshuVoucherExternal(saga.ID, s.now(), verification.ID)
 			if err != nil {
 				return nil, err
 			}
@@ -667,6 +699,28 @@ func (s *DeviceService) verifyXiaohongshuVoucher(req DirectVerifyRequest, device
 		}
 	}
 	return nil, ErrVerificationProcessing
+}
+
+// The provider voucher is consumed once; each later admission is a new local
+// business fact governed by the same ticket rules as any other sales channel.
+func (s *DeviceService) verifyActivatedXiaohongshuTicket(req DirectVerifyRequest, verificationID uint) (*VerifyResponse, error) {
+	err := s.TicketService.VerifyDeviceRequest(req.TicketCode, req.CheckPointID, req.DeviceID, req.TenantID, req.RequestID)
+	response := denyResponse(err)
+	var checkIn model.CheckInRecord
+	queryErr := s.DB.Where("device_id = ? AND device_request_id = ? AND tenant_id = ?", req.DeviceID, req.RequestID, req.TenantID).First(&checkIn).Error
+	if queryErr != nil && !errors.Is(queryErr, gorm.ErrRecordNotFound) {
+		return nil, queryErr
+	}
+	if err == nil && checkIn.ID == 0 {
+		return nil, errors.New("本地核销成功但未找到核销记录")
+	}
+	if checkIn.ID != 0 {
+		response = responseFromCheckIn(s, &checkIn)
+	}
+	if completeErr := s.completeXiaohongshuDeviceVerification(verificationID, response, checkIn.ID); completeErr != nil {
+		return nil, completeErr
+	}
+	return response, nil
 }
 
 func (s *DeviceService) finishXiaohongshuVoucherLocal(req DirectVerifyRequest, saga *model.XiaohongshuVoucherVerification, verificationID uint) (*VerifyResponse, error) {
@@ -696,7 +750,7 @@ func (s *DeviceService) finishXiaohongshuVoucherLocal(req DirectVerifyRequest, s
 			return err
 		}
 		return tx.Model(&model.DeviceVerification{}).Where("id = ? AND status = ?", verificationID, "processing").Updates(map[string]interface{}{
-			"status": "completed", "response_code": response.Code, "result": response.Result, "display_text": response.DisplayText, "voice_file": response.VoiceFile, "voice_code": response.VoiceCode, "open_duration": response.OpenDuration, "check_in_record_id": checkIn.ID, "open_status": "pending",
+			"status": "completed", "response_code": response.Code, "result": response.Result, "display_text": response.DisplayText, "voice_file": response.VoiceFile, "voice_code": response.VoiceCode, "open_duration": response.OpenDuration, "check_in_record_id": checkIn.ID, "open_status": verificationOpenStatus(deviceTypeForVerification(tx, req.DeviceID), response.Result),
 		}).Error
 	}); err != nil {
 		return nil, err
@@ -748,12 +802,12 @@ func (s *DeviceService) ProcessPendingXiaohongshuVoucherVerifications(ctx contex
 			}
 			if err := s.TicketService.PrepareDeviceRequest(ticket.TicketCode, sagas[i].CheckPointID, sagas[i].DeviceID, sagas[i].TenantID, sagas[i].ID, sagas[i].RequestID); err != nil {
 				if isDeterministicLocalVerificationError(err) {
-					_ = s.setXiaohongshuVoucherState(sagas[i].ID, "local_rejected", err.Error(), true, s.now())
+					_ = s.rejectPreparedXiaohongshuVoucher(&sagas[i], err)
 					_ = s.completeXiaohongshuDeviceVerification(sagas[i].DeviceVerificationID, xiaohongshuVoucherRejectedResponse(err.Error()), 0)
 				}
 				continue
 			}
-			claimed, err := s.claimXiaohongshuVoucherExternal(sagas[i].ID, now)
+			claimed, err := s.claimXiaohongshuVoucherExternal(sagas[i].ID, now, sagas[i].DeviceVerificationID)
 			if err != nil || !claimed {
 				continue
 			}

@@ -91,6 +91,9 @@ func seedXiaohongshuVoucherFixture(t *testing.T) xiaohongshuVoucherFixture {
 	if err := model.DB.Create(&link).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := model.DB.Model(&orderLink).Update("voucher_issuance_status", "ready").Error; err != nil {
+		t.Fatal(err)
+	}
 	return xiaohongshuVoucherFixture{tenantID: tenantID, checkpoint: fixtureCheckpoint, device: fixtureDevice, ticket: ticket, link: link}
 }
 
@@ -139,6 +142,12 @@ func TestXiaohongshuVoucherVerificationCommitsExternalAndLocalFactsOnce(t *testi
 	if err != nil || second.Result != "allow" {
 		t.Fatalf("replayed response=%+v err=%v", second, err)
 	}
+	newScan := req
+	newScan.RequestID, newScan.RequestHash = "xhs-new-scan", "xhs-new-body"
+	third, err := svc.VerifyDirect(newScan)
+	if err != nil || third.Result != "deny" {
+		t.Fatalf("a new scan of a consumed single-use ticket must be denied: response=%+v err=%v", third, err)
+	}
 	if remoteCalls.Load() != 1 {
 		t.Fatalf("remote verify calls=%d, want 1", remoteCalls.Load())
 	}
@@ -157,6 +166,76 @@ func TestXiaohongshuVoucherVerificationCommitsExternalAndLocalFactsOnce(t *testi
 	var successful int64
 	if err := model.DB.Model(&model.CheckInRecord{}).Where("ticket_id = ? AND result = ?", fixture.ticket.ID, "success").Count(&successful).Error; err != nil || successful != 1 {
 		t.Fatalf("successful check-ins=%d err=%v", successful, err)
+	}
+}
+
+func TestXiaohongshuActivatedTicketUsesLocalCheckpointRules(t *testing.T) {
+	fixture := seedXiaohongshuVoucherFixture(t)
+	secondPoint := model.CheckPoint{TenantID: fixture.tenantID, ScenicAreaID: fixture.checkpoint.ScenicAreaID, Name: "第二项目"}
+	if err := model.DB.Create(&secondPoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	secondDevice := model.Device{TenantID: fixture.tenantID, ScenicAreaID: secondPoint.ScenicAreaID, CheckPointID: &secondPoint.ID, Name: "手机核销", Type: "handheld", Status: "online", SerialNumber: "XHS-SECOND-POINT"}
+	if err := model.DB.Create(&secondDevice).Error; err != nil {
+		t.Fatal(err)
+	}
+	var rule model.TicketRule
+	if err := json.Unmarshal([]byte(fixture.ticket.RuleSnapshot), &rule); err != nil {
+		t.Fatal(err)
+	}
+	rule.Groups = []model.RuleGroup{{Base: model.Base{ID: 1}, MaxTotalCheckIn: 0, Items: []model.RuleItem{
+		{CheckPointID: fixture.checkpoint.ID, MaxPerCheckIn: 2},
+		{CheckPointID: secondPoint.ID, MaxPerCheckIn: 1},
+	}}}
+	raw, err := json.Marshal(rule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&fixture.ticket).Update("rule_snapshot", string(raw)).Error; err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/rmp/token":
+			_, _ = w.Write([]byte(`{"code":0,"success":true,"data":{"access_token":"ACCESS","expire_in":7200}}`))
+		case "/api/rmp/mp/deal/voucher/verify":
+			calls.Add(1)
+			_, _ = w.Write([]byte(`{"code":0,"success":true,"data":{"verify_id":"VERIFY-MULTI"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	svc := NewDeviceService(model.DB, &TicketService{})
+	svc.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
+	}
+	scan := func(id string, device model.Device, want string) {
+		t.Helper()
+		response, err := svc.VerifyDirect(DirectVerifyRequest{TenantID: fixture.tenantID, DeviceID: device.ID, CheckPointID: *device.CheckPointID, RequestID: id, RequestHash: id, TicketCode: fixture.ticket.TicketCode})
+		if err != nil || response == nil || response.Result != want {
+			t.Fatalf("scan %s response=%+v err=%v want=%s", id, response, err, want)
+		}
+	}
+	scan("first", fixture.device, "allow")
+	scan("first", fixture.device, "allow") // Transport retry, not another admission.
+	scan("second", fixture.device, "allow")
+	scan("over-point-limit", fixture.device, "deny")
+	scan("other-point", secondDevice, "allow")
+	scan("used-up", secondDevice, "deny")
+	if calls.Load() != 1 {
+		t.Fatalf("provider calls=%d", calls.Load())
+	}
+	var successes int64
+	model.DB.Model(&model.CheckInRecord{}).Where("ticket_id = ? AND result = ?", fixture.ticket.ID, "success").Count(&successes)
+	if successes != 3 {
+		t.Fatalf("successful local admissions=%d want 3", successes)
+	}
+	var verification model.DeviceVerification
+	if err := model.DB.Where("device_id = ? AND request_id = ?", secondDevice.ID, "other-point").First(&verification).Error; err != nil || verification.OpenStatus != "not_required" {
+		t.Fatalf("handheld verification=%+v err=%v", verification, err)
 	}
 }
 
@@ -446,4 +525,105 @@ func mustDecryptVoucher(t *testing.T, link model.XiaohongshuVoucherLink) string 
 		t.Fatalf("decrypt voucher err=%v", err)
 	}
 	return value
+}
+
+func TestXiaohongshuLocalRejectionDoesNotPoisonLaterValidScan(t *testing.T) {
+	fixture := seedXiaohongshuVoucherFixture(t)
+	fixture.device.Type = "handheld"
+	if err := model.DB.Model(&fixture.device).Update("type", "handheld").Error; err != nil {
+		t.Fatal(err)
+	}
+	wrongPoint := model.CheckPoint{TenantID: fixture.tenantID, ScenicAreaID: fixture.checkpoint.ScenicAreaID, Name: "Not included"}
+	if err := model.DB.Create(&wrongPoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	wrongDevice := model.Device{TenantID: fixture.tenantID, ScenicAreaID: wrongPoint.ScenicAreaID, CheckPointID: &wrongPoint.ID, Name: "Other handheld", SerialNumber: "XHS-WRONG-POINT", Type: "handheld", Status: "online"}
+	if err := model.DB.Create(&wrongDevice).Error; err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/rmp/token" {
+			_, _ = w.Write([]byte(`{"success":true,"code":0,"data":{"access_token":"ACCESS","expire_in":7200}}`))
+			return
+		}
+		calls.Add(1)
+		_, _ = w.Write([]byte(`{"success":true,"code":0,"data":{"verify_id":"VALID-AFTER-WRONG"}}`))
+	}))
+	defer server.Close()
+	svc := NewDeviceService(model.DB, &TicketService{})
+	svc.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
+	}
+	wrong := DirectVerifyRequest{TenantID: fixture.tenantID, DeviceID: wrongDevice.ID, CheckPointID: wrongPoint.ID, RequestID: "wrong-point", RequestHash: "wrong-body", TicketCode: fixture.ticket.TicketCode}
+	response, err := svc.VerifyDirect(wrong)
+	if err != nil || response.Result != "deny" || calls.Load() != 0 {
+		t.Fatalf("wrong point response=%+v calls=%d err=%v", response, calls.Load(), err)
+	}
+	valid := DirectVerifyRequest{TenantID: fixture.tenantID, DeviceID: fixture.device.ID, CheckPointID: fixture.checkpoint.ID, RequestID: "correct-point", RequestHash: "correct-body", TicketCode: fixture.ticket.TicketCode}
+	// Capture a worker's old snapshot before replacement, then resume it after
+	// the new request has reserved the ticket. Its stale actions must be no-ops.
+	var stale model.XiaohongshuVoucherVerification
+	if err := model.DB.Where("voucher_link_id = ?", fixture.link.ID).First(&stale).Error; err != nil {
+		t.Fatal(err)
+	}
+	verification, _, err := svc.beginDeviceVerification(valid, fixture.device.ScenicAreaID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := svc.ensureXiaohongshuVoucherVerification(valid, &fixture.link, verification.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.TicketService.PrepareDeviceRequest(valid.TicketCode, valid.CheckPointID, valid.DeviceID, valid.TenantID, replacement.ID, valid.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.rejectPreparedXiaohongshuVoucher(&stale, ErrAccessDenied); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := svc.claimXiaohongshuVoucherExternal(stale.ID, time.Now(), stale.DeviceVerificationID); err != nil || claimed {
+		t.Fatalf("stale worker claimed provider call=%t err=%v", claimed, err)
+	}
+	var reserved model.Ticket
+	if err := model.DB.First(&reserved, fixture.ticket.ID).Error; err != nil || reserved.PendingXiaohongshuVerificationID != replacement.ID {
+		t.Fatalf("stale worker released new reservation=%+v err=%v", reserved, err)
+	}
+	if processed, err := svc.ProcessPendingXiaohongshuVoucherVerifications(context.Background(), time.Now(), 20); err != nil || processed != 1 {
+		t.Fatalf("replacement processed=%d err=%v", processed, err)
+	}
+	response, err = svc.VerifyDirect(valid)
+	if err != nil || response.Result != "allow" || calls.Load() != 1 {
+		t.Fatalf("valid subsequent scan response=%+v calls=%d err=%v", response, calls.Load(), err)
+	}
+	if err := model.DB.First(&verification, verification.ID).Error; err != nil || verification.OpenStatus != "not_required" {
+		t.Fatalf("first handheld activation generated opening=%+v err=%v", verification, err)
+	}
+	response, err = svc.VerifyDirect(wrong)
+	if err != nil || response.Result != "deny" || calls.Load() != 1 {
+		t.Fatalf("original rejected replay response=%+v calls=%d err=%v", response, calls.Load(), err)
+	}
+}
+
+func TestXiaohongshuMissingIssuanceCannotBypassUnifiedVerification(t *testing.T) {
+	_, link, order := seedXiaohongshuIssuanceOrder(t, 1)
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, order.TenantID); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	var device model.Device
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Where("tenant_id = ?", order.TenantID).First(&device).Error; err != nil {
+		t.Fatal(err)
+	}
+	err := (&TicketService{}).VerifyDeviceRequest(ticket.TicketCode, *device.CheckPointID, device.ID, order.TenantID, "missing-issuance")
+	if !errors.Is(err, ErrTicketUnavailable) {
+		t.Fatalf("missing issuance should fail closed, link=%d err=%v", link.ID, err)
+	}
+	response, err := NewDeviceService(model.DB, &TicketService{}).VerifyDirect(DirectVerifyRequest{TenantID: order.TenantID, DeviceID: device.ID, CheckPointID: *device.CheckPointID, RequestID: "missing-device-issuance", RequestHash: "missing-hash", TicketCode: ticket.TicketCode})
+	if err != nil || response.Result != "deny" {
+		t.Fatalf("device bypass response=%+v err=%v", response, err)
+	}
 }

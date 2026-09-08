@@ -7,6 +7,7 @@ Page({
     entitlementNo: '',
     entitlement: null,
     checkInDate: '',
+    checkOutDate: '',
     minDate: '',
     maxDate: '',
     dateChips: [],
@@ -32,7 +33,8 @@ Page({
   },
 
   loadOrder() {
-    app.request(`/orders/${encodeURIComponent(this.orderNo)}`).then(order => {
+    this.setData({ loading: true, error: '' });
+    return app.request(`/orders/${encodeURIComponent(this.orderNo)}`).then(order => {
       const entitlement = (order.package_entitlements || []).find(item => item.entitlement_no === this.entitlementNo);
       if (!entitlement || entitlement.status !== 'pending_booking') throw new Error('该套餐当前不可预约');
       const today = new Date();
@@ -55,10 +57,19 @@ Page({
     }).catch(error => this.setData({ loading: false, error: error.message || '预约信息加载失败' }));
   },
 
+  retry() { return this.loadOrder(); },
+  goOrder() { xhs.redirectTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(this.orderNo)}` }); },
+  onPullDownRefresh() {
+    if (this.data.submitting) return xhs.stopPullDownRefresh();
+    this.loadOrder().finally(() => xhs.stopPullDownRefresh());
+  },
+
   selectDate(event) {
+    if (this.data.submitting) return;
     const checkInDate = event.currentTarget.dataset.date;
     if (!calendar.isDateWithin(checkInDate, this.data.minDate, this.data.maxDate)) return;
-    this.setData({ checkInDate, error: '' });
+    const nights = Math.max(1, Number(this.data.entitlement.nights || 1));
+    this.setData({ checkInDate, checkOutDate: calendar.formatDate(calendar.addDays(calendar.parseDate(checkInDate), nights)), error: '' });
     this.refreshCalendar();
   },
   toggleCalendar() { this.setData({ calendarOpen: !this.data.calendarOpen }); },

@@ -56,8 +56,29 @@ func (s *AfterSaleService) Create(req *model.AfterSaleRequest, ticketCodes []str
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
+		// Xiaohongshu customer auto-refunds serialize on the original digital
+		// payment. Do not lock this order first: that would invert the shared
+		// payment -> ticket -> account sequence used by the refund helper.
+		var xiaohongshuOrder bool
+		if req.Type == "refund" {
+			var scope model.Order
+			if err := tx.Select("id", "channel").Where("order_no = ? AND tenant_id = ?", req.OrderNo, req.TenantID).First(&scope).Error; err != nil {
+				return err
+			}
+			xiaohongshuOrder = scope.Channel == xiaohongshuPaymentMethod
+			if xiaohongshuOrder {
+				var payment model.Payment
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND order_no = ? AND method = ? AND status IN ?", req.TenantID, req.OrderNo, xiaohongshuPaymentMethod, []string{"paid", "partial_refunded"}).Order("created_at ASC").First(&payment).Error; err != nil {
+					return err
+				}
+			}
+		}
 		var order model.Order
-		if err := tx.Preload("Items.Product").Preload("Items.Tickets").Where("order_no = ? AND tenant_id = ?", req.OrderNo, req.TenantID).First(&order).Error; err != nil {
+		orderQuery := tx.Preload("Items.Product").Preload("Items.Tickets").Where("order_no = ? AND tenant_id = ?", req.OrderNo, req.TenantID)
+		if req.Type == "refund" && !xiaohongshuOrder {
+			orderQuery = orderQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		if err := orderQuery.First(&order).Error; err != nil {
 			return err
 		}
 		for _, item := range order.Items {
@@ -80,6 +101,11 @@ func (s *AfterSaleService) Create(req *model.AfterSaleRequest, ticketCodes []str
 		}
 		if err := validateAfterSaleTickets(&order, codes, req.Type, allowUsed); err != nil {
 			return err
+		}
+		if req.Type == "refund" && order.Channel == xiaohongshuPaymentMethod {
+			if err := ensureNoActiveXiaohongshuRefundApplicationTx(tx, &order); err != nil {
+				return err
+			}
 		}
 		req.Base = model.Base{}
 		req.RequestNo = generateAfterSaleNo()
@@ -622,7 +648,7 @@ func (s *AfterSaleService) executeRefund(req *model.AfterSaleRequest) (*model.Re
 	if method == "cash" {
 		return s.RefundService.CreateCashRefundAs(RefundActor{TenantID: req.TenantID, UserID: req.OperatorID}, req.OrderNo, "after-sale:"+req.IdempotencyKey, amount, codes, req.Reason)
 	}
-	if method == "wechat" || method == "alipay" {
+	if method == "wechat" || method == "alipay" || method == "xiaohongshu" {
 		return s.RefundService.CreateDigitalRefundAs(RefundActor{TenantID: req.TenantID, UserID: req.OperatorID}, req.OrderNo, "after-sale:"+req.IdempotencyKey, amount, codes, req.Reason)
 	}
 	return nil, fmt.Errorf("unsupported refund method %s", method)

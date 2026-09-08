@@ -21,6 +21,7 @@ function loadPage(relativePath, app, xhs) {
     require: request => {
       if (request === '../../utils/payment') return require(path.join(miniappRoot, 'utils/payment.js'));
       if (request === '../../utils/calendar') return require(path.join(miniappRoot, 'utils/calendar.js'));
+      if (request === '../../utils/qr') return require(path.join(miniappRoot, 'utils/qr.js'));
       throw new Error(`unexpected require: ${request}`);
     },
     Date,

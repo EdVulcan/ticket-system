@@ -1007,6 +1007,12 @@ func ledgerItemKey(item *model.OrderItem) string {
 }
 
 func buildTickets(service *OrderService, product *model.Product, quantity int, order *model.Order) ([]model.Ticket, error) {
+	// The current XHS adapter binds one platform voucher to one local ticket.
+	// Check again inside order creation so a concurrent product edit cannot
+	// produce an order that can be paid but never finish voucher issuance.
+	if order.Channel == "xiaohongshu" && product.CodeMode == "order" && quantity > 1 {
+		return nil, errors.New("小红书整单一码票种暂只支持每单购买一份")
+	}
 	count := quantity
 	if product.CodeMode == "order" {
 		count = 1

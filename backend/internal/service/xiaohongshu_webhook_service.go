@@ -84,7 +84,22 @@ func (XiaohongshuWebhookService) Receive(ctx context.Context, appID string, mess
 		if result.Error != nil || result.RowsAffected == 0 {
 			return result.Error
 		}
-		if strings.EqualFold(eventType, "AFTER_SALE_REFUND") {
+		if strings.EqualFold(eventType, "AFTER_SALE_REFUND") || strings.EqualFold(eventType, "REFUND_RESULT") {
+			// DC852262 documents REFUND_RESULT, not AFTER_SALE_REFUND.
+			// A failed result neither creates a new hold nor clears an earlier one.
+			// Success/unknown stays held until the exact refund is reconciled;
+			// this payload alone contains no order amount or ticket allocation.
+			if strings.EqualFold(eventType, "REFUND_RESULT") {
+				if handled, err := wakeXiaohongshuRefundTx(tx, account, &event, payload); handled || err != nil {
+					return err
+				}
+				var result struct {
+					Status int `json:"Status"`
+				}
+				if json.Unmarshal(payload, &result) == nil && result.Status == 3 {
+					return nil
+				}
+			}
 			if err := CreateXiaohongshuRefundCoordinationTx(tx, account, &event, payload); err != nil {
 				return err
 			}

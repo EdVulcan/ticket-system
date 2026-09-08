@@ -5,19 +5,21 @@ page { min-height: 100%; background: #f5f7f8; color: #20262b; }
 .header-hint { margin-top: 12rpx; color: #6e7b82; font-size: 24rpx; line-height: 1.5; }
 .content { padding: 0; }
 .ticket, .date-card, .quantity-row, .guest-card, .notice, .summary { background: #fff; }
-.ticket { display: flex; gap: 24rpx; padding: 24rpx 38rpx 36rpx; }
+.ticket { display: flex; gap: 24rpx; min-height: 186rpx; padding: 24rpx 38rpx 36rpx; box-sizing: border-box; }
 .ticket-image { width: 138rpx; height: 138rpx; flex-shrink: 0; border-radius: 14rpx; background: #eef0f3; }
+.ticket-image.fallback { display: flex; align-items: center; justify-content: center; border: 1rpx solid #dce4e7; background: #f5f7f8; }
+.ticket-icon { width: 54rpx; height: 64rpx; opacity: .72; }
 .ticket-info { display: flex; min-width: 0; flex: 1; flex-direction: column; }
 .ticket-name { display: -webkit-box; overflow: hidden; color: #20262b; font-size: 28rpx; font-weight: 700; line-height: 1.4; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .ticket-scenic { margin-top: 7rpx; overflow: hidden; color: #6e7b82; font-size: 23rpx; text-overflow: ellipsis; white-space: nowrap; }
-.price { margin-top: auto; color: #d45d28; font-size: 31rpx; font-weight: 700; }
+.price { margin-top: auto; color: #d45d28; font-size: 31rpx; font-weight: 700; font-variant-numeric: tabular-nums; }
 .quantity-row { display: flex; align-items: center; justify-content: space-between; margin-top: 16rpx; padding: 32rpx 38rpx; }
 .date-card { margin-top: 16rpx; padding: 32rpx 38rpx; }
 .date-top { display: flex; align-items: center; justify-content: space-between; }
 .date-value { color: #9ca3af; font-size: 24rpx; }
 .date-value.selected { color: #087f8c; font-weight: 650; }
 .date-chips { display: flex; gap: 14rpx; margin-top: 20rpx; }
-.date-chip, .more-date { flex: 1; min-width: 0; height: 112rpx; margin: 0; padding: 18rpx 8rpx; border: 1rpx solid #dfe7e9; border-radius: 12rpx; background: #fff; color: #20262b; font-size: 25rpx; line-height: 36rpx; }
+.date-chip, .more-date { flex: 1; min-width: 0; min-height: 118rpx; margin: 0; padding: 18rpx 8rpx; border: 1rpx solid #dfe7e9; border-radius: 12rpx; background: #fff; color: #20262b; font-size: 25rpx; line-height: 36rpx; }
 .date-chip.selected { border-color: #087f8c; background: #edf7f8; color: #087f8c; }
 .date-chip.disabled { color: #a4afb4; }
 .more-date { color: #087f8c; }
@@ -25,25 +27,30 @@ page { min-height: 100%; background: #f5f7f8; color: #20262b; }
 .date-chip .chip-date, .more-date .chip-date { font-size: 27rpx; font-weight: 600; }
 .calendar { margin-top: 18rpx; padding-top: 16rpx; border-top: 1rpx solid #edf0f2; }
 .calendar-header { display: flex; align-items: center; justify-content: space-between; }
-.calendar-header button { margin: 0; padding: 8rpx; background: transparent; color: #087f8c; font-size: 23rpx; }
+.calendar-header button { display: flex; align-items: center; justify-content: center; min-width: 76rpx; min-height: 72rpx; margin: 0; padding: 0; background: transparent; color: #087f8c; font-size: 23rpx; }
 .calendar-header text { color: #20262b; font-size: 26rpx; font-weight: 650; }
 .weekdays, .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; }
 .weekdays { margin-top: 10rpx; color: #6e7b82; font-size: 20rpx; }
-.calendar-day { height: 68rpx; margin-top: 8rpx; border-radius: 10rpx; }
+.calendar-day { height: 76rpx; margin-top: 8rpx; border-radius: 10rpx; }
 .calendar-day.selected { background: #087f8c; color: #fff; }
 .calendar-day.disabled { color: #b3bdc1; }
-.calendar-day-button { width: 100%; height: 100%; margin: 0; padding: 0; background: transparent; color: inherit; font-size: 25rpx; line-height: 68rpx; }
+.calendar-day-button { width: 100%; height: 100%; margin: 0; padding: 0; background: transparent; color: inherit; font-size: 25rpx; line-height: 76rpx; }
 .guest-card { margin-top: 16rpx; padding: 32rpx 38rpx; }
 .field-row { display: flex; align-items: center; min-height: 78rpx; border-top: 1rpx solid #edf0f2; color: #6e7b82; font-size: 23rpx; }
 .field-row:first-of-type { margin-top: 16rpx; }
 .field-row > text { width: 150rpx; flex-shrink: 0; }
-.field-input { flex: 1; height: 78rpx; color: #20262b; font-size: 24rpx; text-align: right; }
+.field-input { flex: 1; height: 78rpx; padding: 0; color: #20262b; font-size: 24rpx; text-align: right; }
+.field-placeholder { color: #9ca3af; }
+.ticket-name, .inline-error { word-break: break-word; }
+.date-top { flex-wrap: wrap; gap: 12rpx; }
+.quantity-row > view:first-child { min-width: 0; padding-right: 16rpx; }
+.stepper { flex-shrink: 0; }
 .label, .hint { display: block; }
 .label { color: #20262b; font-size: 27rpx; font-weight: 650; }
 .hint { margin-top: 6rpx; color: #6e7b82; font-size: 24rpx; line-height: 1.5; }
 .stepper { display: flex; align-items: center; gap: 18rpx; }
-.stepper button { width: 62rpx; height: 58rpx; padding: 0; border-radius: 13rpx; background: #f5f7f8; color: #20262b; font-size: 29rpx; line-height: 56rpx; }
-.stepper button[disabled] { color: #d1d5db; }
+.stepper button { width: 76rpx; height: 76rpx; padding: 0; border-radius: 13rpx; background: #f5f7f8; color: #20262b; font-size: 31rpx; line-height: 74rpx; }
+.stepper-button.is-disabled { color: #d1d5db; }
 .stepper text { min-width: 40rpx; color: #20262b; text-align: center; font-size: 29rpx; font-weight: 650; }
 .limit { display: block; margin: 12rpx 38rpx 0; color: #d45d28; font-size: 20rpx; }
 .notice { display: flex; flex-direction: column; gap: 9rpx; margin-top: 16rpx; padding: 28rpx 38rpx; background: #fff; color: #6e7b82; font-size: 24rpx; line-height: 1.6; }
@@ -53,10 +60,23 @@ page { min-height: 100%; background: #f5f7f8; color: #20262b; }
 .summary-total { border-top: 1rpx solid #edf0f2; }
 .summary-label { color: #9ca3af; }
 .total { color: #d45d28; font-size: 37rpx; font-weight: 700; }
-.inline-error, .state { display: block; padding: 24rpx; color: #d45d28; text-align: center; font-size: 22rpx; }
-.state { color: #6e7b82; }
+.inline-error { display: block; margin: 16rpx 38rpx 0; padding: 16rpx 18rpx; border-radius: 12rpx; background: #fff5f0; color: #a94e27; font-size: 22rpx; line-height: 1.55; text-align: left; }
+.loading-state, .state { display: flex; align-items: center; flex-direction: column; justify-content: center; min-height: 360rpx; padding: 46rpx 38rpx; box-sizing: border-box; text-align: center; }
+.loading-card { display: flex; width: 100%; max-width: 560rpx; align-items: center; gap: 24rpx; }
+.loading-thumb, .loading-line { border-radius: 14rpx; background: #e9eef0; }
+.loading-thumb { width: 138rpx; height: 138rpx; flex-shrink: 0; }
+.loading-lines { min-width: 0; flex: 1; }
+.loading-line { width: 68%; height: 22rpx; margin-top: 16rpx; }
+.loading-line:first-child { margin-top: 0; }
+.loading-line.wide { width: 92%; height: 30rpx; }
+.loading-line.short { width: 46%; }
+.loading-copy { display: block; margin-top: 26rpx; color: #6e7b82; font-size: 24rpx; }
+.state-title { color: #20262b; font-size: 30rpx; font-weight: 650; line-height: 1.5; }
+.state-detail { display: block; margin-top: 10rpx; color: #6e7b82; font-size: 24rpx; line-height: 1.65; word-break: break-word; }
+.retry-button { width: 220rpx; height: 90rpx; margin-top: 28rpx; border-radius: 18rpx; background: #087f8c; color: #fff; font-size: 26rpx; line-height: 90rpx; }
 .page-spacer { height: 145rpx; }
-.checkout-bar { position: fixed; right: 0; bottom: 0; left: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; height: calc(144rpx + env(safe-area-inset-bottom)); padding: 20rpx 38rpx calc(20rpx + env(safe-area-inset-bottom)); box-sizing: border-box; border-top: 1rpx solid #e5e7eb; background: rgba(255, 255, 255, .98); }
+.checkout-bar { position: fixed; right: 0; bottom: 0; left: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 24rpx; height: calc(144rpx + env(safe-area-inset-bottom)); padding: 20rpx 38rpx calc(20rpx + env(safe-area-inset-bottom)); box-sizing: border-box; border-top: 1rpx solid #e5e7eb; background: rgba(255, 255, 255, .98); }
+.checkout-bar > view { min-width: 0; }
 .checkout-label { display: block; margin-bottom: 6rpx; color: #6e7b82; font-size: 20rpx; }
 .checkout-total { color: #d45d28; font-size: 48rpx; font-weight: 700; }
 .pay-button { width: 330rpx; height: 94rpx; margin: 0; border-radius: 18rpx; background: #087f8c; color: #fff; font-size: 27rpx; font-weight: 650; line-height: 94rpx; }

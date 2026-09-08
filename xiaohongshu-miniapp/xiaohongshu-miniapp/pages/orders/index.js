@@ -9,6 +9,7 @@ Page({
     page: 1,
     total: 0,
     loading: true,
+    refreshing: false,
     loadingMore: false,
     loadingStatus: '',
     error: ''
@@ -25,9 +26,13 @@ Page({
   },
 
   loadOrders(reset) {
+    if (!reset && (this.data.loadingMore || this.data.refreshing)) return Promise.resolve();
+    const version = (this.listVersion || 0) + 1;
+    this.listVersion = version;
     const page = reset ? 1 : this.data.page + 1;
-    this.setData(reset ? { loading: true, error: '' } : { loadingMore: true, error: '' });
+    this.setData(reset ? { loading: !this.data.allOrders.length, refreshing: Boolean(this.data.allOrders.length), loadingMore: false, error: '' } : { loadingMore: true, error: '' });
     return app.request(`/orders?page=${page}&page_size=40`).then(result => {
+      if (version !== this.listVersion) return;
       const incoming = (result.items || []).map(order => ({
         ...order,
         isPackage: order.product_kind === 'scenic_hotel_package',
@@ -36,20 +41,27 @@ Page({
         statusClass: this.statusClass(order.status),
         createdText: this.formatDate(order.created_at)
       }));
-      const allOrders = reset ? incoming : this.data.allOrders.concat(incoming);
-      this.setData({ allOrders, page, total: Number(result.total || 0), loading: false, loadingMore: false }, () => this.applyStatus());
-    }).catch(error => this.setData({ loading: false, loadingMore: false, error: error.message || '订单加载失败，请稍后重试' }));
+      const allOrders = reset ? incoming : this.data.allOrders.concat(incoming.filter(order => !this.data.allOrders.some(existing => existing.order_no === order.order_no)));
+      this.setData({ allOrders, page, total: Number(result.total || 0), loading: false, refreshing: false, loadingMore: false }, () => this.applyStatus());
+    }).catch(error => {
+      if (version !== this.listVersion) return;
+      this.setData({ loading: false, refreshing: false, loadingMore: false, error: error.message || '订单加载失败，请稍后重试' });
+    });
   },
+
+  onUnload() { this.listVersion = (this.listVersion || 0) + 1; },
+  showAll() { this.selectStatus({ currentTarget: { dataset: { status: 'all' } } }); },
+  loadMore() { return this.loadOrders(false); },
 
   selectStatus(event) {
     const activeStatus = event.currentTarget.dataset.status;
     this.setData({ activeStatus }, () => {
+      this.applyStatus();
       if (activeStatus !== 'all' && this.data.total > this.data.allOrders.length) {
         this.setData({ loadingStatus: '正在加载全部订单...' });
         this.loadAllOrders().finally(() => this.setData({ loadingStatus: '' }, () => this.applyStatus()));
         return;
       }
-      this.applyStatus();
     });
   },
 

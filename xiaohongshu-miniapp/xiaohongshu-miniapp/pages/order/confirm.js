@@ -52,9 +52,12 @@ Page({
       product.requiresUseDate = Boolean(product.requires_use_date) && !product.isDeferredPackage;
       product.useDateLabel = product.isPackage ? '入住日期' : '游玩日期';
       product.stayText = product.isPackage ? `${product.hotel_name} · ${product.room_type_name} · ${product.nights}晚` : '';
-      const maxQuantity = catalog.max_order_cents
-        ? Math.min(100, Math.max(1, Math.floor(Number(catalog.max_order_cents) / Number(product.price_cents))))
+      const orderMaximum = Number(catalog.max_order_cents) > 0 && Number(product.price_cents) > 0
+        ? Math.max(1, Math.floor(Number(catalog.max_order_cents) / Number(product.price_cents)))
         : 100;
+      const configuredProductMaximum = Math.floor(Number(product.max_quantity));
+      const productMaximum = configuredProductMaximum > 0 ? configuredProductMaximum : 100;
+      const maxQuantity = Math.min(100, productMaximum, orderMaximum);
       const today = new Date();
       const minDate = calendar.formatDate(calendar.addDays(today, product.isPackage ? Math.max(0, Number(product.min_advance_days || 0)) : 0));
       const maxDate = calendar.formatDate(calendar.addDays(today, 365));
@@ -68,6 +71,8 @@ Page({
       });
     }).catch(error => this.setData({ loading: false, error: error.message || '票种加载失败' }));
   },
+
+  retry() { this.loadProduct(); },
 
   decrease() {
     if (this.data.submitting || this.data.createdOrderNo) return;

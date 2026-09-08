@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"ticket-backend/internal/model"
+	"ticket-backend/internal/utils"
+	"ticket-backend/internal/xiaohongshu"
 	"time"
 
 	"gorm.io/gorm"
@@ -323,6 +327,13 @@ func TestDeferredPackagePartialAdmissionDoesNotCompleteOrderWithPendingEntitleme
 		t.Fatal(err)
 	}
 	account := seedDeferredPackageXiaohongshuAccount(t, fixture, "xhs-deferred-admission", "active", "production")
+	secretCiphertext, err := utils.EncryptAES("deferred-admission-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&account).Updates(map[string]interface{}{"app_id": "deferred-admission-app", "secret_ciphertext": secretCiphertext}).Error; err != nil {
+		t.Fatal(err)
+	}
 	externalNo := "XHS-DEFERRED-ADMISSION-ORDER"
 	order := model.Order{
 		TenantID: fixture.tenantID, Channel: "xiaohongshu", ChannelAccountID: account.ID, ExternalNo: &externalNo,
@@ -332,6 +343,49 @@ func TestDeferredPackagePartialAdmissionDoesNotCompleteOrderWithPendingEntitleme
 		t.Fatal(err)
 	}
 	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, fixture.tenantID); err != nil {
+		t.Fatal(err)
+	}
+	openIDCiphertext, err := utils.EncryptAES("DEFERRED-ADMISSION-OPENID")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionKeyCiphertext, err := utils.EncryptAES("DEFERRED-ADMISSION-SESSION")
+	if err != nil {
+		t.Fatal(err)
+	}
+	customer := model.MiniappCustomer{
+		TenantID: fixture.tenantID, ChannelAccountID: account.ID, OpenIDHash: hashMiniappValue("DEFERRED-ADMISSION-OPENID"),
+		OpenIDCiphertext: openIDCiphertext, SessionKeyCiphertext: sessionKeyCiphertext, SessionTokenHash: hashMiniappValue("DEFERRED-ADMISSION-TOKEN"),
+		SessionExpiresAt: time.Now().Add(time.Hour), Status: "active", LastLoginAt: time.Now(),
+	}
+	if err := model.DB.Create(&customer).Error; err != nil {
+		t.Fatal(err)
+	}
+	orderLink := model.XiaohongshuOrderLink{
+		TenantID: fixture.tenantID, ChannelAccountID: account.ID, MiniappCustomerID: customer.ID, OrderID: order.ID,
+		ClientRequestID: "deferred-admission-request", ExternalOrderID: externalNo, State: "paid", VoucherIssuanceStatus: "pending",
+	}
+	if err := model.DB.Create(&orderLink).Error; err != nil {
+		t.Fatal(err)
+	}
+	var tickets []model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).Order("id ASC").Find(&tickets).Error; err != nil || len(tickets) != 2 {
+		t.Fatalf("tickets=%+v err=%v", tickets, err)
+	}
+	voucherCodes := []string{"DEFERRED-ADMISSION-VOUCHER-1", "DEFERRED-ADMISSION-VOUCHER-2"}
+	for index, issuedTicket := range tickets {
+		ciphertext, encryptErr := utils.EncryptAES(voucherCodes[index])
+		if encryptErr != nil {
+			t.Fatal(encryptErr)
+		}
+		if err := model.DB.Create(&model.XiaohongshuVoucherLink{
+			TenantID: fixture.tenantID, ChannelAccountID: account.ID, XiaohongshuOrderLinkID: orderLink.ID, TicketID: issuedTicket.ID,
+			VoucherCodeHash: hashMiniappValue(voucherCodes[index]), VoucherCodeCiphertext: ciphertext, Status: 1,
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := model.DB.Model(&orderLink).Update("voucher_issuance_status", "ready").Error; err != nil {
 		t.Fatal(err)
 	}
 	var entitlement model.ScenicHotelPackageEntitlement
@@ -355,8 +409,38 @@ func TestDeferredPackagePartialAdmissionDoesNotCompleteOrderWithPendingEntitleme
 	if err := model.DB.Where("tenant_id = ?", fixture.tenantID).First(&checkpoint).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := (&TicketService{}).Verify(ticket.TicketCode, checkpoint.ID, verificationDeviceID(t, fixture.tenantID, checkpoint.ID), fixture.tenantID); err != nil {
-		t.Fatal(err)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/rmp/token":
+			_, _ = w.Write([]byte(`{"data":{"access_token":"deferred-admission-token","expire_in":7200},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/mp/deal/voucher/verify":
+			var request xiaohongshu.VoucherVerifyRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request.ExternalOrderID != externalNo || len(request.Vouchers) != 1 || request.Vouchers[0].Code != voucherCodes[0] {
+				t.Fatalf("activation request=%+v", request)
+			}
+			_, _ = w.Write([]byte(`{"data":{"verify_id":"DEFERRED-ADMISSION-VERIFY"},"success":true,"msg":"success","code":0}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	deviceService := NewDeviceService(model.DB, &TicketService{})
+	deviceService.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
+		if appID != "deferred-admission-app" || secret != "deferred-admission-secret" || environment != "production" {
+			t.Fatalf("client app=%q secret=%q environment=%q", appID, secret, environment)
+		}
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
+	}
+	response, err := deviceService.VerifyDirect(DirectVerifyRequest{
+		TenantID: fixture.tenantID, DeviceID: verificationDeviceID(t, fixture.tenantID, checkpoint.ID), CheckPointID: checkpoint.ID,
+		RequestID: "deferred-admission-scan", RequestHash: "deferred-admission-scan-hash", TicketCode: voucherCodes[0],
+	})
+	if err != nil || response.Result != "allow" {
+		t.Fatalf("xiaohongshu activation response=%+v err=%v", response, err)
 	}
 	var stored model.Order
 	if err := model.DB.First(&stored, order.ID).Error; err != nil {

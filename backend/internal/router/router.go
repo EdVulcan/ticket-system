@@ -47,6 +47,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	miniappGroup.POST("/orders", miniappController.CreateOrder)
 	miniappGroup.GET("/orders", miniappController.ListOrders)
 	miniappGroup.GET("/orders/:orderNo", miniappController.GetOrder)
+	miniappGroup.POST("/orders/:orderNo/refund-applications", miniappController.ApplyRefund)
 	miniappGroup.POST("/orders/:orderNo/package-bookings", miniappController.BookPackage)
 	miniappGroup.POST("/orders/:orderNo/package-bookings/:entitlementNo/cancel", miniappController.CancelPackageBooking)
 	xiaohongshuWebhookController := api.XiaohongshuWebhookController{}

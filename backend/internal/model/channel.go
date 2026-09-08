@@ -90,10 +90,17 @@ type XiaohongshuOrderLink struct {
 	PayTokenCiphertext string     `gorm:"type:text" json:"-"`
 	PayTokenExpiresAt  *time.Time `json:"pay_token_expires_at,omitempty"`
 	State              string     `gorm:"size:20;not null;default:'creating';index" json:"state"`
-	TradeNo            string     `gorm:"size:100;index" json:"trade_no,omitempty"`
-	PayChannel         int        `gorm:"not null;default:0" json:"pay_channel,omitempty"`
-	LastQueriedAt      *time.Time `json:"last_queried_at,omitempty"`
-	LastError          string     `gorm:"size:500" json:"last_error,omitempty"`
+	// Voucher issuance is deliberately separate from payment state. A confirmed
+	// provider payment remains paid while its provider vouchers are delayed or
+	// require review; only ready represents an exact local ticket binding.
+	VoucherIssuanceStatus        string     `gorm:"size:20;not null;default:'pending';index" json:"voucher_issuance_status"`
+	VoucherIssuanceAttemptCount  int        `gorm:"not null;default:0" json:"-"`
+	VoucherIssuanceLastAttemptAt *time.Time `json:"-"`
+	VoucherIssuanceLastError     string     `gorm:"size:500" json:"-"`
+	TradeNo                      string     `gorm:"size:100;index" json:"trade_no,omitempty"`
+	PayChannel                   int        `gorm:"not null;default:0" json:"pay_channel,omitempty"`
+	LastQueriedAt                *time.Time `json:"last_queried_at,omitempty"`
+	LastError                    string     `gorm:"size:500" json:"last_error,omitempty"`
 }
 
 // XiaohongshuVoucherLink maps provider vouchers to immutable local ticket

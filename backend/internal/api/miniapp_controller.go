@@ -135,6 +135,73 @@ func (c *MiniappController) GetOrder(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, result)
 }
 
+func (c *MiniappController) ApplyRefund(ctx *gin.Context) {
+	customer, err := c.authenticate(ctx)
+	if err != nil {
+		return
+	}
+	var body service.MiniappRefundApplicationInput
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "请填写退款原因和申请编号"})
+		return
+	}
+	result, err := c.Service.ApplyXiaohongshuRefund(customer, ctx.Param("orderNo"), body)
+	if err != nil && (errors.Is(err, gorm.ErrRecordNotFound) || strings.Contains(strings.ToLower(err.Error()), "order not found")) {
+		// Do not disclose whether an order exists outside the authenticated
+		// customer/account ownership scope.
+		ctx.JSON(http.StatusNotFound, gin.H{"error": "订单不存在"})
+		return
+	}
+	if errors.Is(err, service.ErrMiniappUnavailable) {
+		ctx.JSON(http.StatusServiceUnavailable, gin.H{"error": "当前小程序暂未开放"})
+		return
+	}
+	if errors.Is(err, service.ErrMiniappUnauthenticated) {
+		ctx.JSON(http.StatusUnauthorized, gin.H{"error": "登录状态已失效，请重新进入小程序"})
+		return
+	}
+	if err != nil {
+		ctx.JSON(http.StatusConflict, gin.H{"error": miniappRefundApplicationError(err)})
+		return
+	}
+	ctx.JSON(http.StatusAccepted, result)
+}
+
+func miniappRefundApplicationError(err error) string {
+	if err == nil {
+		return "退款申请失败，请稍后重试"
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "request id"):
+		return "申请编号无效，请重新提交"
+	case strings.Contains(message, "reason is invalid"):
+		return "退款原因不能为空且不能过长"
+	case strings.Contains(message, "different content"):
+		return "该申请编号已用于其他退款内容，请更换后重试"
+	case strings.Contains(message, "already has a refund application"):
+		return "该订单已有退款申请正在处理"
+	default:
+		return serviceMiniappRefundMessage(err)
+	}
+}
+
+// Keep the HTTP boundary on a customer-safe vocabulary. The service retains
+// detailed evidence only in its internal errors and audit records.
+func serviceMiniappRefundMessage(err error) string {
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "does not allow refunds"):
+		return "该票种按购买时规则不支持退款"
+	case strings.Contains(message, "already used") || strings.Contains(message, "being verified") || strings.Contains(message, "verification"):
+		return "票券已核销或核销状态待确认，暂不能申请退款"
+	case strings.Contains(message, "hold") || strings.Contains(message, "refund"):
+		return "订单售后状态待核查，请联系景区客服"
+	default:
+		return "该订单暂不支持自助退款，请联系景区客服"
+	}
+}
+
 func (c *MiniappController) BookPackage(ctx *gin.Context) {
 	customer, err := c.authenticate(ctx)
 	if err != nil {

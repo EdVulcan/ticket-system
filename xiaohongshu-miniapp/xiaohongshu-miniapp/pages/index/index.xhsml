@@ -6,16 +6,16 @@
     <view class="search-box">
       <image class="search-icon" src="../../assets/search.svg" mode="aspectFit" />
       <input class="search-input" value="{{keyword}}" bindinput="onKeywordInput" placeholder="搜索门票、套餐或房型" placeholder-class="search-placeholder" />
-      <text class="clear" xhs:if="{{keyword}}" bindtap="clearKeyword">清除</text>
+      <button class="clear" xhs:if="{{keyword}}" bindtap="clearKeyword" aria-label="清除搜索">清除</button>
     </view>
   </view>
 
   <view class="selection-bar" xhs:if="{{hasActiveFilters}}">
     <view class="selection-summary"><text class="selection-label">当前筛选</text><text>{{products.length}} 个结果</text></view>
-    <text class="reset-link" bindtap="resetFilters">清除筛选</text>
+    <button class="reset-link" bindtap="resetFilters">清除筛选</button>
   </view>
 
-  <view class="filters" xhs:if="{{!loading && !error && allProducts.length}}">
+  <view class="filters" xhs:if="{{!loading && allProducts.length}}">
     <view class="kind-row" xhs:if="{{kindOptions.length > 1}}">
       <view class="kind-chip {{activeKind === item.value ? 'active' : ''}}" xhs:for="{{kindOptions}}" xhs:key="value" data-kind="{{item.value}}" bindtap="selectKind">{{item.label}}</view>
     </view>
@@ -35,10 +35,12 @@
   </view>
 
   <view class="content">
+    <view class="refresh-status" xhs:if="{{refreshing}}">正在刷新商品…</view>
+    <view class="refresh-error" xhs:elif="{{error && allProducts.length}}"><text>刷新失败，当前显示上次加载的商品</text><button bindtap="retry">重试</button></view>
     <view class="loading" xhs:if="{{loading}}">
-      <view class="skeleton-image"></view><view class="skeleton-line wide"></view><view class="skeleton-line"></view>
+      <view class="skeleton-row" xhs:for="{{[1, 2, 3]}}" xhs:key="*this"><view class="skeleton-image"></view><view class="skeleton-copy"><view class="skeleton-line wide"></view><view class="skeleton-line"></view><view class="skeleton-line short"></view></view></view>
     </view>
-    <view class="state" xhs:elif="{{error}}">
+    <view class="state" xhs:elif="{{error && !allProducts.length}}">
       <text class="state-title">暂时无法加载商品</text><text class="state-detail">{{error}}</text>
       <button class="retry-button" bindtap="retry">重新加载</button>
     </view>
@@ -49,7 +51,7 @@
       <image class="state-symbol muted" src="../../assets/search.svg" mode="aspectFit" /><text class="state-title">没有找到匹配商品</text><text class="state-detail">{{emptyStateDetail}}</text><button class="retry-button compact-retry" bindtap="resetFilters">清除筛选</button>
     </view>
     <view class="product-list" xhs:else>
-      <view class="product" xhs:for="{{products}}" xhs:key="id" data-id="{{item.id}}" bindtap="openProduct">
+      <view class="product" xhs:for="{{products}}" xhs:key="id" data-id="{{item.id}}" bindtap="openProduct" hover-class="tap-feedback" role="button" aria-label="{{item.name}}，查看详情">
         <image class="product-image" xhs:if="{{item.image_url}}" src="{{item.image_url}}" mode="aspectFill" />
         <view class="product-image fallback {{item.product_kind === 'scenic_hotel_package' ? 'package' : ''}}" xhs:else><image class="ticket-icon" src="../../assets/ticket.svg" mode="aspectFit" /></view>
         <view class="product-info">
@@ -67,7 +69,7 @@
   </view>
 
   <view class="bottom-nav">
-    <view class="nav-item active" bindtap="goHome"><image class="nav-icon" src="../../assets/ticket.svg" mode="aspectFit" /><text class="nav-label">购票</text></view>
-    <view class="nav-item" bindtap="goOrders"><image class="nav-icon" src="../../assets/order.svg" mode="aspectFit" /><text class="nav-label">订单</text></view>
+    <view class="nav-item active" bindtap="goHome" role="button" aria-label="购票，当前页面"><image class="nav-icon" src="../../assets/ticket.svg" mode="aspectFit" /><text class="nav-label">购票</text></view>
+    <view class="nav-item" bindtap="goOrders" hover-class="tap-feedback" role="button" aria-label="我的订单"><image class="nav-icon" src="../../assets/order.svg" mode="aspectFit" /><text class="nav-label">订单</text></view>
   </view>
 </view>
