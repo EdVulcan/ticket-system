@@ -69,21 +69,40 @@ func (c *OrderController) List(ctx *gin.Context) {
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "10"))
 	status := ctx.DefaultQuery("status", "")
 	channel := ctx.DefaultQuery("channel", "")
+	salesScope := strings.ToLower(strings.TrimSpace(ctx.DefaultQuery("sales_scope", "")))
 	startDate := ctx.DefaultQuery("start_date", "")
 	endDate := ctx.DefaultQuery("end_date", "")
 	search := ctx.DefaultQuery("search", "")
+	tenantID := ctx.GetUint("tenant_id")
+	if tenantID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "tenant is required"})
+		return
+	}
+	if salesScope != "" && salesScope != "online" {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "unsupported sales scope"})
+		return
+	}
 
-	orders, total, err := c.Service.List(page, pageSize, ctx.GetUint("tenant_id"), status, channel, startDate, endDate, search)
+	orders, total, err := c.Service.ListWithSalesScope(page, pageSize, tenantID, status, channel, salesScope, startDate, endDate, search)
 	if err != nil {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
-	ctx.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"data":  orders,
 		"total": total,
 		"page":  page,
-	})
+	}
+	if salesScope == "online" {
+		options, optionsErr := c.Service.ListChannelOptions(tenantID, salesScope)
+		if optionsErr != nil {
+			ctx.JSON(http.StatusInternalServerError, gin.H{"error": optionsErr.Error()})
+			return
+		}
+		response["channel_options"] = options
+	}
+	ctx.JSON(http.StatusOK, response)
 }
 
 func (c *OrderController) Get(ctx *gin.Context) {

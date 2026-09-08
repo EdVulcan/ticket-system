@@ -264,7 +264,7 @@ test('souvenir ticket uses the current merchant and raw tickets without inventin
   assert.match(template, /\{\{storeName\}\}/);
   assert.match(template, /\{\{order\.image_url\}\}/);
   assert.doesNotMatch(template, /storefront_image_url|created_at|已入园|核销成功/);
-  const ticketTemplate = template.slice(template.indexOf('<view class="keepsake-tickets"'), template.indexOf('<view class="tickets"'));
+  const ticketTemplate = template.slice(template.indexOf('<view class="keepsake-tickets"'), template.indexOf('<view class="ticket-after-sale"'));
   assert.doesNotMatch(ticketTemplate, /image_url|ticket-photo/);
   assert.match(ticketTemplate, /assets\/ticket-art\.svg/);
   assert(ticketTemplate.indexOf('ticket-product') < ticketTemplate.indexOf('ticket-merchant'));

@@ -61,6 +61,14 @@ type SalesOrderDetailView struct {
 	AfterSales   []model.AfterSaleRequest    `json:"after_sales"`
 }
 
+// OrderChannelOption is a tenant-scoped source option for the sales order
+// workbench. Value is the exact value stored on orders.channel so selecting an
+// option preserves the legacy channel equality semantics.
+type OrderChannelOption struct {
+	Value string `json:"value"`
+	Label string `json:"label"`
+}
+
 func (s *OrderService) GenerateOrderNo() string {
 	random := make([]byte, 5)
 	if _, err := rand.Read(random); err != nil {
@@ -1080,10 +1088,23 @@ func persistOrderVisitorsTx(tx *gorm.DB, order *model.Order) error {
 }
 
 func (s *OrderService) List(page, pageSize int, tenantID uint, status, channel, startDate, endDate, search string) ([]model.Order, int64, error) {
+	return s.ListWithSalesScope(page, pageSize, tenantID, status, channel, "", startDate, endDate, search)
+}
+
+// ListWithSalesScope adds an explicit workbench scope without changing the
+// old List contract. An empty scope keeps the historical tenant/status/date/
+// search/channel query semantics. The online scope includes production online,
+// legacy OTA, and tenant-owned formal channel orders, while excluding window,
+// sandbox, and orders originally sold through the team channel.
+func (s *OrderService) ListWithSalesScope(page, pageSize int, tenantID uint, status, channel, salesScope, startDate, endDate, search string) ([]model.Order, int64, error) {
 	var orders []model.Order
 	var total int64
 	if tenantID == 0 {
 		return nil, 0, fmt.Errorf("tenant is required")
+	}
+	salesScope = strings.ToLower(strings.TrimSpace(salesScope))
+	if salesScope != "" && salesScope != "online" {
+		return nil, 0, fmt.Errorf("unsupported sales scope")
 	}
 	if page < 1 {
 		page = 1
@@ -1095,22 +1116,23 @@ func (s *OrderService) List(page, pageSize int, tenantID uint, status, channel, 
 		pageSize = 100
 	}
 
-	query := model.DB.Model(&model.Order{}).Preload("Items").Preload("Items.Tickets").Preload("Items.VisitorRecords").Where("tenant_id = ?", tenantID)
+	query := model.DB.Model(&model.Order{}).Preload("Items").Preload("Items.Tickets").Preload("Items.VisitorRecords").Where("orders.tenant_id = ?", tenantID)
+	query = applyOrderSalesScope(query, salesScope)
 	if status != "" {
-		query = query.Where("status = ?", status)
+		query = query.Where("orders.status = ?", status)
 	}
 	if channel != "" {
-		query = query.Where("channel = ?", channel)
+		query = query.Where("orders.channel = ?", channel)
 	}
 	if startDate != "" {
-		query = query.Where("created_at >= ?", startDate+" 00:00:00")
+		query = query.Where("orders.created_at >= ?", startDate+" 00:00:00")
 	}
 	if endDate != "" {
-		query = query.Where("created_at <= ?", endDate+" 23:59:59")
+		query = query.Where("orders.created_at <= ?", endDate+" 23:59:59")
 	}
 	if search != "" {
 		like := "%" + search + "%"
-		query = query.Where("order_no LIKE ? OR external_no LIKE ? OR contact_name LIKE ? OR contact_phone LIKE ?", like, like, like, like)
+		query = query.Where("orders.order_no LIKE ? OR orders.external_no LIKE ? OR orders.contact_name LIKE ? OR orders.contact_phone LIKE ?", like, like, like, like)
 	}
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -1122,6 +1144,93 @@ func (s *OrderService) List(page, pageSize int, tenantID uint, status, channel, 
 		return nil, 0, err
 	}
 	return orders, total, nil
+}
+
+// ListChannelOptions returns the exact channel values represented by a
+// tenant's visible orders. It intentionally does not require channels.read:
+// orders.read is sufficient to discover the source filter values for this
+// workbench. Channel account metadata is joined only for a user-facing label.
+func (s *OrderService) ListChannelOptions(tenantID uint, salesScope string) ([]OrderChannelOption, error) {
+	if tenantID == 0 {
+		return nil, fmt.Errorf("tenant is required")
+	}
+	salesScope = strings.ToLower(strings.TrimSpace(salesScope))
+	if salesScope != "" && salesScope != "online" {
+		return nil, fmt.Errorf("unsupported sales scope")
+	}
+	type channelRow struct {
+		Channel     string `gorm:"column:channel"`
+		AccountType string `gorm:"column:account_type"`
+		AccountCode string `gorm:"column:account_code"`
+	}
+	var rows []channelRow
+	query := model.DB.Table("orders").
+		Select("orders.channel, COALESCE(channel_accounts.type, '') AS account_type, COALESCE(channel_accounts.code, '') AS account_code").
+		Joins("LEFT JOIN channel_accounts ON channel_accounts.id = orders.channel_account_id AND channel_accounts.tenant_id = orders.tenant_id").
+		Where("orders.tenant_id = ? AND orders.deleted_at IS NULL", tenantID)
+	query = applyOrderSalesScope(query, salesScope)
+	if err := query.Group("orders.channel, channel_accounts.type, channel_accounts.code").Order("orders.channel ASC").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	options := make([]OrderChannelOption, 0, len(rows))
+	seen := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		value := strings.TrimSpace(row.Channel)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		options = append(options, OrderChannelOption{Value: value, Label: orderChannelLabel(value, row.AccountType, row.AccountCode)})
+	}
+	return options, nil
+}
+
+func applyOrderSalesScope(query *gorm.DB, salesScope string) *gorm.DB {
+	if salesScope != "online" {
+		return query
+	}
+	// Keep the scope based on the order fact, not on a copied channel list. This
+	// includes future formal channel account types while retaining explicit
+	// exclusions for operational window/team orders.
+	query = query.Where("orders.channel NOT IN ?", []string{"window", "offline", "team", "team_account"})
+	query = query.Where("orders.environment = ?", "production")
+	// Current account settings or later team association must not hide a
+	// historical online sale. Only the immutable order source/environment
+	// determines this workbench's scope.
+	query = query.Where(`(
+		orders.channel_account_id = 0 OR EXISTS (
+			SELECT 1 FROM channel_accounts AS order_channel_accounts
+			WHERE order_channel_accounts.id = orders.channel_account_id
+			  AND order_channel_accounts.tenant_id = orders.tenant_id
+		)
+	)`)
+	return query
+}
+
+func orderChannelLabel(channel, accountType, accountCode string) string {
+	channel = strings.TrimSpace(strings.ToLower(channel))
+	accountType = strings.TrimSpace(strings.ToLower(accountType))
+	accountCode = strings.TrimSpace(accountCode)
+	switch {
+	case channel == "online":
+		return "线上"
+	case channel == "ota":
+		return "OTA"
+	case accountType == "ctrip" || strings.HasPrefix(channel, "ctrip:"):
+		if accountCode != "" {
+			return "携程 · " + accountCode
+		}
+		return "携程"
+	case accountType == "xiaohongshu" || channel == "xiaohongshu":
+		return "小红书"
+	case accountCode != "":
+		return accountCode
+	default:
+		return channel
+	}
 }
 
 func (s *OrderService) GetByOrderNo(orderNo string, tenantID uint) (*model.Order, error) {

@@ -104,7 +104,7 @@ Page({
     xhs.navigateTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(event.currentTarget.dataset.no)}` });
   },
 
-  goHome() { xhs.reLaunch({ url: '/pages/index/index' }); },
+  goHome() { xhs.redirectTo({ url: '/pages/index/index' }); },
   goOrders() {},
   retry() { this.loadOrders(true); },
 

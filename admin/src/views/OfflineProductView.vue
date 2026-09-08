@@ -386,9 +386,7 @@ const handleEdit = (row: any) => {
   if (data.validity_start_date && data.validity_end_date) {
     validityDateRange.value = [data.validity_start_date.split('T')[0], data.validity_end_date.split('T')[0]]
   } else {
-    form.product.validity_days = 0
-  validityDateRange.value = null
-  productTags.value = []
+    validityDateRange.value = null
   }
 
   try {

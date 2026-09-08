@@ -134,7 +134,7 @@ Page({
 
   goHome() {},
 
-  goOrders() { xhs.navigateTo({ url: '/pages/orders/index' }); },
+  goOrders() { xhs.redirectTo({ url: '/pages/orders/index' }); },
 
   retry() { this.loadCatalog(); },
 

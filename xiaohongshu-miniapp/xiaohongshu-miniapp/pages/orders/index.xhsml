@@ -30,7 +30,7 @@
     <view class="content-spacer"></view>
   </view>
   <view class="bottom-nav">
-    <view class="nav-item" bindtap="goHome"><image class="nav-icon" src="../../assets/ticket.svg" mode="aspectFit" /><text class="nav-label">购票</text></view>
-    <view class="nav-item active" bindtap="goOrders"><image class="nav-icon" src="../../assets/order.svg" mode="aspectFit" /><text class="nav-label">订单</text></view>
+    <view class="nav-item" bindtap="goHome" hover-class="tap-feedback" role="button" aria-label="购票"><image class="nav-icon" src="../../assets/ticket.svg" mode="aspectFit" /><text class="nav-label">购票</text></view>
+    <view class="nav-item active" bindtap="goOrders" hover-class="tap-feedback" role="button" aria-label="我的订单，当前页面"><image class="nav-icon" src="../../assets/order.svg" mode="aspectFit" /><text class="nav-label">订单</text></view>
   </view>
 </view>

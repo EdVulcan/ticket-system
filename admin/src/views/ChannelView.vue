@@ -315,7 +315,7 @@
         <el-table-column label="订单金额" width="110"><template #default="{ row }">¥{{ Number(row.total_amount || 0).toFixed(2) }}</template></el-table-column>
         <el-table-column label="实收/退款" width="130"><template #default="{ row }"><div>收 ¥{{ cents(row.paid_cents) }}</div><div class="text-xs text-gray-500">退 ¥{{ cents(row.refunded_cents) }}</div></template></el-table-column>
         <el-table-column label="下单时间" width="165"><template #default="{ row }">{{ dateTime(row.created_at) }}</template></el-table-column>
-        <el-table-column label="操作" width="80" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openOrderDetail(row)">详情</el-button></template></el-table-column>
+        <el-table-column label="操作" width="155" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openOrderDetail(row)">详情</el-button><el-button v-if="canRefund && row.status === 'paid' && selectedAccount?.environment !== 'sandbox'" link type="danger" @click="openOrderRefund(row)">申请退款</el-button></template></el-table-column>
       </el-table>
       <div class="mt-3 flex justify-end"><el-pagination v-model:current-page="orderPage" :page-size="20" :total="orderTotal" layout="prev, pager, next, total" @current-change="loadOrders" /></div>
       <template #footer><el-button @click="ordersDialog = false">关闭</el-button></template>
@@ -363,7 +363,7 @@
           </el-tab-pane>
         </el-tabs>
       </div>
-      <template #footer><el-button @click="orderDetailDialog = false">关闭</el-button></template>
+      <template #footer><el-button v-if="canRefund && orderDetail?.order.status === 'paid' && orderDetail?.order.environment !== 'sandbox'" type="danger" plain @click="openOrderRefund(orderDetail.order)">申请退款</el-button><el-button @click="openOrderDetail(orderDetail.order)" :disabled="!orderDetail || orderDetailLoading">刷新状态</el-button><el-button @click="orderDetailDialog = false">关闭</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="reconciliationsDialog" :title="`渠道账单对账：${selectedAccount?.code || ''}`" width="1000px" :close-on-click-modal="false">
@@ -407,6 +407,7 @@
       </el-table>
       <template #footer><el-button @click="reconciliationDetailDialog = false">关闭</el-button></template>
     </el-dialog>
+    <OrderRefundDialog ref="orderRefundDialog" @changed="refreshRefundOrders" />
   </section>
 </template>
 
@@ -419,12 +420,15 @@ import { localizeDisplayText } from '@/utils/localize'
 import { hasPermission } from '@/utils/permissions'
 import { activeCapabilitySet, isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 import ChannelStorefrontDialog from '@/components/ChannelStorefrontDialog.vue'
+import OrderRefundDialog from '@/components/OrderRefundDialog.vue'
 
 const currentUser = readStoredUser()
 const capabilities = activeCapabilitySet(currentUser)
 const hasWritePermission = hasPermission(currentUser, 'channels.write')
 const canActiveWrite = hasWritePermission && (capabilities.has('distributor') || isActiveScenicSupplier(currentUser))
 const canHistoryWrite = hasWritePermission && (capabilities.has('distributor') || isScenicHistorySupplier(currentUser))
+const canRefund = hasPermission(currentUser, 'refunds.write')
+const orderRefundDialog = ref<InstanceType<typeof OrderRefundDialog>>()
 
 const accounts = ref<any[]>([])
 const mappings = ref<any[]>([])
@@ -866,7 +870,7 @@ const requestStatusText = (status: string) => ({ processing: '处理中', comple
 const requestStatusType = (status: string) => status === 'completed' ? 'success' : status === 'failed' ? 'danger' : status === 'retryable' ? 'warning' : 'primary'
 const orderStatusText = (status: string) => ({ unpaid: '待支付', paid: '已支付', completed: '已完成', partial_refunded: '部分退款', refunded: '已退款', cancelled: '已取消' } as Record<string, string>)[status] || '未知状态'
 const ticketStatusText = (status: string) => ({ unused: '未使用', active: '可使用', issued: '已出票', used: '已核销', refunded: '已退款', expired: '已过期', void: '已作废' } as Record<string, string>)[status] || '未知状态'
-const paymentMethodText = (method: string) => ({ cash: '现金', wechat: '微信支付', alipay: '支付宝', touch: '碰一碰支付', balance: '账户余额', credit: '授信挂账', team_account: '团队预付款/授信' } as Record<string, string>)[method] || '其他方式'
+const paymentMethodText = (method: string) => ({ cash: '现金', wechat: '微信支付', alipay: '支付宝', xiaohongshu: '小红书担保支付', touch: '碰一碰支付', balance: '账户余额', credit: '授信挂账', team_account: '团队预付款/授信' } as Record<string, string>)[method] || '其他方式'
 const paymentStatusText = (status: string) => ({ pending: '等待支付', processing: '支付处理中', paid: '支付成功', succeeded: '支付成功', failed: '支付失败', cancelled: '已取消', refunded: '已退款', partial_refunded: '部分退款' } as Record<string, string>)[status] || '未知状态'
 const refundStatusText = (status: string) => ({ pending: '等待退款', processing: '退款处理中', succeeded: '退款成功', completed: '退款成功', failed: '退款失败', manual_review: '人工复核' } as Record<string, string>)[status] || '未知状态'
 const checkInResultText = (result: string) => ({ success: '核销成功', deny: '已拒绝', fail: '核销失败', failed: '核销失败', rejected: '已拒绝' } as Record<string, string>)[result] || '未知结果'
@@ -898,6 +902,15 @@ const openOrderDetail = async (row: any) => {
   orderDetailLoading.value = true
   try { orderDetail.value = (await request.get(`/channel-accounts/${selectedAccount.value.id}/orders/${encodeURIComponent(row.order_no)}`)).data }
   finally { orderDetailLoading.value = false }
+}
+const openOrderRefund = (row: any) => {
+  if (!canRefund || !selectedAccount.value) return
+  orderRefundDialog.value?.open(row.order_no, `/channel-accounts/${selectedAccount.value.id}/orders/${encodeURIComponent(row.order_no)}`)
+}
+const refreshRefundOrders = async () => {
+  const detailOrder = orderDetail.value?.order
+  await loadOrders(orderPage.value)
+  if (orderDetailDialog.value && detailOrder) await openOrderDetail(detailOrder)
 }
 const loadRequests = async () => {
   if (!selectedAccount.value) return

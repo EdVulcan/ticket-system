@@ -35,6 +35,28 @@ test('older backend without usage projection is not falsely labelled unused', as
   assert.equal(page.data.ticketCodes[0].usageLabel, '使用状态待查询');
 });
 
+test('refund service remains visible when issued ticket metadata is missing', async () => {
+  const page = loadDetail({status: 'paid', ticket_codes: ['DEMO'], can_apply_refund: false,
+    refund_application_message: '该订单暂不支持自助退款，请联系景区客服'});
+  await page.loadOrder();
+  assert.match(page.data.refundUnavailableMessage, /暂不支持自助退款/);
+});
+
+test('paid orders without refund projection show a refresh explanation, not a hidden service', async () => {
+  const page = loadDetail({status: 'paid', ticket_codes: ['DEMO']});
+  await page.loadOrder();
+  assert.match(page.data.refundUnavailableMessage, /刷新|查询/);
+  assert.notEqual(page.data.order.can_apply_refund, true);
+});
+
+test('used paid tickets retain the server refund explanation without allowing an application', async () => {
+  const page = loadDetail({status: 'paid', ticket_codes: ['DEMO'], can_apply_refund: false,
+    tickets: [{code: 'DEMO', status: 'active', check_in_count: 1}],
+    refund_application_message: '票券已核销或核销状态待确认，暂不能申请退款'});
+  await page.loadOrder();
+  assert.match(page.data.refundUnavailableMessage, /已核销/);
+});
+
 test('pull-down refresh updates ticket usage and completes the native refresh indicator', async () => {
   const order={status:'paid',ticket_codes:['DEMO'],tickets:[{code:'DEMO',status:'active',check_in_count:1}]};
   let stopped=0;

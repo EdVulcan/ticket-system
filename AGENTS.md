@@ -60,3 +60,17 @@ Workers must stop on ambiguity, unexpected interface or dependency changes, secu
 The primary Luna thread owns integration and normal final acceptance. Inspect actual diffs and validation results; do not accept summaries alone. Sol owns only the difficult decision it was asked to make and any explicitly requested high-risk final review.
 
 Never claim a model ran unless the agent activity or tool result identifies it. If a configured model is unavailable, report the limitation and use the best available safe route.
+
+## Agent skills
+
+### Issue tracker
+
+Use GitHub Issues in `EdVulcan/ticket-system` through `gh`; external writes require task authorization. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the five default triage role names. See `docs/agents/triage-labels.md` for mappings and remote availability.
+
+### Domain docs
+
+Use one shared domain context from the existing project skill, baseline, audit and roadmap; do not duplicate business rules. See `docs/agents/domain.md`.

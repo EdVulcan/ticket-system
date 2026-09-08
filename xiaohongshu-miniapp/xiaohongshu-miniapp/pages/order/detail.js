@@ -115,8 +115,8 @@ Page({
         issuanceManualReview,
         qrRenderError: false,
         refundApplicationMessage,
-        refundUnavailableMessage: !order.can_apply_refund && !refundApplicationMessage && ticketCodes.some(item => item.usageLabel === '未使用')
-          ? (order.refund_application_message || '') : '',
+        refundUnavailableMessage: !order.can_apply_refund && !refundApplicationMessage && ['paid', 'completed', 'partial_refunded'].indexOf(coreStatus) >= 0
+          ? (order.refund_application_message || '退票资格暂未确认，请下拉刷新订单后重试；仍无法查询请联系商家') : '',
         loading: false,
         paying: this.paymentInFlight || awaitingPaymentConfirmation,
         error: this.paymentFeedback || ''

@@ -153,9 +153,10 @@ page {
 }
 .ticket-product {
   display: block;
-  max-width: 520rpx;
+  max-width: 100%;
   color: #20262b;
-  font-size: 65rpx;
+  font-size: 60rpx;
+  font-size: clamp(52rpx, 8vw, 60rpx);
   font-weight: 700;
   line-height: 1.3;
   word-break: break-word;
@@ -369,7 +370,6 @@ page {
   line-height: 1.6;
 }
 @media (max-width: 350px) {
-  .ticket-product { font-size: 68rpx; }
   .ticket-qr { width: 328rpx; height: 328rpx; }
   .ticket-admission { gap: 20rpx; }
 }

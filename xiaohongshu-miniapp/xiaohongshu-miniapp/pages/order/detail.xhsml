@@ -32,6 +32,12 @@
       </view>
     </view>
   </view>
+  <view class="ticket-after-sale" xhs:if="{{order && !order.refund_pending && status !== 'refunded' && (order.can_apply_refund || refundApplicationMessage || refundUnavailableMessage)}}">
+    <view class="after-sale-copy"><text class="after-sale-title">退票服务</text><text class="after-sale-hint">{{refundApplicationMessage || refundUnavailableMessage || '未使用且符合退票规则，系统自动办理原路退款'}}</text></view>
+    <button class="refund-apply {{applyingRefund ? 'is-disabled' : ''}}" xhs:if="{{order.can_apply_refund}}" disabled="{{applyingRefund}}" loading="{{applyingRefund}}" bindtap="applyRefund">申请退票</button>
+    <button class="refund-apply" xhs:elif="{{refundApplicationMessage}}" bindtap="retry">刷新进度</button>
+    <button class="refund-apply is-disabled" xhs:else disabled="{{true}}">暂不可自助退票</button>
+  </view>
   <view class="tickets" xhs:if="{{order && order.hotel_stay}}">
     <text class="section-title">住宿预订</text>
     <view class="stay-row"><text>酒店</text><text>{{order.hotel_stay.hotel_name}}</text></view>
@@ -62,11 +68,6 @@
   <view class="issuance-pending" xhs:if="{{issuancePending}}"><text>支付已确认，票码正在生成。</text><button bindtap="retry">重新查询</button></view>
   <view class="issuance-pending" xhs:if="{{issuanceManualReview}}"><text>票码正在人工核查，请联系商家确认。</text></view>
   <view class="issuance-pending" xhs:if="{{qrRenderError}}"><text>二维码未能显示，可重新查询；也可向工作人员出示票码。</text><button bindtap="retry">重新查询</button></view>
-  <view class="ticket-after-sale" xhs:if="{{order && !order.refund_pending && status !== 'refunded' && (order.can_apply_refund || refundApplicationMessage || refundUnavailableMessage)}}">
-    <view class="after-sale-copy"><text class="after-sale-title">退票服务</text><text class="after-sale-hint">{{refundApplicationMessage || refundUnavailableMessage || '未使用且符合退票规则，系统自动办理原路退款'}}</text></view>
-    <button class="refund-apply {{applyingRefund ? 'is-disabled' : ''}}" xhs:if="{{order.can_apply_refund}}" disabled="{{applyingRefund}}" loading="{{applyingRefund}}" bindtap="applyRefund">申请退票</button>
-    <button class="refund-apply" xhs:elif="{{refundApplicationMessage}}" bindtap="retry">刷新进度</button>
-  </view>
   <button class="order-details-toggle" xhs:if="{{ticketCodes.length}}" bindtap="toggleOrderDetails" aria-expanded="{{orderDetailsExpanded}}">{{orderDetailsExpanded ? '收起订单信息' : '订单信息'}}<view class="details-chevron {{orderDetailsExpanded ? 'is-open' : ''}}"></view></button>
   <view xhs:if="{{!ticketCodes.length || orderDetailsExpanded}}">
   <view class="due-amount" xhs:if="{{order}}"><text class="amount-label">{{status === 'unpaid' ? '待支付金额' : (status === 'cancelled' || status === 'failed' || status === 'refunded' ? '订单金额' : '实付金额')}}</text><view class="price"><text class="currency">¥</text>{{order.amountText}}</view></view>

@@ -2,7 +2,7 @@
   <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
     <header class="page-heading">
       <div class="page-heading-copy">
-        <h2 class="text-lg font-bold text-gray-900">订单管理</h2>
+        <h2 class="text-lg font-bold text-gray-900">线上订单</h2>
         <p class="text-xs text-gray-500 mt-1">{{ isSupplier ? '查看线上销售订单、处理退款及手动核销' : canDirectRefund ? '查看线上销售订单及处理退款' : '查看线上销售订单及售后状态' }}</p>
       </div>
       <div class="page-actions">
@@ -10,10 +10,13 @@
       </div>
     </header>
 
-    <div class="filter-toolbar">
-      <el-input v-model="searchQuery" placeholder="搜索订单号/手机号..." class="w-64" prefix-icon="Search" @keyup.enter="applyFilters" />
-      <el-date-picker
-        v-model="dateRange"
+	    <div class="filter-toolbar">
+	      <el-input v-model="searchQuery" placeholder="订单号/外部单/姓名/手机号" class="w-64" prefix-icon="Search" @keyup.enter="applyFilters" />
+	      <el-select v-model="filterChannel" placeholder="渠道来源" class="w-40" clearable @change="applyFilters">
+	        <el-option v-for="option in channelOptions" :key="option.value" :label="option.label" :value="option.value" />
+	      </el-select>
+	      <el-date-picker
+	        v-model="dateRange"
         type="daterange"
         range-separator="至"
         start-placeholder="开始日期"
@@ -21,16 +24,23 @@
         value-format="YYYY-MM-DD"
         class="w-64"
         @change="applyFilters"
-      />
-      <el-select v-model="filterStatus" placeholder="订单状态" class="w-32" clearable @change="applyFilters">
-        <el-option label="已支付" value="paid" />
-        <el-option label="已完成" value="completed" />
-        <el-option label="已退款" value="refunded" />
-      </el-select>
-    </div>
+	      />
+	      <el-select v-model="filterStatus" placeholder="订单状态" class="w-32" clearable @change="applyFilters">
+	        <el-option label="待支付" value="unpaid" />
+	        <el-option label="已支付" value="paid" />
+	        <el-option label="已完成" value="completed" />
+	        <el-option label="部分退款" value="partial_refunded" />
+	        <el-option label="已退款" value="refunded" />
+	        <el-option label="已取消" value="cancelled" />
+	      </el-select>
+	      <el-button type="primary" @click="applyFilters">查询</el-button>
+	      <el-button @click="resetFilters">重置</el-button>
+	    </div>
 
     <el-table :data="tableData" style="width: 100%" v-loading="loading" border>
       <el-table-column prop="order_no" label="订单号" width="180" />
+      <el-table-column label="渠道来源" min-width="135"><template #default="{ row }">{{ channelOptions.find(option => option.value === row.channel)?.label || row.channel || '未知来源' }}</template></el-table-column>
+      <el-table-column prop="external_no" label="外部单号" min-width="160" show-overflow-tooltip />
       <el-table-column label="联系人" width="150">
         <template #default="{ row }">
           <div>{{ row.contact_name }}</div>
@@ -71,16 +81,20 @@
 
     <!-- Pagination -->
     <div class="table-footer">
-      <el-pagination
-        v-model:current-page="currentPage"
-        v-model:page-size="pageSize"
-        :total="total"
-        layout="total, prev, pager, next"
-        @current-change="fetchData"
-      />
-    </div>
+	      <el-pagination
+	        v-model:current-page="currentPage"
+	        v-model:page-size="pageSize"
+	        :total="total"
+	        :page-sizes="[10, 20, 40]"
+	        layout="total, sizes, prev, pager, next"
+	        @current-change="handlePageChange"
+	        @size-change="handlePageSizeChange"
+	      />
+	    </div>
 
-    <!-- Detail Dialog -->
+	    <OrderRefundDialog ref="refundDialog" @changed="fetchData" />
+
+	    <!-- Detail Dialog -->
     <el-dialog v-model="detailVisible" title="订单详情" width="980px">
       <div v-if="currentOrder" v-loading="detailLoading">
         <el-descriptions title="基本信息" :column="2" border>
@@ -173,10 +187,11 @@
 
 <script setup lang="ts">
 import { computed, ref, reactive, onMounted } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { hasPermission } from '@/utils/permissions'
+import OrderRefundDialog from '@/components/OrderRefundDialog.vue'
 
 const loading = ref(false)
 const tableData = ref([])
@@ -184,8 +199,10 @@ const total = ref(0)
 const currentPage = ref(1)
 const pageSize = ref(10)
 const searchQuery = ref('')
+const filterChannel = ref('')
 const filterStatus = ref('')
 const dateRange = ref<[string, string] | null>(null)
+const channelOptions = ref<Array<{ value: string; label: string }>>([])
 
 const detailVisible = ref(false)
 const currentOrder = ref<any>(null)
@@ -194,8 +211,9 @@ const responsibilities = ref<any[]>([])
 const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user') || '{}') } catch { return {} } })()
 const activeCapabilities = new Set((currentUser.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability))
 const isSupplier = computed(() => activeCapabilities.has('supplier'))
-const canDirectRefund = computed(() => isSupplier.value || activeCapabilities.has('distributor'))
+const canDirectRefund = computed(() => (isSupplier.value || activeCapabilities.has('distributor')) && hasPermission(currentUser, 'refunds.write'))
 const canManualVerify = computed(() => isSupplier.value && hasPermission(currentUser, 'tickets.verify') && hasPermission(currentUser, 'onsite.read'))
+const refundDialog = ref<{ open: (orderNo: string, detailURL?: string) => Promise<void> } | null>(null)
 
 // Verify Logic
 const verifyDialogVisible = ref(false)
@@ -274,8 +292,9 @@ const fetchData = async () => {
     const params: any = {
       page: currentPage.value,
       page_size: pageSize.value,
-      channel: 'online'
+      sales_scope: 'online'
     }
+    if (filterChannel.value) params.channel = filterChannel.value
     if (filterStatus.value) params.status = filterStatus.value
     if (searchQuery.value) params.search = searchQuery.value
     
@@ -285,8 +304,11 @@ const fetchData = async () => {
     }
 
     const res = await request.get('/orders', { params })
-    tableData.value = res.data.data
-    total.value = res.data.total
+    tableData.value = res.data.data || []
+    total.value = res.data.total || 0
+    if (Array.isArray(res.data.channel_options)) {
+      channelOptions.value = res.data.channel_options.filter((option: any) => option?.value && option?.label)
+    }
   } catch (error) {
     ElMessage.error('获取订单失败')
   } finally {
@@ -312,23 +334,31 @@ const handleDetail = async (row: any) => {
 
 const applyFilters = () => {
   currentPage.value = 1
-  fetchData()
+  void fetchData()
 }
 
-const handleRefund = async (row: any) => {
-  ElMessageBox.confirm('确认全额退款吗？此操作不可逆。', '退款确认', {
-    confirmButtonText: '确定退款',
-    cancelButtonText: '取消',
-    type: 'warning'
-  }).then(async () => {
-    const idempotencyKey = `admin-${row.order_no}-${Date.now()}`
-    const ticketCodes = (row.items || []).flatMap((item: any) => (item.tickets || []).map((ticket: any) => ticket.ticket_code)).filter(Boolean)
-    if (!ticketCodes.length) { ElMessage.warning('订单没有可退款的未使用票'); return }
-    const response = await request.post('/payments/refunds/mixed', { order_no: row.order_no, idempotency_key: idempotencyKey, amount: row.total_amount, ticket_codes: ticketCodes, reason: '管理端全额退款' })
-    if (response.data.status === 'group_pending') ElMessage.info('退款已按原支付方式分摊，等待支付渠道确认')
-    else ElMessage.success('退款已完成')
-    fetchData()
-  }).catch(() => undefined)
+const resetFilters = () => {
+  searchQuery.value = ''
+  filterChannel.value = ''
+  filterStatus.value = ''
+  dateRange.value = null
+  currentPage.value = 1
+  void fetchData()
+}
+
+const handlePageChange = (page: number) => {
+  currentPage.value = page
+  void fetchData()
+}
+
+const handlePageSizeChange = (size: number) => {
+  pageSize.value = size
+  currentPage.value = 1
+  void fetchData()
+}
+
+const handleRefund = (row: any) => {
+  void refundDialog.value?.open(row.order_no)
 }
 
 const getStatusType = (status: string) => {

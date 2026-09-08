@@ -20,6 +20,37 @@ func xiaohongshuRefundCustomer(t *testing.T, fixture xiaohongshuRefundFixture) m
 	return customer
 }
 
+func TestMiniappRefundButtonProjectionUsesSaleEvidence(t *testing.T) {
+	fixture := seedXiaohongshuRefundFixture(t)
+	customer := xiaohongshuRefundCustomer(t, fixture)
+	svc := NewMiniappService()
+	result, err := svc.GetXiaohongshuOrder(context.Background(), &customer, fixture.order.OrderNo)
+	if err != nil || !result.CanApplyRefund {
+		t.Fatalf("eligible unused order must expose refund button: result=%+v err=%v", result, err)
+	}
+	// Legacy operations without a product-type snapshot must explain the
+	// unavailable action, never infer refund eligibility from today's product.
+	var operation model.XiaohongshuOrderOperation
+	if err := model.DB.Where("tenant_id = ? AND channel_account_id = ?", fixture.tenantID, fixture.account.ID).First(&operation).Error; err != nil {
+		t.Fatal(err)
+	}
+	payload, err := decryptXiaohongshuOrderOperationPayload(operation.RequestPayloadCiphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, err := encryptXiaohongshuOrderOperationPayload(payload.Request, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&operation).Update("request_payload_ciphertext", ciphertext).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err = svc.GetXiaohongshuOrder(context.Background(), &customer, fixture.order.OrderNo)
+	if err != nil || result.CanApplyRefund || result.RefundApplicationMessage == "" {
+		t.Fatalf("legacy order must explain unavailable refund: result=%+v err=%v", result, err)
+	}
+}
+
 func TestMiniappRefundApplicationCreatesAtomicProcessingChain(t *testing.T) {
 	fixture := seedXiaohongshuRefundFixture(t)
 	customer := xiaohongshuRefundCustomer(t, fixture)
