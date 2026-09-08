@@ -70,7 +70,21 @@ func run() error {
 			}
 		}
 	}
-	if err := os.Chdir(filepath.Join(proc, "cwd")); err != nil {
+	if err := loadActiveConfig(proc); err != nil {
+		return err
+	}
+	return repair(*apply, *digest, *approver, *reference)
+}
+
+func loadActiveConfig(proc string) error {
+	// A proc cwd magic link can enter the service's private mount namespace:
+	// relative reads work, but Getwd (and Viper's absolute search paths) fail.
+	// Resolve its release path and enter it through our own mount namespace.
+	release, err := os.Readlink(filepath.Join(proc, "cwd"))
+	if err != nil || !filepath.IsAbs(release) {
+		return fmt.Errorf("cannot resolve active release directory")
+	}
+	if err := os.Chdir(release); err != nil {
 		return fmt.Errorf("cannot select active release")
 	}
 	// InitConfig can generate absent instance keys. Preflight the exact selected
@@ -101,6 +115,10 @@ func run() error {
 		}
 		return fmt.Errorf("cannot load active configuration: %w", err)
 	}
+	return nil
+}
+
+func repair(apply bool, digest, approver, reference string) error {
 	dsn, err := config.GlobalConfig.Database.PostgresDSN()
 	if err != nil {
 		return fmt.Errorf("database configuration unavailable")
@@ -119,18 +137,18 @@ func run() error {
 	model.DB = db
 	model.InitWriter(db, 15*time.Second)
 	var user model.User
-	if err := db.Where("tenant_id = ? AND username = ? AND is_initial_admin = ?", 1, *approver, true).First(&user).Error; err != nil {
+	if err := db.Where("tenant_id = ? AND username = ? AND is_initial_admin = ?", 1, approver, true).First(&user).Error; err != nil {
 		return fmt.Errorf("approved initial administrator not found")
 	}
 	input := service.LegacyXiaohongshuEvidenceInput{
 		TenantID: 1, ChannelAccountID: 2, OrderNo: "ORD1788829969828A20BF97468",
 		ConfigureAuditID: 392, SyncAuditID: 393, ApproverUserID: user.ID,
-		Executor: "server-root/xhs-legacy-refund-repair", ApprovalReference: *reference,
+		Executor: "server-root/xhs-legacy-refund-repair", ApprovalReference: reference,
 		Reason: "初始管理员明确接受历史配置审计392及同步审计393作为此旧单团购券类型兼容依据；非平台历史回执，不自动退款",
 	}
 	var result *service.LegacyXiaohongshuEvidenceResult
-	if *apply {
-		result, err = service.ApplyLegacyXiaohongshuRefundEvidence(input, *digest)
+	if apply {
+		result, err = service.ApplyLegacyXiaohongshuRefundEvidence(input, digest)
 	} else {
 		result, err = service.CheckLegacyXiaohongshuRefundEvidence(input)
 	}
