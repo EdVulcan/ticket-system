@@ -7,11 +7,11 @@ const order = { order_no: 'XHS-REFUND-TEST', external_no: 'EXTERNAL-TEST', chann
   items: [{ product_name: '测试门票', quantity: 1, tickets: [{ ticket_code: 'DEMO-NOT-VALID', status: 'unused', check_in_count: 0, pending_refund_id: 0 }] }] }
 const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 
-async function prepare(page: Page, role = 'super_admin') {
+async function prepare(page: Page, role = 'super_admin', identity: Record<string, unknown> = {}) {
   await page.addInitScript(value => {
     localStorage.setItem('token', 'test-token')
     localStorage.setItem('user', JSON.stringify(value))
-  }, { ...user, role, permissions: role === 'viewer' ? ['channels.read', 'orders.read'] : [] })
+  }, { ...user, role, permissions: role === 'viewer' ? ['channels.read', 'orders.read'] : [], ...identity })
   await page.route('**/api/v1/tenants/me', route => json(route, { ...user, id: 1, status: 'active' }))
   await page.route('**/api/v1/channel-accounts', route => json(route, { data: [account] }))
   await page.route('**/api/v1/channel-accounts/7/orders?*', route => json(route, { data: [{ ...order, ticket_count: 1, paid_cents: 8000 }], total: 1 }))
@@ -34,6 +34,7 @@ test('渠道订单提供退款入口，pending 不误报到账，网络重试复
     expect(body.ticket_codes).toEqual(['DEMO-NOT-VALID'])
     expect(body.amount).toBe(80)
     expect(body.reason).toBe('游客行程改变')
+    expect(body).not.toHaveProperty('override_refund_policy')
     calls++
     if (calls === 1) { original = body; await route.abort('failed'); return }
     expect(body).toEqual(original)
@@ -51,6 +52,105 @@ test('渠道订单提供退款入口，pending 不误报到账，网络重试复
   await expect(page.getByText('退款已完成', { exact: true })).toHaveCount(0)
   expect(calls).toBe(2)
   expect(errors).toEqual([])
+})
+
+for (const entry of ['channel', 'online']) {
+  test(`${entry} 不可退旧单由初始管理员明确确认，取消不提交，重试保留例外申请`, async ({ page }) => {
+    const errors: string[] = []
+    page.on('pageerror', error => errors.push(error.message))
+    await prepare(page, 'super_admin', { is_initial_admin: true })
+    const oldOrder = { ...order, tenant_id: 1, items: order.items.map(item => ({ ...item, refund_type: 'no_refund' })) }
+    await page.route('**/api/v1/channel-accounts/7/orders/XHS-REFUND-TEST', route => json(route, { order: oldOrder, refunds: [] }))
+    if (entry === 'online') {
+      await page.route('**/api/v1/orders?*', route => json(route, { data: [oldOrder], total: 1, channel_options: [] }))
+      await page.route('**/api/v1/orders/XHS-REFUND-TEST', route => json(route, { order: oldOrder, refunds: [] }))
+      await page.route('**/api/v1/checkpoints?*', route => json(route, { data: [] }))
+      await page.route('**/api/v1/devices?*', route => json(route, { data: [] }))
+      await page.goto('/online-order')
+    }
+    let calls = 0
+    let original: any
+    await page.route('**/api/v1/payments/refunds/mixed', async route => {
+      const body = route.request().postDataJSON()
+      expect(body).toMatchObject({ order_no: order.order_no, amount: 80, reason: '售出时退票政策设置错误', override_refund_policy: true, ticket_codes: ['DEMO-NOT-VALID'] })
+      calls++
+      if (calls === 1) { original = body; await route.abort('failed'); return }
+      expect(body).toEqual(original)
+      await json(route, { id: 9, status: 'pending' }, 201)
+    })
+    await page.getByRole('button', { name: entry === 'online' ? '退款' : '申请退款', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '申请原路退款' })
+    const checkbox = dialog.getByRole('checkbox', { name: '以初始管理员身份申请例外退款' })
+    await expect(checkbox).not.toBeChecked()
+    await dialog.getByPlaceholder('请填写本次例外退款的具体原因').fill('售出时退票政策设置错误')
+    await expect(dialog.getByRole('button', { name: '确认例外退款', exact: true })).toBeDisabled()
+    await dialog.locator('label.el-checkbox').click()
+    await expect(checkbox).toBeChecked()
+    await page.screenshot({ path: `${process.env.TEMP || '/tmp'}/refund-policy-${entry}.png` })
+    await dialog.getByRole('button', { name: '确认例外退款', exact: true }).click()
+    const confirmation = page.getByRole('dialog', { name: '确认管理员例外退款' })
+    await expect(confirmation).toContainText('¥80.00')
+    await expect(confirmation).toContainText('售出时退票政策设置错误')
+    await confirmation.getByRole('button', { name: '返回检查' }).click()
+    expect(calls).toBe(0)
+    await dialog.getByRole('button', { name: '确认例外退款', exact: true }).click()
+    await confirmation.getByRole('button', { name: '确认提交例外退款' }).click()
+    await expect(dialog.getByText(/退款结果暂未确认/)).toBeVisible()
+    await expect(checkbox).toBeDisabled()
+    await dialog.getByRole('button', { name: '确认例外退款', exact: true }).click()
+    await expect(page.getByText('退款申请已提交，等待原支付渠道确认，请刷新查看进度', { exact: true })).toBeVisible()
+    expect(calls).toBe(2)
+    expect(errors).toEqual([])
+  })
+}
+
+for (const scenario of [
+  { name: '普通管理员', identity: { is_initial_admin: false }, tenantId: 1 },
+  { name: '其他销售租户', identity: { is_initial_admin: true }, tenantId: 2 },
+  { name: '纯分销商', identity: { is_initial_admin: true, capabilities: [{ capability: 'distributor', status: 'active' }], supplier_business_types: [] }, tenantId: 1 },
+]) {
+  test(`${scenario.name}不可通过共享退款弹窗申请政策例外`, async ({ page }) => {
+    await prepare(page, 'super_admin', scenario.identity)
+    // Preserve this identity through the router's tenant refresh.
+    await page.route('**/api/v1/tenants/me', route => json(route, { ...user, ...scenario.identity, id: 1, status: 'active' }))
+    await page.route('**/api/v1/channel-accounts/7/orders/XHS-REFUND-TEST', route => json(route, {
+      order: { ...order, tenant_id: scenario.tenantId, items: order.items.map(item => ({ ...item, refund_type: 'no_refund' })) }, refunds: [],
+    }))
+    // Identity is read afresh when the refund dialog opens.
+    await page.evaluate(identity => localStorage.setItem('user', JSON.stringify({ ...JSON.parse(localStorage.getItem('user') || '{}'), ...identity })), scenario.identity)
+    let calls = 0
+    await page.route('**/api/v1/payments/refunds/mixed', route => { calls++; return json(route, {}) })
+    await page.getByRole('button', { name: '申请退款', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '申请原路退款' })
+    await expect(dialog.getByText('该订单购买时不可退，仅本商户景区初始管理员可申请例外退款')).toBeVisible()
+    await expect(dialog.getByRole('checkbox')).toHaveCount(0)
+    await expect(dialog.getByRole('button', { name: '确认例外退款', exact: true })).toBeDisabled()
+    expect(calls).toBe(0)
+  })
+}
+
+test('初始管理员的政策例外不放开已用、未知或处理中票券', async ({ page }) => {
+  await prepare(page, 'super_admin', { is_initial_admin: true })
+  let calls = 0
+  await page.route('**/api/v1/payments/refunds/mixed', route => { calls++; return json(route, {}) })
+  for (const ticket of [
+    { ticket_code: 'DEMO-NOT-VALID', status: 'used', check_in_count: 1 },
+    { ticket_code: 'DEMO-NOT-VALID', status: 'unused' },
+    { ticket_code: '', status: 'unused', check_in_count: 0 },
+    { ticket_code: 'DEMO-NOT-VALID', status: 'unused', check_in_count: 0, pending_refund_id: 9 },
+    { ticket_code: 'DEMO-NOT-VALID', status: 'unused', check_in_count: 0, pending_xiaohongshu_verification_id: 9 },
+  ]) {
+    await page.route('**/api/v1/channel-accounts/7/orders/XHS-REFUND-TEST', route => json(route, {
+      order: { ...order, tenant_id: 1, items: [{ refund_type: 'no_refund', tickets: [ticket] }] }, refunds: [],
+    }))
+    await page.getByRole('button', { name: '申请退款', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '申请原路退款' })
+    await expect(dialog.getByRole('alert')).toBeVisible()
+    await expect(dialog.getByRole('checkbox')).toHaveCount(0)
+    await expect(dialog.getByRole('button', { name: '确认例外退款', exact: true })).toBeDisabled()
+    await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  }
+  expect(calls).toBe(0)
 })
 
 test('渠道订单详情也可退款，已用票在提交前说明原因', async ({ page }) => {

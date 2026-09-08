@@ -9,23 +9,29 @@
       <p class="refund-note">款项退回原支付渠道。提交后需要等待渠道确认，不代表已经到账；退票规则及可退金额以服务端校验为准。</p>
       <el-alert v-if="unavailable" :title="unavailable" type="warning" :closable="false" show-icon />
       <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="refund-error" />
+      <div v-if="needsPolicyOverride && canOverridePolicy && !unavailable" class="refund-error">
+        <el-alert title="该订单购买时设置为不可退。例外退款不会修改原销售规则，仍须通过票券及支付渠道校验，并保留操作人和原因。" type="warning" :closable="false" show-icon />
+        <el-checkbox v-model="overridePolicy" :disabled="attempted || submitting">以初始管理员身份申请例外退款</el-checkbox>
+      </div>
       <el-form label-position="top" class="refund-form">
         <el-form-item label="退款原因" required>
-          <el-input v-model="reason" type="textarea" :rows="3" maxlength="255" show-word-limit :disabled="attempted" placeholder="请填写游客申请退票的原因" />
+          <el-input v-model="reason" type="textarea" :rows="3" maxlength="255" show-word-limit :disabled="attempted || submitting" :placeholder="needsPolicyOverride ? '请填写本次例外退款的具体原因' : '请填写游客申请退票的原因'" />
         </el-form-item>
       </el-form>
     </div>
     <template #footer>
       <el-button :disabled="submitting" @click="visible = false">{{ submitted ? '关闭' : '取消' }}</el-button>
-      <el-button v-if="!submitted" type="primary" :loading="submitting" :disabled="loading || !!unavailable || !order || !reason.trim()" @click="submit">确认申请退款</el-button>
+      <el-button v-if="!submitted" type="primary" :loading="submitting" :disabled="loading || !!unavailable || !order || !reason.trim() || (needsPolicyOverride && (!canOverridePolicy || !overridePolicy))" @click="submit">{{ needsPolicyOverride ? '确认例外退款' : '确认申请退款' }}</el-button>
     </template>
   </el-dialog>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
+import { hasPermission } from '@/utils/permissions'
+import { isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 
 const emit = defineEmits<{ changed: [] }>()
 const visible = ref(false)
@@ -37,6 +43,13 @@ const order = ref<any>(null)
 const reason = ref('')
 const error = ref('')
 const unavailable = ref('')
+const currentUser = ref(readStoredUser())
+const overridePolicy = ref(false)
+const needsPolicyOverride = computed(() => (order.value?.items || []).some((item: any) => item.refund_type === 'no_refund'))
+// Visibility mirrors existing authority; RefundService reauthorizes every request.
+const canOverridePolicy = computed(() => currentUser.value.is_initial_admin === true &&
+  hasPermission(currentUser.value, 'refunds.write') && isScenicHistorySupplier(currentUser.value) &&
+  Number(currentUser.value.tenant_id) > 0 && Number(order.value?.tenant_id) === Number(currentUser.value.tenant_id))
 const tickets = computed<any[]>(() => (order.value?.items || []).flatMap((item: any) => item.tickets || []))
 let requestKey = ''
 let payload: Record<string, unknown> | null = null
@@ -51,6 +64,8 @@ const open = async (orderNo: string, detailURL?: string) => {
   loading.value = true
   submitted.value = false
   attempted.value = false
+  overridePolicy.value = false
+  currentUser.value = readStoredUser()
   order.value = null
   reason.value = ''
   error.value = ''
@@ -65,9 +80,12 @@ const open = async (orderNo: string, detailURL?: string) => {
     if (order.value.environment === 'sandbox') unavailable.value = '沙箱订单不发起真实资金退款'
     else if (order.value.status !== 'paid') unavailable.value = '此入口只办理已支付、未使用订单的整单退款；其他售后请在售后工作台处理'
     else if (!tickets.value.length) unavailable.value = '票券尚未完整签发，请先刷新订单或核查出票状态'
+    else if (tickets.value.some(ticket => typeof ticket.ticket_code !== 'string' || !ticket.ticket_code.trim() || !Number.isFinite(ticket.check_in_count))) unavailable.value = '票码或核销信息不完整，请先刷新订单或核查出票状态'
     else if (tickets.value.some(ticket => ticket.status !== 'unused' || Number(ticket.check_in_count || 0) > 0)) unavailable.value = '订单包含已使用或不可退票券，请在售后工作台核查'
     else if (tickets.value.some(ticket => Number(ticket.pending_refund_id || 0) || Number(ticket.pending_xiaohongshu_verification_id || 0)) ||
       (data.refunds || []).some((refund: any) => ['pending', 'group_pending', 'processing', 'submitted', 'manual_review'].includes(refund.status))) unavailable.value = '订单正在退款或核销处理中，请勿重复申请'
+    else if (needsPolicyOverride.value && order.value.environment !== 'production') unavailable.value = '订单环境信息不完整，不能申请例外退款'
+    else if (needsPolicyOverride.value && !canOverridePolicy.value) unavailable.value = '该订单购买时不可退，仅本商户景区初始管理员可申请例外退款'
   } catch (cause: any) {
     if (version === loadVersion) {
       order.value = null
@@ -79,12 +97,24 @@ const open = async (orderNo: string, detailURL?: string) => {
 }
 
 const submit = async () => {
-  if (loading.value || submitting.value || submitted.value || unavailable.value || !order.value || !reason.value.trim()) return
+  if (loading.value || submitting.value || submitted.value || unavailable.value || !order.value || !reason.value.trim() ||
+    (needsPolicyOverride.value && (!canOverridePolicy.value || !overridePolicy.value))) return
+  submitting.value = true
+  if (!payload && needsPolicyOverride.value) {
+    try {
+      await ElMessageBox.confirm(`订单 ${order.value.order_no} 将申请整单原路退款 ¥${Number(order.value.total_amount || 0).toFixed(2)}。例外原因：${reason.value.trim()}。本操作将记录审计，渠道确认成功后才算退款完成。`, '确认管理员例外退款', {
+        confirmButtonText: '确认提交例外退款', cancelButtonText: '返回检查', type: 'warning',
+      })
+    } catch {
+      submitting.value = false
+      return
+    }
+  }
   // A retry within this dialog replays the same request, even when its response
   // was lost. Do not turn a timeout into a second refund application.
   if (!payload) payload = { order_no: order.value.order_no, idempotency_key: requestKey,
-    amount: order.value.total_amount, ticket_codes: tickets.value.map(ticket => ticket.ticket_code), reason: reason.value.trim() }
-  submitting.value = true
+    amount: order.value.total_amount, ticket_codes: tickets.value.map(ticket => ticket.ticket_code), reason: reason.value.trim(),
+    ...(needsPolicyOverride.value ? { override_refund_policy: true } : {}) }
   attempted.value = true
   error.value = ''
   try {
