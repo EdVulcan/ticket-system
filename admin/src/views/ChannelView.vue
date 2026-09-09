@@ -136,10 +136,17 @@
     <el-dialog v-model="mappingDialog" title="商品映射" width="1060px">
       <el-alert v-if="selectedAccount?.type === 'ctrip'" class="mb-4" type="info" :closable="false" title="外部编码填写携程 PLU；价格按当前携程合同单独设置，不会改动景区产品原价。" />
       <el-alert v-else-if="selectedAccount?.type === 'xiaohongshu'" class="mb-4" :type="selectedAccount?.status === 'sandbox' ? 'warning' : 'info'" :closable="false" :title="selectedAccount?.status === 'sandbox' ? '测试小程序单笔订单不能超过 0.10 元；先添加映射，再完成发布配置并同步商品。' : '先添加映射，再完成类目、门店和小程序路径配置并同步商品。'" />
+      <div class="flex flex-wrap items-center gap-3 mb-3">
+        <span class="text-sm text-gray-600">票种来源</span>
+        <el-radio-group v-model="mappingProductType" aria-label="票种来源" @change="mapping.product_id = null">
+          <el-radio-button value="online">线上</el-radio-button>
+          <el-radio-button value="offline">线下（窗口）</el-radio-button>
+        </el-radio-group>
+      </div>
       <div class="grid grid-cols-1 gap-2 mb-4 md:grid-cols-5">
         <el-input v-model="mapping.external_code" placeholder="外部商品编码 / PLU" />
         <el-select v-model="mapping.product_id" filterable placeholder="选择本商户产品">
-          <el-option v-for="product in products" :key="product.id" :label="product.name" :value="product.id" />
+          <el-option v-for="product in mappingProductOptions" :key="product.id" :label="product.name" :value="product.id" />
         </el-select>
         <el-input v-if="selectedAccount?.type === 'xiaohongshu'" v-model="mapping.display_name" placeholder="小程序展示名称" />
         <el-input-number v-if="selectedAccount?.type === 'xiaohongshu'" v-model="mapping.channel_sale_yuan" :min="0.01" :precision="2" :step="1" controls-position="right" placeholder="小红书售价" class="w-full" />
@@ -309,13 +316,13 @@
       <el-table :data="channelOrders" v-loading="ordersLoading" stripe height="470" empty-text="暂无渠道订单">
         <el-table-column prop="external_no" label="外部单号" min-width="160" show-overflow-tooltip />
         <el-table-column prop="order_no" label="内部订单" min-width="170" show-overflow-tooltip />
-        <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag effect="plain">{{ orderStatusText(row.status) }}</el-tag></template></el-table-column>
+        <el-table-column label="状态" width="100"><template #default="{ row }"><el-tag effect="plain" :type="hasPendingRefund(row) ? 'warning' : undefined">{{ hasPendingRefund(row) ? '退款处理中' : orderStatusText(row.status) }}</el-tag></template></el-table-column>
         <el-table-column label="游客" min-width="150"><template #default="{ row }"><div>{{ row.contact_name || '-' }}</div><div class="text-xs text-gray-500">{{ row.contact_phone || '-' }}</div></template></el-table-column>
         <el-table-column label="票况" width="125"><template #default="{ row }"><div>{{ row.ticket_count }} 张</div><div class="text-xs text-gray-500">已核销 {{ row.used_ticket_count }} / 已退 {{ row.refunded_ticket_count }}</div></template></el-table-column>
         <el-table-column label="订单金额" width="110"><template #default="{ row }">¥{{ Number(row.total_amount || 0).toFixed(2) }}</template></el-table-column>
         <el-table-column label="实收/退款" width="130"><template #default="{ row }"><div>收 ¥{{ cents(row.paid_cents) }}</div><div class="text-xs text-gray-500">退 ¥{{ cents(row.refunded_cents) }}</div></template></el-table-column>
         <el-table-column label="下单时间" width="165"><template #default="{ row }">{{ dateTime(row.created_at) }}</template></el-table-column>
-        <el-table-column label="操作" width="155" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openOrderDetail(row)">详情</el-button><el-button v-if="canRefund && row.status === 'paid' && selectedAccount?.environment !== 'sandbox'" link type="danger" @click="openOrderRefund(row)">申请退款</el-button></template></el-table-column>
+        <el-table-column label="操作" width="155" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openOrderDetail(row)">详情</el-button><el-button v-if="canRefund && row.status === 'paid' && !hasPendingRefund(row) && selectedAccount?.environment !== 'sandbox'" link type="danger" @click="openOrderRefund(row)">申请退款</el-button></template></el-table-column>
       </el-table>
       <div class="mt-3 flex justify-end"><el-pagination v-model:current-page="orderPage" :page-size="20" :total="orderTotal" layout="prev, pager, next, total" @current-change="loadOrders" /></div>
       <template #footer><el-button @click="ordersDialog = false">关闭</el-button></template>
@@ -326,7 +333,7 @@
         <el-descriptions v-if="orderDetail" :column="4" border>
           <el-descriptions-item label="外部单号">{{ orderDetail.order.external_no || '-' }}</el-descriptions-item>
           <el-descriptions-item label="内部订单">{{ orderDetail.order.order_no }}</el-descriptions-item>
-          <el-descriptions-item label="状态">{{ orderStatusText(orderDetail.order.status) }}</el-descriptions-item>
+          <el-descriptions-item label="状态">{{ hasPendingRefund(orderDetail.order, orderDetail.refunds) ? '退款处理中' : orderStatusText(orderDetail.order.status) }}</el-descriptions-item>
           <el-descriptions-item label="金额">¥{{ Number(orderDetail.order.total_amount || 0).toFixed(2) }}</el-descriptions-item>
           <el-descriptions-item label="联系人">{{ orderDetail.order.contact_name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="手机号">{{ orderDetail.order.contact_phone || '-' }}</el-descriptions-item>
@@ -363,7 +370,7 @@
           </el-tab-pane>
         </el-tabs>
       </div>
-      <template #footer><el-button v-if="canRefund && orderDetail?.order.status === 'paid' && orderDetail?.order.environment !== 'sandbox'" type="danger" plain @click="openOrderRefund(orderDetail.order)">申请退款</el-button><el-button @click="openOrderDetail(orderDetail.order)" :disabled="!orderDetail || orderDetailLoading">刷新状态</el-button><el-button @click="orderDetailDialog = false">关闭</el-button></template>
+      <template #footer><el-button v-if="canRefund && orderDetail?.order.status === 'paid' && !hasPendingRefund(orderDetail?.order, orderDetail?.refunds || []) && orderDetail?.order.environment !== 'sandbox'" type="danger" plain @click="openOrderRefund(orderDetail.order)">申请退款</el-button><el-button @click="openOrderDetail(orderDetail.order)" :disabled="!orderDetail || orderDetailLoading">刷新状态</el-button><el-button @click="orderDetailDialog = false">关闭</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="reconciliationsDialog" :title="`渠道账单对账：${selectedAccount?.code || ''}`" width="1000px" :close-on-click-modal="false">
@@ -419,6 +426,7 @@ import request from '@/utils/request'
 import { localizeDisplayText } from '@/utils/localize'
 import { hasPermission } from '@/utils/permissions'
 import { activeCapabilitySet, isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
+import { usePendingRefundRefresh } from '@/composables/usePendingRefundRefresh'
 import ChannelStorefrontDialog from '@/components/ChannelStorefrontDialog.vue'
 import OrderRefundDialog from '@/components/OrderRefundDialog.vue'
 
@@ -433,6 +441,8 @@ const orderRefundDialog = ref<InstanceType<typeof OrderRefundDialog>>()
 const accounts = ref<any[]>([])
 const mappings = ref<any[]>([])
 const products = ref<any[]>([])
+const mappingProductType = ref('online')
+const mappingProductOptions = computed(() => products.value.filter(product => product.type === mappingProductType.value))
 const loading = ref(false)
 const saving = ref(false)
 const createDialog = ref(false)
@@ -458,6 +468,8 @@ const orderTotal = ref(0)
 const orderDetailDialog = ref(false)
 const orderDetailLoading = ref(false)
 const orderDetail = ref<any>(null)
+let orderListRequestVersion = 0
+let orderDetailRequestVersion = 0
 const reconciliationsDialog = ref(false)
 const reconciliationsLoading = ref(false)
 const reconciliations = ref<any[]>([])
@@ -621,6 +633,7 @@ const handleAccountCommand = async (command: string, row: any) => {
 const productName = (id: number) => products.value.find((product: any) => Number(product.id) === Number(id))?.name || '已下架或不可见产品'
 const openMapping = async (row: any) => {
   selectedAccount.value = row; selectedID.value = row.id
+  mappingProductType.value = 'online'
   Object.assign(mapping, { external_code: '', display_name: '', product_id: null, channel_sale_yuan: 0, channel_cost_yuan: 0 })
   const [mappingResponse, productResponse] = await Promise.all([
     request.get('/channel-accounts/mappings', { params: { channel_account_id: row.id } }),
@@ -878,15 +891,18 @@ const afterSaleTypeText = (type: string) => ({ refund: '退票', reschedule: '�
 const afterSaleStatusText = (status: string) => ({ pending: '待审核', approved: '已批准', processing: '处理中', completed: '已完成', rejected: '已拒绝', failed: '处理失败' } as Record<string, string>)[status] || '未知状态'
 const operationText = (operation: string) => ({ sale: '销售', payment: '收款', cancel: '取消', refund: '退款' } as Record<string, string>)[operation] || '其他'
 const orderTickets = (order: any) => (order?.items || []).flatMap((item: any) => (item.tickets || []).map((ticket: any) => ({ ...ticket, product_name: item.product_name })))
-const loadOrders = async (page = 1, skipErrorToast = false) => {
+const loadOrders = async (page = 1, skipErrorToast = false, silent = false) => {
   if (!selectedAccount.value) return
+  const accountID = selectedAccount.value.id
+  const requestVersion = ++orderListRequestVersion
   orderPage.value = page
-  ordersLoading.value = true
+  if (!silent) ordersLoading.value = true
   try {
-    const response = await request.get(`/channel-accounts/${selectedAccount.value.id}/orders`, { params: { search: orderSearch.value.trim(), status: orderStatus.value, page, page_size: 20 }, skipErrorToast } as any)
+    const response = await request.get(`/channel-accounts/${accountID}/orders`, { params: { search: orderSearch.value.trim(), status: orderStatus.value, page, page_size: 20 }, skipErrorToast } as any)
+    if (requestVersion !== orderListRequestVersion || selectedAccount.value?.id !== accountID) return
     channelOrders.value = response.data.data || []
     orderTotal.value = Number(response.data.total || 0)
-  } finally { ordersLoading.value = false }
+  } finally { if (requestVersion === orderListRequestVersion && !silent) ordersLoading.value = false }
 }
 const openOrders = async (row: any) => {
   selectedAccount.value = row
@@ -899,9 +915,18 @@ const openOrderDetail = async (row: any, skipErrorToast = false) => {
   if (!selectedAccount.value) return
   orderDetail.value = null
   orderDetailDialog.value = true
-  orderDetailLoading.value = true
-  try { orderDetail.value = (await request.get(`/channel-accounts/${selectedAccount.value.id}/orders/${encodeURIComponent(row.order_no)}`, { skipErrorToast } as any)).data }
-  finally { orderDetailLoading.value = false }
+  await loadOrderDetail(row.order_no, skipErrorToast)
+}
+const loadOrderDetail = async (orderNo: string, skipErrorToast = false, silent = false) => {
+  if (!selectedAccount.value) return
+  const accountID = selectedAccount.value.id
+  const requestVersion = ++orderDetailRequestVersion
+  if (!silent) orderDetailLoading.value = true
+  try {
+    const response = await request.get(`/channel-accounts/${accountID}/orders/${encodeURIComponent(orderNo)}`, { skipErrorToast } as any)
+    if (requestVersion !== orderDetailRequestVersion || !orderDetailDialog.value || selectedAccount.value?.id !== accountID) return
+    orderDetail.value = response.data
+  } finally { if (requestVersion === orderDetailRequestVersion && !silent) orderDetailLoading.value = false }
 }
 const openOrderRefund = (row: any) => {
   if (!canRefund || !selectedAccount.value) return
@@ -911,11 +936,22 @@ const refreshRefundOrders = async () => {
   const detailOrder = orderDetail.value?.order
   try {
     await loadOrders(orderPage.value, true)
-    if (orderDetailDialog.value && detailOrder) await openOrderDetail(detailOrder, true)
+    if (orderDetailDialog.value && detailOrder) await loadOrderDetail(detailOrder.order_no, true)
   } catch {
     ElMessage.warning('退款结果已返回，但订单信息刷新失败，请手动刷新查看')
   }
 }
+const hasPendingRefund = (order: any, refunds: any[] = []) => Boolean(order?.refund_pending) || refunds.some(refund =>
+  ['pending', 'group_pending', 'processing', 'submitted'].includes(refund?.status))
+usePendingRefundRefresh(
+  () => (ordersDialog.value && channelOrders.value.some((order: any) => hasPendingRefund(order))) ||
+    (orderDetailDialog.value && hasPendingRefund(orderDetail.value?.order, orderDetail.value?.refunds || [])),
+  async () => {
+    await loadOrders(orderPage.value, true, true)
+    if (orderDetailDialog.value && orderDetail.value?.order?.order_no) await loadOrderDetail(orderDetail.value.order.order_no, true, true)
+  },
+  () => ordersLoading.value || orderDetailLoading.value
+)
 const loadRequests = async () => {
   if (!selectedAccount.value) return
   requestsLoading.value = true
@@ -983,5 +1019,11 @@ watch(xiaohongshuMappingDialog, visible => {
   }
 })
 onMounted(load)
-onUnmounted(stopXiaohongshuAuditRefresh)
+onUnmounted(() => {
+  stopXiaohongshuAuditRefresh()
+  orderListRequestVersion += 1
+  orderDetailRequestVersion += 1
+  ordersDialog.value = false
+  orderDetailDialog.value = false
+})
 </script>

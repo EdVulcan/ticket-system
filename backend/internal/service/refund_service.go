@@ -868,7 +868,7 @@ func claimDigitalRefundTask(now time.Time) (*model.DigitalRefundTask, error) {
 		}
 		lockedAt := now
 		return tx.Model(&task).Updates(map[string]interface{}{
-			"status": "processing", "locked_at": lockedAt,
+			"status": "processing", "locked_at": lockedAt, "next_attempt_at": nil,
 		}).Error
 	})
 	if err != nil {
@@ -952,13 +952,28 @@ func (s *RefundService) processDigitalRefundTask(ctx context.Context, taskID uin
 	default:
 		next := now.Add(30 * time.Second)
 		return model.Write(func(tx *gorm.DB) error {
-			attempt := task.AttemptCount + 1
-			maxAttempts := task.MaxAttempts
+			// Keep the refund-before-task lock order used by completion.
+			if err := tx.Model(&model.Refund{}).Where("id = ? AND tenant_id = ?", refund.ID, refund.TenantID).Update("provider_refund_id", result.ProviderRefundID).Error; err != nil {
+				return err
+			}
+			var current model.DigitalRefundTask
+			query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ?", task.TenantID)
+			if task.LockedAt != nil {
+				query = query.Where("status = ? AND locked_at = ?", "processing", *task.LockedAt)
+			}
+			if err := query.First(&current, task.ID).Error; err != nil {
+				return err
+			}
+			attempt := current.AttemptCount + 1
+			// Claiming clears the schedule. A new value under this lease means a
+			// callback arrived during the provider request and needs another query.
+			if task.LockedAt != nil && current.NextAttemptAt != nil {
+				next = *current.NextAttemptAt
+				attempt = current.AttemptCount
+			}
+			maxAttempts := current.MaxAttempts
 			if maxAttempts <= 0 {
 				maxAttempts = defaultDigitalRefundMaxAttempts
-			}
-			if err := tx.Model(&model.Refund{}).Where("id = ?", refund.ID).Update("provider_refund_id", result.ProviderRefundID).Error; err != nil {
-				return err
 			}
 			if attempt >= maxAttempts {
 				if err := updateClaimedDigitalRefundTask(tx, task.ID, task.LockedAt, map[string]interface{}{
@@ -986,10 +1001,18 @@ func (s *RefundService) deferDigitalRefundTask(taskID uint, now time.Time, cause
 func (s *RefundService) deferClaimedDigitalRefundTask(taskID uint, lockedAt *time.Time, now time.Time, cause error) error {
 	return model.Write(func(tx *gorm.DB) error {
 		var task model.DigitalRefundTask
-		if err := tx.First(&task, taskID).Error; err != nil {
+		query := tx.Clauses(clause.Locking{Strength: "UPDATE"})
+		if lockedAt != nil {
+			query = query.Where("status = ? AND locked_at = ?", "processing", *lockedAt)
+		}
+		if err := query.First(&task, taskID).Error; err != nil {
 			return err
 		}
 		attempt := task.AttemptCount + 1
+		callbackPending := lockedAt != nil && task.NextAttemptAt != nil
+		if callbackPending {
+			attempt = task.AttemptCount
+		}
 		maxAttempts := task.MaxAttempts
 		if maxAttempts <= 0 {
 			maxAttempts = defaultDigitalRefundMaxAttempts
@@ -1015,6 +1038,9 @@ func (s *RefundService) deferClaimedDigitalRefundTask(taskID uint, lockedAt *tim
 		}
 		delay := time.Duration(1<<minInt(attempt, 6)) * 30 * time.Second
 		next := now.Add(delay)
+		if callbackPending {
+			next = *task.NextAttemptAt
+		}
 		updates["status"] = "pending"
 		updates["attempt_count"] = attempt
 		updates["max_attempts"] = maxAttempts

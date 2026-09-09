@@ -5,16 +5,38 @@ const path = require('node:path');
 const vm = require('node:vm');
 const root = path.join(__dirname, '../xiaohongshu-miniapp');
 
-function loadDetail(order, api = {}, request = () => Promise.resolve(order)) {
+function loadDetail(order, api = {}, request = () => Promise.resolve(order), timers = {}) {
   let definition;
   vm.runInNewContext(fs.readFileSync(path.join(root, 'pages/order/detail.js'), 'utf8'), {
     Page: value => { definition = value; }, getApp: () => ({ request }), xhs: api,
     require: name => name.endsWith('/qr') ? { renderTicketQRCodes() {} } : {},
-    setTimeout: () => 1, clearTimeout() {},
+    setTimeout: timers.setTimeout || (() => 1), clearTimeout: timers.clearTimeout || (() => {}),
   });
   const page = { ...definition, data: JSON.parse(JSON.stringify(definition.data)), orderNo: 'DEMO' };
   page.setData = (data, done) => { Object.assign(page.data, data); if (done) done(); };
   return page;
+}
+
+function createTimers() {
+  let nextId = 1;
+  const callbacks = new Map();
+  const delays = [];
+  return {
+    callbacks,
+    delays,
+    setTimeout(callback, delay) {
+      const id = nextId++;
+      callbacks.set(id, callback);
+      delays.push(delay);
+      return id;
+    },
+    clearTimeout(id) { callbacks.delete(id); },
+    run(id) {
+      const callback = callbacks.get(id);
+      callbacks.delete(id);
+      if (callback) callback();
+    }
+  };
 }
 
 test('ticket shows shared usage facts without removing repeat-use QR', async () => {
@@ -106,4 +128,55 @@ test('refund cancellation makes no request; failed network keeps request identit
   page.applyRefund();modal.success({confirm:true});
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);
+});
+
+test('refund pending polling refreshes to a server-refunded order, stops at terminal state, and avoids duplicate lifecycle timers', async () => {
+  const timers = createTimers();
+  const pending = { status: 'paid', refund_pending: true, ticket_codes: ['OLD'] };
+  const refunded = { status: 'refunded', refund_pending: false, ticket_codes: ['OLD'] };
+  let requests = 0;
+  const page = loadDetail(pending, {}, () => Promise.resolve(++requests === 1 ? pending : refunded), timers);
+
+  await page.loadOrder();
+  assert.equal(page.data.status, 'paid');
+  assert.equal(page.data.ticketCodes.length, 0);
+  assert.deepEqual(timers.delays, [2500]);
+  assert.equal(timers.callbacks.size, 1);
+
+  const firstTimer = [...timers.callbacks.keys()][0];
+  timers.run(firstTimer);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests, 2);
+  assert.equal(page.data.status, 'refunded');
+  assert.equal(page.data.ticketCodes.length, 0);
+  assert.equal(timers.callbacks.size, 0);
+
+  const lifecycleTimers = createTimers();
+  let lifecycleRequests = 0;
+  const lifecyclePage = loadDetail(pending, {}, () => {
+    lifecycleRequests += 1;
+    return Promise.resolve(pending);
+  }, lifecycleTimers);
+  await lifecyclePage.loadOrder();
+  const hiddenTimer = [...lifecycleTimers.callbacks.keys()][0];
+  lifecyclePage.onHide();
+  assert.equal(lifecycleTimers.callbacks.size, 0);
+  lifecycleTimers.run(hiddenTimer);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(lifecycleRequests, 1);
+
+  lifecyclePage.refundPollCount = 48;
+  lifecyclePage.onShow();
+  lifecyclePage.onShow();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(lifecycleRequests, 2);
+  assert.equal(lifecyclePage.refundPollCount, 1);
+  assert.equal(lifecycleTimers.callbacks.size, 1);
+
+  const unloadTimer = [...lifecycleTimers.callbacks.keys()][0];
+  lifecyclePage.onUnload();
+  assert.equal(lifecycleTimers.callbacks.size, 0);
+  lifecycleTimers.run(unloadTimer);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(lifecycleRequests, 2);
 });

@@ -254,10 +254,14 @@ func wakeXiaohongshuRefundTx(tx *gorm.DB, account *model.ChannelAccount, event *
 			return false, err
 		}
 	}
-	// Do not revoke an in-flight task lease. The worker already querying it will
-	// commit under its own lease; a later callback can resume manual-review reads.
-	if err := tx.Model(&model.DigitalRefundTask{}).Where("tenant_id = ? AND refund_id = ? AND status IN ?", op.TenantID, op.RefundID, []string{"pending", "submitted", "manual_review"}).
-		Updates(map[string]interface{}{"status": "submitted", "next_attempt_at": event.ReceivedAt, "attempt_count": 0}).Error; err != nil {
+	// Preserve the lease while recording a durable follow-up hint. The active
+	// worker consumes it after its current request, unless it reaches a terminal
+	// result or a safety condition requiring manual review.
+	if err := tx.Model(&model.DigitalRefundTask{}).Where("tenant_id = ? AND refund_id = ? AND status IN ?", op.TenantID, op.RefundID, []string{"pending", "submitted", "manual_review", "processing"}).
+		Updates(map[string]interface{}{
+			"status":          gorm.Expr("CASE WHEN status = 'processing' THEN status ELSE 'submitted' END"),
+			"next_attempt_at": event.ReceivedAt, "attempt_count": 0,
+		}).Error; err != nil {
 		return false, err
 	}
 	return true, tx.Model(event).Updates(map[string]interface{}{"status": "processed", "last_error": ""}).Error

@@ -79,7 +79,8 @@ func (XiaohongshuWebhookService) Receive(ctx context.Context, appID string, mess
 		PayloadHash: hex.EncodeToString(digest[:]), EventType: eventType,
 		PayloadCiphertext: payloadCiphertext, Status: status, LastError: lastError, ReceivedAt: time.Now(),
 	}
-	return model.Write(func(tx *gorm.DB) error {
+	wakeRefundWorker := false
+	err = model.Write(func(tx *gorm.DB) error {
 		result := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&event)
 		if result.Error != nil || result.RowsAffected == 0 {
 			return result.Error
@@ -91,6 +92,7 @@ func (XiaohongshuWebhookService) Receive(ctx context.Context, appID string, mess
 			// this payload alone contains no order amount or ticket allocation.
 			if strings.EqualFold(eventType, "REFUND_RESULT") {
 				if handled, err := wakeXiaohongshuRefundTx(tx, account, &event, payload); handled || err != nil {
+					wakeRefundWorker = handled && err == nil
 					return err
 				}
 				var result struct {
@@ -160,6 +162,10 @@ func (XiaohongshuWebhookService) Receive(ctx context.Context, appID string, mess
 			"status": "processed", "last_error": "", "processed_at": now,
 		}).Error
 	})
+	if err == nil && wakeRefundWorker {
+		notifyDigitalRefundWorker()
+	}
+	return err
 }
 
 func markXiaohongshuWebhookManualReview(tx *gorm.DB, event *model.XiaohongshuWebhookEvent, reason string) error {

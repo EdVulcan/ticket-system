@@ -37,6 +37,7 @@ type ChannelOrderSummary struct {
 	RefundedTicketCount int64     `json:"refunded_ticket_count"`
 	PaidCents           int64     `json:"paid_cents"`
 	RefundedCents       int64     `json:"refunded_cents"`
+	RefundPending       bool      `json:"refund_pending"`
 	CreatedAt           time.Time `json:"created_at"`
 }
 
@@ -605,6 +606,7 @@ func (s *ChannelService) ListOrders(tenantID, accountID uint, search, status str
 	var rows []ChannelOrderSummary
 	selectColumns := `orders.id, orders.order_no, orders.external_no, orders.status, orders.contact_name, orders.contact_phone,
 		orders.total_amount, orders.created_at,
+		EXISTS(SELECT 1 FROM refunds WHERE refunds.tenant_id = orders.tenant_id AND refunds.order_no = orders.order_no AND refunds.status IN ('pending', 'group_pending', 'group_manual_review') AND refunds.deleted_at IS NULL) AS refund_pending,
 		(SELECT COUNT(*) FROM tickets WHERE tickets.order_id = orders.id) AS ticket_count,
 		(SELECT COUNT(*) FROM tickets WHERE tickets.order_id = orders.id AND tickets.status = 'used') AS used_ticket_count,
 		(SELECT COUNT(*) FROM tickets WHERE tickets.order_id = orders.id AND tickets.status = 'refunded') AS refunded_ticket_count,

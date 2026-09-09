@@ -63,7 +63,7 @@
       </el-table-column>
       <el-table-column prop="status" label="状态" width="100" align="center">
         <template #default="{ row }">
-          <el-tag :type="getStatusType(row.status)">{{ getStatusText(row.status) }}</el-tag>
+          <el-tag :type="hasPendingRefund(row) ? 'warning' : getStatusType(row.status)">{{ hasPendingRefund(row) ? '退款处理中' : getStatusText(row.status) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="created_at" label="下单时间" width="180">
@@ -74,7 +74,7 @@
       <el-table-column label="操作" width="150" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleDetail(row)">详情</el-button>
-          <el-button link type="danger" size="small" v-if="row.status === 'paid' && canDirectRefund" @click="handleRefund(row)">退款</el-button>
+          <el-button link type="danger" size="small" v-if="row.status === 'paid' && canDirectRefund && !hasPendingRefund(row)" @click="handleRefund(row)">退款</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -100,7 +100,7 @@
         <el-descriptions title="基本信息" :column="2" border>
           <el-descriptions-item label="订单号">{{ currentOrder.order_no }}</el-descriptions-item>
           <el-descriptions-item label="状态">
-            <el-tag :type="getStatusType(currentOrder.status)">{{ getStatusText(currentOrder.status) }}</el-tag>
+            <el-tag :type="hasPendingRefund(currentOrder) ? 'warning' : getStatusType(currentOrder.status)">{{ hasPendingRefund(currentOrder) ? '退款处理中' : getStatusText(currentOrder.status) }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="联系人">{{ currentOrder.contact_name }}</el-descriptions-item>
           <el-descriptions-item label="手机号">{{ currentOrder.contact_phone }}</el-descriptions-item>
@@ -186,12 +186,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, reactive, onMounted } from 'vue'
+import { computed, ref, reactive, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { hasPermission } from '@/utils/permissions'
 import OrderRefundDialog from '@/components/OrderRefundDialog.vue'
+import { usePendingRefundRefresh } from '@/composables/usePendingRefundRefresh'
 
 const loading = ref(false)
 const tableData = ref([])
@@ -214,6 +215,8 @@ const isSupplier = computed(() => activeCapabilities.has('supplier'))
 const canDirectRefund = computed(() => (isSupplier.value || activeCapabilities.has('distributor')) && hasPermission(currentUser, 'refunds.write'))
 const canManualVerify = computed(() => isSupplier.value && hasPermission(currentUser, 'tickets.verify') && hasPermission(currentUser, 'onsite.read'))
 const refundDialog = ref<{ open: (orderNo: string, detailURL?: string) => Promise<void> } | null>(null)
+let listRequestVersion = 0
+let detailRequestVersion = 0
 
 // Verify Logic
 const verifyDialogVisible = ref(false)
@@ -286,8 +289,9 @@ const submitVerify = async () => {
   }
 }
 
-const fetchData = async (afterRefund = false) => {
-  loading.value = true
+const fetchData = async (afterRefund = false, silent = false) => {
+  const requestVersion = ++listRequestVersion
+  if (!silent) loading.value = true
   try {
     const params: any = {
       page: currentPage.value,
@@ -304,16 +308,18 @@ const fetchData = async (afterRefund = false) => {
     }
 
     const res = await request.get('/orders', { params, skipErrorToast: afterRefund === true } as any)
+    if (requestVersion !== listRequestVersion) return
     tableData.value = res.data.data || []
     total.value = res.data.total || 0
     if (Array.isArray(res.data.channel_options)) {
       channelOptions.value = res.data.channel_options.filter((option: any) => option?.value && option?.label)
     }
   } catch (error) {
-    if (afterRefund === true) ElMessage.warning('退款结果已返回，但订单列表刷新失败，请手动刷新查看')
-    else ElMessage.error('获取订单失败')
+    if (requestVersion !== listRequestVersion) return
+    if (afterRefund === true && !silent) ElMessage.warning('退款结果已返回，但订单列表刷新失败，请手动刷新查看')
+    else if (!silent) ElMessage.error('获取订单失败')
   } finally {
-    loading.value = false
+    if (requestVersion === listRequestVersion && !silent) loading.value = false
   }
 }
 
@@ -321,17 +327,35 @@ const handleDetail = async (row: any) => {
   currentOrder.value = row
   responsibilities.value = []
   detailVisible.value = true
-  detailLoading.value = true
+  await loadDetail(row.order_no)
+}
+
+const loadDetail = async (orderNo: string, silent = false) => {
+  const requestVersion = ++detailRequestVersion
+  if (!silent) detailLoading.value = true
   try {
-    const res = await request.get(`/orders/${encodeURIComponent(row.order_no)}`)
+    const res = await request.get(`/orders/${encodeURIComponent(orderNo)}`, { skipErrorToast: silent } as any)
+    if (requestVersion !== detailRequestVersion || !detailVisible.value || currentOrder.value?.order_no !== orderNo) return
     currentOrder.value = res.data.order
     responsibilities.value = res.data.fulfillments || []
   } catch (error: any) {
-    ElMessage.error(error.response?.data?.error || '订单详情加载失败')
+    if (!silent && requestVersion === detailRequestVersion) ElMessage.error(error.response?.data?.error || '订单详情加载失败')
   } finally {
-    detailLoading.value = false
+    if (requestVersion === detailRequestVersion && !silent) detailLoading.value = false
   }
 }
+
+const hasPendingRefund = (order: any) => Boolean(order?.refund_pending) || (order?.items || []).some((item: any) =>
+  (item.tickets || []).some((ticket: any) => Number(ticket.pending_refund_id || 0) > 0))
+
+usePendingRefundRefresh(
+  () => tableData.value.some(hasPendingRefund) || (detailVisible.value && hasPendingRefund(currentOrder.value)),
+  async () => {
+    await fetchData(true, true)
+    if (detailVisible.value && currentOrder.value?.order_no) await loadDetail(currentOrder.value.order_no, true)
+  },
+  () => loading.value || detailLoading.value
+)
 
 const applyFilters = () => {
   currentPage.value = 1
@@ -377,6 +401,12 @@ const fulfillmentStatusText = (status: string) => ({ reserved: '已预占', paid
 const settlementStatusText = (status: string) => ({ open: '待结算', draft: '待供应商确认', supplier_confirmed: '待分销商确认', confirmed: '待付款', disputed: '有争议', paid: '已结清' } as Record<string, string>)[status] || '待结算'
 const ticketStatusText = (status: string) => ({ unused: '未使用', active: '可继续使用', used: '已核销', refunded: '已退款', expired: '已过期', void: '已作废' } as Record<string, string>)[status] || '未知状态'
 const ticketStatusType = (status: string) => ({ unused: 'success', active: 'success', used: 'info', refunded: 'warning', expired: 'info', void: 'danger' } as Record<string, string>)[status] || 'info'
+
+onUnmounted(() => {
+  listRequestVersion += 1
+  detailRequestVersion += 1
+  detailVisible.value = false
+})
 
 onMounted(() => {
   fetchData()

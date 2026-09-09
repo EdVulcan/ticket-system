@@ -448,7 +448,10 @@ func TestXiaohongshuRefundKnownWebhookResumesQueryWithoutAccountHold(t *testing.
 	if task.Status != "submitted" || holds != 0 {
 		t.Fatalf("known callback did not resume exact task without account hold: task=%+v holds=%d", task, holds)
 	}
-	runXiaohongshuRefundWorker(t, service, time.Now().Add(time.Minute))
+	if task.NextAttemptAt == nil || task.NextAttemptAt.After(time.Now()) {
+		t.Fatal("authenticated callback did not make refund query immediately due")
+	}
+	runXiaohongshuRefundWorker(t, service, time.Now())
 	if fake.addCalls.Load() != 1 || fake.getCalls.Load() != 1 {
 		t.Fatalf("webhook resume re-sent add or skipped query: add=%d get=%d", fake.addCalls.Load(), fake.getCalls.Load())
 	}

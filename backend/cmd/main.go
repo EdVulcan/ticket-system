@@ -288,6 +288,12 @@ func runDigitalRefundWorker(ctx context.Context) {
 			logger.Log.Error(fmt.Sprintf("after-sale refund reconciliation failed: %v", err))
 		}
 	}
+	runDigitalRefundLoop(ctx, service.DigitalRefundWakeups(), process)
+}
+
+// Committed callbacks wake the worker immediately; periodic scans recover
+// missed notifications and persisted work after a restart.
+func runDigitalRefundLoop(ctx context.Context, wake <-chan struct{}, process func(time.Time)) {
 	process(time.Now())
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -295,6 +301,8 @@ func runDigitalRefundWorker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-wake:
+			process(time.Now())
 		case now := <-ticker.C:
 			process(now)
 		}

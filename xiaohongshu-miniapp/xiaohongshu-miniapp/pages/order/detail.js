@@ -31,39 +31,72 @@ Page({
     this.orderNo = options.order_no || '';
     this.setData({ orderNo: this.orderNo, storeName: app.globalData.storeName || '' });
     this.pollCount = 0;
+    this.refundPollCount = 0;
     this.paymentInFlight = false;
     this.awaitingPaymentConfirmation = false;
     this.paymentFeedback = '';
     this.orderRequestVersion = 0;
     this.qrRenderVersion = 0;
+    this.isPageVisible = true;
+    this.hasActiveOrderRequest = false;
     this.loadOrder();
   },
 
-  onShow() { if (this.orderNo && !this.data.loading) this.loadOrder(); },
+  onShow() {
+    this.isPageVisible = true;
+    this.refundPollCount = 0;
+    if (this.orderNo && !this.hasActiveOrderRequest) this.loadOrder();
+  },
+  onHide() {
+    this.isPageVisible = false;
+    this.hasActiveOrderRequest = false;
+    this.stopPolling();
+    this.orderRequestVersion = (this.orderRequestVersion || 0) + 1;
+    this.qrRenderVersion = (this.qrRenderVersion || 0) + 1;
+  },
   onPullDownRefresh() {
+    this.refundPollCount = 0;
     return Promise.resolve(this.loadOrder()).finally(() => xhs.stopPullDownRefresh());
   },
   onUnload() {
-    if (this.timer) clearTimeout(this.timer);
+    this.isPageVisible = false;
+    this.hasActiveOrderRequest = false;
+    this.stopPolling();
     this.orderRequestVersion = (this.orderRequestVersion || 0) + 1;
     this.qrRenderVersion = (this.qrRenderVersion || 0) + 1;
   },
 
-  loadOrder() {
-    if (this.timer) {
-      clearTimeout(this.timer);
+  stopPolling() {
+    this.pollTimerVersion = (this.pollTimerVersion || 0) + 1;
+    if (this.timer !== null && this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = null;
+  },
+
+  schedulePoll(delay) {
+    this.stopPolling();
+    const timerVersion = (this.pollTimerVersion || 0) + 1;
+    this.pollTimerVersion = timerVersion;
+    this.timer = setTimeout(() => {
+      if (timerVersion !== this.pollTimerVersion || this.isPageVisible === false) return;
       this.timer = null;
-    }
+      this.loadOrder();
+    }, delay);
+  },
+
+  loadOrder() {
+    this.stopPolling();
     if (!this.orderNo) {
       this.setData({ loading: false, error: '订单编号无效' });
       return;
     }
     const requestVersion = (this.orderRequestVersion || 0) + 1;
     this.orderRequestVersion = requestVersion;
+    this.hasActiveOrderRequest = true;
     this.qrRenderVersion = (this.qrRenderVersion || 0) + 1;
     const qrRenderVersion = this.qrRenderVersion;
     return app.request(`/orders/${encodeURIComponent(this.orderNo)}`).then(order => {
 	  if (requestVersion !== this.orderRequestVersion) return;
+	  this.hasActiveOrderRequest = false;
 	  const coreStatus = order.core_order_status || order.status;
 	  const canUsePaidEntitlements = ['paid', 'partial_refunded'].indexOf(coreStatus) >= 0;
       order.isPackage = order.product_kind === 'scenic_hotel_package';
@@ -129,12 +162,16 @@ Page({
 		  });
 		}
 	  });
-	  if (coreStatus === 'unpaid' && this.pollCount < 15) {
+	  if (order.refund_pending && Number(this.refundPollCount || 0) < 48) {
+        this.refundPollCount = Number(this.refundPollCount || 0) + 1;
+        this.schedulePoll(2500);
+      } else if (coreStatus === 'unpaid' && this.pollCount < 15) {
         this.pollCount += 1;
-        this.timer = setTimeout(() => this.loadOrder(), 2000);
+        this.schedulePoll(2000);
       }
 	}).catch(error => {
 	  if (requestVersion !== this.orderRequestVersion) return;
+      this.hasActiveOrderRequest = false;
       if (!this.paymentInFlight) {
         this.awaitingPaymentConfirmation = false;
         this.paymentFeedback = '';
@@ -191,6 +228,7 @@ Page({
 
   retry() {
     this.pollCount = 0;
+    this.refundPollCount = 0;
     this.paymentFeedback = '';
     this.setData({ loading: true, error: '' });
     this.loadOrder();
@@ -212,7 +250,10 @@ Page({
           // Acknowledged application is not proof of a completed funds refund.
           this.refundRequestId = '';
           const refundStarted = result.status === 'processing' || result.status === 'completed';
-          if (refundStarted) this.qrRenderVersion = (this.qrRenderVersion || 0) + 1;
+          if (refundStarted) {
+            this.qrRenderVersion = (this.qrRenderVersion || 0) + 1;
+            this.refundPollCount = 0;
+          }
           this.setData({ applyingRefund: false, order: { ...this.data.order, can_apply_refund: false,
             refund_pending: refundStarted || this.data.order.refund_pending,
             refund_application_status: result.status }, refundApplicationMessage: this.formatRefundApplicationStatus(result.status),
