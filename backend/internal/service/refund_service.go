@@ -588,7 +588,7 @@ func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempote
 func selectRefundTickets(order *model.Order, cleanCodes []string, allowUsed, allowPolicyOverride bool, allowedPendingRefundID uint) (map[string]*model.Ticket, float64, error) {
 	wanted := codeSet(cleanCodes)
 	selected := make(map[string]*model.Ticket, len(cleanCodes))
-	refundableAmount := 0.0
+	var refundableCents int64
 	for itemIndex := range order.Items {
 		item := &order.Items[itemIndex]
 		policyChecked := false
@@ -626,17 +626,13 @@ func selectRefundTickets(order *model.Order, cleanCodes []string, allowUsed, all
 				return nil, 0, fmt.Errorf("ticket %s is already used", ticket.TicketCode)
 			}
 			selected[ticket.TicketCode] = ticket
-			if ticket.CodeMode == "order" || (ticket.CodeMode == "" && item.Product.CodeMode == "order") {
-				refundableAmount += item.Price * float64(item.Quantity)
-			} else {
-				refundableAmount += item.Price
-			}
+			refundableCents += ticketSaleCents(item, ticket)
 		}
 	}
 	if len(selected) != len(cleanCodes) {
 		return nil, 0, errors.New("one or more ticket codes do not belong to the order")
 	}
-	return selected, roundMoney(refundableAmount), nil
+	return selected, centsMoney(refundableCents), nil
 }
 
 func reserveRefundTicketsTx(tx *gorm.DB, selected map[string]*model.Ticket, refundID uint) error {

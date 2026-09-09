@@ -166,7 +166,7 @@ func (s *ReportService) GetDailyReport(tenantID uint, startDate, endDate string)
 		Joins("LEFT JOIN products ON products.id = order_items.product_id").
 		Select(`DATE(order_items.use_date) AS date,
 			COALESCE(SUM(CASE WHEN COALESCE(NULLIF(tickets.code_mode, ''), products.code_mode) = 'order' THEN order_items.quantity ELSE 1 END), 0) AS ticket_count,
-			COALESCE(SUM(CAST(ROUND(order_items.price * 100.0) AS INTEGER) * CASE WHEN COALESCE(NULLIF(tickets.code_mode, ''), products.code_mode) = 'order' THEN order_items.quantity ELSE 1 END), 0) AS gross_cents`).
+			COALESCE(SUM(COALESCE(tickets.sale_amount_cents, CAST(ROUND(order_items.price * 100.0) AS INTEGER) * CASE WHEN COALESCE(NULLIF(tickets.code_mode, ''), products.code_mode) = 'order' THEN order_items.quantity ELSE 1 END)), 0) AS gross_cents`).
 		Where("orders.tenant_id = ? AND orders.environment = ? AND orders.status IN ? AND tickets.status != ? AND order_items.use_date IS NOT NULL AND order_items.use_date BETWEEN ? AND ?", tenantID, "production", completedSalesStatuses(), "refunded", start, end).
 		Group("DATE(order_items.use_date)").Order("date ASC").Scan(&report.Visits).Error; err != nil {
 		return nil, err
@@ -258,7 +258,9 @@ func (s *ReportService) GetProductStats(tenantID uint, startDate, endDate string
 
 	err = model.DB.Raw(paidOrdersCTE+` SELECT order_items.product_name,
 			SUM(order_items.quantity - COALESCE((SELECT SUM(CASE WHEN tickets.code_mode = 'order' THEN order_items.quantity ELSE 1 END) FROM tickets WHERE tickets.order_item_id = order_items.id AND tickets.status = 'refunded'), 0)) as total_sold,
-			SUM(CAST(ROUND(order_items.price * 100.0) AS INTEGER) * (order_items.quantity - COALESCE((SELECT SUM(CASE WHEN tickets.code_mode = 'order' THEN order_items.quantity ELSE 1 END) FROM tickets WHERE tickets.order_item_id = order_items.id AND tickets.status = 'refunded'), 0))) / 100.0 as total_amount
+			SUM(CASE WHEN order_items.sale_amount_cents IS NOT NULL THEN
+				order_items.sale_amount_cents - COALESCE((SELECT SUM(tickets.sale_amount_cents) FROM tickets WHERE tickets.order_item_id = order_items.id AND tickets.status = 'refunded'), 0)
+			ELSE CAST(ROUND(order_items.price * 100.0) AS INTEGER) * (order_items.quantity - COALESCE((SELECT SUM(CASE WHEN tickets.code_mode = 'order' THEN order_items.quantity ELSE 1 END) FROM tickets WHERE tickets.order_item_id = order_items.id AND tickets.status = 'refunded'), 0)) END) / 100.0 as total_amount
 		FROM paid_orders
 		JOIN order_items ON order_items.order_id = paid_orders.order_id AND order_items.deleted_at IS NULL
 		WHERE paid_orders.tenant_id = ? AND paid_orders.sold_at BETWEEN ? AND ?

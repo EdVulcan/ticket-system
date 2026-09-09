@@ -1,6 +1,7 @@
 const app = getApp();
 const { requestGuaranteeOrderPayment } = require('../../utils/payment');
 const calendar = require('../../utils/calendar');
+const promotion = require('../../utils/promotion');
 
 Page({
   data: {
@@ -21,6 +22,18 @@ Page({
     canPreviousMonth: false,
     canNextMonth: false,
     totalText: '0.00',
+    originalTotalText: '0.00',
+    discountText: '0.00',
+    hasDiscount: false,
+    quoteToken: '',
+    quoteReady: false,
+    quoteLoading: false,
+    quoteError: '',
+    opportunity: null,
+    opportunityVisible: false,
+    opportunityAmountText: '',
+    opportunityCountdown: '',
+    opportunityReservedOrderNo: '',
     loading: true,
     submitting: false,
     error: ''
@@ -34,6 +47,24 @@ Page({
     // Reuse one idempotency key if the network drops after order creation.
     this.orderRequestId = `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
     this.loadProduct();
+    this.loadOpportunity();
+  },
+
+  onShow() {
+    if (!this.hasShown) {
+      this.hasShown = true;
+      return;
+    }
+    if (this.data.product && !this.data.submitting && !this.data.createdOrderNo) {
+      this.loadOpportunity();
+      this.refreshQuote();
+    }
+  },
+
+  onUnload() {
+    this.quoteVersion = (this.quoteVersion || 0) + 1;
+    this.opportunityVersion = (this.opportunityVersion || 0) + 1;
+    this.stopOpportunityTimer();
   },
 
   loadProduct() {
@@ -68,6 +99,7 @@ Page({
         app.setStoreName(catalog.store_name || '');
         this.updateTotal();
         this.refreshCalendar();
+        this.refreshQuote();
       });
     }).catch(error => this.setData({ loading: false, error: error.message || '票种加载失败' }));
   },
@@ -77,13 +109,19 @@ Page({
   decrease() {
     if (this.data.submitting || this.data.createdOrderNo) return;
     if (this.data.quantity <= 1) return;
-    this.setData({ quantity: this.data.quantity - 1, error: '' }, () => this.updateTotal());
+    this.setData({ quantity: this.data.quantity - 1, error: '' }, () => {
+      this.updateTotal();
+      this.refreshQuote();
+    });
   },
 
   increase() {
     if (this.data.submitting || this.data.createdOrderNo) return;
     if (this.data.quantity >= this.data.maxQuantity) return;
-    this.setData({ quantity: this.data.quantity + 1, error: '' }, () => this.updateTotal());
+    this.setData({ quantity: this.data.quantity + 1, error: '' }, () => {
+      this.updateTotal();
+      this.refreshQuote();
+    });
   },
 
   selectDate(event) {
@@ -120,13 +158,99 @@ Page({
 
   updateTotal() {
     const cents = Number(this.data.product ? this.data.product.price_cents : 0) * this.data.quantity;
-    this.setData({ totalText: (cents / 100).toFixed(2) });
+    this.setData({ originalTotalText: promotion.money(cents) });
+  },
+
+  loadOpportunity() {
+    const version = (this.opportunityVersion || 0) + 1;
+    this.opportunityVersion = version;
+    return app.request('/promotion', { method: 'POST', data: {} }).then(raw => {
+      if (version !== this.opportunityVersion) return;
+      this.applyOpportunity(promotion.normalize(raw, Date.now()));
+      // Acquisition may finish after the first quote. Always price again
+      // from the server so a late offer cannot leave the full-price quote.
+      return this.refreshQuote();
+    }).catch(() => {
+      if (version === this.opportunityVersion) this.applyOpportunity(null);
+    });
+  },
+
+  applyOpportunity(opportunity) {
+    const hadApplicableGrant = this.opportunity && this.opportunity.status === 'available' &&
+      this.opportunity.mappingIds.indexOf(Number(this.mappingId)) >= 0;
+    this.opportunity = opportunity;
+    const available = promotion.appliesTo(opportunity, this.mappingId);
+    const reserved = opportunity && opportunity.status === 'reserved' && opportunity.reservedOrderNo;
+    this.setData({
+      opportunity,
+      opportunityVisible: Boolean(available || reserved),
+      opportunityAmountText: available ? promotion.money(opportunity.discountCents) : '',
+      opportunityCountdown: promotion.countdown(opportunity),
+      opportunityReservedOrderNo: reserved ? opportunity.reservedOrderNo : ''
+    });
+    this.startOpportunityTimer();
+    if (hadApplicableGrant && !available && this.data.quoteReady && !this.data.quoteLoading && !this.data.createdOrderNo) {
+      this.refreshQuote().then(() => this.setData({ error: '优惠已结束，价格已更新，请确认后重新提交' }));
+    }
+  },
+
+  startOpportunityTimer() {
+    this.stopOpportunityTimer();
+    if (!this.opportunity || !promotion.appliesTo(this.opportunity, this.mappingId) || typeof setInterval !== 'function') return;
+    this.opportunityTimer = setInterval(() => {
+      if (!promotion.appliesTo(this.opportunity, this.mappingId)) return this.applyOpportunity(this.opportunity);
+      this.setData({ opportunityCountdown: promotion.countdown(this.opportunity) });
+    }, 1000);
+  },
+
+  stopOpportunityTimer() {
+    if (this.opportunityTimer && typeof clearInterval === 'function') clearInterval(this.opportunityTimer);
+    this.opportunityTimer = null;
+  },
+
+  refreshQuote() {
+    if (!this.data.product || this.data.createdOrderNo) return Promise.resolve();
+    const version = (this.quoteVersion || 0) + 1;
+    this.quoteVersion = version;
+    this.setData({ quoteLoading: true, quoteReady: false, quoteToken: '', quoteError: '', hasDiscount: false, totalText: '—' });
+    return app.request('/order-quote', {
+      method: 'POST',
+      data: { mapping_id: this.data.product.id, quantity: this.data.quantity }
+    }).then(quote => {
+      if (version !== this.quoteVersion) return;
+      const amount = Number(quote && quote.amount_cents);
+      const original = Number(quote && quote.original_amount_cents);
+      const discount = Number(quote && quote.discount_cents);
+      const quoteToken = String((quote && quote.quote_token) || '');
+      if (!quoteToken || !Number.isFinite(amount) || amount < 0 || !Number.isFinite(original) || original < 0 || !Number.isFinite(discount) || discount < 0) {
+        throw new Error('优惠价格暂不可用，请刷新后重试');
+      }
+      if (quote.promotion) this.applyOpportunity(promotion.normalize(quote.promotion, Date.now()));
+      this.setData({
+        quoteLoading: false,
+        quoteReady: true,
+        quoteToken,
+        quoteError: '',
+        originalTotalText: promotion.money(original),
+        discountText: promotion.money(discount),
+        hasDiscount: discount > 0,
+        totalText: promotion.money(amount)
+      });
+    }).catch(error => {
+      if (version !== this.quoteVersion) return;
+      this.setData({ quoteLoading: false, quoteReady: false, quoteToken: '', quoteError: error.message || '价格更新失败，请重试', hasDiscount: false, totalText: '—' });
+    });
   },
 
   submit() {
     if (!this.data.product || this.data.submitting) return;
     if (this.data.createdOrderNo) {
       xhs.redirectTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(this.data.createdOrderNo)}` });
+      return;
+    }
+    if (!this.data.quoteReady || !this.data.quoteToken) {
+      if (!this.data.quoteLoading) this.refreshQuote();
+      this.setData({ error: '正在更新优惠价格，请确认最新金额后提交' });
       return;
     }
     if (this.data.product.requiresUseDate && !calendar.isDateWithin(this.data.useDate, this.data.minDate, this.data.maxDate)) {
@@ -148,6 +272,7 @@ Page({
         mapping_id: this.data.product.id,
         quantity: this.data.quantity,
         request_id: this.orderRequestId,
+        quote_token: this.data.quoteToken,
         use_date: this.data.useDate,
         guest_name: this.data.guestName.trim(),
         contact_phone: this.data.contactPhone.trim()
@@ -173,8 +298,19 @@ Page({
       });
       if (!started) return;
     }).catch(error => {
-      this.setData({ submitting: false, error: error.message || '订单创建失败，请稍后重试' });
+      const message = error.message || '订单创建失败，请稍后重试';
+      this.setData({ submitting: false });
+      if (/quote|promotion|price|优惠|价格/i.test(message)) {
+        this.refreshQuote().then(() => this.setData({ error: '价格或优惠已更新，请确认后重新提交' }));
+        return;
+      }
+      // Preserve the same request ID and quote token for an unknown network result.
+      this.setData({ error: message });
     });
+  },
+
+  openPromotionOrder() {
+    if (this.data.opportunityReservedOrderNo) xhs.navigateTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(this.data.opportunityReservedOrderNo)}` });
   },
 
   refreshCalendar() {

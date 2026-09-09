@@ -611,6 +611,9 @@ func renderPrintBlockText(block model.PrintTemplateBlock, scenic, orderNo string
 	case "checkpoint_summary":
 		return "检票点：按票种规则执行"
 	case "price":
+		if ticket.SaleAmountCents != nil {
+			return fmt.Sprintf("售价：¥%.2f", centsMoney(*ticket.SaleAmountCents))
+		}
 		if item.Price > 0 {
 			return fmt.Sprintf("售价：¥%.2f", item.Price)
 		}

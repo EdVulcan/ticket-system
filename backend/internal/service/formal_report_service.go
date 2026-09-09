@@ -195,8 +195,8 @@ func (s *ReportService) GetBusinessDetails(tenantID uint, filter FormalReportFil
 }
 
 const verificationIncomeExpression = `CASE
-	WHEN o.tenant_id = oi.fulfillment_tenant_id THEN CAST(ROUND(oi.price * 100.0) AS INTEGER) *
-		CASE WHEN COALESCE(NULLIF(t.code_mode, ''), p.code_mode) = 'order' THEN oi.quantity ELSE 1 END
+	WHEN o.tenant_id = oi.fulfillment_tenant_id THEN COALESCE(t.sale_amount_cents, CAST(ROUND(oi.price * 100.0) AS INTEGER) *
+		CASE WHEN COALESCE(NULLIF(t.code_mode, ''), p.code_mode) = 'order' THEN oi.quantity ELSE 1 END)
 	ELSE (CAST(ROUND(oi.settlement_price * 100.0) AS INTEGER) *
 		CASE WHEN COALESCE(NULLIF(t.code_mode, ''), p.code_mode) = 'order' THEN oi.quantity ELSE 1 END *
 		(10000 - oi.commission_bps)) / 10000 END`

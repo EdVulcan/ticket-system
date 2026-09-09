@@ -165,6 +165,7 @@ func (s XiaohongshuOrderService) loadOrderResult(customer *model.MiniappCustomer
 
 func (s XiaohongshuOrderService) orderResult(link *model.XiaohongshuOrderLink, order *model.Order, includePayToken bool) (*MiniappOrderResult, error) {
 	result := &MiniappOrderResult{
+		OriginalAmountCents: order.OriginalAmountCents, DiscountCents: order.DiscountCents,
 		OrderNo: order.OrderNo, PlatformOrderID: link.PlatformOrderID, AmountCents: moneyCents(order.TotalAmount),
 		Status: order.Status, CoreOrderStatus: order.Status, PlatformPaymentState: link.State, VoucherIssuanceStatus: link.VoucherIssuanceStatus, ExpiresAt: link.PayTokenExpiresAt,
 	}
@@ -370,50 +371,87 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 		ExternalNo: &externalID, ContactName: input.GuestName, ContactPhone: input.ContactPhone,
 		Items: []model.OrderItem{{ProductID: product.ID, Quantity: input.Quantity, UseDate: useDate}},
 	}
-	if err := (&OrderService{}).Create(&order); err != nil {
-		return nil, err
-	}
 	link := model.XiaohongshuOrderLink{
 		TenantID: customer.TenantID, ChannelAccountID: account.ID, MiniappCustomerID: customer.ID,
-		OrderID: order.ID, ClientRequestID: input.ClientRequestID, ExternalOrderID: externalID, State: "creating",
+		ClientRequestID: input.ClientRequestID, ExternalOrderID: externalID, State: "creating",
 	}
-	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&link).Error }); err != nil {
-		_ = (&OrderService{}).Cancel(order.OrderNo, customer.TenantID)
-		if existing, findErr := s.loadOrderResult(customer, input.ClientRequestID); findErr == nil {
-			return existing, nil
-		}
-		return nil, err
-	}
-
 	openID, err := utils.DecryptAES(customer.OpenIDCiphertext)
 	if secret, secretErr := utils.DecryptAES(account.SecretCiphertext); secretErr != nil || strings.TrimSpace(secret) == "" {
-		s.failXiaohongshuOrder(&link, &order, "xiaohongshu channel secret is unavailable")
 		return nil, ErrMiniappUnavailable
 	}
 	if err != nil || strings.TrimSpace(openID) == "" {
-		s.failXiaohongshuOrder(&link, &order, "小程序用户身份解密失败")
 		return nil, ErrMiniappUnauthenticated
 	}
-	expiresAt := s.now().Add(DefaultOrderReservationTTL)
-	request := xiaohongshu.OrderUpsertRequest{
-		ExternalOrderID: externalID, OpenID: openID, Path: miniappPathWithOrder(config.OrderPath, order.OrderNo),
-		CreatedAt: s.now().Unix(), ExpiresAt: expiresAt.Unix(),
-		Products: []xiaohongshu.OrderProduct{{ExternalProductID: mapping.ExternalCode, ExternalSKUID: config.ExternalSKUID, Count: input.Quantity, SalePrice: mapping.ChannelSaleCents, RealPrice: totalCents}},
-		Price:    xiaohongshu.OrderPrice{OrderPrice: totalCents},
-	}
-	payloadCiphertext, err := encryptXiaohongshuOrderOperationPayload(request, config.ProductType)
+	var operation model.XiaohongshuOrderOperation
+	duplicate := false
+	promotions := MiniappPromotionService{Now: s.Now}
+	// Persist the order, grant reservation, customer idempotency link and
+	// encrypted provider request atomically. External I/O only starts after commit.
+	err = model.Write(func(tx *gorm.DB) error {
+		if _, err := lockMiniappPromotionCustomerTx(tx, customer); err != nil {
+			return err
+		}
+		var previous model.XiaohongshuOrderLink
+		findErr := tx.Where("tenant_id = ? AND channel_account_id = ? AND miniapp_customer_id = ? AND client_request_id = ?", customer.TenantID, account.ID, customer.ID, input.ClientRequestID).First(&previous).Error
+		if findErr == nil {
+			duplicate = true
+			return nil
+		}
+		if !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return findErr
+		}
+		quote, err := promotions.LoadLockedQuoteTx(tx, customer, mapping.ID, input.Quantity, totalCents)
+		if err != nil {
+			return err
+		}
+		if (input.QuoteToken != "" || quote.DiscountCents > 0) && !promotions.ValidateQuoteToken(customer, mapping.ID, input.Quantity, quote, input.QuoteToken) {
+			return errors.New("价格或立减资格已变化，请确认最新金额后重新提交")
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND channel_account_id = ? AND status = ?", mapping.ID, account.ID, "active").First(&mapping).Error; err != nil {
+			return err
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("channel_product_mapping_id = ? AND tenant_id = ? AND channel_account_id = ? AND sync_status IN ? AND audit_status = ?", mapping.ID, customer.TenantID, account.ID, []string{"submitted", "synced"}, "approved").First(&config).Error; err != nil {
+			return errors.New("票种当前不可购买")
+		}
+		if err := (&OrderService{}).createTx(tx, &order, func(tx *gorm.DB, created *model.Order) error {
+			return applyMiniappPromotionPriceTx(tx, created, quote)
+		}); err != nil {
+			return err
+		}
+		if quote.DiscountCents > 0 {
+			if err := promotions.ReserveGrantForOrderTx(tx, &order, quote); err != nil {
+				return err
+			}
+		}
+		link.OrderID = order.ID
+		if err := tx.Create(&link).Error; err != nil {
+			return err
+		}
+		request := xiaohongshu.OrderUpsertRequest{
+			ExternalOrderID: externalID, OpenID: openID, Path: miniappPathWithOrder(config.OrderPath, order.OrderNo),
+			CreatedAt: order.CreatedAt.Unix(), ExpiresAt: order.ExpiresAt.Unix(),
+			Products: []xiaohongshu.OrderProduct{{ExternalProductID: mapping.ExternalCode, ExternalSKUID: config.ExternalSKUID, Count: input.Quantity, SalePrice: order.OriginalAmountCents, RealPrice: moneyCents(order.TotalAmount)}},
+			Price:    xiaohongshu.OrderPrice{OrderPrice: moneyCents(order.TotalAmount)},
+		}
+		if order.DiscountCents > 0 {
+			request.Products[0].Discounts = []xiaohongshu.Discount{{Name: "限时随机立减", Price: order.DiscountCents, Count: 1}}
+		}
+		payloadCiphertext, err := encryptXiaohongshuOrderOperationPayload(request, config.ProductType)
+		if err != nil {
+			return err
+		}
+		nextAttempt := s.now()
+		operation = model.XiaohongshuOrderOperation{
+			TenantID: customer.TenantID, ChannelAccountID: account.ID, XiaohongshuOrderLinkID: link.ID,
+			RequestPayloadCiphertext: payloadCiphertext, Status: "pending", NextAttemptAt: &nextAttempt,
+		}
+		return tx.Create(&operation).Error
+	})
 	if err != nil {
-		s.failXiaohongshuOrder(&link, &order, "xiaohongshu order request encryption failed")
 		return nil, err
 	}
-	nextAttempt := s.now()
-	operation := model.XiaohongshuOrderOperation{
-		TenantID: customer.TenantID, ChannelAccountID: account.ID, XiaohongshuOrderLinkID: link.ID,
-		RequestPayloadCiphertext: payloadCiphertext, Status: "pending", NextAttemptAt: &nextAttempt,
-	}
-	if err := model.Write(func(tx *gorm.DB) error { return tx.Create(&operation).Error }); err != nil {
-		s.failXiaohongshuOrder(&link, &order, err.Error())
-		return nil, err
+	if duplicate {
+		return s.loadOrderResult(customer, input.ClientRequestID)
 	}
 	if _, err := s.processXiaohongshuOrderOperation(ctx, operation.ID); err != nil {
 		return nil, err
@@ -470,27 +508,29 @@ func (s XiaohongshuOrderService) refreshXiaohongshuOrder(ctx context.Context, cu
 		}
 		return s.orderResult(link, order, false)
 	case 71, 998:
-		if order.Status == "unpaid" {
-			if err := (&OrderService{}).Cancel(order.OrderNo, order.TenantID); err != nil {
-				return nil, err
+		if err := model.Write(func(tx *gorm.DB) error {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", link.ID, link.TenantID).First(link).Error; err != nil {
+				return err
 			}
-		}
-		_ = model.Write(func(tx *gorm.DB) error {
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Preload("Items.Tickets").Where("id = ? AND tenant_id = ?", order.ID, order.TenantID).First(order).Error; err != nil {
+				return err
+			}
+			if err := cancelOrderTxProvider(tx, order, false, true); err != nil {
+				return err
+			}
 			return tx.Model(link).Updates(map[string]interface{}{"state": "cancelled", "last_queried_at": s.now(), "last_error": ""}).Error
-		})
-		link.State = "cancelled"
-		order.Status = "cancelled"
+		}); err != nil {
+			return nil, err
+		}
+		link.State, order.Status = "cancelled", "cancelled"
 		return s.orderResult(link, order, false)
 	default:
 		if link.PayTokenExpiresAt != nil && !link.PayTokenExpiresAt.After(s.now()) && order.Status == "unpaid" {
-			if err := (&OrderService{}).Cancel(order.OrderNo, order.TenantID); err != nil {
-				return nil, err
-			}
+			// A token timeout is not proof of non-payment. Keep inventory and
+			// the discount reserved until an authoritative closed/paid result.
 			_ = model.Write(func(tx *gorm.DB) error {
-				return tx.Model(link).Updates(map[string]interface{}{"state": "cancelled", "last_queried_at": s.now(), "last_error": ""}).Error
+				return tx.Model(link).Updates(map[string]interface{}{"last_queried_at": s.now(), "last_error": "支付期限已过，等待平台确认订单最终状态"}).Error
 			})
-			link.State = "cancelled"
-			order.Status = "cancelled"
 			return s.orderResult(link, order, false)
 		}
 		_ = model.Write(func(tx *gorm.DB) error {
@@ -529,6 +569,12 @@ func (s XiaohongshuOrderService) recordXiaohongshuPayment(link *model.Xiaohongsh
 			return err
 		}
 		amountCents := moneyCents(lockedOrder.TotalAmount)
+		// The HTTP response may predate a concurrent authoritative closure.
+		// Never recreate payment after cancellation released stock or a grant.
+		if (lockedLink.State != "creating" && lockedLink.State != "unpaid" && lockedLink.State != "paid") ||
+			(lockedOrder.Status != "unpaid" && lockedOrder.Status != "paid") {
+			return errors.New("小红书订单已结束，拒绝过期的支付查询结果")
+		}
 		var payment model.Payment
 		err := tx.Where("tenant_id = ? AND idempotency_key = ?", lockedOrder.TenantID, fmt.Sprintf("xiaohongshu:%d", lockedLink.ID)).First(&payment).Error
 		// Xiaohongshu has no trusted local payment callback: the guarantee-order
@@ -549,6 +595,11 @@ func (s XiaohongshuOrderService) recordXiaohongshuPayment(link *model.Xiaohongsh
 		}
 		if err := settleOrderIfFullyPaidTx(tx, &lockedOrder); err != nil {
 			return err
+		}
+		if lockedOrder.PromotionGrantID > 0 {
+			if err := (MiniappPromotionService{Now: s.Now}).ConsumeGrantForOrderTx(tx, &lockedOrder); err != nil {
+				return err
+			}
 		}
 		return tx.Model(&lockedLink).Updates(map[string]interface{}{"state": "paid", "trade_no": platform.TradeNo, "pay_channel": platform.PayChannel, "last_queried_at": s.now()}).Error
 	})

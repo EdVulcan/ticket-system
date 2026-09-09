@@ -23,6 +23,7 @@
           <el-button v-if="canActiveWrite && row.type === 'ctrip'" link type="primary" @click="openCtripConfig(row)">携程参数</el-button>
           <el-button v-if="canActiveWrite && row.type === 'xiaohongshu'" link type="primary" @click="openXiaohongshuConfig(row)">小红书参数</el-button>
           <el-button v-if="row.type === 'xiaohongshu'" link type="primary" @click="openStorefront(row)">商城图片</el-button>
+          <el-button v-if="row.type === 'xiaohongshu'" link type="primary" @click="openInstantDiscount(row)">随机立减</el-button>
           <el-button v-if="row.type === 'xiaohongshu'" link type="primary" :icon="Connection" @click="diagnoseXiaohongshu(row)">连接测试</el-button>
           <el-button v-if="canActiveWrite" link type="primary" @click="openMapping(row)">商品映射</el-button>
           <el-button link type="primary" @click="openOrders(row)">渠道订单</el-button>
@@ -271,6 +272,7 @@
     <el-dialog v-model="secretDialog" title="新渠道密钥" width="460px"><el-alert type="warning" :closable="false" title="密钥只在本次显示，请立即交给渠道方并安全保存。"/><el-input class="mt-4" :model-value="newSecret" readonly /></el-dialog>
 
     <ChannelStorefrontDialog v-model="storefrontDialog" :account-id="storefrontAccount?.id || null" :can-write="canActiveWrite" />
+    <ChannelInstantDiscountDialog v-model="instantDiscountDialog" :account-id="instantDiscountAccount?.id || null" :can-write="canActiveWrite" />
 
     <el-dialog v-model="requestsDialog" :title="`渠道请求日志：${selectedAccount?.code || ''}`" width="1060px" :close-on-click-modal="false">
       <div class="mb-3 flex items-center gap-2">
@@ -335,6 +337,7 @@
           <el-descriptions-item label="内部订单">{{ orderDetail.order.order_no }}</el-descriptions-item>
           <el-descriptions-item label="状态">{{ hasPendingRefund(orderDetail.order, orderDetail.refunds) ? '退款处理中' : orderStatusText(orderDetail.order.status) }}</el-descriptions-item>
           <el-descriptions-item label="金额">¥{{ Number(orderDetail.order.total_amount || 0).toFixed(2) }}</el-descriptions-item>
+          <el-descriptions-item v-if="orderDetail.order.discount_cents > 0" label="价格明细" :span="4">原价 ¥{{ cents(orderDetail.order.original_amount_cents) }} · 随机立减 ¥{{ cents(orderDetail.order.discount_cents) }} · 应付 ¥{{ Number(orderDetail.order.total_amount || 0).toFixed(2) }}</el-descriptions-item>
           <el-descriptions-item label="联系人">{{ orderDetail.order.contact_name || '-' }}</el-descriptions-item>
           <el-descriptions-item label="手机号">{{ orderDetail.order.contact_phone || '-' }}</el-descriptions-item>
           <el-descriptions-item label="创建时间" :span="2">{{ dateTime(orderDetail.order.created_at) }}</el-descriptions-item>
@@ -428,6 +431,7 @@ import { hasPermission } from '@/utils/permissions'
 import { activeCapabilitySet, isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 import { usePendingRefundRefresh } from '@/composables/usePendingRefundRefresh'
 import ChannelStorefrontDialog from '@/components/ChannelStorefrontDialog.vue'
+import ChannelInstantDiscountDialog from '@/components/ChannelInstantDiscountDialog.vue'
 import OrderRefundDialog from '@/components/OrderRefundDialog.vue'
 
 const currentUser = readStoredUser()
@@ -457,6 +461,8 @@ const requestsLoading = ref(false)
 const selectedAccount = ref<any>(null)
 const storefrontDialog = ref(false)
 const storefrontAccount = ref<any>(null)
+const instantDiscountDialog = ref(false)
+const instantDiscountAccount = ref<any>(null)
 const channelRequests = ref<any[]>([])
 const requestStatus = ref('')
 const requestTotal = ref(0)
@@ -541,6 +547,7 @@ const create = async () => {
 }
 const openCtripConfig = (row: any) => { selectedAccount.value = row; Object.assign(ctripConfig, { account_id: row.app_id || '', sign_key: '', aes_key: '', aes_iv: '' }); ctripConfigDialog.value = true }
 const openStorefront = (row: any) => { storefrontAccount.value = row; storefrontDialog.value = true }
+const openInstantDiscount = (row: any) => { instantDiscountAccount.value = row; instantDiscountDialog.value = true }
 const saveCtripConfig = async () => {
   if (!selectedAccount.value || !ctripConfig.account_id.trim() || !ctripConfig.sign_key.trim() || ctripConfig.aes_key.length !== 16 || ctripConfig.aes_iv.length !== 16) { ElMessage.warning('请完整填写参数，AES 密钥和初始向量必须为 16 位'); return }
   ctripConfigSaving.value = true

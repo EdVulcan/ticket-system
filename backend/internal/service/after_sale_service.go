@@ -81,6 +81,9 @@ func (s *AfterSaleService) Create(req *model.AfterSaleRequest, ticketCodes []str
 		if err := orderQuery.First(&order).Error; err != nil {
 			return err
 		}
+		if order.PromotionGrantID > 0 && req.Type != "refund" && req.Type != "reissue" {
+			return errors.New("立减订单暂不支持改期、换票或直接作废，请按实付金额退票后重新购买")
+		}
 		for _, item := range order.Items {
 			if item.Product.ProductKind == "hotel" {
 				return errStandaloneHotelProductAfterSale

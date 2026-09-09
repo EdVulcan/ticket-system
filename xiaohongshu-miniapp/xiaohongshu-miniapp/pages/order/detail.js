@@ -129,6 +129,8 @@ Page({
       const issuanceManualReview = coreStatus === 'paid' && !order.refund_pending && !packageAwaitingBooking && issuanceStatus === 'manual_review';
 	  const view = this.statusView(coreStatus, order.product_kind, Boolean(order.pay_token), issuancePending, issuanceManualReview);
       order.amountText = (Number(order.amount_cents || 0) / 100).toFixed(2);
+	  order.discountText = (Number(order.discount_cents || 0) / 100).toFixed(2);
+	  order.originalAmountText = (Number(order.original_amount_cents || order.amount_cents || 0) / 100).toFixed(2);
       const refundApplicationMessage = this.formatRefundApplicationStatus(order.refund_application_status);
       const awaitingPaymentConfirmation = this.awaitingPaymentConfirmation && coreStatus === 'unpaid' && this.pollCount < 15;
       if (coreStatus !== 'unpaid') {

@@ -21,6 +21,7 @@ function loadConfirmationPage(app) {
     require: request => {
       if (request === '../../utils/calendar') return calendar;
       if (request === '../../utils/payment') return { requestGuaranteeOrderPayment() {} };
+      if (request === '../../utils/promotion') return require(path.join(miniappRoot, 'utils/promotion.js'));
       throw new Error(`unexpected require: ${request}`);
     },
     Date, Math, Number, String, Boolean, RegExp, encodeURIComponent
@@ -55,7 +56,7 @@ test('confirmation retry restores an initial catalog failure without replacing t
 
   page.retry();
   await flush();
-  assert.equal(attempts, 2);
+  assert.equal(attempts, 3);
   assert.equal(page.data.loading, false);
   assert.equal(page.data.error, '');
   assert.equal(page.data.product.name, '后端商品');

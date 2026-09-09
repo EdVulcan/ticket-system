@@ -56,6 +56,26 @@ func (s XiaohongshuOrderService) applyXiaohongshuVoucherIssuanceTx(tx *gorm.DB, 
 		updates["voucher_issuance_last_error"] = fmt.Sprintf("小红书券码数量 %d 与本地票数 %d 不一致", len(vouchers), len(tickets))
 		return tx.Model(link).Updates(updates).Error
 	}
+	if order.DiscountCents > 0 {
+		// Provider array order is not a financial identity. Match each voucher
+		// to the immutable ticket allocation before recording its code binding.
+		byAmount := make(map[int64][]xiaohongshu.VoucherInfo, len(vouchers))
+		for _, voucher := range vouchers {
+			byAmount[voucher.PayAmount] = append(byAmount[voucher.PayAmount], voucher)
+		}
+		matched := make([]xiaohongshu.VoucherInfo, 0, len(tickets))
+		for _, ticket := range tickets {
+			if ticket.SaleAmountCents == nil || len(byAmount[*ticket.SaleAmountCents]) == 0 {
+				updates["voucher_issuance_status"] = "manual_review"
+				updates["voucher_issuance_last_error"] = "平台券实付金额与立减订单分摊不一致，需核对后出票"
+				return tx.Model(link).Updates(updates).Error
+			}
+			amount := *ticket.SaleAmountCents
+			matched = append(matched, byAmount[amount][0])
+			byAmount[amount] = byAmount[amount][1:]
+		}
+		vouchers = matched
+	}
 
 	rows := make([]model.XiaohongshuVoucherLink, 0, len(vouchers))
 	seenCodes := make(map[string]struct{}, len(vouchers))
@@ -98,10 +118,15 @@ func xiaohongshuVoucherIssuanceMatches(tickets []model.Ticket, existing []model.
 		return false
 	}
 	ticketIDs := make(map[uint]struct{}, len(tickets))
+	ticketAmounts := make(map[uint]int64, len(tickets))
 	for _, ticket := range tickets {
 		ticketIDs[ticket.ID] = struct{}{}
+		if ticket.SaleAmountCents != nil {
+			ticketAmounts[ticket.ID] = *ticket.SaleAmountCents
+		}
 	}
 	boundCodes := make(map[string]struct{}, len(existing))
+	boundAmounts := make(map[string]int64, len(existing))
 	boundTicketIDs := make(map[uint]struct{}, len(existing))
 	for _, voucher := range existing {
 		if _, knownTicket := ticketIDs[voucher.TicketID]; !knownTicket || strings.TrimSpace(voucher.VoucherCodeHash) == "" {
@@ -115,6 +140,9 @@ func xiaohongshuVoucherIssuanceMatches(tickets []model.Ticket, existing []model.
 			return false
 		}
 		boundCodes[voucher.VoucherCodeHash] = struct{}{}
+		if amount, allocated := ticketAmounts[voucher.TicketID]; allocated {
+			boundAmounts[voucher.VoucherCodeHash] = amount
+		}
 	}
 	for _, voucher := range vouchers {
 		code := strings.TrimSpace(voucher.Code)
@@ -123,6 +151,9 @@ func xiaohongshuVoucherIssuanceMatches(tickets []model.Ticket, existing []model.
 		}
 		hash := hashMiniappValue(code)
 		if _, bound := boundCodes[hash]; !bound {
+			return false
+		}
+		if amount, allocated := boundAmounts[hash]; allocated && voucher.PayAmount != amount {
 			return false
 		}
 		delete(boundCodes, hash)

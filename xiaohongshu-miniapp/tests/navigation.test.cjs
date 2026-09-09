@@ -17,7 +17,9 @@ function loadPage(relativePath, xhs) {
       setStoreName() {}
     }),
     xhs,
-    require
+    require: request => request === '../../utils/promotion'
+      ? require(path.join(miniappRoot, 'utils/promotion.js'))
+      : require(request)
   }, { filename: relativePath });
   return { ...definition, data: JSON.parse(JSON.stringify(definition.data)) };
 }

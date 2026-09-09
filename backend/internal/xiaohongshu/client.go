@@ -535,6 +535,17 @@ func validateOrder(request OrderUpsertRequest) error {
 		if strings.TrimSpace(product.ExternalProductID) == "" || strings.TrimSpace(product.ExternalSKUID) == "" || product.Count <= 0 || product.SalePrice < 0 || product.RealPrice < 0 {
 			return errors.New("xiaohongshu order product identifiers, quantity and prices are invalid")
 		}
+		var discountTotal int64
+		for _, discount := range product.Discounts {
+			if strings.TrimSpace(discount.Name) == "" || discount.Price <= 0 || discount.Count <= 0 || discount.Price > product.SalePrice-discountTotal {
+				return errors.New("xiaohongshu order product discount is invalid")
+			}
+			discountTotal += discount.Price
+		}
+		// DC948963: sale_price is the original line total (unit price * num).
+		if product.RealPrice != product.SalePrice-discountTotal {
+			return errors.New("xiaohongshu order product discount price mismatch")
+		}
 		total += product.RealPrice
 	}
 	total += request.Price.Freight

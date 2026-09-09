@@ -8,6 +8,11 @@
       <view class="ticket-image fallback" xhs:else><image class="ticket-icon" src="../../assets/ticket.svg" mode="aspectFit" /></view>
       <view class="ticket-info"><text class="ticket-name">{{product.name}}</text><text class="ticket-scenic">{{product.isPackage ? product.stayText : product.scenic_area_name}}</text><text class="price">¥{{product.priceText}}</text></view>
     </view>
+    <view class="opportunity-strip confirm-opportunity" xhs:if="{{opportunityVisible}}" bindtap="openPromotionOrder" role="button" aria-label="查看随机立减机会">
+      <view xhs:if="{{opportunityReservedOrderNo}}"><text class="opportunity-title">优惠已用于待支付订单</text><text class="opportunity-copy">查看原订单</text></view>
+      <view xhs:else><text class="opportunity-title">随机立减 ¥{{opportunityAmountText}}</text><text class="opportunity-copy">本商品可用 · 剩余 {{opportunityCountdown}}</text></view>
+      <text class="opportunity-arrow">›</text>
+    </view>
     <view class="date-card" xhs:if="{{product.requiresUseDate && !createdOrderNo}}"><view class="date-top"><view><text class="label">{{product.useDateLabel}}</text><text class="hint">{{product.isPackage ? '离店日期将按套餐晚数自动计算' : '门票按所选日期预订'}}</text></view><text class="date-value {{useDate ? 'selected' : ''}}">{{useDate || '请选择'}}</text></view><view class="date-chips"><button xhs:for="{{dateChips}}" xhs:for-item="chip" xhs:key="iso" class="{{chip.className}} {{chip.isDisabled ? 'is-disabled' : ''}}" data-date="{{chip.iso}}" disabled="{{chip.isDisabled}}" bindtap="selectDate"><text>{{chip.label}}</text><text class="chip-date">{{chip.dateText}}</text></button><button class="more-date" bindtap="toggleCalendar"><text>{{calendarOpen ? '收起日历' : '更多日期'}}</text><text class="chip-date">选择日期</text></button></view><view class="calendar" xhs:if="{{calendarOpen}}"><view class="calendar-header"><button class="{{!canPreviousMonth ? 'is-disabled' : ''}}" disabled="{{!canPreviousMonth}}" bindtap="previousMonth">上月</button><text>{{calendarTitle}}</text><button class="{{!canNextMonth ? 'is-disabled' : ''}}" disabled="{{!canNextMonth}}" bindtap="nextMonth">下月</button></view><view class="weekdays"><text>一</text><text>二</text><text>三</text><text>四</text><text>五</text><text>六</text><text>日</text></view><view class="calendar-grid"><view xhs:for="{{calendarCells}}" xhs:for-item="cell" xhs:key="key" class="{{cell.className}}"><button xhs:if="{{cell.isDate}}" class="calendar-day-button {{cell.isDisabled ? 'is-disabled' : ''}}" data-date="{{cell.iso}}" disabled="{{cell.isDisabled}}" bindtap="selectDate">{{cell.label}}</button></view></view></view></view>
     <view class="guest-card" xhs:if="{{product.isDeferredPackage}}">
       <text class="label">购买后预约入住</text>
@@ -25,10 +30,12 @@
     </view>
     <text class="limit" xhs:if="{{maxQuantity < 100}}">单次最多购买 {{maxQuantity}} {{product.isPackage ? '份' : '张'}}</text>
     <view class="notice"><text class="notice-title">购买须知</text><text>{{product.isDeferredPackage ? '支付成功后获得套餐预约权益，实际入住日期以预约时的可用房量为准；预约成功后才生成可用门票。' : (product.isPackage ? '每份套餐同时锁定门票和住宿房量，退改按整份套餐处理。' : '支付结果以小红书担保交易为准，支付成功后系统自动出票。退改按票种实际规则执行。')}}</text></view>
-    <view class="summary"><view><text class="summary-label">单价</text><text>¥{{product.priceText}} × {{quantity}}</text></view><view class="summary-total"><text>合计</text><text class="total">¥{{totalText}}</text></view></view>
+    <view class="summary"><view><text class="summary-label">商品原价</text><text>¥{{product.priceText}} × {{quantity}} · ¥{{originalTotalText}}</text></view><view xhs:if="{{hasDiscount}}"><text class="summary-label">随机立减</text><text class="discount">-¥{{discountText}}</text></view><view class="summary-total"><text>应付</text><text class="total">¥{{totalText}}</text></view></view>
+    <view class="quote-state" xhs:if="{{quoteLoading}}">正在更新优惠价格...</view>
+    <view class="quote-state error" xhs:elif="{{quoteError}}"><text>{{quoteError}}</text><button bindtap="refreshQuote">重新报价</button></view>
     <view class="notice" xhs:if="{{createdOrderNo}}"><text>订单已创建{{useDate ? ' · ' + useDate : ''}}。如需支付，请继续查看该订单。</text></view>
     <text class="inline-error" xhs:if="{{error}}">{{error}}</text>
     <view class="page-spacer"></view>
-    <view class="checkout-bar"><view><text class="checkout-label">应付</text><text class="checkout-total">¥{{totalText}}</text></view><button class="pay-button {{submitting ? 'is-disabled' : ''}}" loading="{{submitting}}" disabled="{{submitting}}" bindtap="submit">{{submitting ? (createdOrderNo ? '正在支付' : '正在创建订单') : (createdOrderNo ? '查看订单 · 继续支付' : '确认并支付')}}</button></view>
+    <view class="checkout-bar"><view><text class="checkout-label">应付</text><text class="checkout-total">¥{{totalText}}</text></view><button class="pay-button {{submitting || (!quoteReady && !createdOrderNo) ? 'is-disabled' : ''}}" loading="{{submitting}}" disabled="{{submitting || (!quoteReady && !createdOrderNo)}}" bindtap="submit">{{submitting ? (createdOrderNo ? '正在支付' : '正在创建订单') : (createdOrderNo ? '查看订单 · 继续支付' : (quoteLoading ? '正在报价' : '确认并支付'))}}</button></view>
   </view>
 </view>

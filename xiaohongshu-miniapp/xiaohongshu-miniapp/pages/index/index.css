@@ -21,6 +21,12 @@ page {
   padding: 30rpx 38rpx 8rpx;
   background: #fff;
 }
+.opportunity-strip { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; margin: 18rpx 38rpx 0; padding: 20rpx 22rpx; border: 1rpx solid #cde8e6; border-radius: 12rpx; background: #eff9f8; color: #087f8c; }
+.opportunity-strip > view { min-width: 0; flex: 1; }
+.opportunity-title, .opportunity-copy { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opportunity-title { font-size: 25rpx; font-weight: 650; }
+.opportunity-copy { margin-top: 5rpx; color: #52787c; font-size: 21rpx; }
+.opportunity-arrow { flex-shrink: 0; font-size: 34rpx; line-height: 1; }
 
 .title {
   display: block;
@@ -244,6 +250,7 @@ page {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.product-opportunity { display: block; margin-top: 8rpx; color: #087f8c; font-size: 21rpx; }
 
 .tag-row {
   display: flex;

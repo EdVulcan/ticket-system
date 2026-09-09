@@ -2,6 +2,12 @@
   <image class="hero-image" xhs:if="{{heroImage}}" src="{{heroImage}}" mode="aspectFill" />
   <view class="catalog-header"><text class="title">{{storeName}}</text></view>
 
+  <view class="opportunity-strip" xhs:if="{{opportunityVisible}}" bindtap="openPromotionOrder" role="button" aria-label="查看随机立减机会">
+    <view xhs:if="{{opportunityReservedOrderNo}}"><text class="opportunity-title">优惠已用于待支付订单</text><text class="opportunity-copy">查看订单 {{opportunityReservedOrderNo}}</text></view>
+    <view xhs:else><text class="opportunity-title">随机立减 ¥{{opportunityAmountText}}</text><text class="opportunity-copy">适用于参与商品 · 剩余 {{opportunityCountdown}}</text></view>
+    <text class="opportunity-arrow">›</text>
+  </view>
+
   <view class="search-wrap">
     <view class="search-box">
       <image class="search-icon" src="../../assets/search.svg" mode="aspectFit" />
@@ -61,6 +67,7 @@
           <view class="tag-row" xhs:if="{{item.tags.length}}">
             <text class="tag" xhs:for="{{item.tags}}" xhs:for-item="tag" xhs:key="*this">{{tag}}</text>
           </view>
+          <text class="product-opportunity" xhs:if="{{item.promotionEligible}}">本次随机立减可用</text>
           <view class="product-bottom"><view class="price"><text class="currency">¥</text><text class="amount">{{item.priceText}}</text><text class="unit">起</text></view><text class="detail-link">查看详情</text></view>
         </view>
       </view>

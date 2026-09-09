@@ -11,6 +11,13 @@ page { min-height: 100%; background: #f5f7f8; color: #20262b; }
 .tag { padding: 5rpx 10rpx; border-radius: 6rpx; background: #f5f7f8; color: #6e7b82; font-size: 19rpx; }
 .tag:nth-child(2n) { background: #fff4eb; color: #d45d28; }
 .price { display: flex; align-items: baseline; margin-top: 22rpx; color: #d45d28; font-variant-numeric: tabular-nums; }
+.opportunity-strip { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; margin: 24rpx 38rpx 0; padding: 20rpx 22rpx; border: 1rpx solid #cde8e6; border-radius: 12rpx; background: #eff9f8; color: #087f8c; }
+.opportunity-strip > view { min-width: 0; flex: 1; }
+.opportunity-title, .opportunity-copy { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opportunity-title { font-size: 25rpx; font-weight: 650; }
+.opportunity-copy { margin-top: 5rpx; color: #52787c; font-size: 21rpx; }
+.opportunity-arrow { flex-shrink: 0; font-size: 34rpx; line-height: 1; }
+.product-opportunity-strip { margin: 24rpx 0 0; }
 .currency { font-size: 25rpx; }
 .amount { font-size: 52rpx; font-weight: 850; }
 .unit { margin-left: 5rpx; color: #9ca3af; font-size: 20rpx; }

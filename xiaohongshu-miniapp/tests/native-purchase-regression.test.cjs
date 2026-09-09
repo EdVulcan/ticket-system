@@ -21,6 +21,7 @@ function loadPage(relativePath, app, xhs) {
     require: request => {
       if (request === '../../utils/calendar') return calendar;
       if (request === '../../utils/payment') return { requestGuaranteeOrderPayment() {} };
+      if (request === '../../utils/promotion') return require(path.join(miniappRoot, 'utils/promotion.js'));
       throw new Error(`unexpected require: ${request}`);
     },
     Date, Math, Number, String, Boolean, RegExp, encodeURIComponent, setTimeout: () => 1, clearTimeout: () => {}
@@ -37,7 +38,7 @@ test('native button styling uses explicit disabled state classes instead of attr
   assert.doesNotMatch(appStyles, /button\[disabled\]/);
   assert.match(appStyles, /button\.is-disabled/);
   assert.match(confirmTemplate, /class="stepper-button \{\{quantity <= 1 \|\| submitting \|\| createdOrderNo \? 'is-disabled' : ''\}\}"[^>]*disabled="\{\{quantity <= 1 \|\| submitting \|\| createdOrderNo\}\}"/);
-  assert.match(confirmTemplate, /class="pay-button \{\{submitting \? 'is-disabled' : ''\}\}"[^>]*disabled="\{\{submitting\}\}"/);
+  assert.match(confirmTemplate, /class="pay-button \{\{submitting \|\| \(!quoteReady && !createdOrderNo\) \? 'is-disabled' : ''\}\}"[^>]*disabled="\{\{submitting \|\| \(!quoteReady && !createdOrderNo\)\}\}"/);
 });
 
 test('detail purchase bypasses the obsolete selector popup and opens confirmation', () => {

@@ -1,4 +1,5 @@
 const app = getApp();
+const promotion = require('../../utils/promotion');
 
 Page({
   data: {
@@ -17,16 +18,23 @@ Page({
     emptyStateDetail: '换个关键词或分类试试',
     loading: true,
     refreshing: false,
-    error: ''
+    error: '',
+    opportunity: null,
+    opportunityVisible: false,
+    opportunityAmountText: '',
+    opportunityCountdown: '',
+    opportunityReservedOrderNo: ''
   },
 
   onLoad() {
     app.setNavigationTitle(app.globalData.storeName || '官方商城');
     this.loadCatalog();
+    this.loadOpportunity();
   },
 
   onShow() {
     if (this.data.allProducts.length) this.applyFilters();
+    if (this.data.allProducts.length) this.loadOpportunity();
   },
 
   onPullDownRefresh() {
@@ -81,7 +89,59 @@ Page({
     });
   },
 
-  onUnload() { this.catalogVersion = (this.catalogVersion || 0) + 1; },
+  onUnload() {
+    this.catalogVersion = (this.catalogVersion || 0) + 1;
+    this.opportunityVersion = (this.opportunityVersion || 0) + 1;
+    this.stopOpportunityTimer();
+  },
+
+  loadOpportunity() {
+    const version = (this.opportunityVersion || 0) + 1;
+    this.opportunityVersion = version;
+    return app.request('/promotion', { method: 'POST', data: {} }).then(raw => {
+      if (version !== this.opportunityVersion) return;
+      this.applyOpportunity(promotion.normalize(raw, Date.now()));
+    }).catch(() => {
+      if (version === this.opportunityVersion) this.applyOpportunity(null);
+    });
+  },
+
+  applyOpportunity(opportunity) {
+    this.opportunity = opportunity;
+    const available = promotion.isAvailable(opportunity);
+    const reserved = opportunity && opportunity.status === 'reserved' && opportunity.reservedOrderNo;
+    const products = this.data.allProducts.map(product => ({
+      ...product,
+      promotionEligible: promotion.appliesTo(opportunity, product.id)
+    }));
+    this.setData({
+      allProducts: products,
+      opportunity,
+      opportunityVisible: Boolean(available || reserved),
+      opportunityAmountText: available ? promotion.money(opportunity.discountCents) : '',
+      opportunityCountdown: promotion.countdown(opportunity),
+      opportunityReservedOrderNo: reserved ? opportunity.reservedOrderNo : ''
+    }, () => this.applyFilters());
+    this.startOpportunityTimer();
+  },
+
+  startOpportunityTimer() {
+    this.stopOpportunityTimer();
+    if (!this.opportunity || !promotion.isAvailable(this.opportunity) || typeof setInterval !== 'function') return;
+    this.opportunityTimer = setInterval(() => {
+      const current = this.opportunity;
+      if (!promotion.isAvailable(current)) {
+        this.applyOpportunity(current);
+        return;
+      }
+      this.setData({ opportunityCountdown: promotion.countdown(current) });
+    }, 1000);
+  },
+
+  stopOpportunityTimer() {
+    if (this.opportunityTimer && typeof clearInterval === 'function') clearInterval(this.opportunityTimer);
+    this.opportunityTimer = null;
+  },
 
   onKeywordInput(event) {
     this.setData({ keyword: event.detail.value || '' }, () => this.applyFilters());
@@ -110,7 +170,9 @@ Page({
 
   applyFilters() {
     const keyword = this.data.keyword.trim().toLowerCase();
-    let products = this.data.allProducts.filter(product => {
+    let products = this.data.allProducts.map(product => ({
+      ...product, promotionEligible: promotion.appliesTo(this.opportunity, product.id)
+    })).filter(product => {
       const scenic = product.scenic_area_name || '其他景区';
       const scenicMatched = this.data.activeScenic === '全部' || scenic === this.data.activeScenic;
       const kindMatched = this.data.activeKind === 'all' || (product.product_kind || 'ticket') === this.data.activeKind;
@@ -135,6 +197,10 @@ Page({
   goHome() {},
 
   goOrders() { xhs.redirectTo({ url: '/pages/orders/index' }); },
+
+  openPromotionOrder() {
+    if (this.data.opportunityReservedOrderNo) xhs.navigateTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(this.data.opportunityReservedOrderNo)}` });
+  },
 
   retry() { this.loadCatalog(); },
 

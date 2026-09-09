@@ -69,6 +69,7 @@ type MiniappCatalog struct {
 }
 
 type MiniappOrderCreateInput struct {
+	QuoteToken      string `json:"quote_token"`
 	MappingID       uint   `json:"mapping_id"`
 	Quantity        int    `json:"quantity"`
 	ClientRequestID string `json:"request_id"`
@@ -122,6 +123,8 @@ type MiniappTicket struct {
 }
 
 type MiniappOrderResult struct {
+	OriginalAmountCents      int64                       `json:"original_amount_cents"`
+	DiscountCents            int64                       `json:"discount_cents"`
 	OrderNo                  string                      `json:"order_no"`
 	PlatformOrderID          string                      `json:"order_id,omitempty"`
 	ProductName              string                      `json:"product_name,omitempty"`

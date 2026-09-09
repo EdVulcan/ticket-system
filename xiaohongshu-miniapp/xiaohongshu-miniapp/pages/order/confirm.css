@@ -5,6 +5,12 @@ page { min-height: 100%; background: #f5f7f8; color: #20262b; }
 .header-hint { margin-top: 12rpx; color: #6e7b82; font-size: 24rpx; line-height: 1.5; }
 .content { padding: 0; }
 .ticket, .date-card, .quantity-row, .guest-card, .notice, .summary { background: #fff; }
+.opportunity-strip { display: flex; align-items: center; justify-content: space-between; gap: 20rpx; padding: 20rpx 38rpx; border-top: 1rpx solid #cde8e6; border-bottom: 1rpx solid #cde8e6; background: #eff9f8; color: #087f8c; }
+.opportunity-strip > view { min-width: 0; flex: 1; }
+.opportunity-title, .opportunity-copy { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.opportunity-title { font-size: 25rpx; font-weight: 650; }
+.opportunity-copy { margin-top: 5rpx; color: #52787c; font-size: 21rpx; }
+.opportunity-arrow { flex-shrink: 0; font-size: 34rpx; line-height: 1; }
 .ticket { display: flex; gap: 24rpx; min-height: 186rpx; padding: 24rpx 38rpx 36rpx; box-sizing: border-box; }
 .ticket-image { width: 138rpx; height: 138rpx; flex-shrink: 0; border-radius: 14rpx; background: #eef0f3; }
 .ticket-image.fallback { display: flex; align-items: center; justify-content: center; border: 1rpx solid #dce4e7; background: #f5f7f8; }
@@ -60,6 +66,10 @@ page { min-height: 100%; background: #f5f7f8; color: #20262b; }
 .summary-total { border-top: 1rpx solid #edf0f2; }
 .summary-label { color: #9ca3af; }
 .total { color: #d45d28; font-size: 37rpx; font-weight: 700; }
+.discount { color: #087f8c; font-variant-numeric: tabular-nums; }
+.quote-state { margin: 14rpx 38rpx 0; color: #6e7b82; font-size: 22rpx; }
+.quote-state.error { display: flex; align-items: center; justify-content: space-between; gap: 16rpx; color: #a94e27; }
+.quote-state button { flex-shrink: 0; margin: 0; padding: 0; background: transparent; color: #087f8c; font-size: 22rpx; }
 .inline-error { display: block; margin: 16rpx 38rpx 0; padding: 16rpx 18rpx; border-radius: 12rpx; background: #fff5f0; color: #a94e27; font-size: 22rpx; line-height: 1.55; text-align: left; }
 .loading-state, .state { display: flex; align-items: center; flex-direction: column; justify-content: center; min-height: 360rpx; padding: 46rpx 38rpx; box-sizing: border-box; text-align: center; }
 .loading-card { display: flex; width: 100%; max-width: 560rpx; align-items: center; gap: 24rpx; }

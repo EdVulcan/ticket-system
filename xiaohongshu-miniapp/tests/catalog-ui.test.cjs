@@ -10,7 +10,8 @@ function catalogPage(catalog) {
   let title;
   vm.runInNewContext(fs.readFileSync(path.join(root, 'pages/index/index.js'), 'utf8'), {
     Page: value => { definition = value; },
-    getApp: () => ({ request: () => Promise.resolve(catalog), setStoreName: value => { title = value; } })
+    getApp: () => ({ request: () => Promise.resolve(catalog), setStoreName: value => { title = value; } }),
+    require: request => require(path.join(root, request.replace('../../', '')))
   });
   const page = { ...definition, data: JSON.parse(JSON.stringify(definition.data)) };
   page.setData = (data, callback) => { Object.assign(page.data, data); if (callback) callback(); };
@@ -72,6 +73,19 @@ test('catalog retains combined search, scenic, kind and price filtering', async 
   page.resetFilters();
   assert.equal(page.data.products.length, 3);
   assert.equal(page.data.hasActiveFilters, false);
+});
+
+test('catalog reload retains promotion labels when opportunity arrived first', async () => {
+  const { page } = catalogPage({ products: [
+    { id: 1, name: '参与票', product_kind: 'ticket', price_cents: 8000 },
+    { id: 2, name: '普通票', product_kind: 'ticket', price_cents: 9000 }
+  ] });
+  page.applyOpportunity({ status: 'available', discountCents: 100, mappingIds: [1] });
+  await page.loadCatalog();
+  assert.equal(page.data.products[0].promotionEligible, true);
+  assert.equal(page.data.products[1].promotionEligible, false);
+  await page.loadCatalog();
+  assert.equal(page.data.products[0].promotionEligible, true);
 });
 
 test('catalog shows useful choices only and production templates contain no demo merchant copy', () => {

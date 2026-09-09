@@ -120,10 +120,7 @@ func prepareXiaohongshuRefundTx(tx *gorm.DB, order *model.Order, payment *model.
 		if err != nil || code == "" || hashMiniappValue(code) != voucher.VoucherCodeHash {
 			return errors.New("小红书凭证关联无效")
 		}
-		value := moneyCents(item.Price)
-		if ticket.CodeMode == "order" {
-			value = refund.AmountCents
-		}
+		value := ticketSaleCents(&item, &ticket)
 		request.Vouchers = append(request.Vouchers, xiaohongshu.AfterSalesVoucherDetail{VoucherCode: code, RefundPrice: value})
 	}
 	if err := xiaohongshu.ValidateAfterSalesAdd(request); err != nil {

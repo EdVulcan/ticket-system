@@ -11,6 +11,11 @@
       <text class="title">{{product.name}}</text>
       <view class="tags" xhs:if="{{product.tags.length}}"><text class="tag" xhs:for="{{product.tags}}" xhs:key="*this">{{item}}</text></view>
       <view class="price"><text class="currency">¥</text><text class="amount">{{product.priceText}}</text><text class="unit">起</text></view>
+      <view class="opportunity-strip product-opportunity-strip" xhs:if="{{opportunityVisible}}" bindtap="openPromotionOrder" role="button" aria-label="查看随机立减机会">
+        <view xhs:if="{{opportunityReservedOrderNo}}"><text class="opportunity-title">优惠已用于待支付订单</text><text class="opportunity-copy">查看原订单</text></view>
+        <view xhs:else><text class="opportunity-title">随机立减 ¥{{opportunityAmountText}}</text><text class="opportunity-copy">本商品可用 · 剩余 {{opportunityCountdown}}</text></view>
+        <text class="opportunity-arrow">›</text>
+      </view>
     </view>
     <view class="section" xhs:if="{{product.isPackage}}">
       <text class="section-title">套餐包含</text>

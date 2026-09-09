@@ -70,6 +70,7 @@
   <view class="issuance-pending" xhs:if="{{qrRenderError}}"><text>二维码未能显示，可重新查询；也可向工作人员出示票码。</text><button bindtap="retry">重新查询</button></view>
   <button class="order-details-toggle" xhs:if="{{ticketCodes.length}}" bindtap="toggleOrderDetails" aria-expanded="{{orderDetailsExpanded}}">{{orderDetailsExpanded ? '收起订单信息' : '订单信息'}}<view class="details-chevron {{orderDetailsExpanded ? 'is-open' : ''}}"></view></button>
   <view xhs:if="{{!ticketCodes.length || orderDetailsExpanded}}">
+  <view class="promotion-breakdown" xhs:if="{{order.discount_cents > 0}}"><text>商品合计 ¥{{order.originalAmountText}}</text><text>限时立减 −¥{{order.discountText}}</text></view>
   <view class="due-amount" xhs:if="{{order}}"><text class="amount-label">{{status === 'unpaid' ? '待支付金额' : (status === 'cancelled' || status === 'failed' || status === 'refunded' ? '订单金额' : '实付金额')}}</text><view class="price"><text class="currency">¥</text>{{order.amountText}}</view></view>
   <view class="order-meta" xhs:if="{{order}}"><text>订单号</text><text>{{orderNo}}</text></view>
   <view class="action-footer"><button class="primary-button {{paying ? 'is-disabled' : ''}}" xhs:if="{{status === 'unpaid' && order.pay_token}}" loading="{{paying}}" disabled="{{paying}}" bindtap="continuePayment">继续支付</button><button class="primary-button" xhs:if="{{order.refund_pending}}" bindtap="retry">刷新退款状态</button><view class="action-row"><button class="secondary-button" bindtap="goOrders">查看全部订单</button><button class="secondary-button" bindtap="goHome">继续购票</button></view></view>

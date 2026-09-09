@@ -182,9 +182,13 @@ type Product struct {
 // Order 订单
 type Order struct {
 	Base
-	OrderNo              string     `gorm:"size:50;uniqueIndex;not null" json:"order_no"`
-	TenantID             uint       `gorm:"uniqueIndex:idx_order_external,priority:1" json:"tenant_id"`
-	TotalAmount          float64    `gorm:"type:decimal(10,2)" json:"total_amount"`
+	OrderNo     string  `gorm:"size:50;uniqueIndex;not null" json:"order_no"`
+	TenantID    uint    `gorm:"uniqueIndex:idx_order_external,priority:1" json:"tenant_id"`
+	TotalAmount float64 `gorm:"type:decimal(10,2)" json:"total_amount"`
+	// Promotion values are immutable sale snapshots, never request prices.
+	OriginalAmountCents  int64      `gorm:"not null;default:0" json:"original_amount_cents"`
+	DiscountCents        int64      `gorm:"not null;default:0" json:"discount_cents"`
+	PromotionGrantID     uint       `gorm:"index;not null;default:0" json:"-"`
 	Status               string     `gorm:"size:20;default:'unpaid'" json:"status"` // unpaid, paid, cancelled, refunded, partial_refunded, completed
 	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
 	ContactName          string     `gorm:"size:50" json:"contact_name"`
@@ -222,6 +226,7 @@ type OrderItem struct {
 	Product                 Product    `gorm:"foreignKey:ProductID" json:"product,omitempty"` // Added relation
 	ProductName             string     `gorm:"size:100" json:"product_name"`
 	Price                   float64    `gorm:"type:decimal(10,2)" json:"price"`
+	SaleAmountCents         *int64     `json:"sale_amount_cents,omitempty"`
 	SettlementPrice         float64    `gorm:"type:decimal(10,2)" json:"settlement_price"`
 	Quantity                int        `json:"quantity"`
 	UseDate                 *time.Time `gorm:"type:date" json:"use_date"`
@@ -274,7 +279,9 @@ type Ticket struct {
 	RuleSnapshot            string    `gorm:"type:text" json:"-"`
 	CodeMode                string    `gorm:"size:20" json:"code_mode"`
 	TicketCode              string    `gorm:"size:50;uniqueIndex;not null" json:"ticket_code"` // 核销码
-	Status                  string    `gorm:"size:20;default:'unused'" json:"status"`          // unused, used, refunded, expired
+	// Nil preserves legacy unit-price semantics; zero is a real allocation.
+	SaleAmountCents *int64 `json:"sale_amount_cents,omitempty"`
+	Status          string `gorm:"size:20;default:'unused'" json:"status"` // unused, used, refunded, expired
 
 	// Visitor Info
 	VisitorName   string `gorm:"size:50" json:"visitor_name"`

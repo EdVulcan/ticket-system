@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 115
+const CurrentPostgresSchemaVersion = 116
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -49,7 +49,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&DistributorRelationship{}, &CapitalAccount{}, &TransactionRecord{}, &LedgerEntry{},
 		&Policy{}, &PaymentConfig{}, &Payment{}, &Refund{}, &PaymentReconciliationTask{}, &DigitalRefundTask{},
 		&AuditLog{}, &OTANonce{}, &FinancialDocument{},
-		&ChannelAccount{}, &MiniappCustomer{}, &ChannelProductMapping{}, &XiaohongshuProductConfig{}, &XiaohongshuBookingOperation{}, &XiaohongshuOrderOperation{}, &ChannelRequest{}, &ChannelNonce{}, &ChannelReservation{},
+		&ChannelAccount{}, &MiniappCustomer{}, &ChannelProductMapping{}, &XiaohongshuProductConfig{}, &MiniappInstantDiscountActivity{}, &MiniappInstantDiscountActivityMapping{}, &MiniappInstantDiscountGrant{}, &XiaohongshuBookingOperation{}, &XiaohongshuOrderOperation{}, &ChannelRequest{}, &ChannelNonce{}, &ChannelReservation{},
 		&CtripOrderLink{}, &CtripOrderItem{}, &CtripOutboundTask{}, &XiaohongshuOrderLink{}, &XiaohongshuVoucherLink{}, &XiaohongshuVoucherVerification{}, &XiaohongshuWebhookEvent{}, &XiaohongshuRefundCoordination{},
 		&ChannelBillRecord{}, &ChannelReconciliation{}, &ChannelReconciliationLine{},
 		&TravelContract{}, &TravelAgent{}, &TourGuide{}, &TravelVehicle{}, &TourGroup{}, &TourGroupMember{},
@@ -514,6 +514,37 @@ func runPostgresMigrations(db *gorm.DB) error {
 			return fmt.Errorf("register xiaohongshu voucher issuance readiness: %w", err)
 		}
 	}
+	if previousSchemaVersion < 116 {
+		if err := db.Exec(`
+			ALTER TABLE orders ADD COLUMN IF NOT EXISTS original_amount_cents bigint NOT NULL DEFAULT 0;
+			ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_cents bigint NOT NULL DEFAULT 0;
+			ALTER TABLE orders ADD COLUMN IF NOT EXISTS promotion_grant_id bigint NOT NULL DEFAULT 0;
+			ALTER TABLE order_items ADD COLUMN IF NOT EXISTS sale_amount_cents bigint NULL;
+			ALTER TABLE tickets ADD COLUMN IF NOT EXISTS sale_amount_cents bigint NULL;
+			CREATE INDEX IF NOT EXISTS idx_orders_promotion_grant_id
+				ON orders(promotion_grant_id) WHERE promotion_grant_id > 0 AND deleted_at IS NULL;
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_miniapp_discount_account
+				ON miniapp_instant_discount_activities(tenant_id, channel_account_id)
+				WHERE deleted_at IS NULL;
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_miniapp_discount_activity_mapping
+				ON miniapp_instant_discount_activity_mappings(activity_id, channel_product_mapping_id)
+				WHERE deleted_at IS NULL;
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_miniapp_discount_reserved_order
+				ON miniapp_instant_discount_grants(reserved_order_id)
+				WHERE reserved_order_id > 0 AND deleted_at IS NULL;
+			CREATE INDEX IF NOT EXISTS idx_miniapp_discount_grant_customer
+				ON miniapp_instant_discount_grants(tenant_id, channel_account_id, miniapp_customer_id, obtained_at DESC, id DESC)
+				WHERE deleted_at IS NULL;
+			ALTER TABLE miniapp_instant_discount_activities DROP CONSTRAINT IF EXISTS chk_miniapp_discount_activity_values;
+			ALTER TABLE miniapp_instant_discount_activities ADD CONSTRAINT chk_miniapp_discount_activity_values
+				CHECK (min_discount_cents >= 0 AND max_discount_cents >= min_discount_cents AND validity_minutes >= 0 AND cooldown_days >= 0);
+			ALTER TABLE miniapp_instant_discount_grants DROP CONSTRAINT IF EXISTS chk_miniapp_discount_grant_values;
+			ALTER TABLE miniapp_instant_discount_grants ADD CONSTRAINT chk_miniapp_discount_grant_values
+				CHECK (discount_cents > 0 AND expires_at >= obtained_at AND next_eligible_at >= obtained_at);
+		`).Error; err != nil {
+			return fmt.Errorf("register miniapp instant discount activities: %w", err)
+		}
+	}
 	if previousSchemaVersion > 0 && previousSchemaVersion < 80 {
 		if err := db.Exec(`
 			INSERT INTO supplier_business_types
@@ -657,12 +688,15 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := applyPostgresOwnershipGuards(db); err != nil {
 		return err
 	}
+	if err := applyPostgresMiniappPromotionGuards(db); err != nil {
+		return err
+	}
 	if err := applyPostgresBundleGuards(db); err != nil {
 		return err
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "xiaohongshu voucher issuance readiness",
+		Name:      "miniapp instant discount activities",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -1612,6 +1646,64 @@ func applyPostgresBundleGuards(db *gorm.DB) error {
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
 			return fmt.Errorf("create PostgreSQL bundle guard: %w", err)
+		}
+	}
+	return nil
+}
+
+func applyPostgresMiniappPromotionGuards(db *gorm.DB) error {
+	function := `CREATE OR REPLACE FUNCTION enforce_miniapp_promotion() RETURNS trigger AS $$
+	BEGIN
+		IF TG_TABLE_NAME = 'miniapp_instant_discount_activities' THEN
+			IF NEW.tenant_id = 0 OR NEW.channel_account_id = 0
+			   OR NEW.min_discount_cents < 0 OR NEW.max_discount_cents < NEW.min_discount_cents
+			   OR NEW.validity_minutes < 0 OR NEW.cooldown_days < 0
+			   OR NOT EXISTS (SELECT 1 FROM channel_accounts account WHERE account.id = NEW.channel_account_id AND account.tenant_id = NEW.tenant_id AND account.type = 'xiaohongshu') THEN
+				RAISE EXCEPTION 'miniapp discount activity ownership mismatch';
+			END IF;
+		ELSIF TG_TABLE_NAME = 'miniapp_instant_discount_activity_mappings' THEN
+			IF NEW.activity_id = 0 OR NEW.channel_product_mapping_id = 0
+			   OR NOT EXISTS (
+				SELECT 1 FROM miniapp_instant_discount_activities activity
+				JOIN channel_product_mappings mapping ON mapping.id = NEW.channel_product_mapping_id
+				WHERE activity.id = NEW.activity_id AND mapping.channel_account_id = activity.channel_account_id
+				  AND activity.deleted_at IS NULL AND mapping.deleted_at IS NULL
+			   ) THEN
+				RAISE EXCEPTION 'miniapp discount mapping ownership mismatch';
+			END IF;
+		ELSIF TG_TABLE_NAME = 'miniapp_instant_discount_grants' THEN
+			IF NEW.tenant_id = 0 OR NEW.channel_account_id = 0 OR NEW.miniapp_customer_id = 0 OR NEW.activity_id = 0
+			   OR NEW.discount_cents <= 0 OR NEW.expires_at < NEW.obtained_at OR NEW.next_eligible_at < NEW.obtained_at
+			   OR NOT EXISTS (
+				SELECT 1 FROM miniapp_instant_discount_activities activity
+				JOIN miniapp_customers customer ON customer.id = NEW.miniapp_customer_id
+				JOIN channel_accounts account ON account.id = NEW.channel_account_id
+				WHERE activity.id = NEW.activity_id AND activity.tenant_id = NEW.tenant_id AND activity.channel_account_id = NEW.channel_account_id
+				  AND customer.tenant_id = NEW.tenant_id AND customer.channel_account_id = NEW.channel_account_id
+				  AND account.tenant_id = NEW.tenant_id AND account.type = 'xiaohongshu'
+			   )
+			   OR (NEW.reserved_order_id <> 0 AND NOT EXISTS (
+				SELECT 1 FROM orders order_row WHERE order_row.id = NEW.reserved_order_id AND order_row.tenant_id = NEW.tenant_id
+				  AND order_row.channel_account_id = NEW.channel_account_id AND order_row.channel = 'xiaohongshu'
+			   ))
+			   OR (TG_OP = 'UPDATE' AND (
+				NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.channel_account_id IS DISTINCT FROM OLD.channel_account_id
+				OR NEW.miniapp_customer_id IS DISTINCT FROM OLD.miniapp_customer_id OR NEW.activity_id IS DISTINCT FROM OLD.activity_id
+				OR NEW.discount_cents IS DISTINCT FROM OLD.discount_cents OR NEW.obtained_at IS DISTINCT FROM OLD.obtained_at
+				OR NEW.expires_at IS DISTINCT FROM OLD.expires_at OR NEW.next_eligible_at IS DISTINCT FROM OLD.next_eligible_at
+			)) THEN
+				RAISE EXCEPTION 'miniapp discount grant ownership or immutable snapshot mismatch';
+			END IF;
+		END IF;
+		RETURN NEW;
+	END;
+	$$ LANGUAGE plpgsql;`
+	if err := db.Exec(function).Error; err != nil {
+		return fmt.Errorf("create miniapp promotion ownership function: %w", err)
+	}
+	for _, table := range []string{"miniapp_instant_discount_activities", "miniapp_instant_discount_activity_mappings", "miniapp_instant_discount_grants"} {
+		if err := db.Exec(fmt.Sprintf(`DROP TRIGGER IF EXISTS miniapp_promotion_guard ON %s; CREATE TRIGGER miniapp_promotion_guard BEFORE INSERT OR UPDATE ON %s FOR EACH ROW EXECUTE FUNCTION enforce_miniapp_promotion()`, table, table)).Error; err != nil {
+			return fmt.Errorf("create miniapp promotion guard on %s: %w", table, err)
 		}
 	}
 	return nil

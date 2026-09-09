@@ -41,6 +41,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	apiGroup.POST("/auth/platform/login", loginLimit, authController.PlatformLogin)
 
 	miniappController := &api.MiniappController{Service: service.NewMiniappService()}
+	miniappPromotionController := &api.MiniappPromotionController{Miniapp: service.NewMiniappService(), Promotion: service.MiniappPromotionService{}}
 	miniappGroup := apiGroup.Group("/storefront/xiaohongshu")
 	miniappGroup.POST("/session", middleware.MiniappLoginRateLimit(), miniappController.LoginXiaohongshu)
 	miniappGroup.GET("/catalog", miniappController.ListCatalog)
@@ -50,6 +51,8 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	miniappGroup.POST("/orders/:orderNo/refund-applications", miniappController.ApplyRefund)
 	miniappGroup.POST("/orders/:orderNo/package-bookings", miniappController.BookPackage)
 	miniappGroup.POST("/orders/:orderNo/package-bookings/:entitlementNo/cancel", miniappController.CancelPackageBooking)
+	miniappGroup.POST("/promotion", miniappPromotionController.Opportunity)
+	miniappGroup.POST("/order-quote", miniappPromotionController.Quote)
 	xiaohongshuWebhookController := api.XiaohongshuWebhookController{}
 	xiaohongshuWebhookGroup := apiGroup.Group("/integrations/xiaohongshu/events")
 	xiaohongshuWebhookGroup.GET("/:appID", xiaohongshuWebhookController.Verify)
@@ -504,6 +507,8 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		channelAdminGroup.GET("/:id/storefront", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.GetXiaohongshuStorefront)
 		channelAdminGroup.PUT("/:id/storefront", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SaveXiaohongshuStorefront)
 		channelAdminGroup.POST("/:id/storefront-image", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.UploadXiaohongshuStorefrontImage)
+		channelAdminGroup.GET("/:id/instant-discount", middleware.RequireTenantPermission(authz.PermissionChannelsRead), miniappPromotionController.GetConfig)
+		channelAdminGroup.PUT("/:id/instant-discount", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), miniappPromotionController.SaveConfig)
 		channelAdminGroup.GET("/mappings", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.ListMappings)
 		channelAdminGroup.POST("/mappings", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.AddMapping)
 		channelAdminGroup.PATCH("/:id/mappings/:mappingId", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.UpdateMapping)

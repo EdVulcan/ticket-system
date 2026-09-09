@@ -19,6 +19,7 @@ function loadPage(relativePath, app, xhs) {
     require: request => {
       if (request === '../../utils/calendar') return calendar;
       if (request === '../../utils/payment') return require(path.join(miniappRoot, 'utils/payment.js'));
+      if (request === '../../utils/promotion') return require(path.join(miniappRoot, 'utils/promotion.js'));
       throw new Error(`unexpected require: ${request}`);
     },
     Date, Math, Number, String, Boolean, RegExp, encodeURIComponent, setTimeout: () => 1, clearTimeout: () => {}
@@ -82,7 +83,7 @@ test('confirmation keeps deferred packages date-free and submits the stable orde
   };
   const page = loadPage('pages/order/confirm.js', app, {});
   page.data.product = { id: 7, price_cents: 5000, isPackage: true, isDeferredPackage: true, requiresUseDate: false };
-  page.data.quantity = 2; page.orderRequestId = 'stable-request-id';
+  page.data.quantity = 2; page.data.quoteReady = true; page.data.quoteToken = 'quote-7'; page.orderRequestId = 'stable-request-id';
   page.submit();
   assert.equal(requests.length, 1);
   assert.equal(requests[0].options.data.use_date, '');

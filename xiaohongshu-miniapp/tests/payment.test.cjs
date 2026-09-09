@@ -22,6 +22,7 @@ function loadPage(relativePath, app, xhs) {
       if (request === '../../utils/payment') return require(path.join(miniappRoot, 'utils/payment.js'));
       if (request === '../../utils/calendar') return require(path.join(miniappRoot, 'utils/calendar.js'));
       if (request === '../../utils/qr') return require(path.join(miniappRoot, 'utils/qr.js'));
+      if (request === '../../utils/promotion') return require(path.join(miniappRoot, 'utils/promotion.js'));
       throw new Error(`unexpected require: ${request}`);
     },
     Date,
@@ -70,6 +71,7 @@ test('confirmation page keeps an existing order and visibly reports missing paym
   const xhs = { redirectTo: () => assert.fail('missing fields must not redirect') };
   const page = loadPage('pages/order/confirm.js', app, xhs);
   page.data.product = { id: 1, price_cents: 8000 };
+  page.data.quoteReady = true; page.data.quoteToken = 'quote-1';
   page.orderRequestId = 'stable-request-id';
 
   page.submit();
@@ -91,6 +93,7 @@ test('confirmation page reports cancellation rather than silently redirecting', 
   };
   const page = loadPage('pages/order/confirm.js', app, xhs);
   page.data.product = { id: 1, price_cents: 8000 };
+  page.data.quoteReady = true; page.data.quoteToken = 'quote-1';
   page.orderRequestId = 'stable-request-id';
 
   page.submit();
@@ -111,6 +114,7 @@ test('created confirmation orders freeze selection and continue in that order wi
     redirectTo: ({ url }) => { destination = url; }
   });
   page.data.product = { id: 1, price_cents: 8000 };
+  page.data.quoteReady = true; page.data.quoteToken = 'quote-1';
   page.data.maxQuantity = 10;
   page.orderRequestId = 'stable-request-id';
   page.submit();

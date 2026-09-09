@@ -108,311 +108,7 @@ func (s *OrderService) Create(req *model.Order) error {
 		req.ClientRequestHash = hashWindowOrderItems(req.Items)
 	}
 	err := model.Write(func(tx *gorm.DB) error {
-		if err := requireActiveTenant(tx, req.TenantID); err != nil {
-			return err
-		}
-		if req.Channel == "window" && strings.TrimSpace(req.ClientRequestID) != "" {
-			var existing model.Order
-			if err := tx.Preload("Items").Preload("Items.Tickets").Preload("Items.VisitorRecords").Where(
-				"tenant_id = ? AND channel = ? AND client_request_id = ?",
-				req.TenantID, req.Channel, strings.TrimSpace(req.ClientRequestID),
-			).First(&existing).Error; err == nil {
-				if existing.ClientRequestHash != "" && existing.ClientRequestHash != req.ClientRequestHash {
-					return ErrWindowOrderRequestMismatch
-				}
-				*req = existing
-				return ErrIdempotentWindowOrder
-			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-				return err
-			}
-		}
-		req.Environment = "production"
-		var channelAccount *model.ChannelAccount
-		if req.ChannelAccountID != 0 {
-			var account model.ChannelAccount
-			if err := tx.Where("id = ? AND tenant_id = ? AND status != ?", req.ChannelAccountID, req.TenantID, "disabled").First(&account).Error; err != nil {
-				return errors.New("channel account is unavailable")
-			}
-			if account.Environment == "sandbox" || account.Status == "sandbox" {
-				req.Environment = "sandbox"
-			}
-			channelAccount = &account
-		}
-		if err := expandBundleOrderItemsTx(tx, req); err != nil {
-			return err
-		}
-		var channelReservation *model.ChannelReservation
-		if req.ChannelReservationID > 0 {
-			if req.ChannelAccountID == 0 || req.Channel == "online" || req.Channel == "window" || req.ExternalNo == nil {
-				return errors.New("invalid channel reservation context")
-			}
-			var held model.ChannelReservation
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
-				"id = ? AND tenant_id = ? AND channel_account_id = ? AND external_no = ? AND status = ? AND expires_at > ?",
-				req.ChannelReservationID, req.TenantID, req.ChannelAccountID, *req.ExternalNo, "held", time.Now(),
-			).First(&held).Error; err != nil {
-				return errors.New("channel reservation is unavailable")
-			}
-			channelReservation = &held
-		}
-		if req.ExternalNo != nil {
-			var count int64
-			if err := tx.Model(&model.Order{}).Where(
-				"tenant_id = ? AND channel = ? AND external_no = ?", req.TenantID, req.Channel, *req.ExternalNo,
-			).Count(&count).Error; err != nil {
-				return err
-			}
-			if count > 0 {
-				return ErrDuplicateExternalOrder
-			}
-		}
-		req.Base = model.Base{}
-		req.OrderNo = s.GenerateOrderNo()
-		req.Status = "unpaid"
-		req.TotalAmount = 0
-		expiresAt := time.Now().Add(DefaultOrderReservationTTL)
-		req.ExpiresAt = &expiresAt
-		policyContext := newSalePolicyContext()
-		hotelPackageFacts := make(map[int]*scenicHotelPackageFacts)
-		deferredHotelPackageFacts := make(map[int]*scenicHotelPackageFacts)
-		hotelProductFacts := make(map[int]*hotelProductSaleFacts)
-
-		for i := range req.Items {
-			item := &req.Items[i]
-			item.Base = model.Base{}
-			item.OrderID = 0
-			item.Product = model.Product{}
-			item.Tickets = nil
-			item.VisitorRecords = nil
-
-			var listing model.Product
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").
-				Where("id = ? AND tenant_id = ? AND status = ?", item.ProductID, req.TenantID, "online").
-				First(&listing).Error; err != nil {
-				return fmt.Errorf("product %d is unavailable", item.ProductID)
-			}
-			if listing.ProductKind == "hotel" {
-				// Independent accommodation products do not yet have a verified
-				// channel order/fulfillment protocol. Keep them available for the
-				// tenant's internal online workflow, but reject OTA/channel account
-				// requests before they can enter the ticket-oriented path.
-				if channelAccount != nil || req.Channel == "ota" {
-					return errors.New("standalone hotel products are not available through external channels until the accommodation protocol is enabled")
-				}
-				if len(req.Items) != 1 {
-					return errors.New("hotel product orders support one accommodation product per order")
-				}
-				facts, err := loadHotelProductSaleFactsTx(tx, req.TenantID, listing.ID, item.UseDate, time.Now())
-				if err != nil {
-					return fmt.Errorf("product %s: %w", listing.Name, err)
-				}
-				item.ProductName = listing.Name
-				item.Price = centsMoney(facts.RetailCents)
-				item.SettlementPrice = centsMoney(facts.SettleCents)
-				item.ReservedStockType = "hotel"
-				item.FulfillmentProductID = listing.ID
-				item.FulfillmentTenantID = facts.Product.TenantID
-				item.FulfillmentScenicAreaID = 0
-				item.ProductOfferID = 0
-				item.ProductRevisionID = 0
-				item.ValidityType = "date"
-				req.TotalAmount = roundMoney(req.TotalAmount + item.Price*float64(item.Quantity))
-				hotelProductFacts[i] = facts
-				continue
-			}
-			if len(hotelProductFacts) > 0 {
-				return errors.New("hotel products cannot be mixed with scenic ticket products in one order")
-			}
-			packageFacts, err := loadSellableScenicHotelPackageTx(tx, req.TenantID, listing.ID, item.UseDate)
-			if err != nil {
-				return fmt.Errorf("product %s: %w", listing.Name, err)
-			}
-			if packageFacts != nil && packageFacts.Package.BookingMode == "after_purchase" &&
-				(req.Channel != "xiaohongshu" || channelAccount == nil || channelAccount.Type != "xiaohongshu" || (channelAccount.Status != "active" && channelAccount.Status != "sandbox")) {
-				return fmt.Errorf("product %s: after-purchase packages are currently available only through an active xiaohongshu channel", listing.Name)
-			}
-			if packageFacts != nil && packageFacts.Package.BookingMode != "after_purchase" && (strings.TrimSpace(req.ContactName) == "" || strings.TrimSpace(req.ContactPhone) == "") {
-				return fmt.Errorf("product %s: hotel guest name and contact phone are required", listing.Name)
-			}
-			listingForResolution := listing
-			var channelCostCents int64
-			channelPricing := false
-			if channelAccount != nil {
-				if channelAccount.Type == "ctrip" || channelAccount.Type == "xiaohongshu" {
-					var mapping model.ChannelProductMapping
-					if err := tx.Where("channel_account_id = ? AND product_id = ? AND status = ?", channelAccount.ID, listing.ID, "active").First(&mapping).Error; err != nil {
-						return errors.New("official channel product mapping is unavailable")
-					}
-					if mapping.ChannelSaleCents <= 0 {
-						return errors.New("official channel product pricing is not configured")
-					}
-					listingForResolution.Price = centsMoney(mapping.ChannelSaleCents)
-					if channelAccount.Type == "ctrip" {
-						if mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents {
-							return errors.New("Ctrip product pricing is not configured")
-						}
-						channelCostCents = mapping.ChannelCostCents
-						channelPricing = true
-					}
-				}
-			}
-			if item.BundleComponentID != 0 {
-				component, err := bundleComponentForOrderTx(tx, req.TenantID, item)
-				if err != nil {
-					return err
-				}
-				listingForResolution.Price = centsMoney(component.RetailAllocationCents / int64(component.Quantity))
-			}
-			fulfillment, distributed, err := resolveFulfillmentProduct(tx, &listingForResolution, req.TenantID, req.Channel)
-			if err != nil {
-				return fmt.Errorf("product %s: %w", listing.Name, err)
-			}
-			capability := "supplier"
-			if distributed {
-				capability = "distributor"
-			}
-			if err := requireActiveTenantCapability(tx, req.TenantID, capability); err != nil {
-				return err
-			}
-			if err := requireActiveScenicSupplier(tx, fulfillment.TenantID); err != nil {
-				return fmt.Errorf("supplier is unavailable: %w", err)
-			}
-			if fulfillment.ScenicAreaID == 0 {
-				return errors.New("fulfillment product has no scenic area")
-			}
-			revision, err := ensureProductRevisionTx(tx, fulfillment)
-			if err != nil {
-				return fmt.Errorf("product %s revision: %w", listing.Name, err)
-			}
-			fulfillment.CurrentRevisionID = revision.ID
-			fulfillment.GateVoiceCode = strings.TrimSpace(revision.GateVoiceCode)
-			if fulfillment.GateVoiceCode == "" {
-				fulfillment.GateVoiceCode = "welcome"
-			}
-
-			item.ProductName = listing.Name
-			item.Price = roundMoney(listingForResolution.Price)
-			item.SettlementPrice = roundMoney(fulfillment.SettlementPrice)
-			if channelPricing && !distributed {
-				item.SettlementPrice = centsMoney(channelCostCents)
-			}
-			item.RefundType = strings.TrimSpace(fulfillment.RefundType)
-			item.RefundRule = fulfillment.RefundRule
-			item.ReservedStockType = fulfillment.StockType
-			if channelReservation != nil && channelReservation.ReservedStockType != "" {
-				item.ReservedStockType = channelReservation.ReservedStockType
-			}
-			item.ValidityType = fulfillment.ValidityType
-			item.FulfillmentProductID = fulfillment.ID
-			item.FulfillmentTenantID = fulfillment.TenantID
-			item.FulfillmentScenicAreaID = fulfillment.ScenicAreaID
-			item.ProductOfferID = listing.ProductOfferID
-			item.ProductRevisionID = revision.ID
-			item.CommissionBPS = fulfillment.ResolvedCommissionBPS
-			deferredPackage := packageFacts != nil && packageFacts.Package.BookingMode == "after_purchase"
-			if deferredPackage && fulfillment.StockType == "daily" {
-				item.ReservedStockType = "voucher_daily"
-			}
-			if err := applyValidity(item, fulfillment); err != nil {
-				return fmt.Errorf("%s: %w", listing.Name, err)
-			}
-			if err := validateSalePolicyTx(tx, fulfillment, req, item, policyContext); err != nil {
-				return err
-			}
-
-			if distributed {
-				if err := reserveOfferQuotaTx(tx, listing.ProductOfferID, item.Quantity); err != nil {
-					return err
-				}
-				item.OfferReservedQuantity = item.Quantity
-				if err := chargeDistributionAccount(tx, req, item, req.TenantID, fulfillment.TenantID, listing.Name); err != nil {
-					return err
-				}
-			}
-			if channelReservation == nil {
-				if req.Environment == "production" {
-					if err := reserveStock(tx, stockProductForReservation(fulfillment, item.ReservedStockType), item.UseDate, item.StockSlot, item.Quantity); err != nil {
-						return err
-					}
-					if packageFacts != nil && !deferredPackage {
-						if err := (PackageFulfillmentLifecycle{}).Reserve(tx, packageFacts, fulfillment, item.Quantity, *item.UseDate); err != nil {
-							return err
-						}
-						hotelPackageFacts[i] = packageFacts
-					}
-				}
-				if deferredPackage {
-					deferredHotelPackageFacts[i] = packageFacts
-				}
-			} else {
-				if len(req.Items) != 1 || channelReservation.ProductID != item.ProductID || channelReservation.Quantity != item.Quantity || !sameOptionalDate(channelReservation.UseDate, item.UseDate) || channelReservation.StockSlot != item.StockSlot {
-					return errors.New("channel reservation does not match order")
-				}
-			}
-
-			req.TotalAmount = roundMoney(req.TotalAmount + item.Price*float64(item.Quantity))
-			item.Tickets, err = buildTickets(s, fulfillment, item.Quantity, req)
-			if err != nil {
-				return fmt.Errorf("%s: %w", listing.Name, err)
-			}
-			if err := assignTicketVisitors(item); err != nil {
-				return fmt.Errorf("%s: %w", listing.Name, err)
-			}
-			if deferredPackage {
-				for ticketIndex := range item.Tickets {
-					item.Tickets[ticketIndex].Status = "pending_booking"
-				}
-			}
-			for ticketIndex := range item.Tickets {
-				if len(item.Visitors) == 0 {
-					item.Tickets[ticketIndex].VisitorName = item.VisitorName
-					item.Tickets[ticketIndex].VisitorPhone = item.VisitorPhone
-					item.Tickets[ticketIndex].VisitorID = item.VisitorID
-					item.Tickets[ticketIndex].VisitorRegion = item.VisitorRegion
-				}
-			}
-		}
-
-		if err := tx.Create(req).Error; err != nil {
-			return err
-		}
-		if len(hotelProductFacts) > 0 {
-			for itemIndex, facts := range hotelProductFacts {
-				if err := createHotelProductEntitlementsTx(tx, req, &req.Items[itemIndex], facts); err != nil {
-					return err
-				}
-			}
-			if err := persistOrderVisitorsTx(tx, req); err != nil {
-				return err
-			}
-			return nil
-		}
-		// Entitlement ownership guards require the denormalized ticket order ID.
-		// GORM fills OrderItemID for nested ticket associations but leaves OrderID
-		// empty, so establish that ownership before creating package projections.
-		if err := tx.Exec("UPDATE tickets SET order_id = ? WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = ?)", req.ID, req.ID).Error; err != nil {
-			return err
-		}
-		for itemIndex, facts := range hotelPackageFacts {
-			if err := (PackageFulfillmentLifecycle{}).CreateReservations(tx, req, &req.Items[itemIndex], facts); err != nil {
-				return err
-			}
-		}
-		for itemIndex, facts := range deferredHotelPackageFacts {
-			if err := (PackageFulfillmentLifecycle{}).CreateEntitlements(tx, req, &req.Items[itemIndex], facts); err != nil {
-				return err
-			}
-		}
-		if channelReservation != nil {
-			if err := tx.Model(channelReservation).Updates(map[string]interface{}{"status": "converted", "order_no": req.OrderNo}).Error; err != nil {
-				return err
-			}
-		}
-		if err := persistOrderVisitorsTx(tx, req); err != nil {
-			return err
-		}
-		return createFulfillmentProjections(tx, s, req)
+		return s.createTx(tx, req, nil)
 	})
 	if req.Channel == "window" && strings.TrimSpace(req.ClientRequestID) != "" && isWindowOrderUniqueViolation(err) {
 		var existing model.Order
@@ -431,6 +127,329 @@ func (s *OrderService) Create(req *model.Order) error {
 		return ErrDuplicateExternalOrder
 	}
 	return err
+}
+
+// createTx keeps supplier resolution, inventory, ticket rights and a trusted
+// channel price adjustment in the caller's transaction. No HTTP handler can
+// provide the adjustment; public Create always passes nil.
+func (s *OrderService) createTx(tx *gorm.DB, req *model.Order, beforePersist func(*gorm.DB, *model.Order) error) error {
+	if err := validateOrder(req); err != nil {
+		return err
+	}
+	if err := requireActiveTenant(tx, req.TenantID); err != nil {
+		return err
+	}
+	if req.Channel == "window" && strings.TrimSpace(req.ClientRequestID) != "" {
+		var existing model.Order
+		if err := tx.Preload("Items").Preload("Items.Tickets").Preload("Items.VisitorRecords").Where(
+			"tenant_id = ? AND channel = ? AND client_request_id = ?",
+			req.TenantID, req.Channel, strings.TrimSpace(req.ClientRequestID),
+		).First(&existing).Error; err == nil {
+			if existing.ClientRequestHash != "" && existing.ClientRequestHash != req.ClientRequestHash {
+				return ErrWindowOrderRequestMismatch
+			}
+			*req = existing
+			return ErrIdempotentWindowOrder
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+	}
+	req.Environment = "production"
+	var channelAccount *model.ChannelAccount
+	if req.ChannelAccountID != 0 {
+		var account model.ChannelAccount
+		if err := tx.Where("id = ? AND tenant_id = ? AND status != ?", req.ChannelAccountID, req.TenantID, "disabled").First(&account).Error; err != nil {
+			return errors.New("channel account is unavailable")
+		}
+		if account.Environment == "sandbox" || account.Status == "sandbox" {
+			req.Environment = "sandbox"
+		}
+		channelAccount = &account
+	}
+	if err := expandBundleOrderItemsTx(tx, req); err != nil {
+		return err
+	}
+	var channelReservation *model.ChannelReservation
+	if req.ChannelReservationID > 0 {
+		if req.ChannelAccountID == 0 || req.Channel == "online" || req.Channel == "window" || req.ExternalNo == nil {
+			return errors.New("invalid channel reservation context")
+		}
+		var held model.ChannelReservation
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
+			"id = ? AND tenant_id = ? AND channel_account_id = ? AND external_no = ? AND status = ? AND expires_at > ?",
+			req.ChannelReservationID, req.TenantID, req.ChannelAccountID, *req.ExternalNo, "held", time.Now(),
+		).First(&held).Error; err != nil {
+			return errors.New("channel reservation is unavailable")
+		}
+		channelReservation = &held
+	}
+	if req.ExternalNo != nil {
+		var count int64
+		if err := tx.Model(&model.Order{}).Where(
+			"tenant_id = ? AND channel = ? AND external_no = ?", req.TenantID, req.Channel, *req.ExternalNo,
+		).Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return ErrDuplicateExternalOrder
+		}
+	}
+	req.Base = model.Base{}
+	req.OrderNo = s.GenerateOrderNo()
+	req.Status = "unpaid"
+	req.TotalAmount = 0
+	req.OriginalAmountCents = 0
+	req.DiscountCents = 0
+	req.PromotionGrantID = 0
+	expiresAt := time.Now().Add(DefaultOrderReservationTTL)
+	req.ExpiresAt = &expiresAt
+	policyContext := newSalePolicyContext()
+	hotelPackageFacts := make(map[int]*scenicHotelPackageFacts)
+	deferredHotelPackageFacts := make(map[int]*scenicHotelPackageFacts)
+	hotelProductFacts := make(map[int]*hotelProductSaleFacts)
+
+	for i := range req.Items {
+		item := &req.Items[i]
+		item.Base = model.Base{}
+		item.OrderID = 0
+		item.Product = model.Product{}
+		item.Tickets = nil
+		item.SaleAmountCents = nil
+		item.VisitorRecords = nil
+
+		var listing model.Product
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").
+			Where("id = ? AND tenant_id = ? AND status = ?", item.ProductID, req.TenantID, "online").
+			First(&listing).Error; err != nil {
+			return fmt.Errorf("product %d is unavailable", item.ProductID)
+		}
+		if listing.ProductKind == "hotel" {
+			// Independent accommodation products do not yet have a verified
+			// channel order/fulfillment protocol. Keep them available for the
+			// tenant's internal online workflow, but reject OTA/channel account
+			// requests before they can enter the ticket-oriented path.
+			if channelAccount != nil || req.Channel == "ota" {
+				return errors.New("standalone hotel products are not available through external channels until the accommodation protocol is enabled")
+			}
+			if len(req.Items) != 1 {
+				return errors.New("hotel product orders support one accommodation product per order")
+			}
+			facts, err := loadHotelProductSaleFactsTx(tx, req.TenantID, listing.ID, item.UseDate, time.Now())
+			if err != nil {
+				return fmt.Errorf("product %s: %w", listing.Name, err)
+			}
+			item.ProductName = listing.Name
+			item.Price = centsMoney(facts.RetailCents)
+			item.SettlementPrice = centsMoney(facts.SettleCents)
+			item.ReservedStockType = "hotel"
+			item.FulfillmentProductID = listing.ID
+			item.FulfillmentTenantID = facts.Product.TenantID
+			item.FulfillmentScenicAreaID = 0
+			item.ProductOfferID = 0
+			item.ProductRevisionID = 0
+			item.ValidityType = "date"
+			req.TotalAmount = roundMoney(req.TotalAmount + item.Price*float64(item.Quantity))
+			hotelProductFacts[i] = facts
+			continue
+		}
+		if len(hotelProductFacts) > 0 {
+			return errors.New("hotel products cannot be mixed with scenic ticket products in one order")
+		}
+		packageFacts, err := loadSellableScenicHotelPackageTx(tx, req.TenantID, listing.ID, item.UseDate)
+		if err != nil {
+			return fmt.Errorf("product %s: %w", listing.Name, err)
+		}
+		if packageFacts != nil && packageFacts.Package.BookingMode == "after_purchase" &&
+			(req.Channel != "xiaohongshu" || channelAccount == nil || channelAccount.Type != "xiaohongshu" || (channelAccount.Status != "active" && channelAccount.Status != "sandbox")) {
+			return fmt.Errorf("product %s: after-purchase packages are currently available only through an active xiaohongshu channel", listing.Name)
+		}
+		if packageFacts != nil && packageFacts.Package.BookingMode != "after_purchase" && (strings.TrimSpace(req.ContactName) == "" || strings.TrimSpace(req.ContactPhone) == "") {
+			return fmt.Errorf("product %s: hotel guest name and contact phone are required", listing.Name)
+		}
+		listingForResolution := listing
+		var channelCostCents int64
+		channelPricing := false
+		if channelAccount != nil {
+			if channelAccount.Type == "ctrip" || channelAccount.Type == "xiaohongshu" {
+				var mapping model.ChannelProductMapping
+				if err := tx.Where("channel_account_id = ? AND product_id = ? AND status = ?", channelAccount.ID, listing.ID, "active").First(&mapping).Error; err != nil {
+					return errors.New("official channel product mapping is unavailable")
+				}
+				if mapping.ChannelSaleCents <= 0 {
+					return errors.New("official channel product pricing is not configured")
+				}
+				listingForResolution.Price = centsMoney(mapping.ChannelSaleCents)
+				if channelAccount.Type == "ctrip" {
+					if mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents {
+						return errors.New("Ctrip product pricing is not configured")
+					}
+					channelCostCents = mapping.ChannelCostCents
+					channelPricing = true
+				}
+			}
+		}
+		if item.BundleComponentID != 0 {
+			component, err := bundleComponentForOrderTx(tx, req.TenantID, item)
+			if err != nil {
+				return err
+			}
+			listingForResolution.Price = centsMoney(component.RetailAllocationCents / int64(component.Quantity))
+		}
+		fulfillment, distributed, err := resolveFulfillmentProduct(tx, &listingForResolution, req.TenantID, req.Channel)
+		if err != nil {
+			return fmt.Errorf("product %s: %w", listing.Name, err)
+		}
+		capability := "supplier"
+		if distributed {
+			capability = "distributor"
+		}
+		if err := requireActiveTenantCapability(tx, req.TenantID, capability); err != nil {
+			return err
+		}
+		if err := requireActiveScenicSupplier(tx, fulfillment.TenantID); err != nil {
+			return fmt.Errorf("supplier is unavailable: %w", err)
+		}
+		if fulfillment.ScenicAreaID == 0 {
+			return errors.New("fulfillment product has no scenic area")
+		}
+		revision, err := ensureProductRevisionTx(tx, fulfillment)
+		if err != nil {
+			return fmt.Errorf("product %s revision: %w", listing.Name, err)
+		}
+		fulfillment.CurrentRevisionID = revision.ID
+		fulfillment.GateVoiceCode = strings.TrimSpace(revision.GateVoiceCode)
+		if fulfillment.GateVoiceCode == "" {
+			fulfillment.GateVoiceCode = "welcome"
+		}
+
+		item.ProductName = listing.Name
+		item.Price = roundMoney(listingForResolution.Price)
+		item.SettlementPrice = roundMoney(fulfillment.SettlementPrice)
+		if channelPricing && !distributed {
+			item.SettlementPrice = centsMoney(channelCostCents)
+		}
+		item.RefundType = strings.TrimSpace(fulfillment.RefundType)
+		item.RefundRule = fulfillment.RefundRule
+		item.ReservedStockType = fulfillment.StockType
+		if channelReservation != nil && channelReservation.ReservedStockType != "" {
+			item.ReservedStockType = channelReservation.ReservedStockType
+		}
+		item.ValidityType = fulfillment.ValidityType
+		item.FulfillmentProductID = fulfillment.ID
+		item.FulfillmentTenantID = fulfillment.TenantID
+		item.FulfillmentScenicAreaID = fulfillment.ScenicAreaID
+		item.ProductOfferID = listing.ProductOfferID
+		item.ProductRevisionID = revision.ID
+		item.CommissionBPS = fulfillment.ResolvedCommissionBPS
+		deferredPackage := packageFacts != nil && packageFacts.Package.BookingMode == "after_purchase"
+		if deferredPackage && fulfillment.StockType == "daily" {
+			item.ReservedStockType = "voucher_daily"
+		}
+		if err := applyValidity(item, fulfillment); err != nil {
+			return fmt.Errorf("%s: %w", listing.Name, err)
+		}
+		if err := validateSalePolicyTx(tx, fulfillment, req, item, policyContext); err != nil {
+			return err
+		}
+
+		if distributed {
+			if err := reserveOfferQuotaTx(tx, listing.ProductOfferID, item.Quantity); err != nil {
+				return err
+			}
+			item.OfferReservedQuantity = item.Quantity
+			if err := chargeDistributionAccount(tx, req, item, req.TenantID, fulfillment.TenantID, listing.Name); err != nil {
+				return err
+			}
+		}
+		if channelReservation == nil {
+			if req.Environment == "production" {
+				if err := reserveStock(tx, stockProductForReservation(fulfillment, item.ReservedStockType), item.UseDate, item.StockSlot, item.Quantity); err != nil {
+					return err
+				}
+				if packageFacts != nil && !deferredPackage {
+					if err := (PackageFulfillmentLifecycle{}).Reserve(tx, packageFacts, fulfillment, item.Quantity, *item.UseDate); err != nil {
+						return err
+					}
+					hotelPackageFacts[i] = packageFacts
+				}
+			}
+			if deferredPackage {
+				deferredHotelPackageFacts[i] = packageFacts
+			}
+		} else {
+			if len(req.Items) != 1 || channelReservation.ProductID != item.ProductID || channelReservation.Quantity != item.Quantity || !sameOptionalDate(channelReservation.UseDate, item.UseDate) || channelReservation.StockSlot != item.StockSlot {
+				return errors.New("channel reservation does not match order")
+			}
+		}
+
+		req.TotalAmount = roundMoney(req.TotalAmount + item.Price*float64(item.Quantity))
+		item.Tickets, err = buildTickets(s, fulfillment, item.Quantity, req)
+		if err != nil {
+			return fmt.Errorf("%s: %w", listing.Name, err)
+		}
+		if err := assignTicketVisitors(item); err != nil {
+			return fmt.Errorf("%s: %w", listing.Name, err)
+		}
+		if deferredPackage {
+			for ticketIndex := range item.Tickets {
+				item.Tickets[ticketIndex].Status = "pending_booking"
+			}
+		}
+		for ticketIndex := range item.Tickets {
+			if len(item.Visitors) == 0 {
+				item.Tickets[ticketIndex].VisitorName = item.VisitorName
+				item.Tickets[ticketIndex].VisitorPhone = item.VisitorPhone
+				item.Tickets[ticketIndex].VisitorID = item.VisitorID
+				item.Tickets[ticketIndex].VisitorRegion = item.VisitorRegion
+			}
+		}
+	}
+
+	if beforePersist != nil {
+		if err := beforePersist(tx, req); err != nil {
+			return err
+		}
+	}
+	if err := tx.Create(req).Error; err != nil {
+		return err
+	}
+	if len(hotelProductFacts) > 0 {
+		for itemIndex, facts := range hotelProductFacts {
+			if err := createHotelProductEntitlementsTx(tx, req, &req.Items[itemIndex], facts); err != nil {
+				return err
+			}
+		}
+		if err := persistOrderVisitorsTx(tx, req); err != nil {
+			return err
+		}
+		return nil
+	}
+	// Entitlement ownership guards require the denormalized ticket order ID.
+	// GORM fills OrderItemID for nested ticket associations but leaves OrderID
+	// empty, so establish that ownership before creating package projections.
+	if err := tx.Exec("UPDATE tickets SET order_id = ? WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = ?)", req.ID, req.ID).Error; err != nil {
+		return err
+	}
+	for itemIndex, facts := range hotelPackageFacts {
+		if err := (PackageFulfillmentLifecycle{}).CreateReservations(tx, req, &req.Items[itemIndex], facts); err != nil {
+			return err
+		}
+	}
+	for itemIndex, facts := range deferredHotelPackageFacts {
+		if err := (PackageFulfillmentLifecycle{}).CreateEntitlements(tx, req, &req.Items[itemIndex], facts); err != nil {
+			return err
+		}
+	}
+	if channelReservation != nil {
+		if err := tx.Model(channelReservation).Updates(map[string]interface{}{"status": "converted", "order_no": req.OrderNo}).Error; err != nil {
+			return err
+		}
+	}
+	if err := persistOrderVisitorsTx(tx, req); err != nil {
+		return err
+	}
+	return createFulfillmentProjections(tx, s, req)
 }
 
 func hashWindowOrderItems(items []model.OrderItem) string {
@@ -1486,8 +1505,21 @@ func cancelOrderTx(tx *gorm.DB, order *model.Order) error {
 }
 
 func cancelOrderTxMode(tx *gorm.DB, order *model.Order, allowPaidChannel bool) error {
+	return cancelOrderTxProvider(tx, order, allowPaidChannel, false)
+}
+
+func cancelOrderTxProvider(tx *gorm.DB, order *model.Order, allowPaidChannel, providerClosed bool) error {
 	if order.Status == "cancelled" {
 		return nil
+	}
+	if order.Channel == "xiaohongshu" && !providerClosed {
+		var active int64
+		if err := tx.Model(&model.XiaohongshuOrderLink{}).Where("tenant_id = ? AND channel_account_id = ? AND order_id = ? AND state IN ?", order.TenantID, order.ChannelAccountID, order.ID, []string{"creating", "unpaid", "paid"}).Count(&active).Error; err != nil {
+			return err
+		}
+		if active > 0 {
+			return errors.New("小红书支付结果尚未确认关闭，请等待平台订单同步")
+		}
 	}
 	paidChannelCancellation := allowPaidChannel && order.Status == "paid" && order.ChannelAccountID > 0
 	if order.Status != "unpaid" && !(allowPaidChannel && order.Status == "paid" && order.ChannelAccountID > 0) {
@@ -1570,6 +1602,11 @@ func cancelOrderTxMode(tx *gorm.DB, order *model.Order, allowPaidChannel bool) e
 	}
 	if err := (HotelProductFulfillmentLifecycle{}).CancelOrder(tx, order.ID, paidChannelCancellation); err != nil {
 		return err
+	}
+	if order.PromotionGrantID > 0 && !paidChannelCancellation {
+		if err := (MiniappPromotionService{}).ReleaseGrantForOrderTx(tx, order); err != nil {
+			return err
+		}
 	}
 	return updateFulfillmentOrdersTx(tx, order.ID, "cancelled")
 }

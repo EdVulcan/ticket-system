@@ -106,6 +106,7 @@
           <el-descriptions-item label="手机号">{{ currentOrder.contact_phone }}</el-descriptions-item>
           <el-descriptions-item label="下单时间">{{ new Date(currentOrder.created_at).toLocaleString() }}</el-descriptions-item>
           <el-descriptions-item label="总金额">¥{{ currentOrder.total_amount }}</el-descriptions-item>
+		  <el-descriptions-item v-if="currentOrder.discount_cents > 0" label="限时立减">¥{{ (currentOrder.discount_cents / 100).toFixed(2) }}（原价 ¥{{ (currentOrder.original_amount_cents / 100).toFixed(2) }}）</el-descriptions-item>
         </el-descriptions>
 
         <el-divider content-position="left">供应履约责任</el-divider>

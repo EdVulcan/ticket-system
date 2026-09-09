@@ -1,18 +1,27 @@
 const app = getApp();
+const promotion = require('../../utils/promotion');
 
 Page({
   data: {
-    product: null, storeName: '', loading: true, navigating: false, error: ''
+    product: null, storeName: '', loading: true, navigating: false, error: '',
+    opportunity: null, opportunityVisible: false, opportunityAmountText: '', opportunityCountdown: '', opportunityReservedOrderNo: ''
   },
 
   onLoad(options) {
     app.setNavigationTitle(app.globalData.storeName || '商品详情');
     this.mappingId = Number(options.mapping_id || 0);
     this.loadProduct();
+    this.loadOpportunity();
+  },
+
+  onShow() {
+    if (this.mappingId) this.loadOpportunity();
   },
 
   onUnload() {
+    this.opportunityVersion = (this.opportunityVersion || 0) + 1;
     if (this.navigateTimer) clearTimeout(this.navigateTimer);
+    this.stopOpportunityTimer();
   },
 
   loadProduct() {
@@ -33,6 +42,45 @@ Page({
     }).catch(error => this.setData({ loading: false, error: error.message || '票种加载失败' }));
   },
 
+  loadOpportunity() {
+    const version = (this.opportunityVersion || 0) + 1;
+    this.opportunityVersion = version;
+    return app.request('/promotion', { method: 'POST', data: {} }).then(raw => {
+      if (version !== this.opportunityVersion) return;
+      this.applyOpportunity(promotion.normalize(raw, Date.now()));
+    }).catch(() => {
+      if (version === this.opportunityVersion) this.applyOpportunity(null);
+    });
+  },
+
+  applyOpportunity(opportunity) {
+    this.opportunity = opportunity;
+    const available = promotion.appliesTo(opportunity, this.mappingId);
+    const reserved = opportunity && opportunity.status === 'reserved' && opportunity.reservedOrderNo;
+    this.setData({
+      opportunity,
+      opportunityVisible: Boolean(available || reserved),
+      opportunityAmountText: available ? promotion.money(opportunity.discountCents) : '',
+      opportunityCountdown: promotion.countdown(opportunity),
+      opportunityReservedOrderNo: reserved ? opportunity.reservedOrderNo : ''
+    });
+    this.startOpportunityTimer();
+  },
+
+  startOpportunityTimer() {
+    this.stopOpportunityTimer();
+    if (!this.opportunity || !promotion.appliesTo(this.opportunity, this.mappingId) || typeof setInterval !== 'function') return;
+    this.opportunityTimer = setInterval(() => {
+      if (!promotion.appliesTo(this.opportunity, this.mappingId)) return this.applyOpportunity(this.opportunity);
+      this.setData({ opportunityCountdown: promotion.countdown(this.opportunity) });
+    }, 1000);
+  },
+
+  stopOpportunityTimer() {
+    if (this.opportunityTimer && typeof clearInterval === 'function') clearInterval(this.opportunityTimer);
+    this.opportunityTimer = null;
+  },
+
   buy() {
     if (!this.data.product || this.data.navigating) return;
     this.setData({ navigating: true });
@@ -41,6 +89,10 @@ Page({
       url: `/pages/order/confirm?mapping_id=${this.data.product.id}`,
       fail: () => this.setData({ navigating: false })
     });
+  },
+
+  openPromotionOrder() {
+    if (this.data.opportunityReservedOrderNo) xhs.navigateTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(this.data.opportunityReservedOrderNo)}` });
   },
 
   retry() { this.loadProduct(); },
