@@ -6,6 +6,11 @@ const account = { id: 7, code: 'xhs-qa', type: 'xiaohongshu', status: 'active', 
 const order = { order_no: 'XHS-REFUND-TEST', external_no: 'EXTERNAL-TEST', channel: 'xiaohongshu', environment: 'production', status: 'paid', total_amount: 80,
   items: [{ product_name: '测试门票', quantity: 1, tickets: [{ ticket_code: 'DEMO-NOT-VALID', status: 'unused', check_in_count: 0, pending_refund_id: 0 }] }] }
 const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+const detailPath = '**/api/v1/channel-accounts/7/orders/XHS-REFUND-TEST'
+
+const refundDetail = (refunds: unknown[]) => ({
+  order, payments: [{ method: 'xiaohongshu', status: 'paid', amount_cents: 8000 }], refunds, after_sales: [], check_ins: [],
+})
 
 async function prepare(page: Page, role = 'super_admin', identity: Record<string, unknown> = {}) {
   await page.addInitScript(value => {
@@ -15,9 +20,7 @@ async function prepare(page: Page, role = 'super_admin', identity: Record<string
   await page.route('**/api/v1/tenants/me', route => json(route, { ...user, id: 1, status: 'active' }))
   await page.route('**/api/v1/channel-accounts', route => json(route, { data: [account] }))
   await page.route('**/api/v1/channel-accounts/7/orders?*', route => json(route, { data: [{ ...order, ticket_count: 1, paid_cents: 8000 }], total: 1 }))
-  await page.route('**/api/v1/channel-accounts/7/orders/XHS-REFUND-TEST', route => json(route, {
-    order, payments: [{ method: 'xiaohongshu', status: 'paid', amount_cents: 8000 }], refunds: [], after_sales: [], check_ins: [],
-  }))
+  await page.route(detailPath, route => json(route, refundDetail([])))
   await page.goto('/channels')
   await page.getByRole('button', { name: '渠道订单', exact: true }).click()
 }
@@ -45,9 +48,9 @@ test('渠道订单提供退款入口，pending 不误报到账，网络重试复
   await expect(dialog.getByText('¥80.00', { exact: true })).toBeVisible()
   await expect(dialog.getByRole('button', { name: '确认申请退款' })).toBeDisabled()
   await dialog.getByPlaceholder('请填写游客申请退票的原因').fill('游客行程改变')
-  await dialog.getByRole('button', { name: '确认申请退款' }).click()
+  await dialog.getByRole('button', { name: '确认申请退款', exact: true }).click()
   await expect(dialog.getByText(/退款结果暂未确认/)).toBeVisible()
-  await dialog.getByRole('button', { name: '确认申请退款' }).click()
+  await dialog.getByRole('button', { name: '重试同一申请', exact: true }).click()
   await expect(page.getByText('退款申请已提交，等待原支付渠道确认，请刷新查看进度', { exact: true })).toBeVisible()
   await expect(page.getByText('退款已完成', { exact: true })).toHaveCount(0)
   expect(calls).toBe(2)
@@ -97,10 +100,187 @@ for (const entry of ['channel', 'online']) {
     await confirmation.getByRole('button', { name: '确认提交例外退款' }).click()
     await expect(dialog.getByText(/退款结果暂未确认/)).toBeVisible()
     await expect(checkbox).toBeDisabled()
-    await dialog.getByRole('button', { name: '确认例外退款', exact: true }).click()
+    await dialog.getByRole('button', { name: '重试同一申请', exact: true }).click()
     await expect(page.getByText('退款申请已提交，等待原支付渠道确认，请刷新查看进度', { exact: true })).toBeVisible()
     expect(calls).toBe(2)
     expect(errors).toEqual([])
+  })
+}
+
+for (const scenario of [
+  { entry: 'channel', failure: 'abort', recoveredStatus: 'succeeded', expectedMessage: '退款已完成' },
+  { entry: 'online', failure: '5xx', recoveredStatus: 'pending', expectedMessage: '退款申请已提交，等待原支付渠道确认，请刷新查看进度' },
+  { entry: 'channel', failure: 'generic400', recoveredStatus: 'succeeded', expectedMessage: '退款已完成' },
+] as const) {
+  test(`${scenario.entry}订单在不确定退款提交后自动查询原详情且不自动重放（${scenario.failure}）`, async ({ page }) => {
+    await prepare(page)
+    let detailReads = 0
+    let postCalls = 0
+    let original: any
+    const detailURL = scenario.entry === 'channel'
+      ? detailPath
+      : '**/api/v1/orders/XHS-REFUND-TEST'
+    await page.route(detailURL, route => {
+      detailReads++
+      const refunds = detailReads === 1 ? [] : [{
+        order_no: order.order_no,
+        idempotency_key: original?.idempotency_key,
+        status: scenario.recoveredStatus,
+      }]
+      return json(route, refundDetail(refunds))
+    })
+    if (scenario.entry === 'online') {
+      await page.route('**/api/v1/orders?*', route => json(route, { data: [order], total: 1, channel_options: [] }))
+      await page.route('**/api/v1/checkpoints?*', route => json(route, { data: [] }))
+      await page.route('**/api/v1/devices?*', route => json(route, { data: [] }))
+      await page.goto('/online-order')
+    }
+    await page.route('**/api/v1/payments/refunds/mixed', async route => {
+      postCalls++
+      original = route.request().postDataJSON()
+      if (scenario.failure === 'abort') await route.abort('failed')
+      else if (scenario.failure === 'generic400') await json(route, { error: 'unexpected EOF' }, 400)
+      else await json(route, { error: '上游暂不可用' }, 503)
+    })
+
+    await page.getByRole('button', { name: scenario.entry === 'channel' ? '申请退款' : '退款', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '申请原路退款' })
+    await dialog.getByPlaceholder('请填写游客申请退票的原因').fill('游客行程改变')
+    await dialog.getByRole('button', { name: '确认申请退款', exact: true }).click()
+
+    await expect(page.getByText(scenario.expectedMessage, { exact: true })).toBeVisible()
+    await expect(page.getByText('请求失败，请稍后重试', { exact: true })).toHaveCount(0)
+    await expect(page.getByText('网络连接异常', { exact: true })).toHaveCount(0)
+    await expect(page.locator('.el-message--error')).toHaveCount(0)
+    expect(postCalls).toBe(1)
+    expect(detailReads).toBe(2)
+  })
+}
+
+test('渠道订单只按订单号和幂等键查询不确定退款，重复查询不会自动重放', async ({ page }) => {
+  await prepare(page)
+  let detailReads = 0
+  let postCalls = 0
+  let original: any
+  await page.route(detailPath, route => {
+    detailReads++
+    const refunds = detailReads === 1 ? [] : detailReads === 2
+      ? [{ order_no: order.order_no, idempotency_key: 'another-refund', status: 'succeeded' }]
+      : detailReads === 3
+        ? [{ order_no: 'OTHER-ORDER', idempotency_key: original?.idempotency_key, status: 'succeeded' }]
+        : []
+    return json(route, refundDetail(refunds))
+  })
+  await page.route('**/api/v1/payments/refunds/mixed', async route => {
+    postCalls++
+    original = route.request().postDataJSON()
+    await route.abort('failed')
+  })
+
+  await page.getByRole('button', { name: '申请退款', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '申请原路退款' })
+  await dialog.getByPlaceholder('请填写游客申请退票的原因').fill('游客行程改变')
+  await dialog.getByRole('button', { name: '确认申请退款', exact: true }).click()
+  await expect(dialog.getByText(/退款结果暂未确认/)).toBeVisible()
+  await expect(page.getByText('退款已完成', { exact: true })).toHaveCount(0)
+  expect(detailReads).toBe(2)
+
+  await dialog.getByRole('button', { name: '查询退款结果', exact: true }).click()
+  await expect(dialog.getByText(/退款结果暂未确认/)).toBeVisible()
+  await dialog.getByRole('button', { name: '查询退款结果', exact: true }).click()
+  await expect(dialog.getByText(/退款结果暂未确认/)).toBeVisible()
+  await expect(page.getByText('退款已完成', { exact: true })).toHaveCount(0)
+  expect(postCalls).toBe(1)
+  expect(detailReads).toBe(4)
+})
+
+test('明确的退款校验拒绝保持可见且不进入不确定查询', async ({ page }) => {
+  await prepare(page)
+  let detailReads = 0
+  await page.route(detailPath, route => {
+    detailReads++
+    return json(route, refundDetail([]))
+  })
+  await page.route('**/api/v1/payments/refunds/mixed', route => json(route, { error: '退款金额必须与票券金额一致' }, 400))
+
+  await page.getByRole('button', { name: '申请退款', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '申请原路退款' })
+  await dialog.getByPlaceholder('请填写游客申请退票的原因').fill('游客行程改变')
+  await dialog.getByRole('button', { name: '确认申请退款', exact: true }).click()
+
+  await expect(dialog.getByText('退款金额必须与票券金额一致', { exact: true })).toBeVisible()
+  await expect(dialog.getByText(/退款结果暂未确认/)).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: '查询退款结果', exact: true })).toHaveCount(0)
+  expect(detailReads).toBe(1)
+})
+
+test('渠道订单的不确定退款查询失败仍保持未确认且不重放', async ({ page }) => {
+  await prepare(page)
+  let detailReads = 0
+  let postCalls = 0
+  await page.route(detailPath, route => {
+    detailReads++
+    if (detailReads === 1) return json(route, refundDetail([]))
+    return json(route, { error: '订单查询暂不可用' }, 503)
+  })
+  await page.route('**/api/v1/payments/refunds/mixed', async route => {
+    postCalls++
+    await route.abort('failed')
+  })
+
+  await page.getByRole('button', { name: '申请退款', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '申请原路退款' })
+  await dialog.getByPlaceholder('请填写游客申请退票的原因').fill('游客行程改变')
+  await dialog.getByRole('button', { name: '确认申请退款', exact: true }).click()
+  await expect(dialog.getByText(/退款结果暂未确认/)).toBeVisible()
+  await dialog.getByRole('button', { name: '查询退款结果', exact: true }).click()
+  await expect(dialog.getByText(/退款结果暂未确认/)).toBeVisible()
+  await expect(page.getByText('请求失败，请稍后重试', { exact: true })).toHaveCount(0)
+  expect(postCalls).toBe(1)
+  expect(detailReads).toBe(3)
+})
+
+for (const entry of ['channel', 'online'] as const) {
+  test(`${entry}订单已接受退款后列表刷新 503 不改写已提交结果`, async ({ page }) => {
+    const errors: string[] = []
+    page.on('pageerror', error => errors.push(error.message))
+    await prepare(page)
+    let refreshCalls = 0
+    if (entry === 'channel') {
+      await page.route('**/api/v1/channel-accounts/7/orders?*', route => {
+        refreshCalls++
+        return json(route, { error: '订单列表刷新失败' }, 503)
+      })
+    } else {
+      await page.route('**/api/v1/orders?*', route => {
+        refreshCalls++
+        return refreshCalls === 1
+          ? json(route, { data: [order], total: 1, channel_options: [] })
+          : json(route, { error: '订单列表刷新失败' }, 503)
+      })
+      await page.route('**/api/v1/orders/XHS-REFUND-TEST', route => json(route, refundDetail([])))
+      await page.route('**/api/v1/checkpoints?*', route => json(route, { data: [] }))
+      await page.route('**/api/v1/devices?*', route => json(route, { data: [] }))
+      await page.goto('/online-order')
+    }
+    let postCalls = 0
+    await page.route('**/api/v1/payments/refunds/mixed', route => {
+      postCalls++
+      return json(route, { id: 9, status: 'pending', method: 'xiaohongshu' }, 201)
+    })
+
+    await page.getByRole('button', { name: entry === 'channel' ? '申请退款' : '退款', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '申请原路退款' })
+    await dialog.getByPlaceholder('请填写游客申请退票的原因').fill('游客行程改变')
+    await dialog.getByRole('button', { name: '确认申请退款', exact: true }).click()
+    await expect(page.getByText('退款申请已提交，等待原支付渠道确认，请刷新查看进度', { exact: true })).toBeVisible()
+    await expect(page.getByText(entry === 'channel'
+      ? '退款结果已返回，但订单信息刷新失败，请手动刷新查看'
+      : '退款结果已返回，但订单列表刷新失败，请手动刷新查看', { exact: true })).toBeVisible()
+    await expect(page.locator('.el-message--error')).toHaveCount(0)
+    expect(refreshCalls).toBe(entry === 'channel' ? 1 : 2)
+    expect(errors).toEqual([])
+    expect(postCalls).toBe(1)
   })
 }
 

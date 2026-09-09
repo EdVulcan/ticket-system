@@ -6,7 +6,7 @@
         <p class="text-xs text-gray-500 mt-1">{{ isSupplier ? '查看线上销售订单、处理退款及手动核销' : canDirectRefund ? '查看线上销售订单及处理退款' : '查看线上销售订单及售后状态' }}</p>
       </div>
       <div class="page-actions">
-        <el-button :icon="Refresh" @click="fetchData">刷新</el-button>
+        <el-button :icon="Refresh" @click="fetchData()">刷新</el-button>
       </div>
     </header>
 
@@ -92,7 +92,7 @@
 	      />
 	    </div>
 
-	    <OrderRefundDialog ref="refundDialog" @changed="fetchData" />
+	    <OrderRefundDialog ref="refundDialog" @changed="fetchData(true)" />
 
 	    <!-- Detail Dialog -->
     <el-dialog v-model="detailVisible" title="订单详情" width="980px">
@@ -286,7 +286,7 @@ const submitVerify = async () => {
   }
 }
 
-const fetchData = async () => {
+const fetchData = async (afterRefund = false) => {
   loading.value = true
   try {
     const params: any = {
@@ -303,14 +303,15 @@ const fetchData = async () => {
       params.end_date = dateRange.value[1]
     }
 
-    const res = await request.get('/orders', { params })
+    const res = await request.get('/orders', { params, skipErrorToast: afterRefund === true } as any)
     tableData.value = res.data.data || []
     total.value = res.data.total || 0
     if (Array.isArray(res.data.channel_options)) {
       channelOptions.value = res.data.channel_options.filter((option: any) => option?.value && option?.label)
     }
   } catch (error) {
-    ElMessage.error('获取订单失败')
+    if (afterRefund === true) ElMessage.warning('退款结果已返回，但订单列表刷新失败，请手动刷新查看')
+    else ElMessage.error('获取订单失败')
   } finally {
     loading.value = false
   }

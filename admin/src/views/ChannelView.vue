@@ -878,12 +878,12 @@ const afterSaleTypeText = (type: string) => ({ refund: '退票', reschedule: '�
 const afterSaleStatusText = (status: string) => ({ pending: '待审核', approved: '已批准', processing: '处理中', completed: '已完成', rejected: '已拒绝', failed: '处理失败' } as Record<string, string>)[status] || '未知状态'
 const operationText = (operation: string) => ({ sale: '销售', payment: '收款', cancel: '取消', refund: '退款' } as Record<string, string>)[operation] || '其他'
 const orderTickets = (order: any) => (order?.items || []).flatMap((item: any) => (item.tickets || []).map((ticket: any) => ({ ...ticket, product_name: item.product_name })))
-const loadOrders = async (page = 1) => {
+const loadOrders = async (page = 1, skipErrorToast = false) => {
   if (!selectedAccount.value) return
   orderPage.value = page
   ordersLoading.value = true
   try {
-    const response = await request.get(`/channel-accounts/${selectedAccount.value.id}/orders`, { params: { search: orderSearch.value.trim(), status: orderStatus.value, page, page_size: 20 } })
+    const response = await request.get(`/channel-accounts/${selectedAccount.value.id}/orders`, { params: { search: orderSearch.value.trim(), status: orderStatus.value, page, page_size: 20 }, skipErrorToast } as any)
     channelOrders.value = response.data.data || []
     orderTotal.value = Number(response.data.total || 0)
   } finally { ordersLoading.value = false }
@@ -895,12 +895,12 @@ const openOrders = async (row: any) => {
   ordersDialog.value = true
   await loadOrders(1)
 }
-const openOrderDetail = async (row: any) => {
+const openOrderDetail = async (row: any, skipErrorToast = false) => {
   if (!selectedAccount.value) return
   orderDetail.value = null
   orderDetailDialog.value = true
   orderDetailLoading.value = true
-  try { orderDetail.value = (await request.get(`/channel-accounts/${selectedAccount.value.id}/orders/${encodeURIComponent(row.order_no)}`)).data }
+  try { orderDetail.value = (await request.get(`/channel-accounts/${selectedAccount.value.id}/orders/${encodeURIComponent(row.order_no)}`, { skipErrorToast } as any)).data }
   finally { orderDetailLoading.value = false }
 }
 const openOrderRefund = (row: any) => {
@@ -909,8 +909,12 @@ const openOrderRefund = (row: any) => {
 }
 const refreshRefundOrders = async () => {
   const detailOrder = orderDetail.value?.order
-  await loadOrders(orderPage.value)
-  if (orderDetailDialog.value && detailOrder) await openOrderDetail(detailOrder)
+  try {
+    await loadOrders(orderPage.value, true)
+    if (orderDetailDialog.value && detailOrder) await openOrderDetail(detailOrder, true)
+  } catch {
+    ElMessage.warning('退款结果已返回，但订单信息刷新失败，请手动刷新查看')
+  }
 }
 const loadRequests = async () => {
   if (!selectedAccount.value) return
