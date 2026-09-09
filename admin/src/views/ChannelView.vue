@@ -322,7 +322,7 @@
         <el-table-column label="订单金额" width="110"><template #default="{ row }">¥{{ Number(row.total_amount || 0).toFixed(2) }}</template></el-table-column>
         <el-table-column label="实收/退款" width="130"><template #default="{ row }"><div>收 ¥{{ cents(row.paid_cents) }}</div><div class="text-xs text-gray-500">退 ¥{{ cents(row.refunded_cents) }}</div></template></el-table-column>
         <el-table-column label="下单时间" width="165"><template #default="{ row }">{{ dateTime(row.created_at) }}</template></el-table-column>
-        <el-table-column label="操作" width="155" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openOrderDetail(row)">详情</el-button><el-button v-if="canRefund && row.status === 'paid' && !hasPendingRefund(row) && selectedAccount?.environment !== 'sandbox'" link type="danger" @click="openOrderRefund(row)">申请退款</el-button></template></el-table-column>
+        <el-table-column label="操作" width="155" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openOrderDetail(row)">详情</el-button><el-button v-if="canOpenOrderRefund(row)" link type="danger" @click="openOrderRefund(row)">申请退款</el-button></template></el-table-column>
       </el-table>
       <div class="mt-3 flex justify-end"><el-pagination v-model:current-page="orderPage" :page-size="20" :total="orderTotal" layout="prev, pager, next, total" @current-change="loadOrders" /></div>
       <template #footer><el-button @click="ordersDialog = false">关闭</el-button></template>
@@ -370,7 +370,7 @@
           </el-tab-pane>
         </el-tabs>
       </div>
-      <template #footer><el-button v-if="canRefund && orderDetail?.order.status === 'paid' && !hasPendingRefund(orderDetail?.order, orderDetail?.refunds || []) && orderDetail?.order.environment !== 'sandbox'" type="danger" plain @click="openOrderRefund(orderDetail.order)">申请退款</el-button><el-button @click="openOrderDetail(orderDetail.order)" :disabled="!orderDetail || orderDetailLoading">刷新状态</el-button><el-button @click="orderDetailDialog = false">关闭</el-button></template>
+      <template #footer><el-button v-if="canOpenOrderRefund(orderDetail?.order, orderDetail?.refunds || [])" type="danger" plain @click="openOrderRefund(orderDetail.order)">申请退款</el-button><el-button @click="openOrderDetail(orderDetail.order)" :disabled="!orderDetail || orderDetailLoading">刷新状态</el-button><el-button @click="orderDetailDialog = false">关闭</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="reconciliationsDialog" :title="`渠道账单对账：${selectedAccount?.code || ''}`" width="1000px" :close-on-click-modal="false">
@@ -436,6 +436,8 @@ const hasWritePermission = hasPermission(currentUser, 'channels.write')
 const canActiveWrite = hasWritePermission && (capabilities.has('distributor') || isActiveScenicSupplier(currentUser))
 const canHistoryWrite = hasWritePermission && (capabilities.has('distributor') || isScenicHistorySupplier(currentUser))
 const canRefund = hasPermission(currentUser, 'refunds.write')
+const canUsedXiaohongshuRefund = currentUser.is_initial_admin === true &&
+  hasPermission(currentUser, 'refunds.write') && isScenicHistorySupplier(currentUser)
 const orderRefundDialog = ref<InstanceType<typeof OrderRefundDialog>>()
 
 const accounts = ref<any[]>([])
@@ -929,7 +931,7 @@ const loadOrderDetail = async (orderNo: string, skipErrorToast = false, silent =
   } finally { if (requestVersion === orderDetailRequestVersion && !silent) orderDetailLoading.value = false }
 }
 const openOrderRefund = (row: any) => {
-  if (!canRefund || !selectedAccount.value) return
+  if (!canOpenOrderRefund(row)) return
   orderRefundDialog.value?.open(row.order_no, `/channel-accounts/${selectedAccount.value.id}/orders/${encodeURIComponent(row.order_no)}`)
 }
 const refreshRefundOrders = async () => {
@@ -943,6 +945,10 @@ const refreshRefundOrders = async () => {
 }
 const hasPendingRefund = (order: any, refunds: any[] = []) => Boolean(order?.refund_pending) || refunds.some(refund =>
   ['pending', 'group_pending', 'processing', 'submitted'].includes(refund?.status))
+const canOpenOrderRefund = (order: any, refunds: any[] = []) => {
+  if (!canRefund || !order || selectedAccount.value?.environment === 'sandbox' || order.environment === 'sandbox' || hasPendingRefund(order, refunds)) return false
+  return order.status === 'paid' || (order.status === 'completed' && selectedAccount.value?.type === 'xiaohongshu' && canUsedXiaohongshuRefund)
+}
 usePendingRefundRefresh(
   () => (ordersDialog.value && channelOrders.value.some((order: any) => hasPendingRefund(order))) ||
     (orderDetailDialog.value && hasPendingRefund(orderDetail.value?.order, orderDetail.value?.refunds || [])),

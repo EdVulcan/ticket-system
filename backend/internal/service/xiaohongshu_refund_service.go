@@ -16,16 +16,17 @@ import (
 var errXiaohongshuRefundMismatch = errors.New("小红书退款查询身份、金额或凭证不匹配，需人工复核")
 
 // prepareXiaohongshuRefundTx runs in the ordinary refund reservation
-// transaction. Only unused, fully issued, ordinary group-voucher orders are
-// supported here; package/calendar/mixed/used-ticket exceptions stay closed.
+// transaction. Ordinary group vouchers support full-order refunds, including
+// the supplier initial administrator's already-authorized used-ticket exception.
+// Package/calendar/mixed-payment and unresolved verification cases stay closed.
 func prepareXiaohongshuRefundTx(tx *gorm.DB, order *model.Order, payment *model.Payment, refund *model.Refund, selected map[string]*model.Ticket) error {
 	if payment.Method != xiaohongshuPaymentMethod {
 		return nil
 	}
-	if order.Channel != xiaohongshuPaymentMethod || order.Status != "paid" || len(order.Items) != 1 ||
-		refund.ParentRefundID != 0 || refund.AuthorizedUsedRefund || refund.AmountCents != payment.AmountCents ||
+	if order.Channel != xiaohongshuPaymentMethod || (order.Status != "paid" && !(refund.AuthorizedUsedRefund && order.Status == "completed")) || len(order.Items) != 1 ||
+		refund.ParentRefundID != 0 || refund.AmountCents != payment.AmountCents ||
 		refund.AmountCents != moneyCents(order.TotalAmount) || len(selected) != len(order.Items[0].Tickets) {
-		return errors.New("小红书当前仅支持未核销普通门票的整单原路退款")
+		return errors.New("小红书当前仅支持普通门票的整单原路退款；已核销票须由景区初始管理员处理")
 	}
 	var account model.ChannelAccount
 	var lockedTickets []model.Ticket
@@ -36,7 +37,9 @@ func prepareXiaohongshuRefundTx(tx *gorm.DB, order *model.Order, payment *model.
 		return errors.New("小红书退款票券数量不匹配")
 	}
 	for _, ticket := range lockedTickets {
-		if ticket.PendingRefundID != refund.ID || ticket.CheckInCount != 0 || ticket.PendingXiaohongshuVerificationID != 0 || ticket.Status != "unused" {
+		usedException := refund.AuthorizedUsedRefund && ticket.CheckInCount > 0 && (ticket.Status == "used" || ticket.Status == "active" || ticket.Status == "unused")
+		unused := ticket.CheckInCount == 0 && ticket.Status == "unused"
+		if ticket.PendingRefundID != refund.ID || ticket.PendingXiaohongshuVerificationID != 0 || (!unused && !usedException) {
 			return errors.New("小红书退款票券占用不匹配")
 		}
 	}
@@ -84,22 +87,34 @@ func prepareXiaohongshuRefundTx(tx *gorm.DB, order *model.Order, payment *model.
 	}
 	// Iterate sale-time tickets, not map order, to freeze stable voucher allocation.
 	for _, ticket := range item.Tickets {
-		if ticket.CheckInCount != 0 || ticket.Status != "unused" || ticket.PendingXiaohongshuVerificationID != 0 {
-			return errors.New("小红书票券已核销或核销处理中，不能退款")
-		}
 		var voucher model.XiaohongshuVoucherLink
 		if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND xiaohongshu_order_link_id = ? AND ticket_id = ?", order.TenantID, account.ID, link.ID, ticket.ID).First(&voucher).Error; err != nil {
 			return err
 		}
-		if voucher.VerifyID != "" || voucher.Status != 1 {
+		if voucher.Status != 1 {
 			return errors.New("小红书平台券状态不允许退款")
 		}
-		var active int64
-		if err := tx.Model(&model.XiaohongshuVoucherVerification{}).Where("voucher_link_id = ? AND state <> ?", voucher.ID, "external_rejected").Count(&active).Error; err != nil {
-			return err
-		}
-		if active != 0 {
-			return errors.New("小红书核销结果待确认，不能退款")
+		if ticket.CheckInCount > 0 {
+			// Preserve the original external consume and local admission evidence.
+			// A refund reverses admission only after the provider confirms payment.
+			var confirmed int64
+			if err := tx.Model(&model.XiaohongshuVoucherVerification{}).
+				Joins("JOIN check_in_records c ON c.id = xiaohongshu_voucher_verifications.check_in_record_id").
+				Where("xiaohongshu_voucher_verifications.tenant_id = ? AND channel_account_id = ? AND voucher_link_id = ? AND xiaohongshu_voucher_verifications.ticket_id = ? AND state = ? AND verify_id = ? AND verify_id <> ''", order.TenantID, account.ID, voucher.ID, ticket.ID, "local_completed", voucher.VerifyID).
+				Where("c.tenant_id = ? AND c.ticket_id = ? AND c.result = ? AND c.reversed_at IS NULL AND c.deleted_at IS NULL", ticket.FulfillmentTenantID, ticket.ID, "success").Count(&confirmed).Error; err != nil {
+				return err
+			}
+			if !refund.AuthorizedUsedRefund || confirmed != 1 {
+				return errors.New("小红书核销记录未完整确认，暂不能办理已核销票退款")
+			}
+		} else {
+			var active int64
+			if err := tx.Model(&model.XiaohongshuVoucherVerification{}).Where("voucher_link_id = ? AND state <> ?", voucher.ID, "external_rejected").Count(&active).Error; err != nil {
+				return err
+			}
+			if voucher.VerifyID != "" || active != 0 {
+				return errors.New("小红书核销结果待确认，不能退款")
+			}
 		}
 		code, err := utils.DecryptAES(voucher.VoucherCodeCiphertext)
 		if err != nil || code == "" || hashMiniappValue(code) != voucher.VoucherCodeHash {

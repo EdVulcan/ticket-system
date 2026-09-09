@@ -74,7 +74,7 @@
       <el-table-column label="操作" width="150" fixed="right" align="center">
         <template #default="{ row }">
           <el-button link type="primary" size="small" @click="handleDetail(row)">详情</el-button>
-          <el-button link type="danger" size="small" v-if="row.status === 'paid' && canDirectRefund && !hasPendingRefund(row)" @click="handleRefund(row)">退款</el-button>
+          <el-button link type="danger" size="small" v-if="canRefundOrder(row)" @click="handleRefund(row)">退款</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -191,6 +191,7 @@ import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { hasPermission } from '@/utils/permissions'
+import { isScenicHistorySupplier } from '@/utils/tenantAccess'
 import OrderRefundDialog from '@/components/OrderRefundDialog.vue'
 import { usePendingRefundRefresh } from '@/composables/usePendingRefundRefresh'
 
@@ -213,6 +214,12 @@ const currentUser = (() => { try { return JSON.parse(localStorage.getItem('user'
 const activeCapabilities = new Set((currentUser.capabilities || []).filter((item: any) => item.status === 'active').map((item: any) => item.capability))
 const isSupplier = computed(() => activeCapabilities.has('supplier'))
 const canDirectRefund = computed(() => (isSupplier.value || activeCapabilities.has('distributor')) && hasPermission(currentUser, 'refunds.write'))
+const canUsedXiaohongshuRefund = computed(() => currentUser.is_initial_admin === true &&
+  hasPermission(currentUser, 'refunds.write') && isScenicHistorySupplier(currentUser))
+const canRefundOrder = (row: any) => !hasPendingRefund(row) && (
+  (row.status === 'paid' && canDirectRefund.value) ||
+  (row.status === 'completed' && row.channel === 'xiaohongshu' && canUsedXiaohongshuRefund.value)
+)
 const canManualVerify = computed(() => isSupplier.value && hasPermission(currentUser, 'tickets.verify') && hasPermission(currentUser, 'onsite.read'))
 const refundDialog = ref<{ open: (orderNo: string, detailURL?: string) => Promise<void> } | null>(null)
 let listRequestVersion = 0

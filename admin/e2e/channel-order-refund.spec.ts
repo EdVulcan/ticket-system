@@ -309,12 +309,11 @@ for (const scenario of [
   })
 }
 
-test('初始管理员的政策例外不放开已用、未知或处理中票券', async ({ page }) => {
+test('初始管理员的政策例外不放开未知或处理中票券', async ({ page }) => {
   await prepare(page, 'super_admin', { is_initial_admin: true })
   let calls = 0
   await page.route('**/api/v1/payments/refunds/mixed', route => { calls++; return json(route, {}) })
   for (const ticket of [
-    { ticket_code: 'DEMO-NOT-VALID', status: 'used', check_in_count: 1 },
     { ticket_code: 'DEMO-NOT-VALID', status: 'unused' },
     { ticket_code: '', status: 'unused', check_in_count: 0 },
     { ticket_code: 'DEMO-NOT-VALID', status: 'unused', check_in_count: 0, pending_refund_id: 9 },
@@ -333,7 +332,84 @@ test('初始管理员的政策例外不放开已用、未知或处理中票券',
   expect(calls).toBe(0)
 })
 
-test('渠道订单详情也可退款，已用票在提交前说明原因', async ({ page }) => {
+for (const entry of ['channel', 'online'] as const) {
+  test(`${entry} 初始供应商管理员可为已完成的小红书误核销订单提交整单退款`, async ({ page }) => {
+    await prepare(page, 'super_admin', { is_initial_admin: true })
+    const usedOrder = {
+      ...order,
+      tenant_id: 1,
+      status: 'completed',
+      items: [{ product_name: '测试门票', quantity: 1, tickets: [{ ticket_code: 'DEMO-NOT-VALID', status: 'used', check_in_count: 1, pending_refund_id: 0 }] }],
+    }
+    const usedDetail = { order: usedOrder, payments: [{ method: 'xiaohongshu', status: 'paid', amount_cents: 8000 }], refunds: [], after_sales: [], check_ins: [] }
+    await page.route(detailPath, route => json(route, usedDetail))
+    await page.route('**/api/v1/channel-accounts/7/orders?*', route => json(route, { data: [{ ...usedOrder, ticket_count: 1, paid_cents: 8000, used_ticket_count: 1, refunded_ticket_count: 0 }], total: 1 }))
+    if (entry === 'online') {
+      await page.route('**/api/v1/orders?*', route => json(route, { data: [usedOrder], total: 1, channel_options: [] }))
+      await page.route('**/api/v1/orders/XHS-REFUND-TEST', route => json(route, usedDetail))
+      await page.route('**/api/v1/checkpoints?*', route => json(route, { data: [] }))
+      await page.route('**/api/v1/devices?*', route => json(route, { data: [] }))
+      await page.goto('/online-order')
+    } else {
+      await page.getByRole('dialog', { name: '渠道订单：xhs-qa' }).getByRole('button', { name: '刷新', exact: true }).click()
+    }
+
+    let body: any
+    await page.route('**/api/v1/payments/refunds/mixed', async route => {
+      body = route.request().postDataJSON()
+      await json(route, { id: 10, status: 'pending', method: 'xiaohongshu' }, 201)
+    })
+    await page.getByRole('button', { name: entry === 'channel' ? '申请退款' : '退款', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '申请原路退款' })
+    await expect(dialog.getByText('订单包含已核销票券。本次仅作为误核销纠错')).toBeVisible()
+    const acknowledgement = dialog.getByRole('checkbox', { name: '已确认误核销，退款成功后票券失效，并保留原核销记录' })
+    await expect(acknowledgement).not.toBeChecked()
+    await dialog.getByPlaceholder('请填写本次例外退款的具体原因').fill('工作人员误核销，确认退票')
+    await expect(dialog.getByRole('button', { name: '确认例外退款', exact: true })).toBeDisabled()
+    await dialog.locator('label.el-checkbox').click()
+    await page.screenshot({ path: `${process.env.TEMP || '/tmp'}/xiaohongshu-used-refund-${entry}.png` })
+    await dialog.getByRole('button', { name: '确认例外退款', exact: true }).click()
+    const confirmation = page.getByRole('dialog', { name: '确认管理员例外退款' })
+    await expect(confirmation).toContainText('原核销记录会保留，退款成功后票券失效')
+    await confirmation.getByRole('button', { name: '确认提交例外退款' }).click()
+    await expect(page.getByText('退款申请已提交，等待原支付渠道确认，请刷新查看进度', { exact: true })).toBeVisible()
+    expect(body).toMatchObject({
+      order_no: order.order_no,
+      ticket_codes: ['DEMO-NOT-VALID'],
+      amount: 80,
+      reason: '工作人员误核销，确认退票',
+    })
+    expect(body).not.toHaveProperty('override_refund_policy')
+  })
+}
+
+test('非初始管理员不显示已完成小红书订单的退款入口', async ({ page }) => {
+  await prepare(page)
+  const usedOrder = { ...order, tenant_id: 1, status: 'completed' }
+  await page.route('**/api/v1/channel-accounts/7/orders?*', route => json(route, { data: [{ ...usedOrder, ticket_count: 1, paid_cents: 8000 }], total: 1 }))
+  await page.getByRole('dialog', { name: '渠道订单：xhs-qa' }).getByRole('button', { name: '刷新', exact: true }).click()
+  await expect(page.getByRole('button', { name: '申请退款', exact: true })).toHaveCount(0)
+})
+
+test('已核销退款在票券或退款处理中保持禁止提交', async ({ page }) => {
+  await prepare(page, 'super_admin', { is_initial_admin: true })
+  const usedOrder = {
+    ...order,
+    tenant_id: 1,
+    status: 'completed',
+    items: [{ product_name: '测试门票', quantity: 1, tickets: [{ ticket_code: 'DEMO-NOT-VALID', status: 'used', check_in_count: 1, pending_xiaohongshu_verification_id: 9 }] }],
+  }
+  await page.route(detailPath, route => json(route, { order: usedOrder, refunds: [] }))
+  await page.route('**/api/v1/channel-accounts/7/orders?*', route => json(route, { data: [{ ...usedOrder, ticket_count: 1, paid_cents: 8000 }], total: 1 }))
+  await page.getByRole('dialog', { name: '渠道订单：xhs-qa' }).getByRole('button', { name: '刷新', exact: true }).click()
+  await page.getByRole('button', { name: '申请退款', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '申请原路退款' })
+  await expect(dialog.getByText('订单正在退款或核销处理中，请勿重复申请')).toBeVisible()
+  await expect(dialog.getByRole('checkbox')).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: '确认例外退款', exact: true })).toBeDisabled()
+})
+
+test('渠道订单详情对非初始管理员拒绝已用票退款', async ({ page }) => {
   await prepare(page)
   await page.getByRole('dialog', { name: '渠道订单：xhs-qa' }).getByRole('button', { name: '详情', exact: true }).click()
   const detail = page.getByRole('dialog', { name: '渠道订单详情', exact: true })
@@ -343,8 +419,8 @@ test('渠道订单详情也可退款，已用票在提交前说明原因', async
   }))
   await detail.getByRole('button', { name: '申请退款' }).click()
   const dialog = page.getByRole('dialog', { name: '申请原路退款' })
-  await expect(dialog.getByText('订单包含已使用或不可退票券，请在售后工作台核查')).toBeVisible()
-  await expect(dialog.getByRole('button', { name: '确认申请退款' })).toBeDisabled()
+  await expect(dialog.getByText('订单包含已核销票券，仅本商户景区初始管理员可按误核销例外申请退款')).toBeVisible()
+  await expect(dialog.getByRole('button', { name: '确认例外退款' })).toBeDisabled()
 })
 
 test('只读岗位在渠道列表及详情没有退款写入口', async ({ page }) => {

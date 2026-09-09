@@ -10,20 +10,20 @@
       <el-alert v-if="unavailable" :title="unavailable" type="warning" :closable="false" show-icon />
       <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="refund-error" />
       <el-alert v-if="uncertain" title="退款结果暂未确认，请先查询退款结果，勿重复创建申请。" type="info" :closable="false" show-icon class="refund-error" />
-      <div v-if="needsPolicyOverride && canOverridePolicy && !unavailable" class="refund-error">
-        <el-alert title="该订单购买时设置为不可退。例外退款不会修改原销售规则，仍须通过票券及支付渠道校验，并保留操作人和原因。" type="warning" :closable="false" show-icon />
-        <el-checkbox v-model="overridePolicy" :disabled="attempted || submitting">以初始管理员身份申请例外退款</el-checkbox>
+      <div v-if="requiresExceptionAcknowledgement && canAuthorizeException && !unavailable" class="refund-error">
+        <el-alert :title="exceptionNotice" type="warning" :closable="false" show-icon />
+        <el-checkbox v-model="overridePolicy" :disabled="attempted || submitting">{{ exceptionAcknowledgement }}</el-checkbox>
       </div>
       <el-form label-position="top" class="refund-form">
         <el-form-item label="退款原因" required>
-          <el-input v-model="reason" type="textarea" :rows="3" maxlength="255" show-word-limit :disabled="attempted || submitting" :placeholder="needsPolicyOverride ? '请填写本次例外退款的具体原因' : '请填写游客申请退票的原因'" />
+          <el-input v-model="reason" type="textarea" :rows="3" maxlength="255" show-word-limit :disabled="attempted || submitting" :placeholder="requiresExceptionAcknowledgement ? '请填写本次例外退款的具体原因' : '请填写游客申请退票的原因'" />
         </el-form-item>
       </el-form>
     </div>
     <template #footer>
       <el-button :disabled="submitting" @click="visible = false">{{ attempted ? '关闭' : '取消' }}</el-button>
       <el-button v-if="uncertain" type="primary" :loading="checking" :disabled="submitting" @click="queryResult">查询退款结果</el-button>
-      <el-button v-if="!submitted" :type="uncertain ? 'default' : 'primary'" :loading="submitting" :disabled="checking || loading || !!unavailable || !order || !reason.trim() || (needsPolicyOverride && (!canOverridePolicy || !overridePolicy))" @click="submit">{{ uncertain ? '重试同一申请' : needsPolicyOverride ? '确认例外退款' : '确认申请退款' }}</el-button>
+      <el-button v-if="!submitted" :type="uncertain ? 'default' : 'primary'" :loading="submitting" :disabled="checking || loading || !!unavailable || !order || !reason.trim() || (requiresExceptionAcknowledgement && (!canAuthorizeException || !overridePolicy))" @click="submit">{{ uncertain ? '重试同一申请' : requiresExceptionAcknowledgement ? '确认例外退款' : '确认申请退款' }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -55,6 +55,20 @@ const canOverridePolicy = computed(() => currentUser.value.is_initial_admin === 
   hasPermission(currentUser.value, 'refunds.write') && isScenicHistorySupplier(currentUser.value) &&
   Number(currentUser.value.tenant_id) > 0 && Number(order.value?.tenant_id) === Number(currentUser.value.tenant_id))
 const tickets = computed<any[]>(() => (order.value?.items || []).flatMap((item: any) => item.tickets || []))
+const hasUsedTickets = computed(() => tickets.value.some(ticket => Number(ticket.check_in_count || 0) > 0))
+const isXiaohongshuOrder = computed(() => order.value?.channel === 'xiaohongshu')
+const canUsedTicketRefund = computed(() => isXiaohongshuOrder.value && canOverridePolicy.value)
+const requiresExceptionAcknowledgement = computed(() => needsPolicyOverride.value || hasUsedTickets.value)
+const canAuthorizeException = computed(() => (!needsPolicyOverride.value || canOverridePolicy.value) &&
+  (!hasUsedTickets.value || canUsedTicketRefund.value))
+const exceptionAcknowledgement = computed(() => hasUsedTickets.value
+  ? '已确认误核销，退款成功后票券失效，并保留原核销记录'
+  : '以初始管理员身份申请例外退款')
+const exceptionNotice = computed(() => {
+  if (hasUsedTickets.value && needsPolicyOverride.value) return '订单包含已核销票券，且购买时设置为不可退。本次仅作为误核销纠错并例外覆盖原销售政策：退款成功后票券失效，原核销记录和处理原因保留；退款未成功前不冲销核销事实。'
+  if (hasUsedTickets.value) return '订单包含已核销票券。本次仅作为误核销纠错：退款成功后票券失效，原核销记录和处理原因保留；退款未成功前不冲销核销事实。'
+  return '该订单购买时设置为不可退。例外退款不会修改原销售规则，仍须通过票券及支付渠道校验，并保留操作人和原因。'
+})
 let requestKey = ''
 let payload: Record<string, unknown> | null = null
 let loadVersion = 0
@@ -85,14 +99,20 @@ const open = async (orderNo: string, detailURL?: string) => {
     order.value = data.order
     if (!order.value || order.value.order_no !== orderNo) throw new Error('订单详情不匹配，请重新打开')
     if (order.value.environment === 'sandbox') unavailable.value = '沙箱订单不发起真实资金退款'
-    else if (order.value.status !== 'paid') unavailable.value = '此入口只办理已支付、未使用订单的整单退款；其他售后请在售后工作台处理'
+    else if (!['paid', 'completed'].includes(order.value.status)) unavailable.value = '此入口只办理已支付订单的整单退款；其他售后请在售后工作台处理'
+    else if (order.value.status === 'completed' && !isXiaohongshuOrder.value) unavailable.value = '已完成订单仅支持小红书误核销纠错退款'
     else if (!tickets.value.length) unavailable.value = '票券尚未完整签发，请先刷新订单或核查出票状态'
     else if (tickets.value.some(ticket => typeof ticket.ticket_code !== 'string' || !ticket.ticket_code.trim() || !Number.isFinite(ticket.check_in_count))) unavailable.value = '票码或核销信息不完整，请先刷新订单或核查出票状态'
-    else if (tickets.value.some(ticket => ticket.status !== 'unused' || Number(ticket.check_in_count || 0) > 0)) unavailable.value = '订单包含已使用或不可退票券，请在售后工作台核查'
+    else if (order.value.status === 'completed' && !hasUsedTickets.value) unavailable.value = '已完成订单没有已核销票券，不能从误核销退款入口提交'
+    else if (tickets.value.some(ticket => {
+      const checkInCount = Number(ticket.check_in_count || 0)
+      return checkInCount === 0 ? ticket.status !== 'unused' : !['unused', 'active', 'used'].includes(ticket.status)
+    })) unavailable.value = '订单包含不可退票券，请在售后工作台核查'
     else if (tickets.value.some(ticket => Number(ticket.pending_refund_id || 0) || Number(ticket.pending_xiaohongshu_verification_id || 0)) ||
       (data.refunds || []).some((refund: any) => ['pending', 'group_pending', 'processing', 'submitted', 'manual_review'].includes(refund.status))) unavailable.value = '订单正在退款或核销处理中，请勿重复申请'
     else if (needsPolicyOverride.value && order.value.environment !== 'production') unavailable.value = '订单环境信息不完整，不能申请例外退款'
     else if (needsPolicyOverride.value && !canOverridePolicy.value) unavailable.value = '该订单购买时不可退，仅本商户景区初始管理员可申请例外退款'
+    else if (hasUsedTickets.value && !canUsedTicketRefund.value) unavailable.value = '订单包含已核销票券，仅本商户景区初始管理员可按误核销例外申请退款'
   } catch (cause: any) {
     if (version === loadVersion) {
       order.value = null
@@ -141,11 +161,12 @@ const queryResult = async () => {
 
 const submit = async () => {
   if (checking.value || loading.value || submitting.value || submitted.value || unavailable.value || !order.value || !reason.value.trim() ||
-    (needsPolicyOverride.value && (!canOverridePolicy.value || !overridePolicy.value))) return
+    (requiresExceptionAcknowledgement.value && (!canAuthorizeException.value || !overridePolicy.value))) return
   submitting.value = true
-  if (!payload && needsPolicyOverride.value) {
+  if (!payload && requiresExceptionAcknowledgement.value) {
     try {
-      await ElMessageBox.confirm(`订单 ${order.value.order_no} 将申请整单原路退款 ¥${Number(order.value.total_amount || 0).toFixed(2)}。例外原因：${reason.value.trim()}。本操作将记录审计，渠道确认成功后才算退款完成。`, '确认管理员例外退款', {
+      const usedNotice = hasUsedTickets.value ? '原核销记录会保留，退款成功后票券失效。' : ''
+      await ElMessageBox.confirm(`订单 ${order.value.order_no} 将申请整单原路退款 ¥${Number(order.value.total_amount || 0).toFixed(2)}。例外原因：${reason.value.trim()}。${usedNotice}本操作将记录审计，渠道确认成功后才算退款完成。`, '确认管理员例外退款', {
         confirmButtonText: '确认提交例外退款', cancelButtonText: '返回检查', type: 'warning',
       })
     } catch {
