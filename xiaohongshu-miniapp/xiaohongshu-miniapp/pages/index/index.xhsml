@@ -67,8 +67,16 @@
           <view class="tag-row" xhs:if="{{item.tags.length}}">
             <text class="tag" xhs:for="{{item.tags}}" xhs:for-item="tag" xhs:key="*this">{{tag}}</text>
           </view>
-          <text class="product-opportunity" xhs:if="{{item.promotionEligible}}">本次随机立减可用</text>
-          <view class="product-bottom"><view class="price"><text class="currency">¥</text><text class="amount">{{item.priceText}}</text><text class="unit">起</text></view><text class="detail-link">查看详情</text></view>
+          <text class="product-opportunity" xhs:if="{{item.hasPromotionPrice}}">本单立减 ¥{{item.promotionDiscountText}}</text>
+          <text class="product-opportunity" xhs:elif="{{item.promotionEligible}}">参与随机立减 · 结算时确认优惠</text>
+          <view class="product-bottom">
+            <view class="price-stack">
+              <text class="price-caption" xhs:if="{{item.hasPromotionPrice}}">单张立减后</text>
+              <view class="price"><text class="currency">¥</text><text class="amount">{{item.displayPriceText}}</text></view>
+              <text class="original-price" xhs:if="{{item.hasPromotionPrice}}">原价 ¥{{item.originalPriceText}}</text>
+            </view>
+            <text class="detail-link">查看详情</text>
+          </view>
         </view>
       </view>
     </view>

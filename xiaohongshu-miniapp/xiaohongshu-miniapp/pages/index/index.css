@@ -273,11 +273,18 @@ page {
   align-items: flex-end;
   justify-content: space-between;
   margin-top: auto;
+  gap: 12rpx;
+  flex-wrap: wrap;
 }
+
+.price-stack { min-width: 0; padding-top: 10rpx; }
+.price-caption { display: block; color: #d45d28; font-size: 20rpx; line-height: 1.4; }
+.original-price { display: block; color: #89949a; font-size: 21rpx; line-height: 1.5; text-decoration: line-through; }
 
 .price {
   color: #d45d28;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .currency {

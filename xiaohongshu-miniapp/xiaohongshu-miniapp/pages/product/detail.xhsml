@@ -10,7 +10,9 @@
       <view class="product-meta"><text class="official-chip">{{product.kindLabel}}</text><text class="scenic" xhs:if="{{product.scenic_area_name}}">{{product.scenic_area_name}}</text></view>
       <text class="title">{{product.name}}</text>
       <view class="tags" xhs:if="{{product.tags.length}}"><text class="tag" xhs:for="{{product.tags}}" xhs:key="*this">{{item}}</text></view>
-      <view class="price"><text class="currency">¥</text><text class="amount">{{product.priceText}}</text><text class="unit">起</text></view>
+      <text class="price-caption" xhs:if="{{product.hasPromotionPrice}}">单张立减后</text>
+      <view class="price {{product.hasPromotionPrice ? 'discounted-price' : ''}}"><text class="currency">¥</text><text class="amount">{{product.displayPriceText}}</text><text class="original-price" xhs:if="{{product.hasPromotionPrice}}">原价 ¥{{product.originalPriceText}}</text></view>
+      <text class="discount-note" xhs:if="{{product.hasPromotionPrice}}">本单立减 ¥{{product.promotionDiscountText}} · 购买多张也只减一次</text>
       <view class="opportunity-strip product-opportunity-strip" xhs:if="{{opportunityVisible}}" bindtap="openPromotionOrder" role="button" aria-label="查看随机立减机会">
         <view xhs:if="{{opportunityReservedOrderNo}}"><text class="opportunity-title">优惠已用于待支付订单</text><text class="opportunity-copy">查看原订单</text></view>
         <view xhs:else><text class="opportunity-title">随机立减 ¥{{opportunityAmountText}}</text><text class="opportunity-copy">本商品可用 · 剩余 {{opportunityCountdown}}</text></view>
@@ -36,7 +38,7 @@
     </view>
     <view class="page-spacer"></view>
     <view class="purchase-bar">
-      <view><text class="bar-label">售价</text><text class="bar-price">¥{{product.priceText}}</text></view>
+      <view class="bar-price-group"><text class="bar-label">{{product.hasPromotionPrice ? '单张立减后' : '售价'}}</text><view class="bar-price-row"><text class="bar-price">¥{{product.displayPriceText}}</text><text class="original-price" xhs:if="{{product.hasPromotionPrice}}">¥{{product.originalPriceText}}</text></view></view>
       <button class="buy-button {{navigating ? 'is-disabled' : ''}}" loading="{{navigating}}" disabled="{{navigating}}" bindtap="buy">立即选购</button>
     </view>
   </view>

@@ -81,7 +81,7 @@ Page({
         refreshing: false
       }, () => {
         app.setStoreName(catalog.store_name || '官方商城');
-        this.applyFilters();
+        this.refreshPromotionPrices();
       });
     }).catch(error => {
       if (version !== this.catalogVersion) return;
@@ -92,6 +92,7 @@ Page({
   onUnload() {
     this.catalogVersion = (this.catalogVersion || 0) + 1;
     this.opportunityVersion = (this.opportunityVersion || 0) + 1;
+    this.priceVersion = (this.priceVersion || 0) + 1;
     this.stopOpportunityTimer();
   },
 
@@ -100,7 +101,7 @@ Page({
     this.opportunityVersion = version;
     return app.request('/promotion', { method: 'POST', data: {} }).then(raw => {
       if (version !== this.opportunityVersion) return;
-      this.applyOpportunity(promotion.normalize(raw, Date.now()));
+      return this.applyOpportunity(promotion.normalize(raw, Date.now()));
     }).catch(() => {
       if (version === this.opportunityVersion) this.applyOpportunity(null);
     });
@@ -110,19 +111,27 @@ Page({
     this.opportunity = opportunity;
     const available = promotion.isAvailable(opportunity);
     const reserved = opportunity && opportunity.status === 'reserved' && opportunity.reservedOrderNo;
-    const products = this.data.allProducts.map(product => ({
-      ...product,
-      promotionEligible: promotion.appliesTo(opportunity, product.id)
-    }));
     this.setData({
-      allProducts: products,
       opportunity,
       opportunityVisible: Boolean(available || reserved),
       opportunityAmountText: available ? promotion.money(opportunity.discountCents) : '',
       opportunityCountdown: promotion.countdown(opportunity),
       opportunityReservedOrderNo: reserved ? opportunity.reservedOrderNo : ''
-    }, () => this.applyFilters());
+    });
     this.startOpportunityTimer();
+    return this.refreshPromotionPrices();
+  },
+
+  refreshPromotionPrices() {
+    const version = (this.priceVersion || 0) + 1;
+    this.priceVersion = version;
+    this.productPrices = {};
+    this.applyFilters();
+    return promotion.loadProductPrices((...args) => app.request(...args), this.data.allProducts, this.opportunity).then(prices => {
+      if (version !== this.priceVersion) return;
+      this.productPrices = prices;
+      this.applyFilters();
+    });
   },
 
   startOpportunityTimer() {
@@ -171,7 +180,7 @@ Page({
   applyFilters() {
     const keyword = this.data.keyword.trim().toLowerCase();
     let products = this.data.allProducts.map(product => ({
-      ...product, promotionEligible: promotion.appliesTo(this.opportunity, product.id)
+      ...product, ...promotion.productPrice(product, this.opportunity, (this.productPrices || {})[product.id])
     })).filter(product => {
       const scenic = product.scenic_area_name || '其他景区';
       const scenicMatched = this.data.activeScenic === '全部' || scenic === this.data.activeScenic;
@@ -179,8 +188,8 @@ Page({
       const text = `${product.name || ''} ${scenic} ${product.hotel_name || ''} ${product.room_type_name || ''} ${product.priceText || ''} ${(product.tags || []).join(' ')}`.toLowerCase();
       return scenicMatched && kindMatched && (!keyword || text.indexOf(keyword) >= 0);
     });
-    if (this.data.sort === 'priceAsc') products.sort((a, b) => a.price_cents - b.price_cents);
-    if (this.data.sort === 'priceDesc') products.sort((a, b) => b.price_cents - a.price_cents);
+    if (this.data.sort === 'priceAsc') products.sort((a, b) => a.displayPriceCents - b.displayPriceCents);
+    if (this.data.sort === 'priceDesc') products.sort((a, b) => b.displayPriceCents - a.displayPriceCents);
     const hasActiveFilters = Boolean(keyword || this.data.activeScenic !== '全部' || (this.data.kindOptions.length > 1 && this.data.activeKind !== 'all') || this.data.sort !== 'default');
     let emptyStateDetail = '换个关键词或分类试试';
     if (keyword && this.data.activeScenic !== '全部') emptyStateDetail = '换个关键词或景区试试';

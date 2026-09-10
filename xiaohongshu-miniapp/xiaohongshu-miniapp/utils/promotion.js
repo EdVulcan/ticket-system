@@ -50,4 +50,38 @@ function countdown(opportunity, clientNow) {
   return `${minutes}:${String(remainder).padStart(2, '0')}`;
 }
 
-module.exports = { normalize, isAvailable, appliesTo, money, countdown };
+// Browse prices are quantity-one server quotes, not a per-ticket deduction.
+// Reuse checkout's price rules (including supplier floors) without reserving the offer.
+function loadProductPrices(request, products, opportunity) {
+  const eligible = products.filter(product => appliesTo(opportunity, product.id));
+  return Promise.all(eligible.map(product => request('/order-quote', {
+    method: 'POST', data: { mapping_id: product.id, quantity: 1 }
+  }).then(quote => [product.id, { ...quote, opportunity: normalize(quote.promotion) }])
+    .catch(() => [product.id, null])))
+    .then(entries => entries.reduce((prices, entry) => {
+      prices[entry[0]] = entry[1];
+      return prices;
+    }, {}));
+}
+
+function productPrice(product, opportunity, quote) {
+  const eligible = appliesTo(opportunity, product.id);
+  const original = quote && quote.original_amount_cents;
+  const amount = quote && quote.amount_cents;
+  const discount = quote && quote.discount_cents;
+  const discounted = Boolean(eligible && quote && appliesTo(quote.opportunity, product.id) &&
+    quote.opportunity.grantId === opportunity.grantId &&
+    Number.isSafeInteger(original) && original === Number(product.price_cents) &&
+    Number.isSafeInteger(amount) && amount > 0 && Number.isSafeInteger(discount) && discount > 0 &&
+    discount <= opportunity.discountCents && amount + discount === original);
+  return {
+    promotionEligible: eligible,
+    hasPromotionPrice: discounted,
+    displayPriceText: discounted ? money(amount) : product.priceText,
+    originalPriceText: money(product.price_cents),
+    promotionDiscountText: discounted ? money(discount) : '',
+    displayPriceCents: discounted ? amount : Number(product.price_cents)
+  };
+}
+
+module.exports = { normalize, isAvailable, appliesTo, money, countdown, loadProductPrices, productPrice };

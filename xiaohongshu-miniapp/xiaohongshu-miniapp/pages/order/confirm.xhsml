@@ -6,7 +6,7 @@
     <view class="ticket">
       <image class="ticket-image" xhs:if="{{product.image_url}}" src="{{product.image_url}}" mode="aspectFill" />
       <view class="ticket-image fallback" xhs:else><image class="ticket-icon" src="../../assets/ticket.svg" mode="aspectFit" /></view>
-      <view class="ticket-info"><text class="ticket-name">{{product.name}}</text><text class="ticket-scenic">{{product.isPackage ? product.stayText : product.scenic_area_name}}</text><text class="price">¥{{product.priceText}}</text></view>
+      <view class="ticket-info"><text class="ticket-name">{{product.name}}</text><text class="ticket-scenic">{{product.isPackage ? product.stayText : product.scenic_area_name}}</text><text class="price"><text class="unit-price-label">单价 </text>¥{{product.priceText}}</text></view>
     </view>
     <view class="opportunity-strip confirm-opportunity" xhs:if="{{opportunityVisible}}" bindtap="openPromotionOrder" role="button" aria-label="查看随机立减机会">
       <view xhs:if="{{opportunityReservedOrderNo}}"><text class="opportunity-title">优惠已用于待支付订单</text><text class="opportunity-copy">查看原订单</text></view>
