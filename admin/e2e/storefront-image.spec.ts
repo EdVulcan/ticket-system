@@ -52,7 +52,8 @@ test('商城图片独立保存和清除，不读取或修改商品映射', async
   await page.route('**/api/v1/channel-accounts/mappings?*', async route => { mappingCalls += 1; await json(route, { data: [] }) })
 
   await page.goto('/channels')
-  await page.getByRole('button', { name: '商城图片' }).click()
+  await page.getByRole('button', { name: '更多操作' }).click()
+  await page.getByRole('menuitem', { name: '商城图片', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '商城图片' })
   await expect(dialog.locator('img')).toHaveAttribute('src', storefrontImageURL)
   await dialog.locator('input[type=file]').setInputFiles(imageFile)
@@ -81,7 +82,8 @@ test('商城图片上传失败时保留已保存图片且不自动保存', async
   await page.route('**/api/v1/channel-accounts/7/storefront-image', route => json(route, { error: '图片上传失败' }, 502))
 
   await page.goto('/channels')
-  await page.getByRole('button', { name: '商城图片' }).click()
+  await page.getByRole('button', { name: '更多操作' }).click()
+  await page.getByRole('menuitem', { name: '商城图片', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '商城图片' })
   await dialog.locator('input[type=file]').setInputFiles(imageFile)
   await expect(dialog.locator('img')).toHaveAttribute('src', original)
@@ -100,7 +102,8 @@ test('商城图片加载失败时不能清空保存，重试后恢复已保存�
   })
 
   await page.goto('/channels')
-  await page.getByRole('button', { name: '商城图片' }).click()
+  await page.getByRole('button', { name: '更多操作' }).click()
+  await page.getByRole('menuitem', { name: '商城图片', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '商城图片' })
   await expect(dialog.getByText('商城图片暂时无法加载，请重试')).toBeVisible()
   await expect(dialog.getByRole('button', { name: '保存' })).toBeDisabled()
@@ -118,7 +121,8 @@ test('只读用户可以查看商城图片但没有写入操作', async ({ page 
   await page.route('**/api/v1/channel-accounts/7/storefront', route => json(route, { image_url: 'https://example.test/readonly-storefront.png' }))
 
   await page.goto('/channels')
-  await page.getByRole('button', { name: '商城图片' }).click()
+  await page.getByRole('button', { name: '更多操作' }).click()
+  await page.getByRole('menuitem', { name: '商城图片', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '商城图片' })
   await expect(dialog.locator('img')).toHaveAttribute('src', 'https://example.test/readonly-storefront.png')
   await expect(dialog.getByRole('button', { name: '保存' })).toHaveCount(0)

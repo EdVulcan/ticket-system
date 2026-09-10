@@ -18,28 +18,30 @@
       <el-table-column prop="status" label="状态" width="120"><template #default="{row}"><el-tag :type="row.status === 'active' ? 'success' : row.status === 'sandbox' ? 'warning' : 'info'">{{ accountStatusText(row.status) }}</el-tag></template></el-table-column>
       <el-table-column prop="rate_limit_per_min" label="限流/分钟" width="120" />
       <el-table-column prop="permissions_json" label="权限" min-width="220" show-overflow-tooltip />
-      <el-table-column label="操作" width="330" fixed="right">
+      <el-table-column label="操作" width="260" fixed="right">
         <template #default="{row}">
-          <el-button v-if="canActiveWrite && row.type === 'ctrip'" link type="primary" @click="openCtripConfig(row)">携程参数</el-button>
-          <el-button v-if="canActiveWrite && row.type === 'xiaohongshu'" link type="primary" @click="openXiaohongshuConfig(row)">小红书参数</el-button>
-          <el-button v-if="row.type === 'xiaohongshu'" link type="primary" @click="openStorefront(row)">商城图片</el-button>
-          <el-button v-if="row.type === 'xiaohongshu'" link type="primary" @click="openInstantDiscount(row)">随机立减</el-button>
-          <el-button v-if="row.type === 'xiaohongshu'" link type="primary" :icon="Connection" @click="diagnoseXiaohongshu(row)">连接测试</el-button>
-          <el-button v-if="canActiveWrite" link type="primary" @click="openMapping(row)">商品映射</el-button>
+          <div class="channel-actions">
           <el-button link type="primary" @click="openOrders(row)">渠道订单</el-button>
+          <el-button v-if="canActiveWrite" link type="primary" @click="openMapping(row)">商品映射</el-button>
           <el-dropdown trigger="click" @command="handleAccountCommand($event, row)">
-            <el-button link type="primary" :icon="MoreFilled" title="更多操作" aria-label="更多操作" />
+            <el-button link type="primary" :icon="ArrowDown" title="更多操作" aria-label="更多操作">更多</el-button>
             <template #dropdown>
               <el-dropdown-menu>
+                <el-dropdown-item v-if="row.type === 'xiaohongshu'" command="storefront">商城图片</el-dropdown-item>
+                <el-dropdown-item v-if="row.type === 'xiaohongshu'" command="instant-discount">随机立减</el-dropdown-item>
+                <el-dropdown-item v-if="canActiveWrite && row.type === 'xiaohongshu'" command="xiaohongshu-config" divided>小红书参数</el-dropdown-item>
+                <el-dropdown-item v-if="canActiveWrite && row.type === 'ctrip'" command="ctrip-config">携程参数</el-dropdown-item>
+                <el-dropdown-item v-if="row.type === 'xiaohongshu'" command="diagnose">连接测试</el-dropdown-item>
+                <el-dropdown-item command="requests" :divided="['ctrip', 'xiaohongshu'].includes(row.type)">请求日志</el-dropdown-item>
+                <el-dropdown-item command="reconciliations">账单对账</el-dropdown-item>
                 <el-dropdown-item v-if="canActiveWrite && row.type === 'xiaohongshu' && row.status !== 'disabled'" command="switch-environment">{{ row.status === 'sandbox' ? '切换正式环境' : '切换测试环境' }}</el-dropdown-item>
                 <el-dropdown-item v-if="canActiveWrite && row.type === 'ctrip' && row.status === 'sandbox'" command="sandbox-consume">沙箱核销测试</el-dropdown-item>
-                <el-dropdown-item command="requests">请求日志</el-dropdown-item>
-                <el-dropdown-item command="reconciliations">账单对账</el-dropdown-item>
                 <el-dropdown-item v-if="canActiveWrite || (canHistoryWrite && row.status !== 'disabled')" command="toggle-status" divided>{{ row.status === 'disabled' ? '启用渠道' : '停用渠道' }}</el-dropdown-item>
                 <el-dropdown-item v-if="canActiveWrite && !['ctrip', 'xiaohongshu'].includes(row.type)" command="rotate-secret">轮换密钥</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
+          </div>
         </template>
       </el-table-column>
     </el-table>
@@ -423,7 +425,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { Connection, MoreFilled, Plus, Refresh, UploadFilled } from '@element-plus/icons-vue'
+import { ArrowDown, Plus, Refresh, UploadFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, type UploadFile, type UploadInstance } from 'element-plus'
 import request from '@/utils/request'
 import { localizeDisplayText } from '@/utils/localize'
@@ -632,6 +634,11 @@ const switchXiaohongshuEnvironment = async (row: any) => {
 }
 const rotate = async (row: any) => { await ElMessageBox.confirm('轮换后旧密钥立即失效，确认继续？', '确认轮换', { type: 'warning' }); const response = await request.post(`/channel-accounts/${row.id}/rotate-secret`); newSecret.value = response.data.secret; secretDialog.value = true }
 const handleAccountCommand = async (command: string, row: any) => {
+  if (command === 'storefront') await openStorefront(row)
+  if (command === 'instant-discount') await openInstantDiscount(row)
+  if (command === 'xiaohongshu-config') await openXiaohongshuConfig(row)
+  if (command === 'ctrip-config') openCtripConfig(row)
+  if (command === 'diagnose') await diagnoseXiaohongshu(row)
   if (command === 'switch-environment') await switchXiaohongshuEnvironment(row)
   if (command === 'sandbox-consume') openCtripSandboxConsume(row)
   if (command === 'requests') await openRequests(row)
@@ -1040,3 +1047,19 @@ onUnmounted(() => {
   orderDetailDialog.value = false
 })
 </script>
+
+<style scoped>
+.channel-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  white-space: nowrap;
+}
+.channel-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+.channel-actions :deep(.el-dropdown) {
+  display: inline-flex;
+  align-items: center;
+}
+</style>

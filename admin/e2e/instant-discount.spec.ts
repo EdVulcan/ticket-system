@@ -57,7 +57,8 @@ test('随机立减仅在启用后要求完整配置，并以整数分保存', as
   })
 
   await page.goto('/channels')
-  await page.getByRole('button', { name: '随机立减' }).click()
+  await page.getByRole('button', { name: '更多操作' }).click()
+  await page.getByRole('menuitem', { name: '随机立减', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '随机立减' })
   const save = dialog.getByRole('button', { name: '保存' })
   await expect(save).toBeEnabled()
@@ -103,7 +104,8 @@ test('只读用户可以查看随机立减配置但不能保存', async ({ page 
   }))
 
   await page.goto('/channels')
-  await page.getByRole('button', { name: '随机立减' }).click()
+  await page.getByRole('button', { name: '更多操作' }).click()
+  await page.getByRole('menuitem', { name: '随机立减', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '随机立减' })
   await expect(dialog.getByRole('checkbox', { name: '成人票' })).toBeChecked()
   await expect(dialog.getByRole('button', { name: '保存' })).toHaveCount(0)
