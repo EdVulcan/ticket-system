@@ -46,7 +46,7 @@ func main() {
 	// 3. Init DB
 	if err := model.InitDB(); err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to connect DB: %v", err))
-		return
+		os.Exit(1)
 	}
 	logger.Log.Info("Database connected")
 	maintenanceService, err := service.NewDeviceMaintenanceService(model.DB, config.GlobalConfig.Maintenance)

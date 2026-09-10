@@ -313,6 +313,9 @@ func (s *OrderService) createTx(tx *gorm.DB, req *model.Order, beforePersist fun
 		if fulfillment.ScenicAreaID == 0 {
 			return errors.New("fulfillment product has no scenic area")
 		}
+		if err := ensureLocalSupplyAvailableTx(tx, fulfillment); err != nil {
+			return err
+		}
 		revision, err := ensureProductRevisionTx(tx, fulfillment)
 		if err != nil {
 			return fmt.Errorf("product %s revision: %w", listing.Name, err)

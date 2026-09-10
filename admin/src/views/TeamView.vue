@@ -415,7 +415,7 @@
         <div v-if="isGroupOwner(selectedGroup) && selectedGroup.sales_order_no" class="flex items-center justify-between rounded border border-gray-200 bg-gray-50 px-4 py-3">
           <div>
             <div class="text-sm font-medium text-gray-900">关联销售订单 {{ selectedGroup.sales_order_no }}</div>
-            <div class="text-xs text-gray-500">退票、改期、换票、作废和补打统一在现有售后工作台处理。</div>
+            <div class="text-xs text-gray-500">退票、改期、作废和补打统一在现有售后工作台处理。</div>
           </div>
           <el-button type="primary" plain @click="openTeamAfterSales">查看订单售后</el-button>
         </div>

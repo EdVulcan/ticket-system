@@ -3,7 +3,7 @@
     <div class="flex items-center justify-between">
       <div>
         <h2 class="text-xl font-semibold text-gray-900">售后工作台</h2>
-        <p class="text-sm text-gray-500 mt-1">统一处理退票、改期、换票、作废和补打，所有状态都保留操作记录。</p>
+        <p class="text-sm text-gray-500 mt-1">统一处理退票、改期、作废和补打，所有状态都保留操作记录。</p>
       </div>
       <div class="flex gap-2">
         <el-button :icon="Refresh" circle title="刷新" @click="load" />
@@ -64,11 +64,10 @@
             <el-form-item label="退款金额（分）"><el-input-number v-model="form.amount_cents" :min="0" class="w-full" /></el-form-item>
             <el-form-item label="退款方式"><el-select v-model="form.payment_method" class="w-full"><el-option label="按原支付方式自动分摊" value="auto" /><el-option v-if="isSupplier" label="现金" value="cash" /><el-option label="微信" value="wechat" /><el-option label="支付宝" value="alipay" /></el-select></el-form-item>
           </template>
-          <template v-if="form.type === 'reschedule' || form.type === 'exchange'">
+          <template v-if="form.type === 'reschedule'">
             <el-form-item label="目标日期"><el-date-picker v-model="form.target_date" value-format="YYYY-MM-DD" class="w-full" /></el-form-item>
             <el-form-item label="目标时段"><el-input v-model="form.target_slot" placeholder="不填则保留原时段" /></el-form-item>
           </template>
-          <el-form-item v-if="form.type === 'exchange'" label="目标产品"><el-select v-model="form.target_product_id" filterable class="w-full" placeholder="选择换票后的产品"><el-option v-for="product in availableProducts" :key="product.id" :label="product.name" :value="product.id" /></el-select></el-form-item>
           <template v-if="form.type === 'reissue'">
             <el-form-item label="售票终端"><el-select v-model="form.device_id" filterable class="w-full" placeholder="选择售票终端" @change="applyFormDevice"><el-option v-for="device in posDevices" :key="device.id" :label="deviceLabel(device)" :value="device.id" /></el-select></el-form-item>
             <el-form-item label="当前班次"><el-select v-model="form.shift_id" class="w-full" placeholder="选择当班班次"><el-option v-for="shift in shiftsForDevice(form.device_id)" :key="shift.id" :label="shiftLabel(shift)" :value="shift.id" /></el-select></el-form-item>
@@ -170,7 +169,6 @@ const rows = ref<any[]>([]); const loading = ref(false); const saving = ref(fals
 const createVisible = ref(false); const detailVisible = ref(false); const approveVisible = ref(false); const differenceVisible = ref(false); const selected = ref<any>(null)
 const approveTarget = ref<any>(null); const differenceTarget = ref<any>(null)
 const refundDetail = ref<any>(null)
-const availableProducts = ref<any[]>([])
 const devices = ref<any[]>([])
 const openShifts = ref<any[]>([])
 const posDevices = computed(() => devices.value.filter((device: any) => device.type === 'pos' && device.status === 'online'))
@@ -178,10 +176,10 @@ const shiftsForDevice = (deviceID: number | null) => openShifts.value.filter((sh
 const deviceLabel = (device: any) => `${device.name}${device.serial_number ? `（${device.serial_number}）` : ''}`
 const shiftLabel = (shift: any) => `${shift.shift_no || `班次 ${shift.id}`} · ${shift.operator_name || '当前收银员'}`
 const types = computed(() => [
-  { value: 'refund', label: '退票' }, { value: 'reschedule', label: '改期' }, { value: 'exchange', label: '换票' }, { value: 'void', label: '作废' },
+  { value: 'refund', label: '退票' }, { value: 'reschedule', label: '改期' }, { value: 'void', label: '作废' },
   ...(isSupplier.value ? [{ value: 'reissue', label: '补打' }] : []),
 ])
-const emptyForm = () => ({ order_no: '', type: 'refund', ticket_codes: '', amount_cents: 0, payment_method: 'auto', target_date: '', target_slot: '', target_product_id: null as number | null, device_id: null as number | null, shift_id: null as number | null, reason: '' })
+const emptyForm = () => ({ order_no: '', type: 'refund', ticket_codes: '', amount_cents: 0, payment_method: 'auto', target_date: '', target_slot: '', device_id: null as number | null, shift_id: null as number | null, reason: '' })
 const form = reactive(emptyForm())
 const approveForm = reactive({ reason: '', settlement_exception: false, settlement_exception_reason: '' })
 const differenceForm = reactive({ method: isSupplier.value ? 'cash' : 'wechat', pay_type: 'cscanb', auth_code: '', shift_id: null as number | null, device_id: null as number | null, cash_tendered_cents: 0 })
@@ -190,8 +188,6 @@ const differenceChange = computed(() => ((Math.max(0, differenceForm.cash_tender
 const load = async () => { loading.value = true; try { const res = await request.get('/after-sales', { params: { page: page.value, page_size: pageSize.value, status: status.value, order_no: orderNo.value.trim() } }); rows.value = res.data.data || []; total.value = res.data.total || 0 } finally { loading.value = false } }
 const applyFilters = () => { page.value = 1; load() }
 const loadOperationOptions = async () => {
-	const [productResult] = await Promise.allSettled([request.get('/products', { params: { page: 1, page_size: 100, product_kind: 'ticket' } })])
-	availableProducts.value = productResult.status === 'fulfilled' ? (productResult.value.data.data || []).filter((product: any) => product.status === 'online') : []
 	if (!isSupplier.value) { devices.value = []; openShifts.value = []; return }
 	const [deviceResult, shiftResult] = await Promise.allSettled([
 		request.get('/devices', { params: { page: 1, page_size: 100 } }),
@@ -234,7 +230,7 @@ const showDetail = async (row: any) => {
 }
 const allocationStatus = (row: any) => refundDetail.value?.tasks?.find((task: any) => task.refund_id === row.id)?.status || row.status
 const parseCodes = (value: string) => { try { return (JSON.parse(value || '[]') || []).join('，') } catch (_) { return value || '' } }
-const typeText = (value: string) => types.value.find(item => item.value === value)?.label || '其他售后'
+const typeText = (value: string) => ({ refund: '退票', reschedule: '改期', exchange: '换票', void: '作废', reissue: '补打' } as Record<string, string>)[value] || '其他售后'
 const statusText = (value: string) => ({ pending: '待审核', approved: '已批准', processing: '处理中', completed: '已完成', rejected: '已拒绝', failed: '失败' } as any)[value] || '未知状态'
 const statusType = (value: string) => ({ completed: 'success', rejected: 'info', failed: 'danger', processing: 'warning', approved: 'warning' } as any)[value] || 'info'
 const paymentMethodText = (value: string) => ({ cash: '现金', wechat: '微信', alipay: '支付宝', mixed: '混合支付', team_account: '团队预付款/授信' } as any)[value] || '其他方式'

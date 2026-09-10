@@ -18,6 +18,10 @@ var validAfterSaleTypes = map[string]bool{
 
 var errStandaloneHotelProductAfterSale = errors.New("standalone hotel product after-sale is not available; only ticket orders are supported")
 
+// ErrNewExchangeAfterSaleDisabled keeps historical exchange requests recoverable
+// without accepting new exchange business while that workflow is not offered.
+var ErrNewExchangeAfterSaleDisabled = errors.New("暂不支持新建换票申请，请退票后重新购买")
+
 type AfterSaleService struct {
 	RefundService *RefundService
 }
@@ -55,6 +59,12 @@ func (s *AfterSaleService) Create(req *model.AfterSaleRequest, ticketCodes []str
 			return nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
+		}
+		// Old exchange requests may still need payment/refund reconciliation after
+		// a restart. Their exact idempotent replay above remains available, but do
+		// not create new exchange workflow records while the feature is closed.
+		if req.Type == "exchange" {
+			return ErrNewExchangeAfterSaleDisabled
 		}
 		// Xiaohongshu customer auto-refunds serialize on the original digital
 		// payment. Do not lock this order first: that would invert the shared

@@ -312,7 +312,10 @@ Page({
   },
 
   usableTicketCodes(codes, status) {
-	if (['paid', 'partial_refunded'].indexOf(status) < 0 || !Array.isArray(codes)) return [];
+	// The server exposes only issued, non-refunded ticket codes. A completed
+	// order can still have remaining checkpoint rights, so completion alone
+	// must not hide its shared ticket code.
+	if (['paid', 'completed', 'partial_refunded'].indexOf(status) < 0 || !Array.isArray(codes)) return [];
 	return codes
 	  .filter(code => typeof code === 'string' && code.length > 0)
 	  .map((code, index) => ({ code, index: index + 1, canvasId: `ticket-qr-${index + 1}` }));

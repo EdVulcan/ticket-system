@@ -32,6 +32,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	r.Use(middleware.SecurityHeaders(), middleware.RequestBodyLimit(8<<20), middleware.Cors())
 
 	apiGroup := r.Group("/api/v1")
+	apiGroup.GET("/ready", api.Readiness)
 
 	// Public Routes
 	authController := &api.AuthController{Service: service.AuthService{}}
@@ -216,6 +217,10 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 
 	// Product Routes
 	productController := &api.ProductController{}
+	upstreamSupplyController := &api.UpstreamSupplyController{}
+	upstreamGroup := protected.Group("/upstream-connections", middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
+	upstreamGroup.GET("", middleware.RequireTenantPermission(authz.PermissionCatalogRead), upstreamSupplyController.ListConnections)
+	upstreamGroup.POST("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), upstreamSupplyController.CreateConnection)
 	productGroup := protected.Group("/products")
 	productGroup.Use(middleware.RequireAnyTenantCapability("supplier", "distributor"))
 	{
@@ -223,6 +228,8 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		productGroup.PUT("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), productController.Update)
 		productGroup.GET("", middleware.RequireTenantPermission(authz.PermissionCatalogRead), productController.List)
 		productGroup.GET("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogRead), productController.Get)
+		productGroup.GET("/:id/supply", middleware.RequireTenantPermission(authz.PermissionCatalogRead), upstreamSupplyController.GetProduct)
+		productGroup.PUT("/:id/supply", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), upstreamSupplyController.SetProduct)
 		productGroup.DELETE("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), productController.Delete)
 		productGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), productController.UpdateStatus)
 	}

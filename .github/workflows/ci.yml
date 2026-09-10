@@ -124,7 +124,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
       - name: Build Linux server artifact
-        run: go build -trimpath -ldflags="-s -w" -o ticket-backend ./cmd
+        run: go build -trimpath -ldflags="-s -w -X ticket-backend/internal/api.ReleaseRevision=${{ github.sha }}" -o ticket-backend ./cmd
         env:
           CGO_ENABLED: "0"
       - name: Upload Linux server artifact
@@ -344,3 +344,21 @@ jobs:
 
           test -w "$runtime_data"
           REMOTE
+      - name: Verify activated revision and database readiness
+        shell: bash
+        run: |
+          export RELEASE_SCHEMA_VERSION="$(sed -n 's/^const CurrentPostgresSchemaVersion = \([0-9][0-9]*\)$/\1/p' backend/internal/model/postgres_migrations.go)"
+          test -n "$RELEASE_SCHEMA_VERSION"
+          # Allow the bounded two-minute pre-upgrade backup plus migration/startup.
+          readiness_deadline=$((SECONDS + 300))
+          while (( SECONDS < readiness_deadline )); do
+            if curl --fail --silent --show-error --max-time 10 \
+              "https://ymsq.edvulcan.top/api/v1/ready" -o readiness.json && \
+              python3 -c 'import json, os; r=json.load(open("readiness.json")); assert r["status"] == "ok" and r["revision"] == os.environ["GITHUB_SHA"] and r["schema_version"] == int(os.environ["RELEASE_SCHEMA_VERSION"])'; then
+              echo 'Activated release and database schema verified'
+              exit 0
+            fi
+            sleep 2
+          done
+          echo 'Release readiness verification failed' >&2
+          exit 1

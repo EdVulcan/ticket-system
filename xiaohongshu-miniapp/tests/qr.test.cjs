@@ -306,10 +306,42 @@ test('a refreshed refund removes an enlarged old ticket', async () => {
   assert.equal(page.data.ticketCodes.length, 0);
 });
 
-test('souvenir design never enables QR display for an unpaid, closed or refunded order', () => {
+test('souvenir ticket retains a server-issued code after completed usage without claiming it is usable', async () => {
   const page = loadOrderDetail({}, {});
-  for (const status of ['unpaid', 'cancelled', 'failed', 'refunded', 'completed']) {
+  for (const status of ['unpaid', 'cancelled', 'failed', 'refunded']) {
     assert.equal(page.usableTicketCodes(['OLD-CODE'], status).length, 0);
   }
   assert.equal(page.usableTicketCodes(['REMAINING-CODE'], 'partial_refunded').length, 1);
+
+  const completed = loadOrderDetail({
+    request: () => Promise.resolve({
+      status: 'completed', amount_cents: 100, ticket_codes: ['SHARED-CODE'],
+      tickets: [{ code: 'SHARED-CODE', status: 'used', check_in_count: 1 }]
+    })
+  }, {});
+  completed.orderNo = 'ORDER-1';
+  completed.loadOrder();
+  await flush();
+  assert.equal(completed.data.ticketCodes[0].code, 'SHARED-CODE');
+  assert.equal(completed.data.ticketCodes[0].usageLabel, '已使用');
+  assert.match(completed.data.ticketCodes[0].usageDetail, /后续使用按票种规则核验/);
+});
+
+test('refund and issuance gates still suppress ticket codes', async () => {
+  const page = loadOrderDetail({ request: () => Promise.resolve({
+    status: 'completed', amount_cents: 100, refund_pending: true,
+    ticket_codes: ['SHOULD-NOT-RENDER']
+  }) }, {});
+  page.orderNo = 'ORDER-1';
+  page.loadOrder();
+  await flush();
+  assert.equal(page.data.ticketCodes.length, 0);
+
+  const notIssued = loadOrderDetail({ request: () => Promise.resolve({
+    status: 'completed', amount_cents: 100, voucher_issuance_status: 'pending', ticket_codes: []
+  }) }, {});
+  notIssued.orderNo = 'ORDER-2';
+  notIssued.loadOrder();
+  await flush();
+  assert.equal(notIssued.data.ticketCodes.length, 0);
 });

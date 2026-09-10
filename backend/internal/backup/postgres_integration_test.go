@@ -1,4 +1,4 @@
-package backup
+package backup_test
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"ticket-backend/internal/backup"
 	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"time"
@@ -25,8 +26,18 @@ func TestPostgresBackupAndRestore(t *testing.T) {
 	binDirectory := os.Getenv("TICKET_TEST_POSTGRES_BIN")
 	source := testPostgresConfig("ticket_system_test", password)
 	target := testPostgresConfig("ticket_system_restore_test", password)
-	previousDatabase := config.GlobalConfig.Database
+	previousConfig := config.GlobalConfig
+	t.Cleanup(func() { config.GlobalConfig = previousConfig })
+	temp := t.TempDir()
+	keyFile := filepath.Join(temp, "instance-key.json")
+	if err := os.WriteFile(keyFile, []byte(`{"test":"source-key"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	config.GlobalConfig.Database = source
+	config.GlobalConfig.Backup.Directory = filepath.Join(temp, "backups")
+	config.GlobalConfig.Backup.PostgresBinDir = binDirectory
+	config.GlobalConfig.Backup.Retention = 2
+	config.GlobalConfig.Security.KeyFile = keyFile
 	if err := model.InitDB(); err != nil {
 		t.Fatalf("initialize backup source schema: %v", err)
 	}
@@ -42,19 +53,14 @@ func TestPostgresBackupAndRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	model.DB = nil
-	config.GlobalConfig.Database = previousDatabase
-	temp := t.TempDir()
-	keyFile := filepath.Join(temp, "instance-key.json")
-	if err := os.WriteFile(keyFile, []byte(`{"test":"source-key"}`), 0600); err != nil {
-		t.Fatal(err)
-	}
+	config.GlobalConfig = previousConfig
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	dump, err := CreatePostgres(ctx, source, filepath.Join(temp, "backups"), keyFile, binDirectory, 2)
+	dump, err := backup.CreatePostgres(ctx, source, filepath.Join(temp, "backups"), keyFile, binDirectory, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyPostgres(ctx, dump, binDirectory); err != nil {
+	if err := backup.VerifyPostgres(ctx, dump, binDirectory); err != nil {
 		t.Fatal(err)
 	}
 	targetKey := filepath.Join(temp, "target-key.json")
@@ -62,7 +68,7 @@ func TestPostgresBackupAndRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	backupKey := strings.TrimSuffix(dump, ".dump") + ".key.json"
-	rollback, err := RestorePostgres(ctx, target, dump, backupKey, targetKey, filepath.Join(temp, "rollback"), binDirectory)
+	rollback, err := backup.RestorePostgres(ctx, target, dump, backupKey, targetKey, filepath.Join(temp, "rollback"), binDirectory)
 	if err != nil {
 		t.Fatal(err)
 	}

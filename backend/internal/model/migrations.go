@@ -27,7 +27,14 @@ func runMigrations(db *gorm.DB) error {
 	if db.Dialector.Name() != "postgres" {
 		return fmt.Errorf("unsupported database dialect %q", db.Dialector.Name())
 	}
-	return runPostgresMigrations(db)
+	return db.Transaction(func(tx *gorm.DB) error {
+		// Serialize schema changes and commit the version marker with all DDL
+		// and backfills. A failed upgrade must not leave a half-upgraded schema.
+		if err := tx.Exec("SELECT pg_advisory_xact_lock(741992117)").Error; err != nil {
+			return err
+		}
+		return runPostgresMigrations(tx)
+	})
 }
 
 // runLegacyMigrations is retained only as source history for old schema

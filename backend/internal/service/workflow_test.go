@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -836,9 +837,7 @@ func TestAfterSaleExchangeReplacesWholeItemWithoutChangingMoney(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "exchange-1", TargetProductID: targetID, OperatorID: 1}
-	if err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode}); err != nil {
-		t.Fatal(err)
-	}
+	seedHistoricalExchangeRequest(t, &request, []string{ticket.TicketCode})
 	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 2, "same-price exchange"); err != nil {
 		t.Fatal(err)
 	}
@@ -871,6 +870,80 @@ func TestAfterSaleExchangeReplacesWholeItemWithoutChangingMoney(t *testing.T) {
 		if row.ProductID == targetID && row.Sold != 1 {
 			t.Fatalf("target inventory not reserved: %+v", row)
 		}
+	}
+}
+
+func TestAfterSaleCreateRejectsNewExchangeWithoutWrites(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "daily", 5)
+	visitDate := startOfDay(time.Now().AddDate(0, 0, 1))
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1, UseDate: &visitDate}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&OrderService{}).MarkAsPaid(order.OrderNo, tenantID); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "new-exchange-disabled", TargetProductID: productID, OperatorID: 1}
+	err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode})
+	if !errors.Is(err, ErrNewExchangeAfterSaleDisabled) {
+		t.Fatalf("new exchange error=%v", err)
+	}
+	var requests, events int64
+	if err := model.DB.Model(&model.AfterSaleRequest{}).Where("tenant_id = ? AND order_no = ?", tenantID, order.OrderNo).Count(&requests).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&model.AfterSaleEvent{}).Where("tenant_id = ?", tenantID).Count(&events).Error; err != nil {
+		t.Fatal(err)
+	}
+	if requests != 0 || events != 0 {
+		t.Fatalf("new exchange wrote after-sale records: requests=%d events=%d", requests, events)
+	}
+	var item model.OrderItem
+	if err := model.DB.Where("order_id = ?", order.ID).First(&item).Error; err != nil {
+		t.Fatal(err)
+	}
+	if item.ProductID != productID {
+		t.Fatalf("new exchange changed item=%+v", item)
+	}
+}
+
+func TestAfterSaleCreateReplaysHistoricalExchange(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, productID := seedSellableProduct(t, "daily", 5)
+	visitDate := startOfDay(time.Now().AddDate(0, 0, 1))
+	order := model.Order{TenantID: tenantID, Channel: "window", Items: []model.OrderItem{{ProductID: productID, Quantity: 1, UseDate: &visitDate}}}
+	if err := (&OrderService{}).Create(&order); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	if err := model.DB.Where("order_id = ?", order.ID).First(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	historical := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "historical-exchange-replay", TargetProductID: productID, OperatorID: 1}
+	seedHistoricalExchangeRequest(t, &historical, []string{ticket.TicketCode})
+
+	replay := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: historical.IdempotencyKey, TargetProductID: productID, OperatorID: 1}
+	if err := (&AfterSaleService{}).Create(&replay, []string{ticket.TicketCode}); err != nil {
+		t.Fatalf("historical exchange replay error=%v", err)
+	}
+	if replay.ID != historical.ID || replay.RequestNo != historical.RequestNo || replay.Status != historical.Status {
+		t.Fatalf("historical exchange replay=%+v historical=%+v", replay, historical)
+	}
+	var requests, events int64
+	if err := model.DB.Model(&model.AfterSaleRequest{}).Where("tenant_id = ? AND order_no = ?", tenantID, order.OrderNo).Count(&requests).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&model.AfterSaleEvent{}).Where("tenant_id = ? AND request_no = ?", tenantID, historical.RequestNo).Count(&events).Error; err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 || events != 1 {
+		t.Fatalf("historical exchange replay wrote records: requests=%d events=%d", requests, events)
 	}
 }
 
@@ -914,9 +987,7 @@ func TestAfterSaleExchangeSupportsSelectedVisitor(t *testing.T) {
 		t.Fatalf("tickets=%d err=%v", len(tickets), err)
 	}
 	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "partial-exchange", TargetProductID: targetID, OperatorID: 1}
-	if err := (&AfterSaleService{}).Create(&request, []string{tickets[0].TicketCode}); err != nil {
-		t.Fatal(err)
-	}
+	seedHistoricalExchangeRequest(t, &request, []string{tickets[0].TicketCode})
 	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 2, "visitor requested exchange"); err != nil {
 		t.Fatal(err)
 	}
@@ -993,9 +1064,7 @@ func TestAfterSaleExchangeCollectsCashDifferenceBeforeChangingTicket(t *testing.
 		t.Fatal(err)
 	}
 	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "exchange-cash-difference", TargetProductID: targetID, OperatorID: 7, Reason: "upgrade ticket"}
-	if err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode}); err != nil {
-		t.Fatal(err)
-	}
+	seedHistoricalExchangeRequest(t, &request, []string{ticket.TicketCode})
 	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 8, "approved"); err != nil {
 		t.Fatal(err)
 	}
@@ -1051,9 +1120,7 @@ func TestAfterSaleExchangeDifferenceCompletesFromProviderCallbackOnce(t *testing
 		t.Fatal(err)
 	}
 	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "exchange-provider-callback", TargetProductID: targetID, OperatorID: 7, Reason: "upgrade online ticket"}
-	if err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode}); err != nil {
-		t.Fatal(err)
-	}
+	seedHistoricalExchangeRequest(t, &request, []string{ticket.TicketCode})
 	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 8, "approved"); err != nil {
 		t.Fatal(err)
 	}
@@ -1113,9 +1180,7 @@ func TestAfterSaleExchangeRefundsCashDifferenceWithoutVoidingTicket(t *testing.T
 		t.Fatal(err)
 	}
 	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "exchange-refund-difference", TargetProductID: targetID, OperatorID: 7, Reason: "downgrade ticket"}
-	if err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode}); err != nil {
-		t.Fatal(err)
-	}
+	seedHistoricalExchangeRequest(t, &request, []string{ticket.TicketCode})
 	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 8, "approved"); err != nil {
 		t.Fatal(err)
 	}
@@ -1162,9 +1227,7 @@ func TestAfterSaleExchangeDifferenceDigitalRefundCompletionKeepsTicketActive(t *
 		t.Fatal(err)
 	}
 	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "exchange-digital-refund", TargetProductID: targetID, OperatorID: 7, Reason: "downgrade online ticket"}
-	if err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode}); err != nil {
-		t.Fatal(err)
-	}
+	seedHistoricalExchangeRequest(t, &request, []string{ticket.TicketCode})
 	if _, err := (&AfterSaleService{}).Approve(tenantID, request.ID, 8, "approved"); err != nil {
 		t.Fatal(err)
 	}
@@ -1219,9 +1282,7 @@ func TestAfterSaleExchangeSettlementDifferenceRequiresExplicitException(t *testi
 			t.Fatal(err)
 		}
 		request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: key, TargetProductID: targetID, OperatorID: 7, Reason: "settlement exception"}
-		if err := (&AfterSaleService{}).Create(&request, []string{ticket.TicketCode}); err != nil {
-			t.Fatal(err)
-		}
+		seedHistoricalExchangeRequest(t, &request, []string{ticket.TicketCode})
 		return order, request
 	}
 
@@ -1271,6 +1332,30 @@ func cloneExchangeTarget(t *testing.T, sourceID uint, price, settlementPrice flo
 		t.Fatal(err)
 	}
 	return targetID
+}
+
+// seedHistoricalExchangeRequest represents an exchange that was created before
+// new exchange applications were closed. Existing records must still be able
+// to complete their durable money and fulfillment recovery workflow.
+func seedHistoricalExchangeRequest(t *testing.T, request *model.AfterSaleRequest, ticketCodes []string) {
+	t.Helper()
+	codes, err := json.Marshal(normalizeTicketCodes(ticketCodes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Base = model.Base{}
+	request.Type = "exchange"
+	request.RequestNo = generateAfterSaleNo()
+	request.Status = "pending"
+	request.TicketCodesJSON = string(codes)
+	if err := model.Write(func(tx *gorm.DB) error {
+		if err := tx.Create(request).Error; err != nil {
+			return err
+		}
+		return appendAfterSaleEvent(tx, request, "", "pending", "created", request.OperatorID, request.Reason)
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func createTestPOS(t *testing.T, tenantID uint) uint {

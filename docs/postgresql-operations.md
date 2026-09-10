@@ -2,7 +2,7 @@
 
 ## 1. 当前架构
 
-生产数据库已切换到 PostgreSQL，当前代码 schema 版本为 112。Go 服务、管理端静态资源和业务任务仍由一个应用进程承载，不引入 Redis、MySQL、消息队列或微服务。
+生产数据库使用 PostgreSQL，本轮代码 schema 版本为 117（待发布）。Go 服务、管理端静态资源和业务任务仍由一个应用进程承载，不引入 Redis、MySQL、消息队列或微服务。
 
 schema 111 增加手机网页核销会话；schema 112 为现有小红书商品配置增加最近审核查询时间 `audit_checked_at`、查询错误 `audit_check_error` 和查询调度索引。升级保留原审核状态、审核原因及提交记录，不批量放行历史待审核商品；服务启动后按官方商品查询结果逐项更新。查询时间与小红书实际审核时间 `audited_at` 分开保存。
 
@@ -42,6 +42,10 @@ go run ./cmd/db-migrate
 
 命令可重复执行。新建 PostgreSQL 库会直接建立当前 schema、必要索引和跨租户/跨景区归属触发器。
 
+服务发布时不需要先手动运行这个命令：服务会在绑定 HTTP 端口、启动后台任务或报告就绪前运行同一迁移入口。若已存在的 `schema_migrations` 最高版本大于 `0` 且低于当前程序支持版本，服务会先在 `data/backups/pre-upgrade`（生产环境映射为 `/var/lib/ticket-system/backups/pre-upgrade`）创建、校验 PostgreSQL custom dump，并复制同时间戳的实例密钥副本；只有备份成功才会变更 schema。该目录独立于周期备份目录，仍按 `backup.retention` 保留最近的升级前备份及其配对 `.key.json` 文件。新库、空迁移记录和已在当前版本的库不会触发这一步。
+
+升级前备份或迁移任一步失败，服务会以非零状态退出，不能开始监听或报告 ready。数据库版本高于当前二进制支持的版本仍会明确拒绝启动，不能通过跳过备份来降级绕过。
+
 旧系统或 SQLite 数据导入不属于本项目交付范围；如以后单独立项，应使用独立工具和脱敏样本处理，不恢复 SQLite 运行支持。
 
 ## 4. 自动备份
@@ -52,6 +56,12 @@ go run ./cmd/db-migrate
 - `ticket-system-pg-时间戳.key.json`
 
 实例密钥必须与同时间戳 dump 成对保存，否则加密配置可能无法解密。`pg_dump`/`pg_restore` 可放在 `PATH`，也可通过 `TICKET_BACKUP_POSTGRES_BIN_DIR` 指定安装目录。
+
+旧版本升级前的同步备份设有 2 分钟总超时，涵盖 `pg_dump` 与 `pg_restore --list` 校验。超时取消子进程并拒绝执行迁移，服务以非零退出码结束；应排查数据库锁或备份环境后重试，不允许跳过备份继续升级。普通定时备份的周期不变。
+
+主线 GitHub Action 上传 release 并调用服务器上的 `/usr/local/sbin/ticket-system-deploy`；仓库工作流不会直接访问生产数据库或备份目录。实际 schema 迁移和上述升级前备份由新服务启动完成。激活之后 Action 请求 `/api/v1/ready`，精确比对本次 Git SHA 与源码声明的 schema 版本；接口只在数据库版本匹配时返回成功，检查失败会阻止部署任务报告成功。即使发布成功，数据库的前向迁移也不能靠切回旧二进制回滚。需要回退时，停止服务，使用对应的 `pre-upgrade` dump 与配对 key 恢复，再启动与该 dump schema 兼容的版本。
+
+schema 117 增加上游供应预置。已有产品不激活任何上游映射；每个已有订单明细补建一份 `local` 供应快照，包括已支付、已核销、已退款、已关闭及软删除明细，不修改原始业务记录。所有 DDL、回填及版本标记在 PostgreSQL advisory lock 保护的事务内提交。无法关联原订单的孤儿明细会令整批迁移回滚，需依据原始归属处理后重试；不自动删除旧数据，也不猜测供应归属。真实上游凭证写入和新售启用仍关闭。
 
 ## 5. 恢复
 

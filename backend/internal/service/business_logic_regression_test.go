@@ -141,9 +141,7 @@ func TestAfterSaleExchangeRejectsCodeModeChange(t *testing.T) {
 	}
 	request := model.AfterSaleRequest{TenantID: tenantID, OrderNo: order.OrderNo, Type: "exchange", IdempotencyKey: "code-mode-change", TargetProductID: targetID, OperatorID: 7}
 	service := &AfterSaleService{}
-	if err := service.Create(&request, []string{ticket.TicketCode}); err != nil {
-		t.Fatal(err)
-	}
+	seedHistoricalExchangeRequest(t, &request, []string{ticket.TicketCode})
 	if _, err := service.Approve(tenantID, request.ID, 8, "approved"); err != nil {
 		t.Fatal(err)
 	}

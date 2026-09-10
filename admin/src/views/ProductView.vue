@@ -59,9 +59,10 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column v-if="canHistoryWrite" label="操作" width="200" fixed="right" align="center">
+      <el-table-column v-if="canHistoryWrite" label="操作" width="240" fixed="right" align="center">
         <template #default="{ row }">
           <el-button v-if="canWrite" link type="primary" size="small" @click="handleEdit(row)">编辑</el-button>
+          <el-button v-if="canWrite && !row.source_product_id && !row.product_offer_id && row.product_kind === 'ticket'" link type="primary" size="small" @click="supplyDialog?.open(row)">供应</el-button>
           <el-button 
             v-if="canWrite || row.status === 'online'"
             link 
@@ -407,9 +408,11 @@
       </template>
     </el-dialog>
   </div>
+  <ProductSupplyDialog ref="supplyDialog" />
 </template>
 
 <script setup lang="ts">
+import ProductSupplyDialog from '@/components/ProductSupplyDialog.vue'
 import { computed, ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
@@ -417,6 +420,7 @@ import { Delete, InfoFilled, Minus, Plus, Refresh } from '@element-plus/icons-vu
 import { hasPermission } from '@/utils/permissions'
 import { isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 
+const supplyDialog = ref<InstanceType<typeof ProductSupplyDialog>>()
 const currentUser = readStoredUser()
 const hasCatalogWritePermission = hasPermission(currentUser, 'catalog.write')
 const canWrite = hasCatalogWritePermission && isActiveScenicSupplier(currentUser)

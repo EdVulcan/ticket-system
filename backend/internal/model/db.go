@@ -3,6 +3,7 @@ package model
 import (
 	"fmt"
 	"strings"
+	"ticket-backend/internal/backup"
 	"ticket-backend/internal/config"
 	"time"
 
@@ -34,7 +35,7 @@ func InitDB() error {
 	sqlDB.SetMaxOpenConns(databaseConfig.MaxOpenConnections)
 	sqlDB.SetConnMaxLifetime(time.Duration(databaseConfig.ConnMaxLifetimeMinutes) * time.Minute)
 
-	if err := runMigrations(DB); err != nil {
+	if err := initializePostgresSchema(DB, config.GlobalConfig, backup.CreatePostgres, runMigrations); err != nil {
 		return fmt.Errorf("failed to migrate database: %w", err)
 	}
 	InitWriter(DB, time.Duration(databaseConfig.WriteTimeoutSeconds)*time.Second)

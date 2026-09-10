@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 116
+const CurrentPostgresSchemaVersion = 117
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -58,6 +58,8 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&SettlementStatement{}, &SettlementLine{}, &SettlementAdjustment{}, &StaffResourceScope{},
 		&AfterSaleRequest{}, &AfterSaleEvent{}, &HardwareCommand{}, &HardwareEvent{}, &DeviceRequestNonce{}, &DeviceVerification{}, &DeviceMaintenanceCredential{}, &DeviceMaintenanceSession{}, &DeviceProvisioningLease{}, &MigrationAuditIssue{},
 		&MobileVerificationSession{},
+		&UpstreamConnection{}, &UpstreamProductMapping{}, &ProductSupplyConfig{},
+		&OrderItemSupplySnapshot{}, &ExternalAdmissionCredential{}, &ExternalAdmissionBinding{},
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
@@ -694,9 +696,12 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := applyPostgresBundleGuards(db); err != nil {
 		return err
 	}
+	if err := migrateUpstreamSupplyFoundation(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "miniapp instant discount activities",
+		Name:      "upstream supply foundation and local history snapshots",
 		AppliedAt: time.Now(),
 	}).Error
 }
