@@ -129,6 +129,127 @@ test('created confirmation orders freeze selection and continue in that order wi
   assert.equal(destination, '/pages/order/detail?order_no=ORD-KEPT');
 });
 
+test('unknown order creation freezes the first payload and retries it after attempted edits', async () => {
+  const orderRequests = [];
+  let firstCreate = true;
+  const app = {
+    request: (url, options) => {
+      if (url === '/orders') {
+        orderRequests.push(options.data);
+        if (firstCreate) {
+          firstCreate = false;
+          return Promise.reject(new Error('网络连接失败，请稍后重试'));
+        }
+        return Promise.resolve({ order_no: 'ORD-RECOVERED', order_id: 'order-1', pay_token: 'pay-1' });
+      }
+      if (url === '/order-quote') {
+        const quantity = options.data.quantity;
+        return Promise.resolve({
+          amount_cents: quantity * 8000,
+          original_amount_cents: quantity * 8000,
+          discount_cents: 0,
+          quote_token: `quote-${quantity}`
+        });
+      }
+      return Promise.resolve({});
+    }
+  };
+  const page = loadPage('pages/order/confirm.js', app, {
+    requestGuaranteeOrderPayment(options) { options.fail({ errMsg: 'cancel' }); options.complete(); }
+  });
+  page.data.product = { id: 1, price_cents: 8000, requiresUseDate: true, useDateLabel: '游玩日期' };
+  page.data.quantity = 1;
+  page.data.maxQuantity = 10;
+  page.data.useDate = '2026-09-20';
+  page.data.minDate = '2026-09-20';
+  page.data.maxDate = '2026-10-20';
+  page.data.quoteReady = true;
+  page.data.quoteToken = 'quote-1';
+  page.data.totalText = '80.00';
+  page.data.originalTotalText = '80.00';
+  page.orderRequestId = 'same-request-id';
+
+  page.submit();
+  await flush();
+
+  assert.equal(page.data.orderRecoveryPending, true);
+  page.increase();
+  page.selectDate({ currentTarget: { dataset: { date: '2026-09-21' } } });
+  page.onGuestNameInput({ detail: { value: 'Changed' } });
+  page.onContactPhoneInput({ detail: { value: '13900000000' } });
+  page.submit();
+  await flush();
+  await flush();
+
+  assert.equal(orderRequests.length, 2);
+  assert.deepEqual(orderRequests[1], orderRequests[0]);
+  assert.equal(page.data.createdOrderNo, 'ORD-RECOVERED');
+  assert.equal(page.data.quantity, 1);
+  assert.equal(page.data.useDate, '2026-09-20');
+  assert.equal(page.data.guestName, '');
+  assert.equal(page.data.contactPhone, '');
+});
+
+test('explicit precheck rejection unlocks editing and requires a fresh quote before retry', async () => {
+  const requests = [];
+  const app = {
+    request: (url, options) => {
+      requests.push({ url, data: options && options.data });
+      if (url === '/orders') {
+        const error = new Error('价格或立减资格已变化，请确认最新金额后重新提交');
+        error.data = { error_code: 'order_not_created' };
+        return Promise.reject(error);
+      }
+      return Promise.resolve({ amount_cents: 9000, original_amount_cents: 9000, discount_cents: 0, quote_token: 'fresh-quote' });
+    }
+  };
+  const page = loadPage('pages/order/confirm.js', app, {});
+  page.data.product = { id: 1, price_cents: 8000, requiresUseDate: false };
+  page.data.quoteReady = true;
+  page.data.quoteToken = 'stale-quote';
+  page.data.totalText = '80.00';
+  page.data.originalTotalText = '80.00';
+  page.orderRequestId = 'same-request-id';
+
+  page.submit();
+  await flush();
+  await flush();
+
+  assert.equal(page.data.orderRecoveryPending, false);
+  assert.match(page.data.error, /价格或立减已更新|重新提交/);
+  page.increase();
+  assert.equal(page.data.quantity, 2);
+  assert.ok(requests.some(item => item.url === '/order-quote'));
+});
+
+test('idempotency recovery errors never call payment and navigate to the existing order', async () => {
+  for (const errorCode of ['idempotency_payload_mismatch', 'existing_order_recovery_required']) {
+    let paymentCalls = 0;
+    let destination = '';
+    const app = {
+      request: () => {
+        const error = new Error('原请求需要恢复');
+        error.data = { error_code: errorCode, order_no: 'ORD-EXISTING' };
+        return Promise.reject(error);
+      }
+    };
+    const page = loadPage('pages/order/confirm.js', app, {
+      requestGuaranteeOrderPayment() { paymentCalls += 1; },
+      redirectTo: ({ url }) => { destination = url; }
+    });
+    page.data.product = { id: 1, price_cents: 8000, requiresUseDate: false };
+    page.data.quoteReady = true;
+    page.data.quoteToken = 'quote-1';
+    page.orderRequestId = 'same-request-id';
+
+    page.submit();
+    await flush();
+
+    assert.equal(paymentCalls, 0);
+    assert.equal(destination, '/pages/order/detail?order_no=ORD-EXISTING');
+  }
+});
+
 test('detail page reports unavailable API, missing fields, and synchronous SDK errors without changing order status', () => {
   const app = { request: () => Promise.resolve({}) };
   const page = loadPage('pages/order/detail.js', app, {});

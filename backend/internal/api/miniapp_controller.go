@@ -92,15 +92,30 @@ func (c *MiniappController) CreateOrder(ctx *gin.Context) {
 	}
 	result, err := c.Service.CreateXiaohongshuOrder(ctx.Request.Context(), customer, body)
 	if err != nil {
-		var platformError *xiaohongshu.APIError
-		if errors.As(err, &platformError) {
-			ctx.JSON(http.StatusBadGateway, gin.H{"error": "小红书暂时无法创建支付订单，请稍后重试", "platform_code": platformError.Code})
-			return
-		}
-		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		writeMiniappCreateOrderError(ctx, err)
 		return
 	}
 	ctx.JSON(http.StatusCreated, result)
+}
+
+func writeMiniappCreateOrderError(ctx *gin.Context, err error) {
+	var createError *service.MiniappOrderCreateError
+	if errors.As(err, &createError) {
+		body := gin.H{"error": createError.Message, "error_code": createError.Code}
+		if createError.OrderNo != "" {
+			body["order_no"] = createError.OrderNo
+		}
+		ctx.JSON(http.StatusConflict, body)
+		return
+	}
+	var platformError *xiaohongshu.APIError
+	if errors.As(err, &platformError) {
+		ctx.JSON(http.StatusBadGateway, gin.H{"error": "小红书暂时无法创建支付订单，请稍后重试", "platform_code": platformError.Code})
+		return
+	}
+	// An unclassified failure may occur after the local order committed. Do not
+	// tell the client it can discard its request ID and create another order.
+	ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 }
 
 func (c *MiniappController) ListOrders(ctx *gin.Context) {

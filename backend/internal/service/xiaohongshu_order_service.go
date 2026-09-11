@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +21,86 @@ const (
 	xiaohongshuPaymentMethod       = "xiaohongshu"
 	xiaohongshuOrderOperationLease = 30 * time.Second
 )
+
+const (
+	miniappOrderNotCreatedCode       = "order_not_created"
+	miniappOrderPayloadMismatchCode  = "idempotency_payload_mismatch"
+	miniappOrderRecoveryRequiredCode = "existing_order_recovery_required"
+)
+
+// MiniappOrderCreateError carries a safe, typed outcome for the storefront.
+// OrderNo is only populated when an existing order was authenticated in the
+// request-id scope; no payment token is included in this error.
+type MiniappOrderCreateError struct {
+	Code    string
+	OrderNo string
+	Message string
+	cause   error
+}
+
+func (e *MiniappOrderCreateError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Message != "" {
+		return e.Message
+	}
+	return e.Code
+}
+
+func (e *MiniappOrderCreateError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+type xiaohongshuOrderIntent struct {
+	MappingID    uint   `json:"mapping_id"`
+	Quantity     int    `json:"quantity"`
+	UseDate      string `json:"use_date"`
+	GuestName    string `json:"guest_name"`
+	ContactPhone string `json:"contact_phone"`
+}
+
+func newMiniappOrderCreateError(code, orderNo, message string) *MiniappOrderCreateError {
+	return &MiniappOrderCreateError{Code: code, OrderNo: orderNo, Message: message}
+}
+
+func newMiniappOrderCreateErrorWithCause(code, orderNo, message string, cause error) *MiniappOrderCreateError {
+	return &MiniappOrderCreateError{Code: code, OrderNo: orderNo, Message: message, cause: cause}
+}
+
+func miniappOrderIntentFingerprint(input MiniappOrderCreateInput) string {
+	useDate := strings.TrimSpace(input.UseDate)
+	if parsed, err := time.ParseInLocation("2006-01-02", useDate, time.Local); err == nil {
+		useDate = parsed.Format("2006-01-02")
+	}
+	intent := xiaohongshuOrderIntent{
+		MappingID: input.MappingID, Quantity: input.Quantity, UseDate: useDate,
+		GuestName: strings.TrimSpace(input.GuestName), ContactPhone: strings.TrimSpace(input.ContactPhone),
+	}
+	raw, _ := json.Marshal(intent)
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:])
+}
+
+func isMiniappOrderNotCreatedError(err error) bool {
+	return errors.Is(err, ErrMiniappPromotionQuote) ||
+		errors.Is(err, ErrMiniappPromotionMapping) ||
+		errors.Is(err, ErrMiniappPromotionUnavailable)
+}
+
+func lockXiaohongshuOrderAccountTx(tx *gorm.DB, tenantID, accountID uint) (*model.ChannelAccount, error) {
+	if tx == nil || tenantID == 0 || accountID == 0 {
+		return nil, ErrMiniappUnavailable
+	}
+	var account model.ChannelAccount
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", accountID, tenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
+		return nil, ErrMiniappUnavailable
+	}
+	return &account, nil
+}
 
 // XiaohongshuOrderService owns the durable ordinary-order operation. The
 // storefront facade delegates to it, while the operation itself keeps the
@@ -290,128 +372,151 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 	if input.MappingID == 0 || input.Quantity <= 0 || input.Quantity > 100 || input.ClientRequestID == "" || len(input.ClientRequestID) > 100 {
 		return nil, errors.New("请选择票种、数量并提供有效的请求编号")
 	}
-	if existing, err := s.loadOrderResult(customer, input.ClientRequestID); err == nil {
-		return existing, nil
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
-
+	input.GuestName, input.ContactPhone = strings.TrimSpace(input.GuestName), strings.TrimSpace(input.ContactPhone)
+	fingerprint := miniappOrderIntentFingerprint(input)
 	var account model.ChannelAccount
 	var mapping model.ChannelProductMapping
 	var product model.Product
 	var config model.XiaohongshuProductConfig
-	if err := model.DB.Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", customer.ChannelAccountID, customer.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
-		return nil, ErrMiniappUnavailable
-	}
-	if held, err := HasXiaohongshuRefundAccountHoldTx(model.DB, customer.TenantID, account.ID); err != nil {
-		return nil, err
-	} else if held {
-		return nil, ErrXiaohongshuRefundHold
-	}
-	if err := model.DB.Where("id = ? AND channel_account_id = ? AND status = ?", input.MappingID, account.ID, "active").First(&mapping).Error; err != nil {
-		return nil, errors.New("票种当前不可购买")
-	}
-	if err := model.DB.Where("id = ? AND tenant_id = ? AND status = ?", mapping.ProductID, customer.TenantID, "online").First(&product).Error; err != nil {
-		return nil, errors.New("票种当前不可购买")
-	}
-	if product.ProductKind == "hotel" {
-		// Hotel products have no scenic ticket or voucher entitlement. Keep the
-		// existing ticket order/Saga path fail-closed until a dedicated hotel
-		// order and reservation protocol is enabled for this channel.
-		return nil, errors.New("酒店产品暂未开放小红书交易，请先完成住宿订单协议联调")
-	}
-	if product.CodeMode == "order" && input.Quantity > 1 {
-		return nil, errors.New("该票种为整单一码，小红书暂只支持每单购买一份，请分次下单")
-	}
-	if err := model.DB.Where("channel_product_mapping_id = ? AND tenant_id = ? AND channel_account_id = ? AND sync_status IN ? AND audit_status = ?", mapping.ID, customer.TenantID, account.ID, []string{"submitted", "synced"}, "approved").First(&config).Error; err != nil {
-		return nil, errors.New("票种尚未通过小红书商品审核")
-	}
-	var hotelPackage model.ScenicHotelPackage
-	hasHotelPackage := false
-	if err := model.DB.Where("tenant_id = ? AND product_id = ?", customer.TenantID, product.ID).First(&hotelPackage).Error; err == nil {
-		hasHotelPackage = true
-		if hotelPackage.Status != "online" {
-			return nil, errors.New("酒景套餐当前不可购买")
-		}
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
-	var useDate *time.Time
-	if value := strings.TrimSpace(input.UseDate); value != "" {
-		parsed, err := time.ParseInLocation("2006-01-02", value, time.Local)
-		if err != nil {
-			return nil, errors.New("请选择有效的使用日期")
-		}
-		useDate = &parsed
-	}
-	deferredPackage := hasHotelPackage && hotelPackage.BookingMode == "after_purchase"
-	if ((hasHotelPackage && !deferredPackage) || (!hasHotelPackage && product.StockType == "daily")) && useDate == nil {
-		if hasHotelPackage {
-			return nil, errors.New("请选择入住日期")
-		}
-		return nil, errors.New("请选择游玩日期")
-	}
-	input.GuestName, input.ContactPhone = strings.TrimSpace(input.GuestName), strings.TrimSpace(input.ContactPhone)
-	if hasHotelPackage && !deferredPackage && (input.GuestName == "" || input.ContactPhone == "" || len(input.GuestName) > 50 || len(input.ContactPhone) > 20) {
-		return nil, errors.New("请填写有效的入住人和联系电话")
-	}
-	totalCents := mapping.ChannelSaleCents * int64(input.Quantity)
-	if totalCents <= 0 {
-		return nil, errors.New("票种售价无效")
-	}
-	if account.Environment == "sandbox" && totalCents > 10 {
-		return nil, errors.New("测试小程序单笔订单金额不能超过 0.10 元")
-	}
-	externalID, err := randomXiaohongshuOrderID()
-	if err != nil {
-		return nil, err
-	}
-	order := model.Order{
-		TenantID: customer.TenantID, Channel: "xiaohongshu", ChannelAccountID: account.ID,
-		ExternalNo: &externalID, ContactName: input.GuestName, ContactPhone: input.ContactPhone,
-		Items: []model.OrderItem{{ProductID: product.ID, Quantity: input.Quantity, UseDate: useDate}},
-	}
-	link := model.XiaohongshuOrderLink{
-		TenantID: customer.TenantID, ChannelAccountID: account.ID, MiniappCustomerID: customer.ID,
-		ClientRequestID: input.ClientRequestID, ExternalOrderID: externalID, State: "creating",
-	}
-	openID, err := utils.DecryptAES(customer.OpenIDCiphertext)
-	if secret, secretErr := utils.DecryptAES(account.SecretCiphertext); secretErr != nil || strings.TrimSpace(secret) == "" {
-		return nil, ErrMiniappUnavailable
-	}
-	if err != nil || strings.TrimSpace(openID) == "" {
-		return nil, ErrMiniappUnauthenticated
-	}
 	var operation model.XiaohongshuOrderOperation
+	var order model.Order
+	var link model.XiaohongshuOrderLink
 	duplicate := false
+	var duplicateOrder model.Order
+	var openID string
 	promotions := MiniappPromotionService{Now: s.Now}
 	// Persist the order, grant reservation, customer idempotency link and
 	// encrypted provider request atomically. External I/O only starts after commit.
-	err = model.Write(func(tx *gorm.DB) error {
-		if _, err := lockMiniappPromotionCustomerTx(tx, customer); err != nil {
+	err := model.Write(func(tx *gorm.DB) error {
+		lockedAccount, err := lockXiaohongshuOrderAccountTx(tx, customer.TenantID, customer.ChannelAccountID)
+		if err != nil {
 			return err
 		}
+		account = *lockedAccount
+
 		var previous model.XiaohongshuOrderLink
-		findErr := tx.Where("tenant_id = ? AND channel_account_id = ? AND miniapp_customer_id = ? AND client_request_id = ?", customer.TenantID, account.ID, customer.ID, input.ClientRequestID).First(&previous).Error
+		findErr := tx.Where("tenant_id = ? AND channel_account_id = ? AND miniapp_customer_id = ? AND client_request_id = ? AND deleted_at IS NULL", customer.TenantID, account.ID, customer.ID, input.ClientRequestID).First(&previous).Error
 		if findErr == nil {
+			if err := tx.Preload("Items").Where("id = ? AND tenant_id = ?", previous.OrderID, customer.TenantID).First(&duplicateOrder).Error; err != nil {
+				return err
+			}
+			if err := validateExistingXiaohongshuOrderRequestTx(tx, &previous, &duplicateOrder, fingerprint); err != nil {
+				return err
+			}
 			duplicate = true
 			return nil
 		}
 		if !errors.Is(findErr, gorm.ErrRecordNotFound) {
 			return findErr
 		}
-		quote, err := promotions.LoadLockedQuoteTx(tx, customer, mapping.ID, input.Quantity, totalCents)
+		if held, err := HasXiaohongshuRefundAccountHoldTx(tx, customer.TenantID, account.ID); err != nil {
+			return err
+		} else if held {
+			return newMiniappOrderCreateErrorWithCause(miniappOrderNotCreatedCode, "", "店铺订单售后核对中，暂不可购买，请稍后重试", ErrXiaohongshuRefundHold)
+		}
+		if _, err := lockMiniappPromotionCustomerTx(tx, customer); err != nil {
+			return err
+		}
+		if _, err := lockMiniappPromotionActivityTx(tx, customer.TenantID, account.ID); err != nil {
+			return err
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND channel_account_id = ? AND status = ?", input.MappingID, account.ID, "active").First(&mapping).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "票种当前不可购买")
+			}
+			return err
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND status = ?", mapping.ProductID, customer.TenantID, "online").First(&product).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "票种当前不可购买")
+			}
+			return err
+		}
+		if product.ProductKind == "hotel" {
+			// Hotel products have no scenic ticket or voucher entitlement. Keep the
+			// existing ticket order/Saga path fail-closed until a dedicated hotel
+			// order and reservation protocol is enabled for this channel.
+			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "酒店产品暂未开放小红书交易，请先完成住宿订单协议联调")
+		}
+		if product.CodeMode == "order" && input.Quantity > 1 {
+			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "该票种为整单一码，小红书暂只支持每单购买一份，请分次下单")
+		}
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("channel_product_mapping_id = ? AND tenant_id = ? AND channel_account_id = ? AND sync_status IN ? AND audit_status = ?", mapping.ID, customer.TenantID, account.ID, []string{"submitted", "synced"}, "approved").First(&config).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "票种尚未通过小红书商品审核")
+			}
+			return err
+		}
+		var hotelPackage model.ScenicHotelPackage
+		hasHotelPackage := false
+		if err := tx.Where("tenant_id = ? AND product_id = ?", customer.TenantID, product.ID).First(&hotelPackage).Error; err == nil {
+			hasHotelPackage = true
+			if hotelPackage.Status != "online" {
+				return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "酒景套餐当前不可购买")
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		var useDate *time.Time
+		if value := strings.TrimSpace(input.UseDate); value != "" {
+			parsed, err := time.ParseInLocation("2006-01-02", value, time.Local)
+			if err != nil {
+				return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "请选择有效的使用日期")
+			}
+			input.UseDate = parsed.Format("2006-01-02")
+			useDate = &parsed
+		} else {
+			input.UseDate = ""
+		}
+		deferredPackage := hasHotelPackage && hotelPackage.BookingMode == "after_purchase"
+		if ((hasHotelPackage && !deferredPackage) || (!hasHotelPackage && product.StockType == "daily")) && useDate == nil {
+			if hasHotelPackage {
+				return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "请选择入住日期")
+			}
+			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "请选择游玩日期")
+		}
+		if hasHotelPackage && !deferredPackage && (input.GuestName == "" || input.ContactPhone == "" || len(input.GuestName) > 50 || len(input.ContactPhone) > 20) {
+			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "请填写有效的入住人和联系电话")
+		}
+		totalCents := mapping.ChannelSaleCents * int64(input.Quantity)
+		if totalCents <= 0 {
+			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "票种售价无效")
+		}
+		if account.Environment == "sandbox" && totalCents > 10 {
+			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "测试小程序单笔订单金额不能超过 0.10 元")
+		}
+		// Keep deterministic local qualification errors ahead of credential
+		// decryption, so an invalid session cannot hide a price or catalog
+		// rejection that the caller can act on.
+		openID, err = utils.DecryptAES(customer.OpenIDCiphertext)
+		if err != nil || strings.TrimSpace(openID) == "" {
+			return ErrMiniappUnauthenticated
+		}
+		if secret, secretErr := utils.DecryptAES(account.SecretCiphertext); secretErr != nil || strings.TrimSpace(secret) == "" {
+			return ErrMiniappUnavailable
+		}
+		externalID, err := randomXiaohongshuOrderID()
 		if err != nil {
 			return err
 		}
-		if (input.QuoteToken != "" || quote.DiscountCents > 0) && !promotions.ValidateQuoteToken(customer, mapping.ID, input.Quantity, quote, input.QuoteToken) {
-			return errors.New("价格或立减资格已变化，请确认最新金额后重新提交")
+		order = model.Order{
+			TenantID: customer.TenantID, Channel: "xiaohongshu", ChannelAccountID: account.ID,
+			ExternalNo: &externalID, ContactName: input.GuestName, ContactPhone: input.ContactPhone,
+			Items: []model.OrderItem{{ProductID: product.ID, Quantity: input.Quantity, UseDate: useDate}},
 		}
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND channel_account_id = ? AND status = ?", mapping.ID, account.ID, "active").First(&mapping).Error; err != nil {
+		link = model.XiaohongshuOrderLink{
+			TenantID: customer.TenantID, ChannelAccountID: account.ID, MiniappCustomerID: customer.ID,
+			ClientRequestID: input.ClientRequestID, ExternalOrderID: externalID, State: "creating",
+		}
+		quote, err := promotions.LoadLockedQuoteTx(tx, customer, mapping.ID, input.Quantity, totalCents)
+		if err != nil {
+			if isMiniappOrderNotCreatedError(err) {
+				return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", err.Error())
+			}
 			return err
 		}
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("channel_product_mapping_id = ? AND tenant_id = ? AND channel_account_id = ? AND sync_status IN ? AND audit_status = ?", mapping.ID, customer.TenantID, account.ID, []string{"submitted", "synced"}, "approved").First(&config).Error; err != nil {
-			return errors.New("票种当前不可购买")
+		if (input.QuoteToken != "" || quote.DiscountCents > 0) && !promotions.ValidateQuoteToken(customer, mapping.ID, input.Quantity, quote, input.QuoteToken) {
+			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "价格或立减资格已变化，请确认最新金额后重新提交")
 		}
 		if err := (&OrderService{}).createTx(tx, &order, func(tx *gorm.DB, created *model.Order) error {
 			return applyMiniappPromotionPriceTx(tx, created, quote)
@@ -436,7 +541,7 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 		if order.DiscountCents > 0 {
 			request.Products[0].Discounts = []xiaohongshu.Discount{{Name: "限时随机立减", Price: order.DiscountCents, Count: 1}}
 		}
-		payloadCiphertext, err := encryptXiaohongshuOrderOperationPayload(request, config.ProductType)
+		payloadCiphertext, err := encryptXiaohongshuOrderOperationPayloadWithFingerprint(request, fingerprint, config.ProductType)
 		if err != nil {
 			return err
 		}
@@ -463,6 +568,30 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 		return nil, err
 	}
 	return s.orderResult(&link, &order, link.State == "unpaid")
+}
+
+func validateExistingXiaohongshuOrderRequestTx(tx *gorm.DB, link *model.XiaohongshuOrderLink, order *model.Order, fingerprint string) error {
+	if tx == nil || link == nil || order == nil || link.OrderID == 0 || order.OrderNo == "" {
+		return errors.New("小红书既有订单关联不完整")
+	}
+	var operation model.XiaohongshuOrderOperation
+	err := tx.Where("tenant_id = ? AND channel_account_id = ? AND xiaohongshu_order_link_id = ?", link.TenantID, link.ChannelAccountID, link.ID).First(&operation).Error
+	if err == nil {
+		payload, decryptErr := decryptXiaohongshuOrderOperationPayload(operation.RequestPayloadCiphertext)
+		if decryptErr != nil {
+			return newMiniappOrderCreateError(miniappOrderRecoveryRequiredCode, order.OrderNo, "请打开原订单详情核对后继续")
+		}
+		if payload.Fingerprint != "" {
+			if payload.Fingerprint != fingerprint {
+				return newMiniappOrderCreateError(miniappOrderPayloadMismatchCode, order.OrderNo, "同一请求编号已用于另一组下单参数，请核对原订单信息")
+			}
+			return nil
+		}
+		return newMiniappOrderCreateError(miniappOrderRecoveryRequiredCode, order.OrderNo, "请打开原订单详情核对后继续")
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	return newMiniappOrderCreateError(miniappOrderRecoveryRequiredCode, order.OrderNo, "请打开原订单详情核对后继续")
 }
 
 func (s XiaohongshuOrderService) refreshXiaohongshuOrder(ctx context.Context, customer *model.MiniappCustomer, link *model.XiaohongshuOrderLink, order *model.Order) (*MiniappOrderResult, error) {
@@ -659,10 +788,25 @@ func (s XiaohongshuOrderService) ProcessPendingXiaohongshuOrders(ctx context.Con
 		}
 	}
 	var links []model.XiaohongshuOrderLink
-	if err := model.DB.Where("(state IN ? OR (state = ? AND voucher_issuance_status = ?))", []string{"creating", "unpaid"}, "paid", "pending").Where("last_queried_at IS NULL OR last_queried_at < ?", now.Add(-20*time.Second)).Order("id ASC").Limit(limit).Find(&links).Error; err != nil {
+	if err := model.DB.Table("xiaohongshu_order_links AS link").Select("link.*").
+		Where("link.deleted_at IS NULL").
+		Where("(link.state IN ? OR (link.state = ? AND link.voucher_issuance_status = ?))", []string{"creating", "unpaid"}, "paid", "pending").
+		Where("link.last_queried_at IS NULL OR link.last_queried_at < ?", now.Add(-20*time.Second)).
+		Where(`(link.state <> ? OR NOT EXISTS (
+			SELECT 1 FROM xiaohongshu_order_operations AS operation
+			WHERE operation.xiaohongshu_order_link_id = link.id
+				AND operation.tenant_id = link.tenant_id
+				AND operation.deleted_at IS NULL
+		))`, "creating").
+		Order("link.last_queried_at ASC NULLS FIRST, link.id ASC").Limit(limit).Find(&links).Error; err != nil {
 		return 0, err
 	}
 	for i := range links {
+		// Advance the durable attempt cursor before any scoped lookup or remote
+		// call. A malformed/partial legacy row must not occupy every batch.
+		if err := s.markXiaohongshuOrderQueryAttempt(&links[i], now); err != nil {
+			continue
+		}
 		if links[i].State == "creating" {
 			// A durable operation owns every new create attempt. Never cancel its
 			// local order merely because the link is still creating: the remote
@@ -697,6 +841,17 @@ func (s XiaohongshuOrderService) ProcessPendingXiaohongshuOrders(ctx context.Con
 	return processed, nil
 }
 
+func (s XiaohongshuOrderService) markXiaohongshuOrderQueryAttempt(link *model.XiaohongshuOrderLink, attemptedAt time.Time) error {
+	if link == nil || link.ID == 0 || link.TenantID == 0 {
+		return errors.New("xiaohongshu order link is required")
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		return tx.Model(&model.XiaohongshuOrderLink{}).
+			Where("id = ? AND tenant_id = ? AND (last_queried_at IS NULL OR last_queried_at < ?)", link.ID, link.TenantID, attemptedAt).
+			Update("last_queried_at", attemptedAt).Error
+	})
+}
+
 func (s XiaohongshuOrderService) now() time.Time {
 	if s.Now != nil {
 		return s.Now()
@@ -707,14 +862,19 @@ func (s XiaohongshuOrderService) now() time.Time {
 type xiaohongshuOrderOperationPayload struct {
 	Request     xiaohongshu.OrderUpsertRequest `json:"request"`
 	ProductType int                            `json:"product_type"`
+	Fingerprint string                         `json:"fingerprint,omitempty"`
 }
 
 func encryptXiaohongshuOrderOperationPayload(request xiaohongshu.OrderUpsertRequest, productTypes ...int) (string, error) {
+	return encryptXiaohongshuOrderOperationPayloadWithFingerprint(request, "", productTypes...)
+}
+
+func encryptXiaohongshuOrderOperationPayloadWithFingerprint(request xiaohongshu.OrderUpsertRequest, fingerprint string, productTypes ...int) (string, error) {
 	productType := 0
 	if len(productTypes) == 1 {
 		productType = productTypes[0]
 	}
-	raw, err := json.Marshal(xiaohongshuOrderOperationPayload{Request: request, ProductType: productType})
+	raw, err := json.Marshal(xiaohongshuOrderOperationPayload{Request: request, ProductType: productType, Fingerprint: fingerprint})
 	if err != nil {
 		return "", err
 	}

@@ -3,6 +3,27 @@ const { requestGuaranteeOrderPayment } = require('../../utils/payment');
 const calendar = require('../../utils/calendar');
 const promotion = require('../../utils/promotion');
 
+const ORDER_RECOVERY_ERROR_CODES = ['idempotency_payload_mismatch', 'existing_order_recovery_required'];
+const ORDER_PRECHECK_ERROR_CODES = ['order_not_created'];
+
+function errorData(error) {
+  return error && error.data && typeof error.data === 'object' ? error.data : {};
+}
+
+function errorCode(error) {
+  const data = errorData(error);
+  return String(data.error_code || error && (error.error_code || error.errorCode) || '').trim();
+}
+
+function errorOrderNo(error) {
+  const data = errorData(error);
+  return String(data.order_no || data.orderNo || error && (error.order_no || error.orderNo) || '').trim();
+}
+
+function includesErrorCode(codes, code) {
+  return Boolean(code) && codes.indexOf(code) >= 0;
+}
+
 Page({
   data: {
     product: null,
@@ -34,6 +55,7 @@ Page({
     opportunityAmountText: '',
     opportunityCountdown: '',
     opportunityReservedOrderNo: '',
+    orderRecoveryPending: false,
     loading: true,
     submitting: false,
     error: ''
@@ -55,7 +77,7 @@ Page({
       this.hasShown = true;
       return;
     }
-    if (this.data.product && !this.data.submitting && !this.data.createdOrderNo) {
+    if (this.data.product && !this.data.submitting && !this.data.createdOrderNo && !this.data.orderRecoveryPending) {
       this.loadOpportunity();
       this.refreshQuote();
     }
@@ -68,6 +90,7 @@ Page({
   },
 
   loadProduct() {
+    if (this.data.orderRecoveryPending) return Promise.resolve();
     this.setData({ loading: true, error: '' });
     app.request('/catalog').then(catalog => {
       const product = (catalog.products || []).find(item => Number(item.id) === this.mappingId);
@@ -106,8 +129,12 @@ Page({
 
   retry() { this.loadProduct(); },
 
+  isOrderSelectionLocked() {
+    return Boolean(this.data.submitting || this.data.createdOrderNo || this.data.orderRecoveryPending);
+  },
+
   decrease() {
-    if (this.data.submitting || this.data.createdOrderNo) return;
+    if (this.isOrderSelectionLocked()) return;
     if (this.data.quantity <= 1) return;
     this.setData({ quantity: this.data.quantity - 1, error: '' }, () => {
       this.updateTotal();
@@ -116,7 +143,7 @@ Page({
   },
 
   increase() {
-    if (this.data.submitting || this.data.createdOrderNo) return;
+    if (this.isOrderSelectionLocked()) return;
     if (this.data.quantity >= this.data.maxQuantity) return;
     this.setData({ quantity: this.data.quantity + 1, error: '' }, () => {
       this.updateTotal();
@@ -125,34 +152,39 @@ Page({
   },
 
   selectDate(event) {
-    if (this.data.submitting || this.data.createdOrderNo) return;
+    if (this.isOrderSelectionLocked()) return;
     const useDate = event.currentTarget.dataset.date;
     if (!calendar.isDateWithin(useDate, this.data.minDate, this.data.maxDate)) return;
     this.setData({ useDate, error: '' });
     this.refreshCalendar();
   },
 
-  toggleCalendar() { this.setData({ calendarOpen: !this.data.calendarOpen }); },
+  toggleCalendar() {
+    if (this.isOrderSelectionLocked()) return;
+    this.setData({ calendarOpen: !this.data.calendarOpen });
+  },
 
   previousMonth() {
+    if (this.isOrderSelectionLocked()) return;
     if (!calendar.canMoveMonth(this.calendarMonth, -1, this.data.minDate, this.data.maxDate)) return;
     this.calendarMonth = new Date(this.calendarMonth.getFullYear(), this.calendarMonth.getMonth() - 1, 1);
     this.refreshCalendar();
   },
 
   nextMonth() {
+    if (this.isOrderSelectionLocked()) return;
     if (!calendar.canMoveMonth(this.calendarMonth, 1, this.data.minDate, this.data.maxDate)) return;
     this.calendarMonth = new Date(this.calendarMonth.getFullYear(), this.calendarMonth.getMonth() + 1, 1);
     this.refreshCalendar();
   },
 
   onGuestNameInput(event) {
-    if (this.data.submitting || this.data.createdOrderNo) return;
+    if (this.isOrderSelectionLocked()) return;
     this.setData({ guestName: event.detail.value || '', error: '' });
   },
 
   onContactPhoneInput(event) {
-    if (this.data.submitting || this.data.createdOrderNo) return;
+    if (this.isOrderSelectionLocked()) return;
     this.setData({ contactPhone: event.detail.value || '', error: '' });
   },
 
@@ -162,6 +194,7 @@ Page({
   },
 
   loadOpportunity() {
+    if (this.data.orderRecoveryPending) return Promise.resolve();
     const version = (this.opportunityVersion || 0) + 1;
     this.opportunityVersion = version;
     return app.request('/promotion', { method: 'POST', data: {} }).then(raw => {
@@ -176,6 +209,7 @@ Page({
   },
 
   applyOpportunity(opportunity) {
+    if (this.data.orderRecoveryPending) return;
     const hadApplicableGrant = this.opportunity && this.opportunity.status === 'available' &&
       this.opportunity.mappingIds.indexOf(Number(this.mappingId)) >= 0;
     this.opportunity = opportunity;
@@ -196,7 +230,7 @@ Page({
 
   startOpportunityTimer() {
     this.stopOpportunityTimer();
-    if (!this.opportunity || !promotion.appliesTo(this.opportunity, this.mappingId) || typeof setInterval !== 'function') return;
+    if (this.data.orderRecoveryPending || !this.opportunity || !promotion.appliesTo(this.opportunity, this.mappingId) || typeof setInterval !== 'function') return;
     this.opportunityTimer = setInterval(() => {
       if (!promotion.appliesTo(this.opportunity, this.mappingId)) return this.applyOpportunity(this.opportunity);
       this.setData({ opportunityCountdown: promotion.countdown(this.opportunity) });
@@ -209,7 +243,7 @@ Page({
   },
 
   refreshQuote() {
-    if (!this.data.product || this.data.createdOrderNo) return Promise.resolve();
+    if (!this.data.product || this.data.createdOrderNo || this.data.orderRecoveryPending) return Promise.resolve();
     const version = (this.quoteVersion || 0) + 1;
     this.quoteVersion = version;
     this.setData({ quoteLoading: true, quoteReady: false, quoteToken: '', quoteError: '', hasDiscount: false, totalText: '—' });
@@ -242,11 +276,155 @@ Page({
     });
   },
 
+  buildOrderPayload() {
+    return {
+      mapping_id: this.data.product.id,
+      quantity: this.data.quantity,
+      request_id: this.orderRequestId,
+      quote_token: this.data.quoteToken,
+      use_date: this.data.useDate,
+      guest_name: this.data.guestName.trim(),
+      contact_phone: this.data.contactPhone.trim()
+    };
+  },
+
+  captureOrderRecoverySnapshot(payload) {
+    return {
+      quantity: payload.quantity,
+      useDate: payload.use_date,
+      guestName: payload.guest_name,
+      contactPhone: payload.contact_phone,
+      quoteReady: this.data.quoteReady,
+      quoteToken: payload.quote_token,
+      originalTotalText: this.data.originalTotalText,
+      discountText: this.data.discountText,
+      hasDiscount: this.data.hasDiscount,
+      totalText: this.data.totalText
+    };
+  },
+
+  invalidateMutableRequests() {
+    this.quoteVersion = (this.quoteVersion || 0) + 1;
+    this.opportunityVersion = (this.opportunityVersion || 0) + 1;
+    this.stopOpportunityTimer();
+  },
+
+  restoreOrderRecoverySnapshot() {
+    const snapshot = this.orderRecoverySnapshot;
+    if (!snapshot) return;
+    this.setData({
+      quantity: snapshot.quantity,
+      useDate: snapshot.useDate,
+      guestName: snapshot.guestName,
+      contactPhone: snapshot.contactPhone,
+      quoteLoading: false,
+      quoteReady: Boolean(snapshot.quoteReady && snapshot.quoteToken),
+      quoteToken: snapshot.quoteToken,
+      quoteError: '',
+      originalTotalText: snapshot.originalTotalText,
+      discountText: snapshot.discountText,
+      hasDiscount: snapshot.hasDiscount,
+      totalText: snapshot.totalText,
+      calendarOpen: false,
+      orderRecoveryPending: true
+    });
+  },
+
+  enterUnknownOrderRecovery() {
+    this.invalidateMutableRequests();
+    this.restoreOrderRecoverySnapshot();
+    this.setData({
+      submitting: false,
+      orderRecoveryPending: true,
+      error: '订单创建结果暂时无法确认，已保留首次提交的日期、数量、游客信息和报价。请点击“重试确认订单”恢复原请求，不要修改当前选择。'
+    });
+  },
+
+  releaseOrderRecovery(error) {
+    this.invalidateMutableRequests();
+    this.orderPayload = null;
+    this.orderRecoverySnapshot = null;
+    const detail = String(error && error.message || '').trim();
+    const baseMessage = detail || '订单校验未通过';
+    this.setData({ submitting: false, orderRecoveryPending: false, error: `${baseMessage}，已确认本次未创建订单，请核对信息并重新报价后提交` });
+    return this.refreshQuote().then(() => {
+      if (this.data.orderRecoveryPending) return;
+      const suffix = this.data.quoteReady ? '请核对最新报价后重新提交' : '请重新报价后提交';
+      this.setData({ error: `${baseMessage}，已确认本次未创建订单，${suffix}` });
+    });
+  },
+
+  recoverExistingOrder(error, errorCodeValue) {
+    this.invalidateMutableRequests();
+    this.orderPayload = null;
+    this.orderRecoverySnapshot = null;
+    const orderNo = errorOrderNo(error);
+    const message = errorCodeValue === 'idempotency_payload_mismatch'
+      ? '原请求已关联其他订单选择，未自动发起支付；请打开原订单核对后继续。'
+      : '原订单已创建但当前响应信息不足，未自动发起支付；请打开订单详情核对后继续。';
+    this.setData({ submitting: false, orderRecoveryPending: false, createdOrderNo: orderNo, error: message });
+    const url = orderNo
+      ? `/pages/order/detail?order_no=${encodeURIComponent(orderNo)}`
+      : '/pages/orders/index';
+    if (typeof xhs.redirectTo === 'function') xhs.redirectTo({ url });
+  },
+
+  handleOrderCreateError(error) {
+    const code = errorCode(error);
+    if (includesErrorCode(ORDER_RECOVERY_ERROR_CODES, code)) {
+      this.recoverExistingOrder(error, code);
+      return;
+    }
+    if (includesErrorCode(ORDER_PRECHECK_ERROR_CODES, code)) {
+      this.releaseOrderRecovery(error);
+      return;
+    }
+    this.enterUnknownOrderRecovery();
+  },
+
+  createOrder(payload) {
+    this.setData({ submitting: true, error: '' });
+    return app.request('/orders', {
+      method: 'POST',
+      data: { ...payload }
+    }).then(order => {
+      if (!order || !order.order_no) {
+        this.enterUnknownOrderRecovery();
+        return;
+      }
+      this.orderPayload = null;
+      this.orderRecoverySnapshot = null;
+      this.setData({ createdOrderNo: order.order_no, orderRecoveryPending: false, calendarOpen: false });
+      const started = requestGuaranteeOrderPayment(xhs, order, {
+        onSuccess: () => {
+          xhs.redirectTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(order.order_no || '')}` });
+        },
+        onFailure: result => {
+          this.setData({ submitting: false, error: result.message });
+        },
+        onComplete: result => {
+          if (result.outcome === 'unknown') {
+            this.setData({ submitting: false, error: '支付结果正在确认，订单已保留，请在订单详情继续查看' });
+          }
+        }
+      });
+      if (!started) return;
+    }).catch(error => this.handleOrderCreateError(error));
+  },
+
   submit() {
     if (!this.data.product || this.data.submitting) return;
     if (this.data.createdOrderNo) {
       xhs.redirectTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(this.data.createdOrderNo)}` });
       return;
+    }
+    if (this.data.orderRecoveryPending) {
+      if (!this.orderPayload) {
+        this.setData({ error: '订单恢复信息不可用，请打开订单列表核对，勿重复下单' });
+        if (typeof xhs.redirectTo === 'function') xhs.redirectTo({ url: '/pages/orders/index' });
+        return;
+      }
+      return this.createOrder(this.orderPayload);
     }
     if (!this.data.quoteReady || !this.data.quoteToken) {
       if (!this.data.quoteLoading) this.refreshQuote();
@@ -265,51 +443,15 @@ Page({
       this.setData({ error: '请填写有效的联系电话' });
       return;
     }
-    this.setData({ submitting: true, error: '' });
-    app.request('/orders', {
-      method: 'POST',
-      data: {
-        mapping_id: this.data.product.id,
-        quantity: this.data.quantity,
-        request_id: this.orderRequestId,
-        quote_token: this.data.quoteToken,
-        use_date: this.data.useDate,
-        guest_name: this.data.guestName.trim(),
-        contact_phone: this.data.contactPhone.trim()
-      }
-    }).then(order => {
-      if (!order || !order.order_no) {
-        this.setData({ submitting: false, error: '订单信息不完整，订单已保留，请在订单列表中查看' });
-        return;
-      }
-      this.setData({ createdOrderNo: order.order_no, calendarOpen: false });
-      const started = requestGuaranteeOrderPayment(xhs, order, {
-        onSuccess: () => {
-          xhs.redirectTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(order.order_no || '')}` });
-        },
-        onFailure: result => {
-          this.setData({ submitting: false, error: result.message });
-        },
-        onComplete: result => {
-          if (result.outcome === 'unknown') {
-            this.setData({ submitting: false, error: '支付结果正在确认，订单已保留，请在订单详情继续查看' });
-          }
-        }
-      });
-      if (!started) return;
-    }).catch(error => {
-      const message = error.message || '订单创建失败，请稍后重试';
-      this.setData({ submitting: false });
-      if (/quote|promotion|price|优惠|价格/i.test(message)) {
-        this.refreshQuote().then(() => this.setData({ error: '价格或优惠已更新，请确认后重新提交' }));
-        return;
-      }
-      // Preserve the same request ID and quote token for an unknown network result.
-      this.setData({ error: message });
-    });
+    const payload = this.buildOrderPayload();
+    this.orderPayload = payload;
+    this.orderRecoverySnapshot = this.captureOrderRecoverySnapshot(payload);
+    this.invalidateMutableRequests();
+    return this.createOrder(payload);
   },
 
   openPromotionOrder() {
+    if (this.data.orderRecoveryPending) return;
     if (this.data.opportunityReservedOrderNo) xhs.navigateTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(this.data.opportunityReservedOrderNo)}` });
   },
 

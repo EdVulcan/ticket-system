@@ -131,7 +131,11 @@ test('price conflict fetches a new quote and requires a subsequent submit', asyn
   const page = loadConfirmation({
     request(path, options) {
       requests.push({ path, options });
-      if (path === '/orders') return Promise.reject(new Error('quote expired'));
+      if (path === '/orders') {
+        const error = new Error('quote expired');
+        error.data = { error_code: 'order_not_created' };
+        return Promise.reject(error);
+      }
       return Promise.resolve({ original_amount_cents: 5000, discount_cents: 0, amount_cents: 5000, quote_token: 'replacement' });
     }
   });

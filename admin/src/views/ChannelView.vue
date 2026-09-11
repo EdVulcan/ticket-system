@@ -186,6 +186,7 @@
 
     <el-dialog v-model="xiaohongshuMappingDialog" title="小红书商品发布配置" width="760px" :close-on-click-modal="false">
       <el-alert v-if="selectedAccount?.status === 'sandbox'" class="mb-4" type="warning" :closable="false" title="当前为测试小程序：不能对外发布，订单总额不能超过 0.10 元，且使用小红书自动绑定的测试门店。" />
+      <el-alert v-if="xiaohongshuMappingSaveNotice" class="mb-4" :type="xiaohongshuMappingSaveNotice.type" :closable="false" :title="xiaohongshuMappingSaveNotice.message" />
       <div v-if="xiaohongshuCategoryError || xiaohongshuPOIError" class="mb-4 rounded border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
         <div class="font-medium">小红书发布资源暂不可用</div>
         <p v-if="xiaohongshuCategoryError" class="mt-1 leading-5">类目：{{ xiaohongshuCategoryError }}</p>
@@ -512,6 +513,7 @@ const xiaohongshuMappingDialog = ref(false)
 const xiaohongshuMappingSaving = ref(false)
 const xiaohongshuMappingLoading = ref(false)
 const xiaohongshuMappingSyncing = ref(false)
+const xiaohongshuMappingSaveNotice = ref<{ type: 'warning' | 'error'; message: string } | null>(null)
 const xiaohongshuAuditRefreshing = ref(false)
 const xiaohongshuImageUploading = ref(false)
 const xiaohongshuImageUpload = ref<UploadInstance>()
@@ -712,6 +714,73 @@ const applyXiaohongshuAuditProjection = (config: any) => {
     audit_check_error: config.audit_check_error || '',
   })
 }
+const applyXiaohongshuPersistedConfig = (config: any) => {
+  const persisted = config || {}
+  Object.assign(xiaohongshuMapping, {
+    external_sku_id: persisted.external_sku_id || '',
+    category_id: persisted.category_id || '',
+    poi_ids: Array.isArray(persisted.poi_ids) ? persisted.poi_ids : [],
+    image_url: persisted.image_url || '',
+    description: persisted.description || '',
+    product_path: persisted.product_path || '/pages/index/index',
+    order_path: persisted.order_path || '/pages/order/detail',
+    product_type: persisted.product_type || 1,
+    settle_type: persisted.settle_type || 1,
+  })
+  applyXiaohongshuAuditProjection(persisted)
+}
+const normalizeXiaohongshuPOIIDs = (value: unknown) => Array.from(new Set(Array.isArray(value) ? value.map(item => String(item).trim()).filter(Boolean) : [])).sort()
+const xiaohongshuMappingMatches = (actual: any, expected: any) => Boolean(actual) &&
+  String(actual.external_code || '') === expected.external_code &&
+  String(actual.display_name || '') === expected.display_name &&
+  Number(actual.channel_sale_cents || 0) === expected.channel_sale_cents &&
+  String(actual.status || '') === expected.status
+const xiaohongshuConfigMatches = (actual: any, expected: any) => Boolean(actual && actual.external_sku_id) &&
+  String(actual.external_sku_id || '') === expected.external_sku_id &&
+  String(actual.category_id || '') === expected.category_id &&
+  JSON.stringify(normalizeXiaohongshuPOIIDs(actual.poi_ids)) === JSON.stringify(normalizeXiaohongshuPOIIDs(expected.poi_ids)) &&
+  String(actual.image_url || '') === expected.image_url &&
+  String(actual.description || '') === expected.description &&
+  String(actual.product_path || '') === expected.product_path &&
+  String(actual.order_path || '') === expected.order_path &&
+  Number(actual.product_type || 0) === expected.product_type &&
+  Number(actual.settle_type || 0) === expected.settle_type
+const refreshXiaohongshuMappingState = async (accountID: number, mappingID: number, session: number, expectedMapping: any, expectedConfig: any) => {
+  const state = { mappingMatch: null as boolean | null, configMatch: null as boolean | null, syncStatus: '', errors: [] as string[] }
+  const [mappingResult, configResult] = await Promise.allSettled([
+    request.get('/channel-accounts/mappings', { params: { channel_account_id: accountID }, skipErrorToast: true } as any),
+    request.get(`/channel-accounts/${accountID}/mappings/${mappingID}/xiaohongshu-product`, { skipErrorToast: true } as any),
+  ])
+  if (!isCurrentXiaohongshuMappingDialog(session, accountID, mappingID)) return { ...state, errors: ['发布配置窗口已关闭，未能更新当前页面'] }
+  if (mappingResult.status === 'fulfilled') {
+    const rows = Array.isArray(mappingResult.value.data?.data) ? mappingResult.value.data.data : []
+    mappings.value = rows
+    const persistedMapping = rows.find((item: any) => Number(item.id) === Number(mappingID))
+    if (persistedMapping) {
+      state.mappingMatch = xiaohongshuMappingMatches(persistedMapping, expectedMapping)
+      Object.assign(xiaohongshuMapping, {
+        external_code: persistedMapping.external_code || '',
+        display_name: persistedMapping.display_name || '',
+        channel_sale_yuan: Number(persistedMapping.channel_sale_cents || 0) / 100,
+        status: persistedMapping.status || 'disabled',
+      })
+    } else {
+      state.mappingMatch = false
+      state.errors.push('映射未在当前渠道列表中找到')
+    }
+  } else {
+    state.errors.push(`映射状态刷新失败：${xiaohongshuResourceError(mappingResult.reason)}`)
+  }
+  if (configResult.status === 'fulfilled') {
+    const persistedConfig = configResult.value.data || {}
+    state.configMatch = xiaohongshuConfigMatches(persistedConfig, expectedConfig)
+    state.syncStatus = persistedConfig.sync_status || ''
+    applyXiaohongshuPersistedConfig(persistedConfig)
+  } else {
+    state.errors.push(`发布配置状态刷新失败：${xiaohongshuResourceError(configResult.reason)}`)
+  }
+  return state
+}
 const stopXiaohongshuAuditRefresh = () => {
   if (xiaohongshuAuditRefreshTimer !== undefined) {
     window.clearInterval(xiaohongshuAuditRefreshTimer)
@@ -748,6 +817,9 @@ const openXiaohongshuMappingEdit = async (row: any) => {
   ++xiaohongshuAuditProjectionGeneration
   const accountID = selectedAccount.value.id
   const mappingID = row.id
+  xiaohongshuMappingSaveNotice.value = null
+  xiaohongshuMappingSaving.value = false
+  xiaohongshuMappingSyncing.value = false
   Object.assign(xiaohongshuMapping, { mapping_id: mappingID, external_code: row.external_code || '', external_sku_id: `${row.external_code || 'XHS'}_SKU`, display_name: row.display_name || '', channel_sale_yuan: Number(row.channel_sale_cents || 0) / 100, category_id: '', poi_ids: [], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, status: row.status || 'active', sync_status: '', last_sync_error: '', audit_status: '', audit_message: '', audited_at: '', audit_checked_at: '', audit_check_error: '' })
   xiaohongshuMappingDialog.value = true
   xiaohongshuMappingLoading.value = true
@@ -813,28 +885,71 @@ const saveXiaohongshuMapping = async (syncAfterSave: boolean) => {
   if (!selectedAccount.value || !xiaohongshuMapping.external_code.trim() || !xiaohongshuMapping.external_sku_id.trim() || xiaohongshuMapping.channel_sale_yuan <= 0 || !xiaohongshuMapping.category_id || !xiaohongshuMapping.image_url.trim() || !xiaohongshuMapping.description.trim()) { ElMessage.warning('请完整填写商品编码、规格编码、售价、类目、图片和商品说明'); return }
   if (!xiaohongshuMapping.product_path.startsWith('/') || !xiaohongshuMapping.order_path.startsWith('/')) { ElMessage.warning('小程序页面路径必须以 / 开头'); return }
   if (selectedAccount.value.status === 'sandbox' && Math.round(xiaohongshuMapping.channel_sale_yuan * 100) > 10) { ElMessage.warning('测试小程序售价不能高于 0.10 元，否则无法完成支付测试'); return }
+  const accountID = selectedAccount.value.id
+  const mappingID = xiaohongshuMapping.mapping_id
+  const session = xiaohongshuMappingDialogSession
+  const mappingPayload = { external_code: xiaohongshuMapping.external_code.trim(), display_name: xiaohongshuMapping.display_name.trim(), channel_sale_cents: Math.round(xiaohongshuMapping.channel_sale_yuan * 100), channel_cost_cents: 0, status: xiaohongshuMapping.status }
+  const configPayload = { external_sku_id: xiaohongshuMapping.external_sku_id.trim(), category_id: xiaohongshuMapping.category_id, poi_ids: [...xiaohongshuMapping.poi_ids], image_url: xiaohongshuMapping.image_url.trim(), description: xiaohongshuMapping.description.trim(), product_path: xiaohongshuMapping.product_path.trim(), order_path: xiaohongshuMapping.order_path.trim(), product_type: xiaohongshuMapping.product_type, settle_type: xiaohongshuMapping.settle_type }
   ++xiaohongshuAuditProjectionGeneration
+  xiaohongshuMappingSaveNotice.value = null
   xiaohongshuMappingSaving.value = true
+  let mappingSaved = false
+  let configSaved = false
+  let syncAttempted = false
   try {
-    await request.patch(`/channel-accounts/${selectedAccount.value.id}/mappings/${xiaohongshuMapping.mapping_id}`, { external_code: xiaohongshuMapping.external_code.trim(), display_name: xiaohongshuMapping.display_name.trim(), channel_sale_cents: Math.round(xiaohongshuMapping.channel_sale_yuan * 100), channel_cost_cents: 0, status: xiaohongshuMapping.status })
-    const config = (await request.put(`/channel-accounts/${selectedAccount.value.id}/mappings/${xiaohongshuMapping.mapping_id}/xiaohongshu-product`, { external_sku_id: xiaohongshuMapping.external_sku_id.trim(), category_id: xiaohongshuMapping.category_id, poi_ids: xiaohongshuMapping.poi_ids, image_url: xiaohongshuMapping.image_url.trim(), description: xiaohongshuMapping.description.trim(), product_path: xiaohongshuMapping.product_path.trim(), order_path: xiaohongshuMapping.order_path.trim(), product_type: xiaohongshuMapping.product_type, settle_type: xiaohongshuMapping.settle_type })).data
-    const row = mappings.value.find((item: any) => item.id === xiaohongshuMapping.mapping_id)
-    if (row) Object.assign(row, { external_code: xiaohongshuMapping.external_code.trim(), display_name: xiaohongshuMapping.display_name.trim(), channel_sale_cents: Math.round(xiaohongshuMapping.channel_sale_yuan * 100), channel_cost_cents: 0, status: xiaohongshuMapping.status })
-    Object.assign(xiaohongshuMapping, { sync_status: config.sync_status || 'pending', last_sync_error: config.last_sync_error || '', audit_status: config.audit_status || 'pending', audit_message: config.audit_message || '', audited_at: config.audited_at || '', audit_checked_at: config.audit_checked_at || '', audit_check_error: config.audit_check_error || '' })
+    await request.patch(`/channel-accounts/${accountID}/mappings/${mappingID}`, mappingPayload, { skipErrorToast: true } as any)
+    mappingSaved = true
+    const config = (await request.put(`/channel-accounts/${accountID}/mappings/${mappingID}/xiaohongshu-product`, configPayload, { skipErrorToast: true } as any)).data
+    configSaved = true
+    if (isCurrentXiaohongshuMappingDialog(session, accountID, mappingID)) {
+      const row = mappings.value.find((item: any) => Number(item.id) === Number(mappingID))
+      if (row) Object.assign(row, mappingPayload)
+      Object.assign(xiaohongshuMapping, { sync_status: config.sync_status || 'pending', last_sync_error: config.last_sync_error || '', audit_status: config.audit_status || 'pending', audit_message: config.audit_message || '', audited_at: config.audited_at || '', audit_checked_at: config.audit_checked_at || '', audit_check_error: config.audit_check_error || '' })
+    }
     if (syncAfterSave) {
-      xiaohongshuMappingSyncing.value = true
-      await request.post(`/channel-accounts/${selectedAccount.value.id}/mappings/${xiaohongshuMapping.mapping_id}/xiaohongshu-sync`)
+      if (isCurrentXiaohongshuMappingDialog(session, accountID, mappingID)) xiaohongshuMappingSyncing.value = true
+      syncAttempted = true
+      await request.post(`/channel-accounts/${accountID}/mappings/${mappingID}/xiaohongshu-sync`, {}, { skipErrorToast: true } as any)
       // The provider accepts the upsert before review. Keep the local state at
       // submitted/pending until the official product query confirms PASS.
-      xiaohongshuMapping.sync_status = 'submitted'
-      xiaohongshuMapping.audit_status = 'pending'
-      xiaohongshuMapping.audit_message = ''
-      xiaohongshuMapping.audited_at = ''
-      ElMessage.success('商品已提交小红书审核，审核通过后才会进入目录')
+      if (isCurrentXiaohongshuMappingDialog(session, accountID, mappingID)) {
+        xiaohongshuMapping.sync_status = 'submitted'
+        xiaohongshuMapping.audit_status = 'pending'
+        xiaohongshuMapping.audit_message = ''
+        xiaohongshuMapping.audited_at = ''
+        ElMessage.success('商品已提交小红书审核，审核通过后才会进入目录')
+      }
     } else {
-      ElMessage.success('小红书商品发布配置已保存')
+      if (isCurrentXiaohongshuMappingDialog(session, accountID, mappingID)) ElMessage.success('小红书商品发布配置已保存')
     }
-  } finally { xiaohongshuMappingSaving.value = false; xiaohongshuMappingSyncing.value = false }
+  } catch (error: any) {
+    const refreshed = await refreshXiaohongshuMappingState(accountID, mappingID, session, mappingPayload, configPayload)
+    const errorMessage = error?.response?.data?.error || error?.message || '请求失败，请稍后重试'
+    let message = ''
+    if (!mappingSaved) {
+      message = `${refreshed.mappingMatch === true ? '映射已保存' : refreshed.mappingMatch === false ? '映射未保存' : '映射保存结果未确认'}，发布配置未执行：${errorMessage}`
+    } else if (!configSaved) {
+      const configResult = refreshed.configMatch === true ? '发布配置已保存' : refreshed.configMatch === false ? '发布配置未保存' : '发布配置保存结果未确认'
+      const mappingResult = refreshed.mappingMatch === false ? '映射已保存，但当前映射与本次提交不一致' : '映射已保存'
+      message = `${mappingResult}，${configResult}：${errorMessage}`
+    } else if (syncAfterSave && syncAttempted) {
+      const syncResult = refreshed.syncStatus === 'failed' ? '商品同步失败' : '同步结果未确认'
+      const configCaveat = refreshed.configMatch === false ? '（当前发布配置与本次提交不一致）' : ''
+      message = `映射和发布配置已保存${configCaveat}，但${syncResult}：${errorMessage}`
+    } else {
+      message = `小红书商品发布配置保存失败：${errorMessage}`
+    }
+    if (refreshed.errors.length > 0) message += ` 当前状态刷新异常：${refreshed.errors.join('；')}`
+    if (isCurrentXiaohongshuMappingDialog(session, accountID, mappingID)) {
+      xiaohongshuMappingSaveNotice.value = { type: mappingSaved || refreshed.mappingMatch === true ? 'warning' : 'error', message }
+    }
+    if (isCurrentXiaohongshuMappingDialog(session, accountID, mappingID)) ElMessage.error(message)
+  } finally {
+    if (isCurrentXiaohongshuMappingDialog(session, accountID, mappingID)) {
+      xiaohongshuMappingSaving.value = false
+      xiaohongshuMappingSyncing.value = false
+    }
+  }
 }
 const loadCtripSyncTasks = async () => {
   if (!selectedAccount.value || selectedAccount.value.type !== 'ctrip') return

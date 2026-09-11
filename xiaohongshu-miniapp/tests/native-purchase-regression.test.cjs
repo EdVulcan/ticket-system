@@ -37,8 +37,8 @@ test('native button styling uses explicit disabled state classes instead of attr
 
   assert.doesNotMatch(appStyles, /button\[disabled\]/);
   assert.match(appStyles, /button\.is-disabled/);
-  assert.match(confirmTemplate, /class="stepper-button \{\{quantity <= 1 \|\| submitting \|\| createdOrderNo \? 'is-disabled' : ''\}\}"[^>]*disabled="\{\{quantity <= 1 \|\| submitting \|\| createdOrderNo\}\}"/);
-  assert.match(confirmTemplate, /class="pay-button \{\{submitting \|\| \(!quoteReady && !createdOrderNo\) \? 'is-disabled' : ''\}\}"[^>]*disabled="\{\{submitting \|\| \(!quoteReady && !createdOrderNo\)\}\}"/);
+  assert.match(confirmTemplate, /class="stepper-button \{\{quantity <= 1 \|\| submitting \|\| createdOrderNo \|\| orderRecoveryPending \? 'is-disabled' : ''\}\}"[^>]*disabled="\{\{quantity <= 1 \|\| submitting \|\| createdOrderNo \|\| orderRecoveryPending\}\}"/);
+  assert.match(confirmTemplate, /class="pay-button \{\{submitting \|\| \(!quoteReady && !createdOrderNo && !orderRecoveryPending\) \? 'is-disabled' : ''\}\}"[^>]*disabled="\{\{submitting \|\| \(!quoteReady && !createdOrderNo && !orderRecoveryPending\)\}\}"/);
 });
 
 test('detail purchase bypasses the obsolete selector popup and opens confirmation', () => {

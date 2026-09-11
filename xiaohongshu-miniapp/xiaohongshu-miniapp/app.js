@@ -100,7 +100,10 @@ App({
             return;
           }
           if (response.statusCode < 200 || response.statusCode >= 300) {
-            reject(new Error(this.readError(response, '请求失败，请稍后重试')));
+            const requestError = new Error(this.readError(response, '请求失败，请稍后重试'));
+            requestError.statusCode = response.statusCode;
+            if (response.data && typeof response.data === 'object') requestError.data = response.data;
+            reject(requestError);
             return;
           }
           resolve(response.data);

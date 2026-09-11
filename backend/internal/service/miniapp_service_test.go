@@ -306,7 +306,18 @@ func TestXiaohongshuSandboxOrderLimitIsServerEnforced(t *testing.T) {
 	if err := model.DB.Create(&model.XiaohongshuProductConfig{TenantID: tenantID, ChannelAccountID: account.ID, ChannelProductMappingID: mapping.ID, ExternalSKUID: "SKU", CategoryID: "ticket", ImageURL: "https://example.com/ticket.png", Description: "票", ProductPath: "/pages/index/index", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 1, SyncStatus: "synced", AuditStatus: "approved"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	customer := model.MiniappCustomer{Base: model.Base{ID: 99}, TenantID: tenantID, ChannelAccountID: account.ID}
+	openIDCiphertext, err := utils.EncryptAES("sandbox-limit-openid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	customer := model.MiniappCustomer{
+		TenantID: tenantID, ChannelAccountID: account.ID, OpenIDHash: hashMiniappValue("sandbox-limit-openid"),
+		OpenIDCiphertext: openIDCiphertext, SessionTokenHash: hashMiniappValue("sandbox-limit-token"),
+		SessionExpiresAt: time.Now().Add(time.Hour), Status: "active", LastLoginAt: time.Now(),
+	}
+	if err := model.DB.Create(&customer).Error; err != nil {
+		t.Fatal(err)
+	}
 	if _, err := (NewMiniappService()).CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 2, ClientRequestID: "too-much"}); err == nil || !strings.Contains(err.Error(), "0.10") {
 		t.Fatalf("error=%v", err)
 	}
