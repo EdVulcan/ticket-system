@@ -23,7 +23,7 @@ func TestXiaohongshuWebhookVerifiesDecryptsAndPersistsIdempotently(t *testing.T)
 	if err := (&ChannelService{}).CreateXiaohongshuIntegration(tenantID, &account, appID, "app-secret", token, encodingAESKey); err != nil {
 		t.Fatal(err)
 	}
-	mapping := model.ChannelProductMapping{ChannelAccountID: account.ID, ProductID: productID, ExternalCode: "P1", ChannelSaleCents: 1}
+	mapping := model.ChannelProductMapping{ChannelAccountID: account.ID, ProductID: productID, ExternalCode: "XHS_TEST_MULTI_20260911", ChannelSaleCents: 1}
 	if err := (&ChannelService{}).AddMapping(tenantID, &mapping); err != nil {
 		t.Fatal(err)
 	}
@@ -43,11 +43,11 @@ func TestXiaohongshuWebhookVerifiesDecryptsAndPersistsIdempotently(t *testing.T)
 		t.Fatalf("echo=%q err=%v", echo, err)
 	}
 
-	payload := []byte(`{"Event":"PRODUCT_AUDIT","OutProductId":"P1","Status":2,"RejectTime":1700000001,"RejectReason":"missing document"}`)
+	payload := []byte(`{"Event":"PRODUCT_AUDIT","OutProductId":"XHS_TEST_MULTI_20260911","Status":2,"AuditTime":1789111852,"RejectReason":"无意义商品"}`)
 	encrypted := encryptXiaohongshuWebhookFixture(t, encodingAESKey, payload, appID)
 	message := XiaohongshuWebhookMessage{
-		Nonce: "event-nonce", Timestamp: 1700000001, Encrypt: encrypted,
-		MsgSignature: xiaohongshu.MessageSignature(token, strconv.FormatInt(1700000001, 10), "event-nonce", encrypted),
+		Nonce: "event-nonce", Timestamp: 1789111852, Encrypt: encrypted,
+		MsgSignature: xiaohongshu.MessageSignature(token, strconv.FormatInt(1789111852, 10), "event-nonce", encrypted),
 	}
 	if err := webhook.Receive(context.Background(), appID, message); err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestXiaohongshuWebhookVerifiesDecryptsAndPersistsIdempotently(t *testing.T)
 	if err := model.DB.Where("channel_product_mapping_id = ? AND tenant_id = ?", mapping.ID, tenantID).First(&config).Error; err != nil {
 		t.Fatal(err)
 	}
-	if config.AuditStatus != "rejected" || config.AuditMessage != "missing document" || config.AuditedAt == nil || config.AuditedAt.Unix() != 1700000001 {
+	if config.AuditStatus != "rejected" || config.AuditMessage != "无意义商品" || config.AuditedAt == nil || config.AuditedAt.Unix() != 1789111852 {
 		t.Fatalf("config=%+v", config)
 	}
 	storedPayload, err := utils.DecryptAES(events[0].PayloadCiphertext)
@@ -232,7 +232,7 @@ func TestXiaohongshuProductAuditWebhookFailsClosedForRejectedOfflineAndUnknownSt
 		}
 	}
 	receive("rejected", []byte(`{"Event":"PRODUCT_AUDIT","out_product_id":"AUDIT-PRODUCT","Status":2,"RejectTime":1700000010,"RejectReason":"missing document"}`))
-	if err := model.DB.First(&config, config.ID).Error; err != nil || config.AuditStatus != "rejected" || config.AuditMessage != "missing document" {
+	if err := model.DB.First(&config, config.ID).Error; err != nil || config.AuditStatus != "rejected" || config.AuditMessage != "missing document" || config.AuditedAt == nil || config.AuditedAt.Unix() != 1700000010 {
 		t.Fatalf("rejected config=%+v err=%v", config, err)
 	}
 	if err := model.DB.First(&otherConfig, otherConfig.ID).Error; err != nil || otherConfig.AuditStatus != "approved" {

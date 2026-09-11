@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"ticket-backend/internal/model"
+	"ticket-backend/internal/utils"
 	"ticket-backend/internal/xiaohongshu"
 	"time"
 
@@ -63,6 +64,15 @@ func (s XiaohongshuProductAuditService) RefreshAudit(ctx context.Context, tenant
 	if statusErr != nil {
 		checkError = "小红书审核状态无法识别"
 	}
+	if status == "rejected" && strings.TrimSpace(message) == "" {
+		var detailsErr error
+		message, auditedAt, detailsErr = s.rejectionDetails(ctx, target, auditedAt)
+		if detailsErr != nil {
+			// Missing diagnostics must never prevent the authoritative REJECT
+			// from making a previously approved product unavailable.
+			checkError = "商品审核已拒绝，读取历史驳回原因失败"
+		}
+	}
 	view, applied, writeErr := s.applyCheck(target, status, message, auditedAt, checkError)
 	if writeErr != nil {
 		return nil, writeErr
@@ -74,6 +84,49 @@ func (s XiaohongshuProductAuditService) RefreshAudit(ctx context.Context, tenant
 		return view, statusErr
 	}
 	return view, nil
+}
+
+// A product query can omit audit_info entirely. Preserve a matching review's
+// details, or recover them from the authenticated encrypted inbox. This only
+// supplements an authoritative REJECT; it cannot approve a product.
+func (s XiaohongshuProductAuditService) rejectionDetails(ctx context.Context, target *xiaohongshuProductAuditTarget, queryTime *time.Time) (string, *time.Time, error) {
+	config := &target.config
+	if config.LastSyncedAt == nil {
+		return "", queryTime, nil
+	}
+	if queryTime != nil && queryTime.Unix() < config.LastSyncedAt.Unix() {
+		return "", nil, nil
+	}
+	matchesReview := func(at *time.Time) bool {
+		return at != nil &&
+			at.Unix() >= config.LastSyncedAt.Unix() &&
+			(queryTime == nil || at.Unix() == queryTime.Unix())
+	}
+	if config.AuditStatus == "rejected" && strings.TrimSpace(config.AuditMessage) != "" && matchesReview(config.AuditedAt) {
+		return config.AuditMessage, config.AuditedAt, nil
+	}
+	var events []model.XiaohongshuWebhookEvent
+	if err := model.DB.WithContext(ctx).
+		Where("tenant_id = ? AND channel_account_id = ? AND UPPER(event_type) = ? AND received_at >= ?",
+			config.TenantID, config.ChannelAccountID, "PRODUCT_AUDIT", *config.LastSyncedAt).
+		Order("id DESC").Limit(100).Find(&events).Error; err != nil {
+		return "", queryTime, err
+	}
+	message, auditedAt := "", queryTime
+	for _, event := range events {
+		payload, err := utils.DecryptAES(event.PayloadCiphertext)
+		if err != nil {
+			continue
+		}
+		product, status, reason, at := parseXiaohongshuProductAudit([]byte(payload))
+		if product != strings.TrimSpace(target.mapping.ExternalCode) || status != "rejected" || !matchesReview(at) {
+			continue
+		}
+		if auditedAt == nil || at.After(*auditedAt) || (at.Equal(*auditedAt) && message == "") {
+			message, auditedAt = reason, at
+		}
+	}
+	return message, auditedAt, nil
 }
 
 // ProcessProductAuditRefreshes advances a bounded, restart-safe fair batch.

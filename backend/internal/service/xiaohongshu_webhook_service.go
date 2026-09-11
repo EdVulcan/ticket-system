@@ -205,7 +205,9 @@ func parseXiaohongshuProductAudit(payload []byte) (productCode, auditStatus, mes
 		return productCode, "", "", nil
 	}
 	message = truncateChannelError(value("reject_reason", "rejectreason"))
-	rejectUnix, err := strconv.ParseInt(value("reject_time", "rejecttime"), 10, 64)
+	// DC192939 documents RejectTime; authenticated production callbacks also
+	// use AuditTime (2026-09-11). Both are provider epoch seconds.
+	rejectUnix, err := strconv.ParseInt(value("reject_time", "rejecttime", "audit_time"), 10, 64)
 	if err != nil || rejectUnix <= 0 {
 		return productCode, "", "", nil
 	}
