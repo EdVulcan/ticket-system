@@ -83,11 +83,29 @@ test('confirmation keeps deferred packages date-free and submits the stable orde
   };
   const page = loadPage('pages/order/confirm.js', app, {});
   page.data.product = { id: 7, price_cents: 5000, isPackage: true, isDeferredPackage: true, requiresUseDate: false };
+  page.data.guestName = '订单联系人'; page.data.contactPhone = '13800138000';
   page.data.quantity = 2; page.data.quoteReady = true; page.data.quoteToken = 'quote-7'; page.orderRequestId = 'stable-request-id';
   page.submit();
   assert.equal(requests.length, 1);
   assert.equal(requests[0].options.data.use_date, '');
   assert.equal(requests[0].options.data.request_id, 'stable-request-id');
+});
+
+test('confirmation exposes one required order contact for every product', () => {
+  const template = fs.readFileSync(path.join(miniappRoot, 'pages/order/confirm.xhsml'), 'utf8');
+  assert.match(template, /订单联系人/);
+  assert.match(template, /请输入联系人姓名/);
+  assert.match(template, /请输入手机号/);
+
+  const page = loadPage('pages/order/confirm.js', { globalData: {}, setNavigationTitle() {}, setStoreName() {}, request: () => Promise.resolve({}) }, {});
+  page.data.product = { id: 7, price_cents: 5000, requiresUseDate: false };
+  page.data.quoteReady = true;
+  page.data.quoteToken = 'quote-7';
+  page.submit();
+  assert.equal(page.data.error, '请填写联系人姓名');
+  page.data.guestName = '订单联系人';
+  page.submit();
+  assert.equal(page.data.error, '请填写有效的手机号');
 });
 
 test('booking rejects a locally out-of-bounds date before it requests the API', () => {

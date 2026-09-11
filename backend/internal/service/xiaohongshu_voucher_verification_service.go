@@ -520,7 +520,7 @@ func (s *DeviceService) completedXiaohongshuVoucherResponse(saga *model.Xiaohong
 }
 
 func xiaohongshuVoucherUnknownResponse() *VerifyResponse {
-	return &VerifyResponse{Code: 409, Result: "deny", DisplayText: "核销确认中，请稍后重试", VoiceFile: "invalid.mp3", VoiceCode: "invalid"}
+	return &VerifyResponse{Code: 409, Result: "deny", ReasonCode: "processing", DisplayText: "核销确认中，请稍后重试", VoiceFile: "invalid.mp3", VoiceCode: "invalid"}
 }
 
 func xiaohongshuVoucherRejectedResponse(message string) *VerifyResponse {
@@ -767,7 +767,7 @@ func isKnownXiaohongshuVoucherRejection(err error) bool {
 }
 
 func isDeterministicLocalVerificationError(err error) bool {
-	return errors.Is(err, ErrInvalidTicket) || errors.Is(err, ErrOrderNotPaid) || errors.Is(err, ErrTicketUnavailable) ||
+	return errors.Is(err, ErrInvalidTicket) || errors.Is(err, ErrOrderNotPaid) || errors.Is(err, ErrTicketRefunded) || errors.Is(err, ErrTicketUnavailable) ||
 		errors.Is(err, ErrTicketNotStarted) || errors.Is(err, ErrTicketExpired) || errors.Is(err, ErrCheckpointNotFound) ||
 		errors.Is(err, ErrAccessDenied) || errors.Is(err, ErrPointLimitReached) || errors.Is(err, ErrGroupLimitReached)
 }

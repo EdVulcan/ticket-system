@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/utils"
@@ -61,6 +62,20 @@ type xiaohongshuOrderIntent struct {
 	UseDate      string `json:"use_date"`
 	GuestName    string `json:"guest_name"`
 	ContactPhone string `json:"contact_phone"`
+}
+
+var miniappContactPhonePattern = regexp.MustCompile(`^[0-9+()\-\s]{6,20}$`)
+
+func validateMiniappOrderContact(name, phone string) error {
+	name = strings.TrimSpace(name)
+	phone = strings.TrimSpace(phone)
+	if name == "" || len(name) > 50 {
+		return errors.New("请填写联系人姓名")
+	}
+	if phone == "" || len(phone) > 20 || !miniappContactPhonePattern.MatchString(phone) || !strings.ContainsAny(phone, "0123456789") {
+		return errors.New("请填写有效的手机号")
+	}
+	return nil
 }
 
 func newMiniappOrderCreateError(code, orderNo, message string) *MiniappOrderCreateError {
@@ -249,6 +264,7 @@ func (s XiaohongshuOrderService) orderResult(link *model.XiaohongshuOrderLink, o
 	result := &MiniappOrderResult{
 		OriginalAmountCents: order.OriginalAmountCents, DiscountCents: order.DiscountCents,
 		OrderNo: order.OrderNo, PlatformOrderID: link.PlatformOrderID, AmountCents: moneyCents(order.TotalAmount),
+		ContactName: order.ContactName, ContactPhone: order.ContactPhone,
 		Status: order.Status, CoreOrderStatus: order.Status, PlatformPaymentState: link.State, VoucherIssuanceStatus: link.VoucherIssuanceStatus, ExpiresAt: link.PayTokenExpiresAt,
 	}
 	type presentationRow struct {
@@ -484,6 +500,9 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 		}
 		if account.Environment == "sandbox" && totalCents > 10 {
 			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "测试小程序单笔订单金额不能超过 0.10 元")
+		}
+		if contactErr := validateMiniappOrderContact(input.GuestName, input.ContactPhone); contactErr != nil {
+			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", contactErr.Error())
 		}
 		// Keep deterministic local qualification errors ahead of credential
 		// decryption, so an invalid session cannot hide a price or catalog

@@ -56,9 +56,21 @@ func TestMobileVerificationSessionScopesTargetsAndReplaysWithoutGateTask(t *test
 	if err != nil || first.Result != "allow" {
 		t.Fatalf("first=%+v err=%v", first, err)
 	}
-	second, err := service.Verify(tenantID, staff.ID, session.SessionToken, ticket.TicketCode, "mobile-scan-1")
+	second, err := service.Verify(tenantID, staff.ID, session.SessionToken, "  "+ticket.TicketCode+"  ", "mobile-scan-1")
 	if err != nil || second.Result != "allow" {
 		t.Fatalf("replay=%+v err=%v", second, err)
+	}
+	// A lost browser response can force the operator to sign in again. The
+	// request ID must remain replayable across that new session, otherwise a
+	// successful verification could be reported as a second attempt or as a
+	// request-content conflict.
+	secondSession, err := service.CreateSession(tenantID, staff.ID, staff.Roles, checkpoint.ID, handheld.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterLogin, err := service.Verify(tenantID, staff.ID, secondSession.SessionToken, ticket.TicketCode, "mobile-scan-1")
+	if err != nil || afterLogin.Result != "allow" {
+		t.Fatalf("replay after login=%+v err=%v", afterLogin, err)
 	}
 	var verification model.DeviceVerification
 	if err := model.DB.Where("device_id = ? AND request_id = ?", handheld.ID, "mobile-scan-1").First(&verification).Error; err != nil {
@@ -71,7 +83,7 @@ func TestMobileVerificationSessionScopesTargetsAndReplaysWithoutGateTask(t *test
 	if err := model.DB.Model(&model.CheckInRecord{}).Where("ticket_id = ? AND result = ?", ticket.ID, "success").Count(&successful).Error; err != nil || successful != 1 {
 		t.Fatalf("successful check-ins=%d err=%v", successful, err)
 	}
-	if err := service.Close(tenantID, staff.ID, session.SessionToken); err != nil {
+	if err := service.Close(tenantID, staff.ID, secondSession.SessionToken); err != nil {
 		t.Fatal(err)
 	}
 	var storedDevice model.Device
@@ -102,6 +114,56 @@ func TestMobileVerificationRejectsUnscopedDevice(t *testing.T) {
 	service := NewMobileVerificationService(model.DB, NewDeviceService(model.DB, &TicketService{}))
 	if _, err := service.CreateSession(tenantID, staff.ID, staff.Roles, checkpoint.ID, device.ID); err == nil || !errors.Is(err, ErrMobileTargetDenied) {
 		t.Fatalf("unscoped session err=%v, want ErrMobileTargetDenied", err)
+	}
+}
+
+func TestMobileSessionIsRevokedWhenResourceScopeChanges(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	var checkpoint model.CheckPoint
+	if err := model.DB.Where("tenant_id = ?", tenantID).First(&checkpoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	checkpointID := checkpoint.ID
+	device := model.Device{Name: "资源撤销终端", SerialNumber: fmt.Sprintf("HANDHELD-%d", time.Now().UnixNano()), Type: "handheld", Status: "offline", TenantID: tenantID, ScenicAreaID: checkpoint.ScenicAreaID, CheckPointID: &checkpointID}
+	if err := model.DB.Create(&device).Error; err != nil {
+		t.Fatal(err)
+	}
+	staff := model.Staff{Name: "资源撤销验票员", JobNumber: fmt.Sprintf("CHECKER-%d", time.Now().UnixNano()), Roles: "checker", Status: "active", TenantID: tenantID, TokenVersion: 1}
+	if err := model.DB.Create(&staff).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Create(&model.StaffResourceScope{TenantID: tenantID, StaffID: staff.ID, ResourceType: "checkpoint", ResourceID: checkpoint.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Create(&model.StaffResourceScope{TenantID: tenantID, StaffID: staff.ID, ResourceType: "device", ResourceID: device.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	service := NewMobileVerificationService(model.DB, NewDeviceService(model.DB, &TicketService{}))
+	session, err := service.CreateSession(tenantID, staff.ID, staff.Roles, checkpoint.ID, device.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Where("tenant_id = ? AND staff_id = ? AND resource_type = ? AND resource_id = ?", tenantID, staff.ID, "device", device.ID).Delete(&model.StaffResourceScope{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Heartbeat(tenantID, staff.ID, session.SessionToken, staff.Roles); !errors.Is(err, ErrMobileSessionInvalid) {
+		t.Fatalf("heartbeat after resource revocation err=%v, want ErrMobileSessionInvalid", err)
+	}
+	var storedSession model.MobileVerificationSession
+	if err := model.DB.Where("tenant_id = ? AND staff_id = ?", tenantID, staff.ID).Order("id desc").First(&storedSession).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedSession.Status != "revoked" {
+		t.Fatalf("session status=%q after resource revocation, want revoked", storedSession.Status)
+	}
+	var storedDevice model.Device
+	if err := model.DB.First(&storedDevice, device.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedDevice.Status != "offline" {
+		t.Fatalf("device status=%q after resource revocation, want offline", storedDevice.Status)
 	}
 }
 

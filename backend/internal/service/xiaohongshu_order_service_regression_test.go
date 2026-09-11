@@ -210,6 +210,38 @@ func newXiaohongshuOrderRegressionService(t *testing.T) (XiaohongshuOrderService
 	return service, server
 }
 
+func TestCreateXiaohongshuOrderRequiresOrderContact(t *testing.T) {
+	fixture := seedXiaohongshuOrderRegressionFixture(t)
+	service, server := newXiaohongshuOrderRegressionService(t)
+	defer server.Close()
+
+	cases := []struct {
+		name  string
+		input MiniappOrderCreateInput
+		want  string
+	}{
+		{name: "missing name", input: MiniappOrderCreateInput{MappingID: fixture.mapping.ID, Quantity: 1, ClientRequestID: "missing-name", ContactPhone: "13800138000"}, want: "请填写联系人姓名"},
+		{name: "missing phone", input: MiniappOrderCreateInput{MappingID: fixture.mapping.ID, Quantity: 1, ClientRequestID: "missing-phone", GuestName: "订单联系人"}, want: "请填写有效的手机号"},
+		{name: "invalid phone", input: MiniappOrderCreateInput{MappingID: fixture.mapping.ID, Quantity: 1, ClientRequestID: "invalid-phone", GuestName: "订单联系人", ContactPhone: "phone-number"}, want: "请填写有效的手机号"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := service.CreateXiaohongshuOrder(context.Background(), &fixture.customer, tc.input)
+			var typed *MiniappOrderCreateError
+			if !errors.As(err, &typed) || typed.Code != miniappOrderNotCreatedCode || typed.Message != tc.want {
+				t.Fatalf("error=%v typed=%+v", err, typed)
+			}
+		})
+	}
+	var orders int64
+	if err := model.DB.Model(&model.Order{}).Where("tenant_id = ? AND channel_account_id = ?", fixture.tenantID, fixture.account.ID).Count(&orders).Error; err != nil {
+		t.Fatal(err)
+	}
+	if orders != 0 {
+		t.Fatalf("invalid contact created %d orders", orders)
+	}
+}
+
 func newXiaohongshuAccountHoldEvent(t *testing.T, fixture xiaohongshuOrderRegressionFixture) (model.XiaohongshuWebhookEvent, []byte) {
 	t.Helper()
 	payload := []byte(fmt.Sprintf(`{"Event":"AFTER_SALE_REFUND","OrderId":"","AfterSaleId":"xhs-regression-after-sale-%d","RefundId":"xhs-regression-refund-%d"}`, time.Now().UnixNano(), time.Now().UnixNano()))
@@ -382,7 +414,7 @@ func TestCreateXiaohongshuOrderExactRetryPrecedesAccountHold(t *testing.T) {
 	fixture := seedXiaohongshuOrderRegressionFixture(t)
 	service, server := newXiaohongshuOrderRegressionService(t)
 	defer server.Close()
-	input := MiniappOrderCreateInput{MappingID: fixture.mapping.ID, Quantity: 1, ClientRequestID: "xhs-regression-retry-held"}
+	input := MiniappOrderCreateInput{MappingID: fixture.mapping.ID, Quantity: 1, ClientRequestID: "xhs-regression-retry-held", GuestName: "重试联系人", ContactPhone: "13800138000"}
 	created, err := service.CreateXiaohongshuOrder(context.Background(), &fixture.customer, input)
 	if err != nil {
 		t.Fatal(err)
@@ -417,7 +449,7 @@ func TestCreateXiaohongshuOrderWaitsForConcurrentAfterSaleHold(t *testing.T) {
 	}
 	outcomeCh := make(chan orderOutcome, 1)
 	go func() {
-		result, err := service.CreateXiaohongshuOrder(context.Background(), &fixture.customer, MiniappOrderCreateInput{MappingID: fixture.mapping.ID, Quantity: 1, ClientRequestID: "xhs-regression-concurrent-hold"})
+		result, err := service.CreateXiaohongshuOrder(context.Background(), &fixture.customer, MiniappOrderCreateInput{MappingID: fixture.mapping.ID, Quantity: 1, ClientRequestID: "xhs-regression-concurrent-hold", GuestName: "并发联系人", ContactPhone: "13800138000"})
 		outcomeCh <- orderOutcome{result: result, err: err}
 	}()
 	select {

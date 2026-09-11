@@ -100,6 +100,7 @@ Page({
 	  const coreStatus = order.core_order_status || order.status;
 	  const canUsePaidEntitlements = ['paid', 'partial_refunded'].indexOf(coreStatus) >= 0;
       order.isPackage = order.product_kind === 'scenic_hotel_package';
+      order.contactPhoneText = this.maskPhone(order.contact_phone);
       if (order.hotel_stay) {
         order.hotel_stay.checkInText = this.formatDay(order.hotel_stay.check_in_date);
         order.hotel_stay.checkOutText = this.formatDay(order.hotel_stay.check_out_date);

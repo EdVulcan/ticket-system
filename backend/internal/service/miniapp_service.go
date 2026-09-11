@@ -129,6 +129,8 @@ type MiniappOrderResult struct {
 	PlatformOrderID          string                      `json:"order_id,omitempty"`
 	ProductName              string                      `json:"product_name,omitempty"`
 	ImageURL                 string                      `json:"image_url,omitempty"`
+	ContactName              string                      `json:"contact_name,omitempty"`
+	ContactPhone             string                      `json:"contact_phone,omitempty"`
 	Quantity                 int                         `json:"quantity"`
 	PayToken                 string                      `json:"pay_token,omitempty"`
 	AmountCents              int64                       `json:"amount_cents"`

@@ -78,7 +78,7 @@ test('confirmation page keeps an existing order and visibly reports missing paym
   await flush();
 
   assert.equal(page.data.submitting, false);
-  assert.match(page.data.error, /支付信息不完整/);
+  assert.match(page.data.error, /联系人姓名/);
 });
 
 test('confirmation page reports cancellation rather than silently redirecting', async () => {
@@ -94,6 +94,7 @@ test('confirmation page reports cancellation rather than silently redirecting', 
   const page = loadPage('pages/order/confirm.js', app, xhs);
   page.data.product = { id: 1, price_cents: 8000 };
   page.data.quoteReady = true; page.data.quoteToken = 'quote-1';
+  page.data.guestName = '测试联系人'; page.data.contactPhone = '13800138000';
   page.orderRequestId = 'stable-request-id';
 
   page.submit();
@@ -116,13 +117,14 @@ test('created confirmation orders freeze selection and continue in that order wi
   page.data.product = { id: 1, price_cents: 8000 };
   page.data.quoteReady = true; page.data.quoteToken = 'quote-1';
   page.data.maxQuantity = 10;
+  page.data.guestName = '初始联系人'; page.data.contactPhone = '13800138000';
   page.orderRequestId = 'stable-request-id';
   page.submit();
   await flush();
   page.increase();
   page.onGuestNameInput({ detail: { value: 'Changed' } });
   assert.equal(page.data.quantity, 1);
-  assert.equal(page.data.guestName, '');
+  assert.equal(page.data.guestName, '初始联系人');
   assert.equal(page.data.createdOrderNo, 'ORD-KEPT');
   page.submit();
   assert.equal(requests, 1);
@@ -165,6 +167,7 @@ test('unknown order creation freezes the first payload and retries it after atte
   page.data.maxDate = '2026-10-20';
   page.data.quoteReady = true;
   page.data.quoteToken = 'quote-1';
+  page.data.guestName = '恢复联系人'; page.data.contactPhone = '13800138000';
   page.data.totalText = '80.00';
   page.data.originalTotalText = '80.00';
   page.orderRequestId = 'same-request-id';
@@ -186,8 +189,8 @@ test('unknown order creation freezes the first payload and retries it after atte
   assert.equal(page.data.createdOrderNo, 'ORD-RECOVERED');
   assert.equal(page.data.quantity, 1);
   assert.equal(page.data.useDate, '2026-09-20');
-  assert.equal(page.data.guestName, '');
-  assert.equal(page.data.contactPhone, '');
+  assert.equal(page.data.guestName, '恢复联系人');
+  assert.equal(page.data.contactPhone, '13800138000');
 });
 
 test('explicit precheck rejection unlocks editing and requires a fresh quote before retry', async () => {
@@ -207,6 +210,7 @@ test('explicit precheck rejection unlocks editing and requires a fresh quote bef
   page.data.product = { id: 1, price_cents: 8000, requiresUseDate: false };
   page.data.quoteReady = true;
   page.data.quoteToken = 'stale-quote';
+  page.data.guestName = '报价联系人'; page.data.contactPhone = '13800138000';
   page.data.totalText = '80.00';
   page.data.originalTotalText = '80.00';
   page.orderRequestId = 'same-request-id';
@@ -240,6 +244,7 @@ test('idempotency recovery errors never call payment and navigate to the existin
     page.data.product = { id: 1, price_cents: 8000, requiresUseDate: false };
     page.data.quoteReady = true;
     page.data.quoteToken = 'quote-1';
+    page.data.guestName = '恢复联系人'; page.data.contactPhone = '13800138000';
     page.orderRequestId = 'same-request-id';
 
     page.submit();

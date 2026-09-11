@@ -72,7 +72,7 @@ func TestMiniappPromotionOrderLocksPriceAndRefundAllocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 2, ClientRequestID: "promotion-create", QuoteToken: quote.QuoteToken}
+	input := MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 2, ClientRequestID: "promotion-create", QuoteToken: quote.QuoteToken, GuestName: "促销联系人", ContactPhone: "13800138000"}
 	result, err := s.CreateXiaohongshuOrder(context.Background(), &f.customer, input)
 	if err != nil {
 		t.Fatal(err)
@@ -124,7 +124,7 @@ func TestMiniappPromotionConcurrentOrderUsesGrantOnce(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			if _, err := s.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: fmt.Sprintf("promotion-concurrent-%d", i), QuoteToken: quote.QuoteToken}); err == nil {
+			if _, err := s.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: fmt.Sprintf("promotion-concurrent-%d", i), QuoteToken: quote.QuoteToken, GuestName: "并发联系人", ContactPhone: "13800138000"}); err == nil {
 				successes.Add(1)
 			}
 		}(i)
@@ -145,7 +145,7 @@ func TestMiniappPromotionPaymentRefundAndNextOpportunity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := s.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 2, ClientRequestID: "promotion-paid", QuoteToken: quote.QuoteToken})
+	result, err := s.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 2, ClientRequestID: "promotion-paid", QuoteToken: quote.QuoteToken, GuestName: "退款联系人", ContactPhone: "13800138000"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestMiniappPromotionDisableReenableAndConfirmedCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: "promotion-disable", QuoteToken: quote.QuoteToken}
+	input := MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: "promotion-disable", QuoteToken: quote.QuoteToken, GuestName: "活动联系人", ContactPhone: "13800138000"}
 	settings := MiniappInstantDiscountConfig{MinDiscountCents: 5, MaxDiscountCents: 5, ValidityMinutes: 10, CooldownDays: 1, MappingIDs: []uint{f.mapping.ID}}
 	if _, err := p.SaveConfig(f.tenantID, f.account.ID, settings); err != nil {
 		t.Fatal(err)
@@ -295,7 +295,7 @@ func TestMiniappPromotionVoucherAmountMismatchHoldsIssuance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := s.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 2, ClientRequestID: "promotion-bad-voucher", QuoteToken: quote.QuoteToken})
+	result, err := s.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 2, ClientRequestID: "promotion-bad-voucher", QuoteToken: quote.QuoteToken, GuestName: "异常联系人", ContactPhone: "13800138000"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestMiniappPromotionStalePaidAndClosedQueries(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				result, err := s.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: "stale-query", QuoteToken: quote.QuoteToken})
+				result, err := s.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: "stale-query", QuoteToken: quote.QuoteToken, GuestName: "查询联系人", ContactPhone: "13800138000"})
 				if err != nil {
 					t.Fatal(err)
 				}

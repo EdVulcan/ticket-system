@@ -83,7 +83,7 @@ func TestXiaohongshuCreateWaitsForAccountHoldBeforeReserving(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, createErr := s.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: "hold-wins", QuoteToken: quote.QuoteToken})
+		_, createErr := s.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: "hold-wins", QuoteToken: quote.QuoteToken, GuestName: "售后联系人", ContactPhone: "13800138000"})
 		done <- createErr
 	}()
 	waitForXhsBlockedTransaction(t, pid)
@@ -132,7 +132,7 @@ func TestXiaohongshuCreateCommitWinsHoldAndReplayKeepsOriginalOrder(t *testing.T
 		<-releaseRemote
 		return client(appID, secret, env)
 	}
-	input := MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: "order-wins", QuoteToken: quote.QuoteToken}
+	input := MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: "order-wins", QuoteToken: quote.QuoteToken, GuestName: "并发联系人", ContactPhone: "13800138000"}
 	type completion struct {
 		result *MiniappOrderResult
 		err    error
@@ -217,7 +217,7 @@ func TestXiaohongshuCreateUsesSameLockOrderAsAnotherCustomerQuote(t *testing.T) 
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, err := s.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: "quote-lock-order", QuoteToken: quote.QuoteToken})
+		_, err := s.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: "quote-lock-order", QuoteToken: quote.QuoteToken, GuestName: "锁定联系人", ContactPhone: "13800138000"})
 		done <- err
 	}()
 	waitForXhsBlockedTransaction(t, pid)

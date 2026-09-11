@@ -15,6 +15,7 @@ import (
 var (
 	ErrInvalidTicket      = errors.New("invalid ticket")
 	ErrOrderNotPaid       = errors.New("order is not paid")
+	ErrTicketRefunded     = errors.New("ticket has been refunded")
 	ErrTicketUnavailable  = errors.New("ticket is unavailable")
 	ErrTicketNotStarted   = errors.New("ticket is not valid yet")
 	ErrTicketExpired      = errors.New("ticket has expired")
@@ -99,6 +100,12 @@ func (s *TicketService) verifyDeviceRequestWithReservation(code string, checkPoi
 		}
 		if ticket.Environment == "sandbox" {
 			return ErrInvalidTicket
+		}
+		// A successful refund permanently removes the ticket entitlement. Check
+		// this before the order/payment state so refunded orders get a precise
+		// field response instead of being reported as unpaid or fully used.
+		if ticket.Status == "refunded" {
+			return ErrTicketRefunded
 		}
 
 		var order model.Order

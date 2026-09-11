@@ -111,6 +111,7 @@ test('orders receive only the fresh quote token and unknown network retry retain
   page.data.product = { id: 42, price_cents: 5000 };
   page.data.quoteReady = true;
   page.data.quoteToken = 'fresh-quote-token';
+  page.data.guestName = '报价联系人'; page.data.contactPhone = '13800138000';
   page.orderRequestId = 'same-request-id';
   page.submit();
   await flush();
@@ -142,6 +143,7 @@ test('price conflict fetches a new quote and requires a subsequent submit', asyn
   page.data.product = { id: 42, price_cents: 5000 };
   page.data.quoteReady = true;
   page.data.quoteToken = 'expired-token';
+  page.data.guestName = '冲突联系人'; page.data.contactPhone = '13800138000';
   page.orderRequestId = 'same-request-id';
   page.submit();
   await flush();

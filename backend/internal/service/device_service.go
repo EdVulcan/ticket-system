@@ -111,11 +111,12 @@ type VerifyRequest struct {
 
 type VerifyResponse struct {
 	Code         int    `json:"code"`
-	Result       string `json:"result"`        // allow, deny
-	DisplayText  string `json:"display_text"`  // Message for screen
-	VoiceFile    string `json:"voice_file"`    // e.g., welcome.mp3
-	VoiceCode    string `json:"voice_code"`    // device-local audio resource identifier
-	OpenDuration int    `json:"open_duration"` // ms
+	Result       string `json:"result"`                // allow, deny
+	ReasonCode   string `json:"reason_code,omitempty"` // stable client-facing state
+	DisplayText  string `json:"display_text"`          // Message for screen
+	VoiceFile    string `json:"voice_file"`            // e.g., welcome.mp3
+	VoiceCode    string `json:"voice_code"`            // device-local audio resource identifier
+	OpenDuration int    `json:"open_duration"`         // ms
 }
 
 type DirectVerifyRequest struct {
@@ -482,19 +483,19 @@ func (s *DeviceService) Verify(req VerifyRequest) (*VerifyResponse, error) {
 	// 1. Validate Tenant
 	var tenant model.Tenant
 	if err := s.DB.Where("system_code = ? AND status = ?", req.SystemCode, "active").First(&tenant).Error; err != nil {
-		return &VerifyResponse{Code: 400, Result: "deny", DisplayText: "Invalid System Code"}, nil
+		return &VerifyResponse{Code: 400, Result: "deny", ReasonCode: "invalid_system", DisplayText: "Invalid System Code"}, nil
 	}
 	if err := requireActiveTenantCapability(s.DB, tenant.ID, "supplier"); err != nil {
-		return &VerifyResponse{Code: 403, Result: "deny", DisplayText: "Tenant Unavailable"}, nil
+		return &VerifyResponse{Code: 403, Result: "deny", ReasonCode: "tenant_unavailable", DisplayText: "Tenant Unavailable"}, nil
 	}
 
 	// 2. Validate Device
 	var device model.Device
 	if err := s.DB.Where("serial_number = ? AND tenant_id = ? AND status = ?", req.SerialNumber, tenant.ID, "online").First(&device).Error; err != nil {
-		return &VerifyResponse{Code: 403, Result: "deny", DisplayText: "Unauthorized Device"}, nil
+		return &VerifyResponse{Code: 403, Result: "deny", ReasonCode: "unauthorized_device", DisplayText: "Unauthorized Device"}, nil
 	}
 	if !validDeviceKey(&device, req.DeviceKey) {
-		return &VerifyResponse{Code: 403, Result: "deny", DisplayText: "Unauthorized Device"}, nil
+		return &VerifyResponse{Code: 403, Result: "deny", ReasonCode: "unauthorized_device", DisplayText: "Unauthorized Device"}, nil
 	}
 
 	// 3. Delegate Verification to TicketService (Common Logic)
@@ -657,7 +658,7 @@ func (s *DeviceService) ReportOpenResult(tenantID, deviceID uint, req OpenResult
 }
 
 func responseFromVerification(row *model.DeviceVerification) *VerifyResponse {
-	return &VerifyResponse{Code: row.ResponseCode, Result: row.Result, DisplayText: row.DisplayText, VoiceFile: row.VoiceFile, VoiceCode: row.VoiceCode, OpenDuration: row.OpenDuration}
+	return &VerifyResponse{Code: row.ResponseCode, Result: row.Result, ReasonCode: reasonCodeFromDisplayText(row.DisplayText, row.Result), DisplayText: row.DisplayText, VoiceFile: row.VoiceFile, VoiceCode: row.VoiceCode, OpenDuration: row.OpenDuration}
 }
 
 func verificationOpenStatus(deviceType, result string) string {
@@ -698,11 +699,11 @@ func (s *DeviceService) allowResponse(ticketCode string) *VerifyResponse {
 	if voiceCode == "" {
 		voiceCode = "welcome"
 	}
-	return &VerifyResponse{Code: 200, Result: "allow", DisplayText: fmt.Sprintf("欢迎光临\n%s", productName), VoiceCode: voiceCode, OpenDuration: 5000}
+	return &VerifyResponse{Code: 200, Result: "allow", ReasonCode: "verified", DisplayText: fmt.Sprintf("欢迎光临\n%s", productName), VoiceCode: voiceCode, OpenDuration: 5000}
 }
 
 func denyResponse(err error) *VerifyResponse {
-	resp := &VerifyResponse{Code: 403, Result: "deny", VoiceFile: "invalid.mp3", VoiceCode: "invalid"}
+	resp := &VerifyResponse{Code: 403, Result: "deny", ReasonCode: reasonCodeForError(err), VoiceFile: "invalid.mp3", VoiceCode: "invalid"}
 	if err == nil {
 		return resp
 	}
@@ -712,12 +713,18 @@ func denyResponse(err error) *VerifyResponse {
 		resp.DisplayText, resp.VoiceCode = "渠道售后待核对", "manual_review"
 	case errors.Is(err, ErrXiaohongshuVoucherRequiresDevice):
 		resp.DisplayText, resp.VoiceCode = "请使用设备扫码核销渠道券", "manual_review"
+	case errors.Is(err, ErrTicketUnavailable) && (strings.Contains(message, "pending") || strings.Contains(message, "concurrent")):
+		resp.DisplayText, resp.VoiceCode, resp.ReasonCode = "核验处理中，请稍后重试", "manual_review", "processing"
 	case errors.Is(err, ErrInvalidTicket) || strings.Contains(message, ErrInvalidTicket.Error()):
 		resp.DisplayText = "无效票"
 	case errors.Is(err, ErrTicketExpired) || strings.Contains(message, ErrTicketExpired.Error()):
 		resp.DisplayText, resp.VoiceFile, resp.VoiceCode = "已过期", "expired.mp3", "expired"
 	case errors.Is(err, ErrTicketNotStarted) || strings.Contains(message, ErrTicketNotStarted.Error()):
 		resp.DisplayText, resp.VoiceFile, resp.VoiceCode = "未生效", "not_started.mp3", "not_started"
+	case errors.Is(err, ErrTicketRefunded) || strings.Contains(message, ErrTicketRefunded.Error()):
+		// Keep the existing invalid voice fallback: field devices are not
+		// guaranteed to have a dedicated refunded audio asset installed.
+		resp.DisplayText = "订单已退款，不能核销"
 	case errors.Is(err, ErrOrderNotPaid) || strings.Contains(message, ErrOrderNotPaid.Error()):
 		resp.DisplayText = "订单未支付"
 	case errors.Is(err, ErrAccessDenied) || errors.Is(err, ErrCheckpointNotFound) || strings.Contains(message, ErrAccessDenied.Error()) || strings.Contains(message, ErrCheckpointNotFound.Error()):
@@ -730,6 +737,70 @@ func denyResponse(err error) *VerifyResponse {
 		resp.DisplayText = "验证失败\n" + message
 	}
 	return resp
+}
+
+func reasonCodeForError(err error) string {
+	if err == nil {
+		return "verified"
+	}
+	message := err.Error()
+	switch {
+	case errors.Is(err, ErrXiaohongshuRefundHold):
+		return "manual_review"
+	case errors.Is(err, ErrXiaohongshuVoucherRequiresDevice):
+		return "manual_review"
+	case errors.Is(err, ErrTicketUnavailable) && (strings.Contains(message, "pending") || strings.Contains(message, "concurrent")):
+		return "processing"
+	case errors.Is(err, ErrInvalidTicket) || strings.Contains(message, ErrInvalidTicket.Error()):
+		return "invalid_ticket"
+	case errors.Is(err, ErrTicketExpired) || strings.Contains(message, ErrTicketExpired.Error()):
+		return "expired"
+	case errors.Is(err, ErrTicketNotStarted) || strings.Contains(message, ErrTicketNotStarted.Error()):
+		return "not_started"
+	case errors.Is(err, ErrTicketRefunded) || strings.Contains(message, ErrTicketRefunded.Error()):
+		return "refunded"
+	case errors.Is(err, ErrOrderNotPaid) || strings.Contains(message, ErrOrderNotPaid.Error()):
+		return "order_not_paid"
+	case errors.Is(err, ErrAccessDenied) || errors.Is(err, ErrCheckpointNotFound) || strings.Contains(message, ErrAccessDenied.Error()) || strings.Contains(message, ErrCheckpointNotFound.Error()):
+		return "wrong_checkpoint"
+	case errors.Is(err, ErrPointLimitReached) || errors.Is(err, ErrTicketUnavailable) || strings.Contains(message, ErrPointLimitReached.Error()) || strings.Contains(message, ErrTicketUnavailable.Error()):
+		return "already_used"
+	case errors.Is(err, ErrGroupLimitReached) || strings.Contains(message, ErrGroupLimitReached.Error()):
+		return "benefit_exhausted"
+	default:
+		return "verification_failed"
+	}
+}
+
+func reasonCodeFromDisplayText(displayText, result string) string {
+	if strings.TrimSpace(result) == "allow" {
+		return "verified"
+	}
+	text := strings.TrimSpace(displayText)
+	switch {
+	case strings.Contains(text, "渠道售后待核对") || strings.Contains(text, "请使用设备"):
+		return "manual_review"
+	case strings.Contains(text, "处理中") || strings.Contains(text, "正在处理") || strings.Contains(text, "确认中"):
+		return "processing"
+	case strings.Contains(text, "无效票"):
+		return "invalid_ticket"
+	case strings.Contains(text, "过期"):
+		return "expired"
+	case strings.Contains(text, "未生效"):
+		return "not_started"
+	case strings.Contains(text, "已退款"):
+		return "refunded"
+	case strings.Contains(text, "未支付"):
+		return "order_not_paid"
+	case strings.Contains(text, "区域无权"):
+		return "wrong_checkpoint"
+	case strings.Contains(text, "次数已满"):
+		return "already_used"
+	case strings.Contains(text, "权益已尽"):
+		return "benefit_exhausted"
+	default:
+		return "verification_failed"
+	}
 }
 
 // --- CRUD Methods (Admin UI) ---

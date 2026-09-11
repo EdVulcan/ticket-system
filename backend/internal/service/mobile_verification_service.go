@@ -228,7 +228,72 @@ func (s *MobileVerificationService) CreateSession(tenantID, staffID uint, role s
 	return &response, nil
 }
 
-func (s *MobileVerificationService) loadSession(tenantID, staffID uint, token string) (*model.MobileVerificationSession, error) {
+// validateSessionTarget re-checks the mutable authorization boundary on every
+// mobile request. A session is intentionally short-lived, but its checkpoint
+// and handheld scope can be revoked while the browser remains open.
+func (s *MobileVerificationService) validateSessionTarget(session *model.MobileVerificationSession, role string) error {
+	if session == nil || session.ID == 0 || s == nil || s.DB == nil {
+		return ErrMobileSessionInvalid
+	}
+	var checkpoint model.CheckPoint
+	if err := s.DB.Where("id = ? AND tenant_id = ? AND scenic_area_id = ? AND scenic_area_id != 0", session.CheckPointID, session.TenantID, session.ScenicAreaID).First(&checkpoint).Error; err != nil {
+		return ErrMobileSessionInvalid
+	}
+	var device model.Device
+	if err := s.DB.Where("id = ? AND tenant_id = ? AND type = ? AND check_point_id = ? AND scenic_area_id = ? AND status IN ?", session.DeviceID, session.TenantID, "handheld", session.CheckPointID, session.ScenicAreaID, []string{"offline", "online"}).First(&device).Error; err != nil {
+		return ErrMobileSessionInvalid
+	}
+	if strings.TrimSpace(role) == "" {
+		var staff model.Staff
+		if err := s.DB.Select("roles").Where("id = ? AND tenant_id = ? AND status = ?", session.StaffID, session.TenantID, "active").First(&staff).Error; err != nil {
+			return ErrMobileSessionInvalid
+		}
+		role = staff.Roles
+	}
+	if mobileRoleIsAdmin(role) {
+		return nil
+	}
+	checkpointAllowed, err := hasMobileResourceScope(s.DB, session.TenantID, session.StaffID, role, "checkpoint", session.CheckPointID)
+	if err != nil || !checkpointAllowed {
+		return ErrMobileSessionInvalid
+	}
+	deviceAllowed, err := hasMobileResourceScope(s.DB, session.TenantID, session.StaffID, role, "device", session.DeviceID)
+	if err != nil || !deviceAllowed {
+		return ErrMobileSessionInvalid
+	}
+	return nil
+}
+
+func (s *MobileVerificationService) revokeSession(session *model.MobileVerificationSession, now time.Time) error {
+	if session == nil || session.ID == 0 {
+		return ErrMobileSessionInvalid
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		result := tx.Model(&model.MobileVerificationSession{}).
+			Where("id = ? AND status = ?", session.ID, "active").
+			Update("status", "revoked")
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		var other int64
+		if err := tx.Model(&model.MobileVerificationSession{}).
+			Where("tenant_id = ? AND device_id = ? AND status = ? AND expires_at > ?", session.TenantID, session.DeviceID, "active", now).
+			Count(&other).Error; err != nil {
+			return err
+		}
+		if other == 0 {
+			return tx.Model(&model.Device{}).
+				Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", session.DeviceID, session.TenantID, "handheld", []string{"offline", "online"}).
+				Updates(map[string]interface{}{"status": "offline", "last_heartbeat": nil}).Error
+		}
+		return nil
+	})
+}
+
+func (s *MobileVerificationService) loadSession(tenantID, staffID uint, token string, role ...string) (*model.MobileVerificationSession, error) {
 	if tenantID == 0 || staffID == 0 || strings.TrimSpace(token) == "" || s == nil || s.DB == nil {
 		return nil, ErrMobileSessionInvalid
 	}
@@ -239,6 +304,14 @@ func (s *MobileVerificationService) loadSession(tenantID, staffID uint, token st
 	now := s.now()
 	if !session.ExpiresAt.After(now) {
 		_ = s.expireSession(&session, now)
+		return nil, ErrMobileSessionInvalid
+	}
+	currentRole := ""
+	if len(role) > 0 {
+		currentRole = strings.TrimSpace(role[0])
+	}
+	if err := s.validateSessionTarget(&session, currentRole); err != nil {
+		_ = s.revokeSession(&session, now)
 		return nil, ErrMobileSessionInvalid
 	}
 	return &session, nil
@@ -296,16 +369,16 @@ func (s *MobileVerificationService) touchSession(session *model.MobileVerificati
 	})
 }
 
-func (s *MobileVerificationService) Heartbeat(tenantID, staffID uint, token string) error {
-	session, err := s.loadSession(tenantID, staffID, token)
+func (s *MobileVerificationService) Heartbeat(tenantID, staffID uint, token string, role ...string) error {
+	session, err := s.loadSession(tenantID, staffID, token, role...)
 	if err != nil {
 		return err
 	}
 	return s.touchSession(session)
 }
 
-func (s *MobileVerificationService) Close(tenantID, staffID uint, token string) error {
-	session, err := s.loadSession(tenantID, staffID, token)
+func (s *MobileVerificationService) Close(tenantID, staffID uint, token string, role ...string) error {
+	session, err := s.loadSession(tenantID, staffID, token, role...)
 	if err != nil {
 		return err
 	}
@@ -325,11 +398,13 @@ func (s *MobileVerificationService) Close(tenantID, staffID uint, token string) 
 	})
 }
 
-func (s *MobileVerificationService) Verify(tenantID, staffID uint, token, ticketCode, requestID string) (*VerifyResponse, error) {
-	if strings.TrimSpace(ticketCode) == "" || strings.TrimSpace(requestID) == "" || len(requestID) > 100 {
+func (s *MobileVerificationService) Verify(tenantID, staffID uint, token, ticketCode, requestID string, role ...string) (*VerifyResponse, error) {
+	ticketCode = strings.TrimSpace(ticketCode)
+	requestID = strings.TrimSpace(requestID)
+	if ticketCode == "" || requestID == "" || len(requestID) > 100 {
 		return nil, errors.New("票码和请求号不能为空")
 	}
-	session, err := s.loadSession(tenantID, staffID, token)
+	session, err := s.loadSession(tenantID, staffID, token, role...)
 	if err != nil {
 		return nil, err
 	}
@@ -339,9 +414,14 @@ func (s *MobileVerificationService) Verify(tenantID, staffID uint, token, ticket
 	if s.DeviceService == nil {
 		return nil, errors.New("移动核销服务未配置")
 	}
-	requestHash := deviceauth.HashBody([]byte(fmt.Sprintf("%d:%d:%s:%s", session.ID, session.CheckPointID, requestID, ticketCode)))
+	// The request hash is the client-visible idempotency contract. It must stay
+	// stable when an operator has to sign in again after a lost response, while
+	// still binding a request to the authenticated tenant, device, checkpoint,
+	// request ID and normalized ticket code. Do not include the short-lived
+	// browser session row ID here.
+	requestHash := deviceauth.HashBody([]byte(fmt.Sprintf("%d:%d:%d:%s:%s", tenantID, session.DeviceID, session.CheckPointID, requestID, ticketCode)))
 	return s.DeviceService.VerifyDirect(DirectVerifyRequest{
 		TenantID: tenantID, DeviceID: session.DeviceID, CheckPointID: session.CheckPointID,
-		RequestID: requestID, RequestHash: requestHash, TicketCode: strings.TrimSpace(ticketCode), MediaType: "qr_code",
+		RequestID: requestID, RequestHash: requestHash, TicketCode: ticketCode, MediaType: "qr_code",
 	})
 }

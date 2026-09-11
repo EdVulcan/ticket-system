@@ -193,16 +193,19 @@ func TestXiaohongshuMiniappOrderConvergesFromOfficialPaymentQuery(t *testing.T) 
 	miniapp.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
 		return &xiaohongshu.Client{AppID: appID, Secret: secret, ComponentAppID: "provider-app", ComponentAccessToken: "authorized-miniapp-token", BaseURL: server.URL, HTTP: server.Client()}
 	}
-	created, err := miniapp.CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 2, ClientRequestID: "request-1"})
+	created, err := miniapp.CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 2, ClientRequestID: "request-1", GuestName: "订单联系人", ContactPhone: "13800138000"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.OrderNo == "" || created.PlatformOrderID != "XHS-PLATFORM-1" || created.PayToken != "PAY-TOKEN-1" || created.AmountCents != 2 || created.Status != "unpaid" {
+	if created.OrderNo == "" || created.PlatformOrderID != "XHS-PLATFORM-1" || created.PayToken != "PAY-TOKEN-1" || created.AmountCents != 2 || created.Status != "unpaid" || created.ContactName != "订单联系人" || created.ContactPhone != "13800138000" {
 		t.Fatalf("created=%+v", created)
 	}
 	var recoveredOrder model.Order
 	if err := model.DB.Where("order_no = ? AND tenant_id = ?", created.OrderNo, tenantID).First(&recoveredOrder).Error; err != nil {
 		t.Fatal(err)
+	}
+	if recoveredOrder.ContactName != "订单联系人" || recoveredOrder.ContactPhone != "13800138000" {
+		t.Fatalf("contact was not snapshotted: %+v", recoveredOrder)
 	}
 	var recoveredLink model.XiaohongshuOrderLink
 	if err := model.DB.Where("order_id = ? AND tenant_id = ?", recoveredOrder.ID, tenantID).First(&recoveredLink).Error; err != nil {
@@ -243,7 +246,7 @@ func TestXiaohongshuMiniappOrderConvergesFromOfficialPaymentQuery(t *testing.T) 
 	if recoveredOperation.Status != "completed" || recoveredOperation.CompletedAt == nil {
 		t.Fatalf("recovered operation=%+v", recoveredOperation)
 	}
-	replayed, err := miniapp.CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 2, ClientRequestID: "request-1"})
+	replayed, err := miniapp.CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 2, ClientRequestID: "request-1", GuestName: "订单联系人", ContactPhone: "13800138000"})
 	if err != nil || replayed.OrderNo != created.OrderNo {
 		t.Fatalf("replayed=%+v err=%v", replayed, err)
 	}
@@ -536,7 +539,7 @@ func TestXiaohongshuMiniappDeferredPackageBooksIdempotentlyAndCancels(t *testing
 	if err != nil || len(catalog.Products) != 1 || catalog.Products[0].RequiresUseDate || catalog.Products[0].BookingMode != "after_purchase" {
 		t.Fatalf("catalog=%+v err=%v", catalog, err)
 	}
-	created, err := miniapp.CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 1, ClientRequestID: "deferred-order"})
+	created, err := miniapp.CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 1, ClientRequestID: "deferred-order", GuestName: "订单联系人", ContactPhone: "13800138000"})
 	if err != nil {
 		t.Fatal(err)
 	}

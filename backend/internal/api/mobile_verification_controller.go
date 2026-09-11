@@ -53,7 +53,7 @@ func (c *MobileVerificationController) CreateSession(ctx *gin.Context) {
 }
 
 func (c *MobileVerificationController) Heartbeat(ctx *gin.Context) {
-	if err := c.Service.Heartbeat(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), mobileSessionToken(ctx)); err != nil {
+	if err := c.Service.Heartbeat(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), mobileSessionToken(ctx), ctx.GetString("role")); err != nil {
 		writeMobileError(ctx, err)
 		return
 	}
@@ -61,7 +61,7 @@ func (c *MobileVerificationController) Heartbeat(ctx *gin.Context) {
 }
 
 func (c *MobileVerificationController) Close(ctx *gin.Context) {
-	if err := c.Service.Close(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), mobileSessionToken(ctx)); err != nil {
+	if err := c.Service.Close(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), mobileSessionToken(ctx), ctx.GetString("role")); err != nil {
 		writeMobileError(ctx, err)
 		return
 	}
@@ -74,10 +74,10 @@ func (c *MobileVerificationController) Verify(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	result, err := c.Service.Verify(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), mobileSessionToken(ctx), req.TicketCode, req.RequestID)
+	result, err := c.Service.Verify(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), mobileSessionToken(ctx), req.TicketCode, req.RequestID, ctx.GetString("role"))
 	if err != nil {
 		if errors.Is(err, service.ErrVerificationProcessing) {
-			ctx.JSON(http.StatusConflict, gin.H{"error": "该扫码请求正在处理中，请稍后重试"})
+			ctx.JSON(http.StatusConflict, gin.H{"error": "该扫码请求正在处理中，请稍后重试", "request_id": req.RequestID, "retryable": true})
 			return
 		}
 		writeMobileError(ctx, err)

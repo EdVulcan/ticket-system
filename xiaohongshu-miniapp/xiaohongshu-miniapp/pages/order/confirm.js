@@ -188,6 +188,11 @@ Page({
     this.setData({ contactPhone: event.detail.value || '', error: '' });
   },
 
+  isValidContactPhone(value) {
+    const phone = String(value || '').trim();
+    return phone.length >= 6 && phone.length <= 20 && /^[0-9+()\-\s]+$/.test(phone) && /[0-9]/.test(phone);
+  },
+
   updateTotal() {
     const cents = Number(this.data.product ? this.data.product.price_cents : 0) * this.data.quantity;
     this.setData({ originalTotalText: promotion.money(cents) });
@@ -435,12 +440,12 @@ Page({
       this.setData({ error: `请选择${this.data.product.useDateLabel}` });
       return;
     }
-    if (this.data.product.isPackage && !this.data.product.isDeferredPackage && !this.data.guestName.trim()) {
-      this.setData({ error: '请填写入住人姓名' });
+    if (!this.data.guestName.trim()) {
+      this.setData({ error: '请填写联系人姓名' });
       return;
     }
-    if (this.data.product.isPackage && !this.data.product.isDeferredPackage && !/^[0-9+\-\s]{6,20}$/.test(this.data.contactPhone.trim())) {
-      this.setData({ error: '请填写有效的联系电话' });
+    if (!this.isValidContactPhone(this.data.contactPhone)) {
+      this.setData({ error: '请填写有效的手机号' });
       return;
     }
     const payload = this.buildOrderPayload();
