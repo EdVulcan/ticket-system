@@ -300,8 +300,9 @@ type PresaleBookResponse struct {
 	Results             []PresaleBookResult `json:"book_result"`
 }
 
-// PresalePayDetail is returned only when booking requires a price difference
-// payment. Pre-sale voucher bookings with no price difference leave it empty.
+// PresalePayDetail is retained for response compatibility. The application
+// collects any hotel-side difference at the front desk and does not initiate
+// an online top-up from this field.
 type PresalePayDetail struct {
 	OrderID     string `json:"order_id"`
 	FinalPrice  int64  `json:"final_price"`

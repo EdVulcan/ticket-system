@@ -14,7 +14,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestXiaohongshuBookingCompensatesWhenPlatformRequiresPriceDifference(t *testing.T) {
+func TestXiaohongshuBookingIgnoresPlatformPayDetailForFrontDeskDifference(t *testing.T) {
 	resetBusinessData(t)
 	fixture := seedScenicHotelPackage(t, 1)
 	if err := model.DB.Model(&model.ScenicHotelPackage{}).Where("id = ?", fixture.packageView.ID).Updates(map[string]interface{}{
@@ -120,21 +120,21 @@ func TestXiaohongshuBookingCompensatesWhenPlatformRequiresPriceDifference(t *tes
 	if err != nil || processed != 1 {
 		t.Fatalf("processed=%d err=%v", processed, err)
 	}
-	if bookCalls != 1 || confirmCalls != 0 || compensationCalls != 1 {
+	if bookCalls != 1 || confirmCalls != 1 || compensationCalls != 0 {
 		t.Fatalf("book=%d confirm=%d compensation=%d", bookCalls, confirmCalls, compensationCalls)
 	}
 	var completed model.XiaohongshuBookingOperation
 	if err := model.DB.First(&completed, operation.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if completed.Status != "failed" || completed.CompletedAt == nil || completed.PlatformBookID != "PLATFORM-PAY-DETAIL" {
+	if completed.Status != "completed" || completed.CompletedAt == nil || completed.PlatformBookID != "PLATFORM-PAY-DETAIL" {
 		t.Fatalf("operation=%+v", completed)
 	}
 	var released model.ScenicHotelPackageEntitlement
 	if err := model.DB.First(&released, entitlement.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if released.Status != "pending_booking" || released.ReservationID != 0 || released.ExternalBookOrderID != "" || released.PlatformBookID != "" {
-		t.Fatalf("entitlement was not released after compensation: %+v", released)
+	if released.Status != "booked" || released.ReservationID == 0 || released.ExternalBookOrderID != externalBookID || released.PlatformBookID != "PLATFORM-PAY-DETAIL" {
+		t.Fatalf("entitlement was not confirmed for front-desk difference: %+v", released)
 	}
 }

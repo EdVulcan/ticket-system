@@ -427,13 +427,11 @@ func (s XiaohongshuBookingService) executeXiaohongshuBookStep(ctx context.Contex
 		voucherMismatch := result.VoucherCode != "" && hashMiniappValue(result.VoucherCode) != payload.VoucherCodeHash
 		now := s.now()
 		nextStatus, lastError := "remote_succeeded", ""
-		if response.PayDetail != nil {
-			// A price-difference response requires a separate payment flow. This
-			// service only supports zero-difference pre-sale bookings; persist the
-			// remote booking and reject it through the compensation stage instead
-			// of confirming an appointment that has not been paid.
-			nextStatus, lastError = "compensation_pending", "小红书预约需要补差价支付，当前流程不支持补差价"
-		} else if voucherMismatch {
+		// Any hotel-side price difference is collected at the front desk. The
+		// miniapp does not run an online top-up flow, so pay_detail is retained
+		// only as an upstream compatibility field and never changes booking
+		// confirmation or compensation state.
+		if voucherMismatch {
 			nextStatus, lastError = "compensation_pending", "小红书预约返回的券码不匹配"
 		}
 		// Persist the remote result independently of the entitlement update. If
