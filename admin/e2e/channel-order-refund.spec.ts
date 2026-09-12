@@ -214,6 +214,20 @@ test('明确的退款校验拒绝保持可见且不进入不确定查询', async
   expect(detailReads).toBe(1)
 })
 
+test('退款处理中提示使用业务 warning 样式而不是 error', async ({ page }) => {
+  await prepare(page)
+  await page.route('**/api/v1/payments/refunds/mixed', route => json(route, { error: '订单正在退款或核销处理中，请勿重复申请' }, 409))
+
+  await page.getByRole('button', { name: '申请退款', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '申请原路退款' })
+  await dialog.getByPlaceholder('请填写游客申请退票的原因').fill('游客行程改变')
+  await dialog.getByRole('button', { name: '确认申请退款', exact: true }).click()
+
+  await expect(dialog.locator('.el-alert--warning')).toContainText('订单正在退款或核销处理中，请勿重复申请')
+  await expect(dialog.locator('.el-alert--error')).toHaveCount(0)
+  await expect(dialog.getByRole('button', { name: '查询退款结果', exact: true })).toHaveCount(0)
+})
+
 test('渠道订单的不确定退款查询失败仍保持未确认且不重放', async ({ page }) => {
   await prepare(page)
   let detailReads = 0

@@ -8,6 +8,7 @@
       </el-descriptions>
       <p class="refund-note">款项退回原支付渠道。提交后需要等待渠道确认，不代表已经到账；退票规则及可退金额以服务端校验为准。</p>
       <el-alert v-if="unavailable" :title="unavailable" type="warning" :closable="false" show-icon />
+      <el-alert v-if="businessNotice" :title="businessNotice" type="warning" :closable="false" show-icon class="refund-error" />
       <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon class="refund-error" />
       <el-alert v-if="uncertain" title="退款结果暂未确认，请先查询退款结果，勿重复创建申请。" type="info" :closable="false" show-icon class="refund-error" />
       <div v-if="requiresExceptionAcknowledgement && canAuthorizeException && !unavailable" class="refund-error">
@@ -46,6 +47,7 @@ const checking = ref(false)
 const order = ref<any>(null)
 const reason = ref('')
 const error = ref('')
+const businessNotice = ref('')
 const unavailable = ref('')
 const currentUser = ref(readStoredUser())
 const overridePolicy = ref(false)
@@ -89,6 +91,7 @@ const open = async (orderNo: string, detailURL?: string) => {
   order.value = null
   reason.value = ''
   error.value = ''
+  businessNotice.value = ''
   unavailable.value = ''
   requestKey = `admin-refund-${orderNo}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   payload = null
@@ -131,6 +134,7 @@ const showResult = (status: string) => {
   uncertain.value = false
   submitted.value = true
   error.value = ''
+  businessNotice.value = ''
   if (completed) ElMessage.success('退款已完成')
   else ElMessage.info('退款申请已提交，等待原支付渠道确认，请刷新查看进度')
   visible.value = false
@@ -152,7 +156,7 @@ const queryResult = async () => {
     if (refund && ['failed', 'manual_review', 'group_failed'].includes(refund.status)) {
       uncertain.value = false
       submitted.value = true
-      error.value = '该退款申请未完成或需要人工复核，请在退款任务中查看处理，勿重复创建申请'
+      businessNotice.value = '该退款申请未完成或需要人工复核，请在退款任务中查看处理，勿重复创建申请'
     }
   } catch {
     // A read failure says nothing about whether the original refund committed.
@@ -181,6 +185,7 @@ const submit = async () => {
     ...(needsPolicyOverride.value ? { override_refund_policy: true } : {}) }
   attempted.value = true
   error.value = ''
+  businessNotice.value = ''
   try {
     const { data } = await request.post('/payments/refunds/mixed', payload, { skipErrorToast: true } as any)
     if (showResult(data?.status)) return
@@ -192,7 +197,10 @@ const submit = async () => {
     const genericFailure = ['请求失败，请稍后重试', '操作失败，请稍后重试', '请求超时，请稍后重试', '网络连接失败，请检查网络后重试'].includes(message)
     if ([400, 401, 403, 404, 409, 422].includes(status) && typeof message === 'string' && message.trim() && !genericFailure) {
       uncertain.value = false
-      error.value = cause.response.data.error
+      const normalized = message.trim()
+      const isNonTerminalBusinessState = status === 409 || /(退款处理中|退款申请.*(处理中|已提交)|核销处理中|请勿重复|人工复核|售后.*处理)/.test(normalized)
+      if (isNonTerminalBusinessState) businessNotice.value = normalized
+      else error.value = normalized
     } else {
       uncertain.value = true
       await queryResult()

@@ -1,32 +1,35 @@
 <template>
-  <el-dialog v-model="visible" title="上游供应配置" width="min(520px, calc(100vw - 24px))" :close-on-click-modal="false" destroy-on-close>
+  <el-dialog v-model="visible" title="上游供应商配置" width="min(560px, calc(100vw - 24px))" :close-on-click-modal="false" destroy-on-close>
     <div v-loading="loading">
       <p class="supply-product">{{ productName }}</p>
-      <el-alert title="当前仍由本系统出票" description="可提前保存智游宝连接和商品编码。接口联调通过前不能启用上游出票，保存草稿不影响现有销售和已售门票。" type="info" :closable="false" show-icon />
+      <el-alert title="当前仍由本系统出票" description="这里用于把本景区自有票种映射到上游供应商。保存的是配置草稿，不会改变现有销售、已出票门票或核销方式；完成接口联调和验收后，才会单独开放上游出票。" type="info" :closable="false" show-icon />
       <el-form label-position="top" class="supply-form" @submit.prevent>
-        <el-form-item label="供应连接">
+        <el-form-item label="上游供应连接">
           <el-select v-model="form.upstream_connection_id" placeholder="选择供应连接" style="width:100%" :disabled="loading || saving">
-            <el-option v-for="item in connections" :key="item.id" :value="item.id" :label="`${item.name} · 智游宝（待联调）`" />
+            <el-option v-for="item in connections" :key="item.id" :value="item.id" :label="item.name" />
           </el-select>
+          <div class="field-hint">选择已经建立的供应商接口连接。一个连接可以供多个票种复用。</div>
           <el-button link type="primary" @click="creating = !creating" :disabled="loading || saving">新建供应连接</el-button>
         </el-form-item>
         <div v-if="creating" class="connection-form">
-          <el-input v-model="connectionName" placeholder="连接名称，例如：合作景区智游宝" maxlength="100" />
+          <el-input v-model="connectionName" placeholder="连接名称，例如：景区合作供应商接口" maxlength="100" />
           <el-button @click="createConnection" :loading="creatingBusy" :disabled="!connectionName.trim()">保存连接</el-button>
         </div>
-        <el-form-item label="上游商品编码">
-          <el-input v-model="form.external_product_code" placeholder="填写智游宝提供的商品编码" maxlength="200" :disabled="loading || saving" />
+        <el-form-item label="供应商商品编码">
+          <el-input v-model="form.external_product_code" placeholder="填写供应商提供的商品编码" maxlength="200" :disabled="loading || saving" />
+          <div class="field-hint">这是供应商系统中对应商品的唯一编码，不是本系统票种 ID，也不是小红书商品编码。</div>
         </el-form-item>
-        <el-form-item label="正式启用上游出票">
+        <el-form-item label="出票方式">
           <el-switch :model-value="false" disabled />
-          <span class="supply-hint">等待接口联调完成</span>
+          <span class="supply-hint">暂未开放上游出票</span>
+          <div class="field-hint">联调完成后会在这里明确显示启用条件和切换影响；当前保存后仍由本系统出票。</div>
         </el-form-item>
       </el-form>
       <el-alert v-if="loadFailed" title="配置加载失败，请关闭后重试" type="error" :closable="false" />
     </div>
     <template #footer>
       <el-button @click="visible = false" :disabled="saving">取消</el-button>
-      <el-button type="primary" :loading="saving" :disabled="loading || loadFailed || !form.upstream_connection_id || !form.external_product_code.trim()" @click="save">保存待联调配置</el-button>
+      <el-button type="primary" :loading="saving" :disabled="loading || loadFailed || !form.upstream_connection_id || !form.external_product_code.trim()" @click="save">保存配置草稿</el-button>
     </template>
   </el-dialog>
 </template>
@@ -109,4 +112,5 @@ defineExpose({ open })
 .supply-form { margin-top: 20px; }
 .connection-form { display: flex; gap: 8px; margin-bottom: 18px; }
 .supply-hint { margin-left: 12px; color: #909399; font-size: 13px; }
+.field-hint { margin-top: 5px; color: #909399; font-size: 12px; line-height: 1.5; }
 </style>

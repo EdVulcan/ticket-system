@@ -59,6 +59,25 @@ func TestXiaohongshuRefundPendingSuppressesServerTicketCodes(t *testing.T) {
 	}
 }
 
+func TestXiaohongshuRefundSubmittedStillSuppressesServerTicketCodes(t *testing.T) {
+	fixture := seedXiaohongshuRefundFixture(t)
+	var link model.XiaohongshuOrderLink
+	if err := model.DB.Where("order_id = ? AND tenant_id = ?", fixture.order.ID, fixture.tenantID).First(&link).Error; err != nil {
+		t.Fatal(err)
+	}
+	refund := createXiaohongshuRefund(t, fixture, "refund-submitted-projection")
+	if err := model.DB.Model(&refund).Update("status", "submitted").Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := (XiaohongshuOrderService{}).orderResult(&link, &fixture.order, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.RefundPending || len(result.TicketCodes) != 0 {
+		t.Fatalf("submitted refund must remain pending and hide ticket codes: %+v", result)
+	}
+}
+
 func TestXiaohongshuRefundLocalCommitFailureRecoversByQueryOnly(t *testing.T) {
 	fixture := seedXiaohongshuRefundFixture(t)
 	refund := createXiaohongshuRefund(t, fixture, "commit-recovery")

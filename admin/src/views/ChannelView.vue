@@ -1016,7 +1016,7 @@ const orderStatusText = (status: string) => ({ unpaid: '待支付', paid: '已�
 const ticketStatusText = (status: string) => ({ unused: '未使用', active: '可使用', issued: '已出票', used: '已核销', refunded: '已退款', expired: '已过期', void: '已作废' } as Record<string, string>)[status] || '未知状态'
 const paymentMethodText = (method: string) => ({ cash: '现金', wechat: '微信支付', alipay: '支付宝', xiaohongshu: '小红书担保支付', touch: '碰一碰支付', balance: '账户余额', credit: '授信挂账', team_account: '团队预付款/授信' } as Record<string, string>)[method] || '其他方式'
 const paymentStatusText = (status: string) => ({ pending: '等待支付', processing: '支付处理中', paid: '支付成功', succeeded: '支付成功', failed: '支付失败', cancelled: '已取消', refunded: '已退款', partial_refunded: '部分退款' } as Record<string, string>)[status] || '未知状态'
-const refundStatusText = (status: string) => ({ pending: '等待退款', processing: '退款处理中', succeeded: '退款成功', completed: '退款成功', failed: '退款失败', manual_review: '人工复核' } as Record<string, string>)[status] || '未知状态'
+const refundStatusText = (status: string) => ({ pending: '等待退款', processing: '退款处理中', submitted: '渠道处理中', succeeded: '退款成功', completed: '退款成功', group_pending: '整单退款处理中', group_manual_review: '整单人工复核', group_succeeded: '整单退款成功', failed: '退款失败', group_failed: '整单退款失败', manual_review: '人工复核' } as Record<string, string>)[status] || '未知状态'
 const checkInResultText = (result: string) => ({ success: '核销成功', deny: '已拒绝', fail: '核销失败', failed: '核销失败', rejected: '已拒绝' } as Record<string, string>)[result] || '未知结果'
 const afterSaleTypeText = (type: string) => ({ refund: '退票', reschedule: '改期', exchange: '换票', void: '作废', reissue: '补打' } as Record<string, string>)[type] || '其他售后'
 const afterSaleStatusText = (status: string) => ({ pending: '待审核', approved: '已批准', processing: '处理中', completed: '已完成', rejected: '已拒绝', failed: '处理失败' } as Record<string, string>)[status] || '未知状态'
@@ -1073,7 +1073,7 @@ const refreshRefundOrders = async () => {
   }
 }
 const hasPendingRefund = (order: any, refunds: any[] = []) => Boolean(order?.refund_pending) || refunds.some(refund =>
-  ['pending', 'group_pending', 'processing', 'submitted'].includes(refund?.status))
+  ['pending', 'group_pending', 'processing', 'submitted', 'manual_review', 'group_manual_review'].includes(refund?.status))
 const canOpenOrderRefund = (order: any, refunds: any[] = []) => {
   if (!canRefund || !order || selectedAccount.value?.environment === 'sandbox' || order.environment === 'sandbox' || hasPendingRefund(order, refunds)) return false
   return order.status === 'paid' || (order.status === 'completed' && selectedAccount.value?.type === 'xiaohongshu' && canUsedXiaohongshuRefund)

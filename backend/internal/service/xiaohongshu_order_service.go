@@ -350,7 +350,7 @@ func (s XiaohongshuOrderService) orderResult(link *model.XiaohongshuOrderLink, o
 	}
 	if link.State == "paid" && link.VoucherIssuanceStatus == "ready" && order.Status != "refunded" && order.Status != "cancelled" {
 		var pendingRefunds int64
-		if err := model.DB.Model(&model.Refund{}).Where("tenant_id = ? AND order_no = ? AND method = ? AND status = ?", order.TenantID, order.OrderNo, "xiaohongshu", "pending").Count(&pendingRefunds).Error; err != nil {
+		if err := model.DB.Model(&model.Refund{}).Where("tenant_id = ? AND order_no = ? AND method = ? AND status IN ?", order.TenantID, order.OrderNo, "xiaohongshu", []string{"pending", "processing", "submitted", "manual_review"}).Count(&pendingRefunds).Error; err != nil {
 			return nil, err
 		}
 		result.RefundPending = pendingRefunds > 0
