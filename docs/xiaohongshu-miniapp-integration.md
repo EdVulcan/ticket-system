@@ -1,5 +1,11 @@
 # 小红书专业号小程序接入说明
 
+### 2026-09-12 酒景预售券预约自研接入
+
+- 官方预约接口 [发起预约（DC842183）](https://miniapp.xiaohongshu.com/doc/DC842183) 与 [预约单状态同步（DC394388）](https://miniapp.xiaohongshu.com/doc/DC394388) 均使用商家自研小程序的 `/mp` 路径：`POST /api/rmp/mp/deal/pre_sale/book` 和 `POST /api/rmp/mp/deal/pre_sale/sync_status`。请求通过当前销售租户渠道账号的 `app_id/access_token` 鉴权，不要求服务商组件授权；“支持第三方调用”不改变本正式小程序的自研接入方式。
+- 预约 Saga 已使用同一商家凭据调用上述接口，持久化平台 `book_id` 后再发送状态同步。状态只接受官方定义的 `1`（确认）、`2`（拒绝/补偿）和 `3`（撤销）；`3` 也用于本地退款完成后的预约撤销。预约状态同步不代表资金退款，资金仍由独立售后退款流程负责。
+- 预约、撤销、退款后预约撤销均保留可重启的持久任务和失败恢复；本轮没有新增数据库版本，也没有改写已有订单、票权、库存或资金事实。部署后仍需用正式酒景预售券完成支付、预约确认、取消/改约、退款后的预约撤销和核销验收。
+
 ## 1. 当前接入定位
 
 ### 2026-09-10 商品优惠价展示修复
@@ -91,7 +97,7 @@
 - 本地验收：`go test ./... -count=1 -timeout 5m` 中业务服务、API、路由等包通过，模型包因全套迁移耗时超过 5 分钟而超时；单独 `go test ./internal/model -count=1 -timeout 15m` 通过（318.189s）。退款 race 回归通过（21.700s），覆盖响应丢失只查询、最终写库失败后重启恢复、精确结果校验、跨租户拒绝、幂等、不可变快照、回调不抢租约与服务端票码暂停。`go vet ./...`、`go build ./...`、小程序 Node 36/36 及 `git diff --check` 通过。
 - 页面验证使用 `http://127.0.0.1:4177/` 的实际 XHSML/CSS/JS 浏览器适配预览；Browser plugin not available，因此按前端测试技能采用已有 Playwright。390/320px 的退款中→重新进入→退款完成状态、无票码/支付按钮、无横向溢出和无运行时错误通过；原 B 票面、二维码解码及放大、多票、订单展开、支付失败提示和导航回归通过。此结果不等于原生 SDK 或真机验收。
 
-普通商品、订单和支付查询当前按景区已有企业专业号小程序的商家自开发模式接入。预售券预约使用小红书服务商组件接口，必须使用服务商 `appid` 和已授权小程序的组件访问凭据，不能把商家自开发 `appid/appsecret` 换取的普通令牌发送到 `/component` 接口。当前管理端尚未配置服务商授权凭据，因此预约请求会 fail-closed 并进入持久重试/人工处理，不宣称已具备生产预约能力。
+普通商品、订单、支付查询和预售券预约当前均按景区已有企业专业号小程序的商家自开发模式接入，使用销售租户渠道账号自己的 `appid/appsecret` 获取调用凭证。当前预约客户端不依赖服务商组件授权；服务商字段仅为历史兼容保留，不参与正式自研预约请求。
 
 小红书负责笔记、直播、POI、专业号商品卡、支付凭证和原生订单中心；本项目继续负责产品来源、库存、销售订单、票权、景区核销、退款事实和渠道对账。小程序只承接小红书内商品详情、下单确认、支付拉起、订单详情和售后入口，不复制管理端业务规则。
 
@@ -100,7 +106,7 @@
 - 已确认沙盒小程序已开通交易能力。
 - 已在小红书后台完成当前沙盒小程序的相关配置，并已配置消息推送。
 - 以上是外部配置状态，不等同于本项目已经完成联调或生产准入。下一步仍需实际验证消息推送 GET 验签、POST 加密事件入库幂等、商品同步、`0.1` 元以内下单支付和支付收敛。
-- 服务商组件授权凭据、酒景预售券预约、资金退款、售后/退款事件消费、凭证核销和结算仍按本文档的 fail-closed 边界处理；缺少真实凭据或协议验证时不得显示成功。
+- 酒景预售券预约、资金退款、售后/退款事件消费、凭证核销和结算仍按本文档的 fail-closed 边界处理；缺少真实商家凭据或协议验证时不得显示成功。
 
 ### 2026-09-03 正式小程序域名校验
 
@@ -184,8 +190,8 @@
 - 凭证核销：`POST https://miniapp.xiaohongshu.com/api/rmp/mp/deal/voucher/verify`
 - 售后新增：`POST https://miniapp.xiaohongshu.com/api/rmp/mp/deal/order/after_sales_order/add`
 - 结算请求：`POST https://miniapp.xiaohongshu.com/api/rmp/mp/deal/settle`
-- 预售券预约：`POST https://miniapp.xiaohongshu.com/api/rmp/component/deal/pre_sale/book`
-- 预约状态同步：`POST https://miniapp.xiaohongshu.com/api/rmp/component/deal/pre_sale/sync_status`
+- 预售券预约：`POST https://miniapp.xiaohongshu.com/api/rmp/mp/deal/pre_sale/book`
+- 预约状态同步：`POST https://miniapp.xiaohongshu.com/api/rmp/mp/deal/pre_sale/sync_status`
 - 消息加解密：`https://miniapp.xiaohongshu.com/third/api-3rd-doc/msgCrypt`
 
 正式小程序服务端 API 基地址为 `https://miniapp.xiaohongshu.com`，测试小程序必须改用
@@ -194,8 +200,8 @@
 
 ## 2. 已确认的业务语义
 
-- 普通 `/mp` 商品、订单和查询接口使用销售租户自有小程序 `appid` 和 `appsecret` 获取并缓存调用凭证；这组凭据不能用于预售券 `/component` 接口。
-- 预售券预约和预约状态同步必须使用服务商 `appid` 与已授权销售小程序的组件访问凭据。授权凭据未配置、过期或无法刷新时，预约必须拒绝外部请求并保留可恢复的本地任务，不能伪造成功。
+- 普通 `/mp` 商品、订单、查询及预售券预约接口使用销售租户自有小程序 `appid` 和 `appsecret` 获取并缓存调用凭证；正式自研链路不发送 `/component` 请求。
+- 预售券预约和预约状态同步使用 `/mp` 商家凭据。凭据缺失、过期或无法刷新时，预约必须拒绝外部请求并保留可恢复的本地任务，不能伪造成功。服务商组件授权仅作为未来另行接入服务商模式的配置，不是当前正式小程序的前置条件。
 - 景点身份同步生活服务商品时必须关联小红书 POI；团购、预售券和日历商品分别使用 `product_type=1/2/3`。
 - 本地生活担保支付必须配置结算方式。优先按景区实际资质选择总店或门店结算，不由客户端自行提交。
 - 本系统先创建外部订单，再将订单及小程序订单详情路径同步给小红书；小红书返回 `order_id`、`pay_token` 和支付类型。
@@ -219,7 +225,7 @@
 | `verify_id` | 核销外部事实编号，与本地核销记录幂等关联 |
 | 平台结算结果 | 渠道对账事实，不覆盖供应商核销收入和上下游结算账本 |
 
-小红书商家应用凭据必须按销售租户单独加密保存。景区自营使用景区供应商租户的应用；未来分销商自有小红书账号接入时使用分销商租户的应用，但履约票权仍属于产品对应的供应商和景区。服务商 `appid`、授权小程序标识及组件访问/刷新凭据属于独立配置，不能复用商家 `AppID/AppSecret` 字段。
+小红书商家应用凭据必须按销售租户单独加密保存。景区自营使用景区供应商租户的应用；未来分销商自有小红书账号接入时使用分销商租户的应用，但履约票权仍属于产品对应的供应商和景区。服务商组件字段如在历史配置中存在，也不得覆盖或混用当前商家 `AppID/AppSecret`；正式自研预约只读取销售租户自己的商家凭据。
 
 ## 4. 当前实现状态
 
@@ -234,14 +240,14 @@
 - 服务端下单使用客户端请求号幂等创建本地订单并同步小红书订单；`pay_token` 加密保存，只在有效未支付订单中返回。支付完成只能由小红书担保支付查询确认，随后在单一事务中生成支付事实、履约单、票权和加密券码关联。
 - 未支付订单由前端查询和后台任务共同收敛；重复查询、并发查询和进程重启不会重复支付或出票。测试环境单笔金额上限 `0.10` 元同时由前端提示和服务端强制校验。
 - 客户端已校验订单金额、商品必要字段、担保支付结算类型和单批最多 10 张凭证。
-- 管理端已支持按租户创建小红书渠道账号，并配置商家 AppID、AppSecret、消息 Token 和 EncodingAESKey；敏感值加密保存且不会通过接口回显，组合型供应商/分销商租户仍按销售租户隔离凭据。服务商组件授权配置尚未接入管理端，预约客户端没有组件授权凭据时会在发网前拒绝。
+- 管理端已支持按租户创建小红书渠道账号，并配置商家 AppID、AppSecret、消息 Token 和 EncodingAESKey；敏感值加密保存且不会通过接口回显，组合型供应商/分销商租户仍按销售租户隔离凭据。预售券预约沿用该商家凭据，不要求管理端配置服务商组件授权。
 - 消息推送地址为 `https://<部署域名>/api/v1/integrations/xiaohongshu/events/<AppID>`。保存配置时的 GET 请求执行 SHA-1 验签并原样返回 `echostr`；POST 事件先验签、按官方 AES-CBC/PKCS#7 协议解密、校验明文 AppID，再加密且幂等入库后返回 `success`。无法验证或无法持久化的事件不会被确认。
 - 已在官方开发者工具中使用测试小程序完成真实 `xhs.login -> code2session` 和票种目录验证；商城五个页面已完整编译，并以长票名、多价格、待支付/已支付订单验证搜索、排序、状态筛选和窄屏布局。服务端按渠道环境自动选择正式或沙箱 API 基地址，不维护两套业务代码。
-- 先售券后预约页面、服务端库存事务、小红书预约/状态同步客户端及 PostgreSQL 持久重试已经完成代码和自动化。普通撤销预约使用平台状态 `3`，只有本地真实退款事实完成后才使用状态 `4` 通知预约链；这里的状态 `4` 是预约状态同步，不是资金退款接口。外部预约成功后先持久化平台预约号，再收尾本地权益，进程重启或本地写失败可以从对应阶段恢复。由于服务商组件授权尚未配置，当前预约调用会 fail-closed；小红书担保支付主动退款和正式退款字段/主动查询协议尚未验收，通用退款服务会明确拒绝 `xiaohongshu` 支付方式。已实现的 `AFTER_SALE_REFUND` 消息消费只负责验签、持久化和履约隔离协调，不会冒充资金退款；真实沙盒券核销仍未验收。真实沙盒仍需依次验证预售券商品同步、`0.01` 元担保支付、服务商授权、预约、取消预约、改约、平台售后退款、普通券核销、过期和结算；生产环境仍需重新验收。资金退款、结算请求和未验收的外部业务分发不得显示为可用或模拟成功。
+- 先售券后预约页面、服务端库存事务、小红书预约/状态同步客户端及 PostgreSQL 持久重试已经完成代码和自动化。预约确认使用平台状态 `1`，拒绝/补偿使用 `2`，普通撤销和本地退款后的预约撤销均使用 `3`；这些状态同步都不是资金退款接口。外部预约成功后先持久化平台预约号，再收尾本地权益，进程重启或本地写失败可以从对应阶段恢复。商家凭据缺失时当前预约调用会 fail-closed；小红书担保支付主动退款和正式退款字段/主动查询协议尚未验收，通用退款服务会明确拒绝 `xiaohongshu` 支付方式。已实现的 `AFTER_SALE_REFUND` 消息消费只负责验签、持久化和履约隔离协调，不会冒充资金退款；真实沙盒券核销仍未验收。真实沙盒仍需依次验证预售券商品同步、`0.01` 元担保支付、预约、取消预约、改约、平台售后退款、普通券核销、过期和结算；生产环境仍需重新验收。资金退款、结算请求和未验收的外部业务分发不得显示为可用或模拟成功。
 
 ### Booking status and webhook boundary (schema 86)
 
-- `refund_status_sync` is a durable presale-booking operation only. It sends booking status `4` after an independently completed local user after-sale and must never be interpreted as, invoke, or confirm a Xiaohongshu funds refund.
+- `refund_status_sync` is a durable presale-booking operation only. It sends booking status `3` after an independently completed local user after-sale and must never be interpreted as, invoke, or confirm a Xiaohongshu funds refund.
 - Schema 86 migrates legacy `refund` booking operations and their conventional `xhs:refund:` operation keys to `refund_status_sync`. The migration protects the globally unique key before renaming, so durable legacy tasks are preserved.
 - Webhooks remain signature-verified, decrypted, encrypted at rest, and idempotently stored in the inbox. Only explicitly recognized non-financial events remain pending. After-sale/refund and unknown business events are stored as `manual_review`; they cannot change local payment, ticket, entitlement, inventory, or settlement facts.
 - Deferred booking commands and the admin/reconciliation worker use `XiaohongshuBookingService`; `MiniappService` remains only the HTTP compatibility facade for existing storefront routes. Payment/order reconciliation is kept separate from the booking Saga.
@@ -264,7 +270,7 @@
 ## 5. 真实联调前需要的资料
 
 - 小程序 `AppID` 和 `AppSecret`，只能通过管理端加密配置，不进入代码、文档或日志。
-- 服务商 `appid`、授权销售小程序的授权关系，以及组件 `access_token/refresh_token` 的安全托管方案；普通商家 `AppID/AppSecret` 不满足预约组件接口鉴权。
+- 当前正式自研模式不需要服务商 `appid` 或组件 `access_token/refresh_token`；如未来接入服务商代调用模式，再单独取得授权关系并隔离托管其凭据，不能与商家 `AppID/AppSecret` 混用。
 - 小程序后台确认已开通本地生活担保支付，支付类型应返回 `life_gpay`。
 - 已认领景区 POI 的名称和 `poi_id`。
 - 景点门票对应的末级 `category_id`。

@@ -13,7 +13,7 @@ type XiaohongshuBookingOperation struct {
 	OrderLinkID      uint   `gorm:"not null;index" json:"order_link_id"`
 	EntitlementID    uint   `gorm:"not null;index" json:"entitlement_id"`
 	OperationKey     string `gorm:"size:160;not null;uniqueIndex" json:"operation_key"`
-	// refund_status_sync records only the presale-booking status=4 notification
+	// refund_status_sync records only the presale-booking status=3 revocation
 	// after an independently completed local after-sale. It is not a payment
 	// refund operation.
 	Type                     string     `gorm:"size:30;not null;index;check:chk_xiaohongshu_booking_operations_type,type IN ('book','revoke','refund_status_sync')" json:"type"`

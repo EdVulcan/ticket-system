@@ -129,7 +129,7 @@ func TestXiaohongshuMiniappSessionFailsClosedWhenChannelIsDisabled(t *testing.T)
 	defer server.Close()
 	miniapp := NewMiniappService()
 	miniapp.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
-		return &xiaohongshu.Client{AppID: appID, Secret: secret, ComponentAppID: "provider-app", ComponentAccessToken: "authorized-miniapp-token", BaseURL: server.URL, HTTP: server.Client()}
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
 	}
 	login, err := miniapp.LoginXiaohongshu(context.Background(), "miniapp-disabled", "login-code")
 	if err != nil {
@@ -191,7 +191,7 @@ func TestXiaohongshuMiniappOrderConvergesFromOfficialPaymentQuery(t *testing.T) 
 
 	miniapp := NewMiniappService()
 	miniapp.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
-		return &xiaohongshu.Client{AppID: appID, Secret: secret, ComponentAppID: "provider-app", ComponentAccessToken: "authorized-miniapp-token", BaseURL: server.URL, HTTP: server.Client()}
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
 	}
 	created, err := miniapp.CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 2, ClientRequestID: "request-1", GuestName: "订单联系人", ContactPhone: "13800138000"})
 	if err != nil {
@@ -376,7 +376,7 @@ func TestXiaohongshuMiniappScenicHotelPackageRequiresStayDateAndCreatesReservati
 	}))
 	defer server.Close()
 	miniapp.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
-		return &xiaohongshu.Client{AppID: appID, Secret: secret, ComponentAppID: "provider-app", ComponentAccessToken: "authorized-miniapp-token", BaseURL: server.URL, HTTP: server.Client()}
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
 	}
 	created, err := miniapp.CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 1, ClientRequestID: "package-with-date", UseDate: fixture.checkIn.Format("2006-01-02"), GuestName: "测试游客", ContactPhone: "13800138000"})
 	if err != nil {
@@ -444,6 +444,7 @@ func TestXiaohongshuMiniappDeferredPackageBooksIdempotentlyAndCancels(t *testing
 	var confirmExternalIDs []string
 	cancelShouldFail := true
 	confirmShouldFail, breakLocalFinalize, refundShouldFail := false, false, false
+	refundSyncExpected := false
 	bookStarted := make(chan struct{}, 1)
 	releaseInitialBook := make(chan struct{})
 	var callsMu sync.Mutex
@@ -457,7 +458,7 @@ func TestXiaohongshuMiniappDeferredPackageBooksIdempotentlyAndCancels(t *testing
 			_, _ = w.Write([]byte(`{"data":{"out_order_id":"XHS-DEFERRED","order_id":"XHS-DEFERRED-ORDER","final_price":1,"pay_token":"DEFERRED-PAY","expired_time":1786349700,"open_pay_type":"life_gpay"},"success":true,"msg":"success","code":0}`))
 		case "/api/rmp/mp/deal/gpay_order/get":
 			_, _ = w.Write([]byte(`{"data":{"order_id":"XHS-DEFERRED-ORDER","pay_amount":1,"order_status":6,"voucher_infos":[{"voucher_code":"VOUCHER-DEFERRED","voucher_status":1,"pay_amount":1}],"third_trade_no":"TRADE-DEFERRED","pay_channel":1},"success":true,"msg":"success","code":0}`))
-		case "/api/rmp/component/deal/pre_sale/book":
+		case "/api/rmp/mp/deal/pre_sale/book":
 			callsMu.Lock()
 			bookCalls++
 			callsMu.Unlock()
@@ -474,12 +475,13 @@ func TestXiaohongshuMiniappDeferredPackageBooksIdempotentlyAndCancels(t *testing
 			})
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"data": map[string]interface{}{
-					"out_order_id": request.ExternalOrderID,
-					"book_result":  []map[string]string{{"book_id": "PLATFORM-BOOK-DEFERRED", "voucher_code": "VOUCHER-DEFERRED"}},
+					"out_order_id":      request.ExternalOrderID,
+					"out_book_order_id": request.BookInfo.ExternalBookOrderID,
+					"book_result":       []map[string]string{{"book_id": "PLATFORM-BOOK-DEFERRED", "voucher_code": "VOUCHER-DEFERRED"}},
 				},
 				"success": true, "msg": "success", "code": 0,
 			})
-		case "/api/rmp/component/deal/pre_sale/sync_status":
+		case "/api/rmp/mp/deal/pre_sale/sync_status":
 			var request xiaohongshu.PresaleBookStatusRequest
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 				t.Fatal(err)
@@ -503,16 +505,18 @@ func TestXiaohongshuMiniappDeferredPackageBooksIdempotentlyAndCancels(t *testing
 			case 2:
 				compensationCalls++
 			case 3:
-				cancelCalls++
-				if cancelShouldFail {
-					_, _ = w.Write([]byte(`{"data":null,"success":false,"msg":"temporary revoke failure","code":50001}`))
-					return
-				}
-			case 4:
-				refundCalls++
-				if refundShouldFail {
-					_, _ = w.Write([]byte(`{"data":null,"success":false,"msg":"temporary refund notification failure","code":50004}`))
-					return
+				if refundSyncExpected {
+					refundCalls++
+					if refundShouldFail {
+						_, _ = w.Write([]byte(`{"data":null,"success":false,"msg":"temporary refund notification failure","code":50004}`))
+						return
+					}
+				} else {
+					cancelCalls++
+					if cancelShouldFail {
+						_, _ = w.Write([]byte(`{"data":null,"success":false,"msg":"temporary revoke failure","code":50001}`))
+						return
+					}
 				}
 			default:
 				t.Fatalf("unexpected booking status=%d", request.Status)
@@ -532,7 +536,7 @@ func TestXiaohongshuMiniappDeferredPackageBooksIdempotentlyAndCancels(t *testing
 		return clock
 	}
 	miniapp.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
-		return &xiaohongshu.Client{AppID: appID, Secret: secret, ComponentAppID: "provider-app", ComponentAccessToken: "authorized-miniapp-token", BaseURL: server.URL, HTTP: server.Client()}
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
 	}
 
 	catalog, err := miniapp.ListCatalog(&customer)
@@ -800,6 +804,7 @@ func TestXiaohongshuMiniappDeferredPackageBooksIdempotentlyAndCancels(t *testing
 		t.Fatalf("local finalize retry result=%+v compensationCalls=%d", frozen, compensationCalls)
 	}
 
+	refundSyncExpected = true
 	refundShouldFail = true
 	if err := model.Write(func(tx *gorm.DB) error {
 		if err := tx.Model(&model.Ticket{}).Where("id = ?", frozen.TicketID).Update("status", "refunded").Error; err != nil {
@@ -1119,7 +1124,7 @@ func TestFailedXiaohongshuBookingOperationsAreTenantScopedAndRecoverCorrectPhase
 	// Simulate a platform refund notice that already succeeded while the local
 	// finalization fact is temporarily inconsistent. Exhaustion must remember
 	// remote_succeeded, and a manual retry must only finish local work without
-	// sending status 4 again.
+	// sending the documented revoke status 3 again.
 	past := time.Now().Add(-time.Minute)
 	if err := model.DB.Model(&refundOperation).Updates(map[string]interface{}{
 		"status": "remote_succeeded", "platform_book_id": "WRONG-PLATFORM-ID", "attempts": 0,
@@ -1237,7 +1242,7 @@ func TestFailedXiaohongshuBookingOperationResumesOriginalCompensationStage(t *te
 		switch r.URL.Path {
 		case "/api/rmp/token":
 			_, _ = w.Write([]byte(`{"data":{"access_token":"ACCESS","expire_in":7200},"success":true,"msg":"success","code":0}`))
-		case "/api/rmp/component/deal/pre_sale/sync_status":
+		case "/api/rmp/mp/deal/pre_sale/sync_status":
 			var request xiaohongshu.PresaleBookStatusRequest
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 				t.Fatal(err)
@@ -1255,7 +1260,7 @@ func TestFailedXiaohongshuBookingOperationResumesOriginalCompensationStage(t *te
 	}))
 	defer server.Close()
 	miniapp.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
-		return &xiaohongshu.Client{AppID: appID, Secret: secret, ComponentAppID: "provider-app", ComponentAccessToken: "authorized-miniapp-token", BaseURL: server.URL, HTTP: server.Client()}
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
 	}
 	if err := miniapp.RetryFailedXiaohongshuBookingOperation(fixture.tenantID, operation.ID, 88, "admin", "continue compensation"); err != nil {
 		t.Fatal(err)

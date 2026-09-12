@@ -177,9 +177,9 @@ func (lifecycle PackageFulfillmentLifecycle) FinalizeExternalCancellationTx(tx *
 	return lifecycle.FinalizeCancelTx(tx, entitlement.EntitlementNo)
 }
 
-// MarkRefundStatusSyncedTx records completion of the platform status-4
-// after-sale notification. It never changes payment, order, ticket or refund
-// facts; those are owned by the normal refund workflow.
+// MarkRefundStatusSyncedTx records completion of the platform status-3 booking
+// revocation after a local after-sale. It never changes payment, order, ticket
+// or refund facts; those are owned by the normal refund workflow.
 func (lifecycle PackageFulfillmentLifecycle) MarkRefundStatusSyncedTx(tx *gorm.DB, tenantID uint, entitlementNo, externalBookOrderID, platformBookID string) (*model.ScenicHotelPackageEntitlement, error) {
 	entitlement, err := lockExternalBookingEntitlementTx(tx, tenantID, entitlementNo)
 	if err != nil {

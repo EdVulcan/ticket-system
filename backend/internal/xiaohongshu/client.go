@@ -21,9 +21,10 @@ const (
 	SandboxBaseURL = "https://miniapp-sandbox.xiaohongshu.com"
 )
 
-// ErrComponentAuthorizationRequired is returned before any network request
-// when a presale-booking component credential is not configured. Merchant
-// self-developed miniapp credentials must not be reused for /component APIs.
+// ErrComponentAuthorizationRequired is retained for callers that still use an
+// explicitly configured legacy component operation. Self-developed miniapp
+// presale booking no longer returns this error: the official /mp endpoints use
+// the merchant app credentials already held by Client.
 var ErrComponentAuthorizationRequired = errors.New("xiaohongshu component authorization is not configured")
 
 const (
@@ -34,6 +35,10 @@ const (
 	SettleAtHeadOffice = 1
 	SettleAtPOI        = 2
 	SettleByRegion     = 3
+
+	PresaleBookStatusConfirm = 1
+	PresaleBookStatusReject  = 2
+	PresaleBookStatusRevoke  = 3
 )
 
 type Client struct {
@@ -43,9 +48,9 @@ type Client struct {
 	HTTP    *http.Client
 	Now     func() time.Time
 
-	// These are the service-provider app id and authorized miniapp credential
-	// required by the /component transaction APIs. They are separate from the
-	// merchant self-developed AppID/Secret used by /mp APIs.
+	// Deprecated component credentials. They remain in the client for source
+	// compatibility with older integrations, but presale booking uses the
+	// merchant self-developed /mp APIs and never requires these fields.
 	ComponentAppID       string
 	ComponentAccessToken string
 
@@ -289,8 +294,19 @@ type PresaleBookResult struct {
 }
 
 type PresaleBookResponse struct {
-	ExternalOrderID string              `json:"out_order_id"`
-	Results         []PresaleBookResult `json:"book_result"`
+	ExternalOrderID     string              `json:"out_order_id"`
+	ExternalBookOrderID string              `json:"out_book_order_id"`
+	PayDetail           *PresalePayDetail   `json:"pay_detail,omitempty"`
+	Results             []PresaleBookResult `json:"book_result"`
+}
+
+// PresalePayDetail is returned only when booking requires a price difference
+// payment. Pre-sale voucher bookings with no price difference leave it empty.
+type PresalePayDetail struct {
+	OrderID     string `json:"order_id"`
+	FinalPrice  int64  `json:"final_price"`
+	PayToken    string `json:"pay_token"`
+	ExpiredTime int64  `json:"expired_time"`
 }
 
 type PresaleBookStatusRequest struct {
@@ -474,11 +490,20 @@ func (c *Client) BookPresaleVoucher(ctx context.Context, request PresaleBookRequ
 		}
 	}
 	var response PresaleBookResponse
-	if err := c.componentAuthenticatedPost(ctx, "/api/rmp/component/deal/pre_sale/book", request, &response); err != nil {
+	// The current official endpoint is the merchant self-developed /mp path.
+	// It accepts the channel account's app_id/access_token and does not require
+	// service-provider component authorization.
+	if err := c.authenticatedPost(ctx, "/api/rmp/mp/deal/pre_sale/book", request, &response); err != nil {
 		return nil, err
 	}
 	if strings.TrimSpace(response.ExternalOrderID) != "" && strings.TrimSpace(response.ExternalOrderID) != strings.TrimSpace(request.ExternalOrderID) {
 		return nil, errors.New("xiaohongshu presale booking response order does not match request")
+	}
+	if strings.TrimSpace(response.ExternalBookOrderID) == "" {
+		return nil, errors.New("xiaohongshu presale booking response is missing out_book_order_id")
+	}
+	if strings.TrimSpace(response.ExternalBookOrderID) != strings.TrimSpace(request.BookInfo.ExternalBookOrderID) {
+		return nil, errors.New("xiaohongshu presale booking response booking order does not match request")
 	}
 	if len(response.Results) != len(request.BookInfo.Details) {
 		return nil, errors.New("xiaohongshu presale booking response is incomplete")
@@ -492,8 +517,8 @@ func (c *Client) BookPresaleVoucher(ctx context.Context, request PresaleBookRequ
 }
 
 func (c *Client) SyncPresaleBookStatus(ctx context.Context, request PresaleBookStatusRequest) error {
-	if strings.TrimSpace(request.ExternalBookOrderID) == "" || len(request.BookIDs) == 0 || request.Status < 1 || request.Status > 4 {
-		return errors.New("xiaohongshu presale booking status request is invalid")
+	if strings.TrimSpace(request.ExternalBookOrderID) == "" || len(request.BookIDs) == 0 || request.Status < PresaleBookStatusConfirm || request.Status > PresaleBookStatusRevoke {
+		return errors.New("xiaohongshu presale booking status request is invalid (status must be 1, 2, or 3)")
 	}
 	for _, id := range request.BookIDs {
 		if strings.TrimSpace(id) == "" {
@@ -501,7 +526,9 @@ func (c *Client) SyncPresaleBookStatus(ctx context.Context, request PresaleBookS
 		}
 	}
 	var response struct{}
-	return c.componentAuthenticatedPost(ctx, "/api/rmp/component/deal/pre_sale/sync_status", request, &response)
+	// The status endpoint is also available on the merchant self-developed /mp
+	// path. Status 1 confirms, 2 rejects, and 3 revokes a pre-sale booking.
+	return c.authenticatedPost(ctx, "/api/rmp/mp/deal/pre_sale/sync_status", request, &response)
 }
 
 func validateProduct(request LocalLifeProductRequest) error {

@@ -309,11 +309,12 @@ func (s XiaohongshuBookingService) executeXiaohongshuRefundStatusSyncStep(ctx co
 		if err != nil {
 			return false, err
 		}
-		// Status 4 reports an already-completed, real user after-sale to the
-		// presale booking component. It never calls or confirms a funds-refund
-		// endpoint. Appointment cancellation and rescheduling use status 3.
+		// A completed local refund revokes the corresponding pre-sale booking.
+		// Status 3 is the only documented revocation status; it never calls or
+		// confirms a funds-refund endpoint. The financial refund remains owned by
+		// the normal refund workflow.
 		if err := client.SyncPresaleBookStatus(ctx, xiaohongshu.PresaleBookStatusRequest{
-			ExternalBookOrderID: operation.ExternalBookOrderID, BookIDs: []string{operation.PlatformBookID}, Status: 4,
+			ExternalBookOrderID: operation.ExternalBookOrderID, BookIDs: []string{operation.PlatformBookID}, Status: xiaohongshu.PresaleBookStatusRevoke,
 		}); err != nil {
 			return false, err
 		}
@@ -426,7 +427,13 @@ func (s XiaohongshuBookingService) executeXiaohongshuBookStep(ctx context.Contex
 		voucherMismatch := result.VoucherCode != "" && hashMiniappValue(result.VoucherCode) != payload.VoucherCodeHash
 		now := s.now()
 		nextStatus, lastError := "remote_succeeded", ""
-		if voucherMismatch {
+		if response.PayDetail != nil {
+			// A price-difference response requires a separate payment flow. This
+			// service only supports zero-difference pre-sale bookings; persist the
+			// remote booking and reject it through the compensation stage instead
+			// of confirming an appointment that has not been paid.
+			nextStatus, lastError = "compensation_pending", "小红书预约需要补差价支付，当前流程不支持补差价"
+		} else if voucherMismatch {
 			nextStatus, lastError = "compensation_pending", "小红书预约返回的券码不匹配"
 		}
 		// Persist the remote result independently of the entitlement update. If
@@ -477,7 +484,7 @@ func (s XiaohongshuBookingService) executeXiaohongshuBookStep(ctx context.Contex
 			return false, err
 		}
 		if err := client.SyncPresaleBookStatus(ctx, xiaohongshu.PresaleBookStatusRequest{
-			ExternalBookOrderID: operation.ExternalBookOrderID, BookIDs: []string{operation.PlatformBookID}, Status: 1,
+			ExternalBookOrderID: operation.ExternalBookOrderID, BookIDs: []string{operation.PlatformBookID}, Status: xiaohongshu.PresaleBookStatusConfirm,
 		}); err != nil {
 			return false, err
 		}
@@ -508,7 +515,7 @@ func (s XiaohongshuBookingService) executeXiaohongshuBookStep(ctx context.Contex
 			return false, err
 		}
 		if err := client.SyncPresaleBookStatus(ctx, xiaohongshu.PresaleBookStatusRequest{
-			ExternalBookOrderID: operation.ExternalBookOrderID, BookIDs: []string{operation.PlatformBookID}, Status: 2,
+			ExternalBookOrderID: operation.ExternalBookOrderID, BookIDs: []string{operation.PlatformBookID}, Status: xiaohongshu.PresaleBookStatusReject,
 		}); err != nil {
 			return false, err
 		}
@@ -544,7 +551,7 @@ func (s XiaohongshuBookingService) executeXiaohongshuRevokeStep(ctx context.Cont
 			return false, err
 		}
 		if err := client.SyncPresaleBookStatus(ctx, xiaohongshu.PresaleBookStatusRequest{
-			ExternalBookOrderID: operation.ExternalBookOrderID, BookIDs: []string{operation.PlatformBookID}, Status: 3,
+			ExternalBookOrderID: operation.ExternalBookOrderID, BookIDs: []string{operation.PlatformBookID}, Status: xiaohongshu.PresaleBookStatusRevoke,
 		}); err != nil {
 			return false, err
 		}
