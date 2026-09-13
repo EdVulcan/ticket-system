@@ -129,6 +129,7 @@ type MiniappOrderResult struct {
 	OrderNo                  string                      `json:"order_no"`
 	PlatformOrderID          string                      `json:"order_id,omitempty"`
 	ProductName              string                      `json:"product_name,omitempty"`
+	ProductDescription       *string                     `json:"product_description,omitempty"`
 	ImageURL                 string                      `json:"image_url,omitempty"`
 	ContactName              string                      `json:"contact_name,omitempty"`
 	ContactPhone             string                      `json:"contact_phone,omitempty"`

@@ -17,8 +17,8 @@
     <view class="guest-card">
       <text class="label">{{product.isPackage && !product.isDeferredPackage ? '订单联系人 / 入住人' : '订单联系人'}}</text>
       <text class="hint">{{product.isDeferredPackage ? '用于接收订单通知；支付后预约入住时可再填写实际入住人。' : (product.isPackage ? '用于订单通知和入住确认。' : '用于接收订单通知和售后联系。')}}</text>
-      <view class="field-row"><text>姓名</text><input disabled="{{submitting || createdOrderNo || orderRecoveryPending}}" class="field-input" maxlength="50" placeholder="请输入联系人姓名" placeholder-class="field-placeholder" value="{{guestName}}" bindinput="onGuestNameInput" /></view>
-      <view class="field-row"><text>手机号</text><input disabled="{{submitting || createdOrderNo || orderRecoveryPending}}" class="field-input" type="number" maxlength="20" placeholder="请输入手机号" placeholder-class="field-placeholder" value="{{contactPhone}}" bindinput="onContactPhoneInput" /></view>
+      <view class="field-row"><text>姓名</text><input focus="{{contactFocus === 'name'}}" disabled="{{submitting || createdOrderNo || orderRecoveryPending}}" class="field-input" maxlength="50" placeholder="请输入联系人姓名" placeholder-class="field-placeholder" value="{{guestName}}" bindinput="onGuestNameInput" /></view>
+      <view class="field-row"><text>手机号</text><input focus="{{contactFocus === 'phone'}}" disabled="{{submitting || createdOrderNo || orderRecoveryPending}}" class="field-input" type="number" maxlength="20" placeholder="请输入手机号" placeholder-class="field-placeholder" value="{{contactPhone}}" bindinput="onContactPhoneInput" /></view>
     </view>
     <view class="quantity-row">
       <view><text class="label">{{product.quantityLabel}}</text><text class="hint">{{product.quantityHint}}</text></view>

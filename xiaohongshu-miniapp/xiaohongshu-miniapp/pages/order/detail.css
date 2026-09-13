@@ -1,3 +1,13 @@
+.order-description {
+  display: block;
+  margin-top: 16rpx;
+  color: #52616a;
+  font-size: 26rpx;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 page {
   background: #f5f7f8;
   color: #20262b;

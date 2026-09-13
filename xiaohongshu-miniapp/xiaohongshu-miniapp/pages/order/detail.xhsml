@@ -8,12 +8,12 @@
   <view class="order-card {{status}}" xhs:if="{{order && !ticketCodes.length}}">
     <image class="order-image" xhs:if="{{order.image_url}}" src="{{order.image_url}}" mode="aspectFill" />
     <view class="order-image fallback" xhs:else><image class="ticket-icon" src="/assets/icons/ticket.svg" /></view>
-    <view class="order-info"><text class="order-name">{{order.product_name}}</text><text class="quantity">{{order.isPackage ? '酒景套餐' : '景区门票'}} · {{order.quantity}} {{order.isPackage ? '份' : '张'}}</text></view>
+    <view class="order-info"><text class="order-name">{{order.product_name}} × {{order.quantity}} {{order.isPackage ? '份' : '张'}}</text></view>
   </view>
   <view class="keepsake-tickets" xhs:if="{{ticketCodes.length}}">
     <view class="keepsake-ticket" xhs:for="{{ticketCodes}}" xhs:key="canvasId">
       <view class="ticket-heading">
-        <text class="ticket-product">{{order.product_name}}</text>
+        <text class="ticket-product">{{order.product_name}} × {{order.quantity}} {{order.isPackage ? '份' : '张'}}</text>
         <text class="ticket-merchant" xhs:if="{{storeName}}">{{storeName}}</text>
       </view>
       <image class="ticket-art" src="/assets/ticket-art.svg" mode="aspectFill" aria-hidden="true" />
@@ -23,7 +23,7 @@
           <text class="ticket-usage {{item.used ? 'is-used' : ''}}">{{item.usageLabel}}</text>
           <text class="ticket-instruction">请出示此码核验</text>
           <text class="ticket-instruction">{{item.usageDetail}}</text>
-          <text class="ticket-edition">第 {{item.index}} 张 / 共 {{ticketCodes.length}} 张</text>
+          <text class="ticket-instruction" xhs:if="{{ticketCodes.length > 1}}">票码 {{item.index}} / {{ticketCodes.length}}</text>
         </view>
         <button class="ticket-qr-button" data-canvas-id="{{item.canvasId}}" bindtap="showTicketQR" aria-label="放大票码"><canvas class="ticket-qr" canvas-id="{{item.canvasId}}" width="280" height="280"></canvas></button>
       </view>
@@ -70,6 +70,7 @@
   <view class="issuance-pending" xhs:if="{{qrRenderError}}"><text>二维码未能显示，可重新查询；也可向工作人员出示票码。</text><button bindtap="retry">重新查询</button></view>
   <button class="order-details-toggle" xhs:if="{{ticketCodes.length}}" bindtap="toggleOrderDetails" aria-expanded="{{orderDetailsExpanded}}">{{orderDetailsExpanded ? '收起订单信息' : '订单信息'}}<view class="details-chevron {{orderDetailsExpanded ? 'is-open' : ''}}"></view></button>
   <view xhs:if="{{!ticketCodes.length || orderDetailsExpanded}}">
+  <view class="tickets" xhs:if="{{order.product_description}}"><text class="section-title">购买时商品介绍</text><text class="order-description">{{order.product_description}}</text></view>
   <view class="promotion-breakdown" xhs:if="{{order.discount_cents > 0}}"><text>商品合计 ¥{{order.originalAmountText}}</text><text>限时立减 −¥{{order.discountText}}</text></view>
   <view class="due-amount" xhs:if="{{order}}"><text class="amount-label">{{status === 'unpaid' ? '待支付金额' : (status === 'cancelled' || status === 'failed' || status === 'refunded' ? '订单金额' : '实付金额')}}</text><view class="price"><text class="currency">¥</text>{{order.amountText}}</view></view>
   <view class="order-meta" xhs:if="{{order}}"><text>订单号</text><text>{{orderNo}}</text></view>
@@ -80,7 +81,8 @@
   <view class="expanded-qr" xhs:if="{{expandedTicket}}">
     <button class="expanded-close" bindtap="closeTicketQR" aria-label="关闭放大票码">关闭</button>
     <text class="expanded-title">请出示此码核验</text>
-    <text class="expanded-product">{{order.product_name}} · 第 {{expandedTicket.index}} 张</text>
+    <text class="expanded-product">{{order.product_name}} × {{order.quantity}} {{order.isPackage ? '份' : '张'}}</text>
+    <text class="ticket-instruction" xhs:if="{{ticketCodes.length > 1}}">票码 {{expandedTicket.index}} / {{ticketCodes.length}}</text>
     <canvas class="expanded-canvas" canvas-id="ticket-qr-expanded" width="280" height="280"></canvas>
     <text class="ticket-value">{{expandedTicket.code}}</text>
     <text class="ticket-privacy">票码可用于核验，请勿公开分享</text>

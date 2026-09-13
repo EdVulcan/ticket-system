@@ -51,6 +51,14 @@ func GetUpstreamOrderView(tenantID uint, orderNo string) ([]UpstreamOrderView, e
 			return nil, err
 		}
 		row := UpstreamOrderView{ProductName: item.ProductName, ProviderOrderCode: s.ProviderOrderCode, ExternalProductCode: s.ExternalProductCode, IssueStatus: s.IssueStatus, ProviderStatus: s.ProviderStatus, CancelStatus: s.CancelStatus, LastSyncedAt: s.LastSyncedAt, ProviderFirstUsedAt: s.ProviderFirstUsedAt, FirstUsedAt: s.ProviderFirstUsedAt, LastError: s.LastError}
+		if s.CancelStatus == "succeeded" && s.ProviderOrderCode != "" {
+			row.ProviderStatus = "refunded"
+		}
+		// This is a supplier-status projection, not a completion of the funds
+		// workflow. Special refunds never imply that the supplier cancelled.
+		if row.ProviderStatus == "refunded" && (s.CancelStatus == "submitted" || s.CancelStatus == "pending") {
+			row.CancelStatus = "succeeded"
+		}
 		var record model.CheckInRecord
 		row.RefundID = s.RefundID
 		row.CanRecoverIssuance = s.IssueStatus == "pending" && s.CancelStatus == "" && s.RefundID == 0 && s.IssueAttemptedAt != nil && s.LastError != "" && (s.LockedAt == nil || s.LockedAt.Before(time.Now().Add(-2*time.Minute)))

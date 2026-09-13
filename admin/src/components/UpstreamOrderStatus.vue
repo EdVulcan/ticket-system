@@ -63,7 +63,7 @@ async function confirm(refundID: number) {
   } catch { /* cancellation or shared request error */ } finally { busy.value = false }
 }
 const date = (value?: string) => value ? new Date(value).toLocaleString() : '暂无记录'
-const text = (value: string) => ({ pending: '等待出票', ready: '出票成功', local_ready: '本系统出票', un_check: '未使用', checked: '已使用', checking: '部分使用', submitted: '取消处理中', succeeded: '已取消', failed: '取消失败', override: '管理员特殊退款' } as Record<string,string>)[value] || value || '暂无'
+const text = (value: string) => ({ pending: '等待出票', ready: '出票成功', local_ready: '本系统出票', un_check: '未使用', checked: '已使用', checking: '部分使用', refunded: '已退票', partial_refunded: '部分退票', unknown: '状态待核实', submitted: '取消处理中', succeeded: '已取消', failed: '取消失败', override: '管理员特殊退款' } as Record<string,string>)[value] || value || '暂无'
 async function load(refresh = false) {
   const current = ++generation
   const orderNo = props.orderNo

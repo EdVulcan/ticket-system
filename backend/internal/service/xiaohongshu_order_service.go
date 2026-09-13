@@ -286,6 +286,16 @@ func (s XiaohongshuOrderService) orderResult(link *model.XiaohongshuOrderLink, o
 	result.ProductName = presentation.ProductName
 	result.ImageURL = presentation.ImageURL
 	result.Quantity = presentation.Quantity
+	var original model.XiaohongshuOrderOperation
+	if err := model.DB.Where("tenant_id = ? AND channel_account_id = ? AND xiaohongshu_order_link_id = ?", order.TenantID, link.ChannelAccountID, link.ID).First(&original).Error; err == nil {
+		payload, err := decryptXiaohongshuOrderOperationPayload(original.RequestPayloadCiphertext)
+		if err != nil {
+			return nil, err
+		}
+		result.ProductDescription = payload.ProductDescription
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
 	result.ProductKind = "ticket"
 	if presentation.PackageID != 0 {
 		result.ProductKind = "scenic_hotel_package"
@@ -571,7 +581,7 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 		if order.DiscountCents > 0 {
 			request.Products[0].Discounts = []xiaohongshu.Discount{{Name: "限时随机立减", Price: order.DiscountCents, Count: 1}}
 		}
-		payloadCiphertext, err := encryptXiaohongshuOrderOperationPayloadWithFingerprint(request, fingerprint, config.ProductType)
+		payloadCiphertext, err := encryptXiaohongshuOrderSnapshot(request, fingerprint, config.ProductType, &config.Description)
 		if err != nil {
 			return err
 		}
@@ -890,9 +900,10 @@ func (s XiaohongshuOrderService) now() time.Time {
 }
 
 type xiaohongshuOrderOperationPayload struct {
-	Request     xiaohongshu.OrderUpsertRequest `json:"request"`
-	ProductType int                            `json:"product_type"`
-	Fingerprint string                         `json:"fingerprint,omitempty"`
+	Request            xiaohongshu.OrderUpsertRequest `json:"request"`
+	ProductType        int                            `json:"product_type"`
+	Fingerprint        string                         `json:"fingerprint,omitempty"`
+	ProductDescription *string                        `json:"product_description,omitempty"`
 }
 
 func encryptXiaohongshuOrderOperationPayload(request xiaohongshu.OrderUpsertRequest, productTypes ...int) (string, error) {
@@ -904,7 +915,11 @@ func encryptXiaohongshuOrderOperationPayloadWithFingerprint(request xiaohongshu.
 	if len(productTypes) == 1 {
 		productType = productTypes[0]
 	}
-	raw, err := json.Marshal(xiaohongshuOrderOperationPayload{Request: request, ProductType: productType, Fingerprint: fingerprint})
+	return encryptXiaohongshuOrderSnapshot(request, fingerprint, productType, nil)
+}
+
+func encryptXiaohongshuOrderSnapshot(request xiaohongshu.OrderUpsertRequest, fingerprint string, productType int, description *string) (string, error) {
+	raw, err := json.Marshal(xiaohongshuOrderOperationPayload{Request: request, ProductType: productType, Fingerprint: fingerprint, ProductDescription: description})
 	if err != nil {
 		return "", err
 	}

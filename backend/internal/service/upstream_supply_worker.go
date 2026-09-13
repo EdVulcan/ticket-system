@@ -347,19 +347,14 @@ func (w *UpstreamSupplyWorker) syncStatus(ctx context.Context, client *zyb.Clien
 	if len(result.SubOrders) == 0 {
 		return errors.New("供应商状态为空")
 	}
-	status := ""
-	used := false
 	for _, row := range result.SubOrders {
 		if !upstreamCheckChildMatches(row.OrderCode, s, order.OrderNo) {
 			return errors.New("供应商核销状态订单不匹配")
 		}
-		if status == "" {
-			status = row.CheckStatus
-		}
-		if row.CheckStatus == "checked" || row.CheckStatus == "checking" {
-			used = true
-			status = row.CheckStatus
-		}
+	}
+	status, used, err := upstreamUsageStatus(result.SubOrders)
+	if err != nil {
+		return err
 	}
 	updates := map[string]interface{}{"provider_status": status, "last_synced_at": time.Now()}
 	if used {
@@ -387,6 +382,9 @@ func (w *UpstreamSupplyWorker) syncStatus(ctx context.Context, client *zyb.Clien
 		}
 	}
 	return model.Write(func(tx *gorm.DB) error {
+		// A check started before confirmed cancellation must not overwrite its
+		// terminal supplier fact when its response arrives afterwards.
+		updates["provider_status"] = gorm.Expr("CASE WHEN cancel_status = 'succeeded' AND provider_order_code <> '' THEN 'refunded' ELSE ? END", status)
 		q := tx.Model(s)
 		if s.LockedAt == nil {
 			q = q.Where("locked_at IS NULL")
@@ -395,4 +393,36 @@ func (w *UpstreamSupplyWorker) syncStatus(ctx context.Context, client *zyb.Clien
 		}
 		return q.Updates(updates).Error
 	})
+}
+
+func upstreamUsageStatus(rows []zyb.CheckStatusSubOrder) (string, bool, error) {
+	allReturned, allUsed := len(rows) > 0, len(rows) > 0
+	anyReturned, anyUsed, ambiguous := false, false, false
+	for _, row := range rows {
+		total, a := strconv.Atoi(row.NeedCheckNum)
+		checked, b := strconv.Atoi(row.AlreadyCheckNum)
+		returned, c := strconv.Atoi(row.ReturnNum)
+		if a != nil || b != nil || c != nil || total <= 0 || checked < 0 || returned < 0 || returned > total {
+			return "", false, errors.New("供应商核销/退票数量不完整或无效")
+		}
+		allReturned = allReturned && returned == total
+		allUsed = allUsed && checked >= total
+		anyReturned = anyReturned || returned > 0
+		anyUsed = anyUsed || checked > 0
+		ambiguous = ambiguous || (checked == 0 && returned == 0 && row.CheckStatus != "un_check")
+	}
+	switch {
+	case allReturned:
+		return "refunded", anyUsed, nil
+	case anyReturned:
+		return "partial_refunded", anyUsed, nil
+	case allUsed:
+		return "checked", true, nil
+	case anyUsed:
+		return "checking", true, nil
+	case ambiguous || len(rows) == 0:
+		return "unknown", false, nil
+	default:
+		return "un_check", false, nil
+	}
 }

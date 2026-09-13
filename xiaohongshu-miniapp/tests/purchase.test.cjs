@@ -108,6 +108,35 @@ test('confirmation exposes one required order contact for every product', () => 
   assert.equal(page.data.error, '请填写有效的手机号');
 });
 
+test('missing contact uses one modal and focuses the missing field without creating an order', () => {
+  let modal;
+  let prompts = 0;
+  const page = loadPage('pages/order/confirm.js', { request: () => assert.fail('invalid contact must not create an order') }, {
+    showModal: options => { modal = options; prompts += 1; }
+  });
+  page.data.product = { requiresUseDate: false };
+  page.data.quoteReady = true;
+  page.data.quoteToken = 'quote';
+  page.submit();
+  page.submit();
+  assert.equal(prompts, 1);
+  assert.match(modal.content, /姓名和手机号/);
+  assert.equal(modal.showCancel, false);
+  modal.success({ confirm: true });
+  modal.complete();
+  assert.equal(page.data.contactFocus, 'name');
+  page.data.guestName = '游客';
+  page.submit();
+  assert.match(modal.content, /填写联系人手机号/);
+  modal.success({ confirm: true });
+  modal.complete();
+  assert.equal(page.data.contactFocus, 'phone');
+  page.data.contactPhone = '123';
+  page.submit();
+  assert.match(modal.content, /格式不正确/);
+  modal.complete();
+});
+
 test('booking rejects a locally out-of-bounds date before it requests the API', () => {
   let calls = 0;
   const app = { globalData: {}, setNavigationTitle() {}, request: () => { calls += 1; return Promise.resolve({}); } };

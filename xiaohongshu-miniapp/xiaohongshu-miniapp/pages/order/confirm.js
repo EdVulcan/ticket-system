@@ -33,6 +33,7 @@ Page({
     useDate: '',
     guestName: '',
     contactPhone: '',
+    contactFocus: '',
     minDate: '',
     maxDate: '',
     dateChips: [],
@@ -417,6 +418,25 @@ Page({
     }).catch(error => this.handleOrderCreateError(error));
   },
 
+  promptContact(message, field, content) {
+    if (this.contactPromptOpen) return;
+    this.setData({ error: message, contactFocus: '' });
+    if (typeof xhs.showModal !== 'function') return;
+    this.contactPromptOpen = true;
+    this.setData({ error: '' });
+    xhs.showModal({
+      title: '完善联系人信息',
+      content,
+      showCancel: false,
+      confirmText: '去填写',
+      success: result => {
+        if (result.confirm && !this.isOrderSelectionLocked()) this.setData({ contactFocus: field });
+      },
+      fail: () => this.setData({ error: message }),
+      complete: () => { this.contactPromptOpen = false; }
+    });
+  },
+
   submit() {
     if (!this.data.product || this.data.submitting) return;
     if (this.data.createdOrderNo) {
@@ -441,11 +461,13 @@ Page({
       return;
     }
     if (!this.data.guestName.trim()) {
-      this.setData({ error: '请填写联系人姓名' });
+      this.promptContact('请填写联系人姓名', 'name', this.data.contactPhone.trim()
+        ? '请填写联系人姓名后继续支付。' : '请填写联系人姓名和手机号后继续支付。');
       return;
     }
     if (!this.isValidContactPhone(this.data.contactPhone)) {
-      this.setData({ error: '请填写有效的手机号' });
+      this.promptContact('请填写有效的手机号', 'phone', this.data.contactPhone.trim()
+        ? '手机号格式不正确，请检查后继续支付。' : '请填写联系人手机号后继续支付。');
       return;
     }
     const payload = this.buildOrderPayload();

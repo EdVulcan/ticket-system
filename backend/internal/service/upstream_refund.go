@@ -296,7 +296,7 @@ func (s *RefundService) processUpstreamRefundCancellation(ctx context.Context, r
 			if !result.Completed {
 				return ErrUpstreamRefundPending
 			}
-			return updateUpstreamSnapshot(snapshot.ID, map[string]interface{}{"cancel_status": "succeeded", "refund_id": root.ID, "last_synced_at": time.Now(), "last_error": ""})
+			return updateUpstreamSnapshot(snapshot.ID, map[string]interface{}{"cancel_status": "succeeded", "provider_status": "refunded", "refund_id": root.ID, "last_synced_at": time.Now(), "last_error": ""})
 		}
 		if snapshot.CancelBatchNo != "" {
 			if err := checkBatch(snapshot.CancelBatchNo); err != nil {
@@ -348,7 +348,7 @@ func (s *RefundService) processUpstreamRefundCancellation(ctx context.Context, r
 			continue
 		}
 		if returned == quantity {
-			if err := updateUpstreamSnapshot(snapshot.ID, map[string]interface{}{"cancel_status": "succeeded", "refund_id": root.ID, "last_synced_at": time.Now()}); err != nil {
+			if err := updateUpstreamSnapshot(snapshot.ID, map[string]interface{}{"cancel_status": "succeeded", "provider_status": "refunded", "refund_id": root.ID, "last_synced_at": time.Now()}); err != nil {
 				return err
 			}
 			continue
