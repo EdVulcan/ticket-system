@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -115,8 +116,11 @@ func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.Ord
 	if s.IssueStatus == "ready" {
 		return w.syncStatus(ctx, client, s, &order)
 	}
-	if len(item.Tickets) != 1 || item.Tickets[0].Status != "pending_provider" || item.Tickets[0].PendingRefundID != 0 || s.CancelStatus != "" {
+	if s.CancelStatus != "" {
 		return errors.New("上游出票已暂停：票券正在退款或状态已变化")
+	}
+	if err := upstreamTicketsPending(item, item.Tickets); err != nil {
+		return err
 	}
 	var request zyb.SendCodeRequest
 	if s.RequestPayloadCiphertext != "" {
@@ -218,14 +222,7 @@ func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.Ord
 		}
 		s.ProviderOrderCode, s.ProviderSubOrderCode = providerOrder, providerSub
 	}
-	artifact, _, err := client.TicketImage(ctx, order.OrderNo)
-	if err != nil {
-		return err
-	}
-	if artifact == nil || artifact.Kind != "image" {
-		return errors.New("供应商未返回二维码图片")
-	}
-	data, err := base64.StdEncoding.DecodeString(artifact.Value)
+	artifacts, _, err := client.TicketImages(ctx, order.OrderNo)
 	if err != nil {
 		return err
 	}
@@ -233,14 +230,40 @@ func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.Ord
 	if decoder == nil {
 		decoder = zyb.QRCodeDecoder{}
 	}
-	code, err := decoder.Decode(ctx, data)
-	if err != nil {
-		return err
+	var codes []string
+	seen := make(map[string]bool)
+	for _, artifact := range artifacts {
+		if artifact == nil || artifact.Kind != "image" {
+			return errors.New("供应商未返回二维码图片")
+		}
+		data, err := base64.StdEncoding.DecodeString(artifact.Value)
+		if err != nil {
+			return err
+		}
+		var decoded []string
+		if multi, ok := decoder.(interface {
+			DecodeAll(context.Context, []byte) ([]string, error)
+		}); ok {
+			decoded, err = multi.DecodeAll(ctx, data)
+		} else {
+			var code string
+			code, err = decoder.Decode(ctx, data)
+			decoded = []string{code}
+		}
+		if err != nil {
+			return err
+		}
+		for _, code := range decoded {
+			if !seen[code] {
+				codes = append(codes, code)
+				seen[code] = true
+			}
+		}
 	}
-	if code == "" || strings.TrimSpace(code) != code || utf8.RuneCountInString(code) > 50 {
-		return errors.New("供应商票码为空或超过现有票码字段长度")
-	}
-	return w.finishIssue(s, code)
+	// Before the initial atomic binding, provider image layout/order is not a
+	// ticket identity. Normalize once; ready tickets are never rebound.
+	sort.Strings(codes)
+	return w.finishIssueCodes(s, codes)
 }
 
 func validateUpstreamIssuedItem(goods, quantity, price, total, date string, request zyb.SendCodeRequest) error {
@@ -260,6 +283,17 @@ func validateUpstreamIssuedItem(goods, quantity, price, total, date string, requ
 }
 
 func (w *UpstreamSupplyWorker) finishIssue(s *model.OrderItemSupplySnapshot, code string) error {
+	return w.finishIssueCodes(s, []string{code})
+}
+
+func (w *UpstreamSupplyWorker) finishIssueCodes(s *model.OrderItemSupplySnapshot, codes []string) error {
+	seen := make(map[string]bool, len(codes))
+	for _, code := range codes {
+		if code == "" || strings.TrimSpace(code) != code || utf8.RuneCountInString(code) > 50 || seen[code] {
+			return errors.New("供应商票码为空、重复或超过现有票码字段长度")
+		}
+		seen[code] = true
+	}
 	return model.Write(func(tx *gorm.DB) error {
 		var order model.Order
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", s.OrderID, s.SalesTenantID).First(&order).Error; err != nil {
@@ -268,26 +302,38 @@ func (w *UpstreamSupplyWorker) finishIssue(s *model.OrderItemSupplySnapshot, cod
 		if order.Status != "paid" && order.Status != "completed" && order.Status != "partial_refunded" {
 			return errors.New("订单已取消或退款，停止出票")
 		}
-		var ticket model.Ticket
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_id = ? AND order_item_id = ? AND tenant_id = ? AND fulfillment_tenant_id = ?", s.OrderID, s.OrderItemID, s.SalesTenantID, s.FulfillmentTenantID).First(&ticket).Error; err != nil {
+		var item model.OrderItem
+		if err := tx.Where("id = ? AND order_id = ?", s.OrderItemID, s.OrderID).First(&item).Error; err != nil {
 			return err
 		}
-		if ticket.Status != "pending_provider" || ticket.PendingRefundID != 0 || ticket.CheckInCount != 0 {
-			return errors.New("票券已退款或被占用，停止出票")
+		var tickets []model.Ticket
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_id = ? AND order_item_id = ? AND tenant_id = ? AND fulfillment_tenant_id = ? AND fulfillment_scenic_area_id = ?", s.OrderID, s.OrderItemID, s.SalesTenantID, s.FulfillmentTenantID, s.ScenicAreaID).Order("id").Find(&tickets).Error; err != nil {
+			return err
+		}
+		if err := upstreamTicketsPending(&item, tickets); err != nil {
+			return err
+		}
+		if len(codes) != len(tickets) {
+			return fmt.Errorf("供应商返回 %d 个票码，本单需要 %d 个；请核对双方票码模式", len(codes), len(tickets))
 		}
 		var current model.OrderItemSupplySnapshot
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND locked_at = ? AND issue_status = 'pending' AND cancel_status = ''", s.ID, s.LockedAt).First(&current).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&ticket).Updates(map[string]interface{}{"ticket_code": code, "status": "unused"}).Error; err != nil {
-			return err
-		}
-		result := tx.Model(&model.TicketEntitlement{}).Where("ticket_id = ? AND sales_tenant_id = ? AND supplier_tenant_id = ? AND scenic_area_id = ?", ticket.ID, s.SalesTenantID, s.FulfillmentTenantID, s.ScenicAreaID).Updates(map[string]interface{}{"ticket_code": code, "status": "issued"})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return errors.New("票券履约记录缺失")
+		// Bind the complete code set once, atomically. No partially bound ticket
+		// is exposed, and a retry after ready never replaces this association.
+		for i := range tickets {
+			ticket := &tickets[i]
+			if err := tx.Model(ticket).Updates(map[string]interface{}{"ticket_code": codes[i], "status": "unused"}).Error; err != nil {
+				return err
+			}
+			result := tx.Model(&model.TicketEntitlement{}).Where("ticket_id = ? AND sales_tenant_id = ? AND supplier_tenant_id = ? AND scenic_area_id = ?", ticket.ID, s.SalesTenantID, s.FulfillmentTenantID, s.ScenicAreaID).Updates(map[string]interface{}{"ticket_code": codes[i], "status": "issued"})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return errors.New("票券履约记录缺失")
+			}
 		}
 		return tx.Model(&current).Updates(map[string]interface{}{"issue_status": "ready", "last_error": ""}).Error
 	})

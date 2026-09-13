@@ -53,6 +53,69 @@ func TestQRCodeDecoderPreservesSupplierPayload(t *testing.T) {
 	}
 }
 
+func TestQRCodeDecoderDecodeAllReturnsDistinctPayloadsDeterministically(t *testing.T) {
+	data := encodeQRCodeSheet(t, []string{
+		"SUPPLIER-opaque-000002",
+		"SUPPLIER-opaque-000001",
+		"SUPPLIER-opaque-000002",
+	})
+
+	codes, err := (QRCodeDecoder{}).DecodeAll(context.Background(), data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"SUPPLIER-opaque-000001", "SUPPLIER-opaque-000002"}
+	if len(codes) != len(want) {
+		t.Fatalf("codes=%q want=%q", codes, want)
+	}
+	for i := range want {
+		if codes[i] != want[i] {
+			t.Fatalf("codes=%q want=%q", codes, want)
+		}
+	}
+}
+
+func TestQRCodeDecoderDecodeRejectsMultiplePayloads(t *testing.T) {
+	data := encodeQRCodeSheet(t, []string{"SUPPLIER-opaque-000001", "SUPPLIER-opaque-000002"})
+	if _, err := (QRCodeDecoder{}).Decode(context.Background(), data); err == nil || !strings.Contains(err.Error(), "包含 2 个不同二维码") {
+		t.Fatalf("expected ambiguous single-code error, got %v", err)
+	}
+}
+
+func encodeQRCodeSheet(t *testing.T, payloads []string) []byte {
+	t.Helper()
+	const (
+		qrSize = 240
+		gap    = 24
+	)
+	img := image.NewGray(image.Rect(0, 0, len(payloads)*qrSize+(len(payloads)-1)*gap, qrSize))
+	for y := 0; y < img.Bounds().Dy(); y++ {
+		for x := 0; x < img.Bounds().Dx(); x++ {
+			img.SetGray(x, y, color.Gray{Y: 255})
+		}
+	}
+	writer := qrcode.NewQRCodeWriter()
+	for index, payload := range payloads {
+		matrix, err := writer.Encode(payload, gozxing.BarcodeFormat_QR_CODE, qrSize, qrSize, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		offsetX := index * (qrSize + gap)
+		for y := 0; y < qrSize; y++ {
+			for x := 0; x < qrSize; x++ {
+				if matrix.Get(x, y) {
+					img.SetGray(offsetX+x, y, color.Gray{Y: 0})
+				}
+			}
+		}
+	}
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, img); err != nil {
+		t.Fatal(err)
+	}
+	return encoded.Bytes()
+}
+
 // Optional local acceptance against the user's existing supplier application.
 // No private artifacts or decoded admission codes are copied into the repo/log.
 func TestQRCodeDecoderLocalSupplierSample(t *testing.T) {

@@ -64,6 +64,22 @@ func upstreamRefundRequiredTx(tx *gorm.DB, orderID uint, selected map[string]*mo
 	if err := tx.Model(&model.OrderItemSupplySnapshot{}).Where("order_id = ? AND order_item_id IN ? AND mode = ?", orderID, itemIDs, "upstream").Count(&count).Error; err != nil {
 		return false, err
 	}
+	if count > 0 {
+		// The provider cancellation is whole-order. Never cancel every external
+		// code while refunding/locking only a subset of the local tickets.
+		var tickets []model.Ticket
+		if err := tx.Where("order_id = ?", orderID).Find(&tickets).Error; err != nil {
+			return false, err
+		}
+		if len(tickets) != len(selected) {
+			return false, errors.New("供应商供票订单暂仅支持整单退票，请选择全部门票")
+		}
+		for _, ticket := range tickets {
+			if chosen := selected[ticket.TicketCode]; chosen == nil || chosen.ID != ticket.ID {
+				return false, errors.New("供应商供票订单退票范围不完整")
+			}
+		}
+	}
 	return count > 0, nil
 }
 
@@ -204,12 +220,21 @@ func (s *RefundService) processUpstreamRefundCancellation(ctx context.Context, r
 			continue
 		}
 		// Refunds reserve the same ticket used by issuance before any HTTP call.
-		var reserved int64
-		if err := model.DB.Model(&model.Ticket{}).Where("order_id = ? AND order_item_id = ? AND tenant_id = ? AND pending_refund_id = ?", order.ID, snapshot.OrderItemID, order.TenantID, root.ID).Count(&reserved).Error; err != nil {
+		var tickets []model.Ticket
+		if err := model.DB.Where("order_id = ? AND order_item_id = ? AND tenant_id = ?", order.ID, snapshot.OrderItemID, order.TenantID).Find(&tickets).Error; err != nil {
 			return err
 		}
-		if reserved != 1 {
-			return errors.New("上游退款缺少票券锁定")
+		var itemForCodes model.OrderItem
+		if err := model.DB.Where("id = ? AND order_id = ?", snapshot.OrderItemID, order.ID).First(&itemForCodes).Error; err != nil {
+			return err
+		}
+		if _, err := upstreamTicketCount(&itemForCodes, tickets); err != nil {
+			return err
+		}
+		for _, ticket := range tickets {
+			if ticket.PendingRefundID != root.ID {
+				return errors.New("上游退款缺少票券锁定")
+			}
 		}
 		if snapshot.RefundID != 0 && snapshot.RefundID != root.ID {
 			return ErrUpstreamRefundUnknown

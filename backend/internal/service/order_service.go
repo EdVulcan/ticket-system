@@ -1059,7 +1059,9 @@ func buildTickets(service *OrderService, product *model.Product, quantity int, o
 	if product.CodeMode == "order" {
 		count = 1
 	}
-	ruleSnapshot, err := json.Marshal(product.Rule)
+	ruleForSale := product.Rule
+	ruleForSale.AdmissionPolicy = ticketAdmissionPolicyPooledV1
+	ruleSnapshot, err := json.Marshal(ruleForSale)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot ticket rule: %w", err)
 	}

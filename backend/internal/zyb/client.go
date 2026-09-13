@@ -426,6 +426,19 @@ type Artifact struct {
 }
 
 func (c Client) TicketImage(ctx context.Context, orderCode string) (*Artifact, []byte, error) {
+	artifacts, raw, err := c.TicketImages(ctx, orderCode)
+	if err != nil {
+		return nil, raw, err
+	}
+	if len(artifacts) != 1 {
+		return nil, raw, errors.New("智游宝返回多张票码图片，请按多码模式处理")
+	}
+	return artifacts[0], raw, nil
+}
+
+// TicketImages accepts the existing image fields, including repeated elements.
+// It does not follow QR-page URLs or infer codes from order/assist numbers.
+func (c Client) TicketImages(ctx context.Context, orderCode string) ([]*Artifact, []byte, error) {
 	orderCode = strings.TrimSpace(orderCode)
 	if orderCode == "" {
 		return nil, nil, errors.New("智游宝订单号不能为空")
@@ -433,9 +446,9 @@ func (c Client) TicketImage(ctx context.Context, orderCode string) (*Artifact, [
 	body := fmt.Sprintf("  <orderRequest><order><orderCode>%s</orderCode></order></orderRequest>", escapeXML(orderCode))
 	var env struct {
 		responseMeta
-		Img   string `xml:"img"`
-		Image string `xml:"image"`
-		URL   string `xml:"url"`
+		Img   []string `xml:"img"`
+		Image []string `xml:"image"`
+		URL   []string `xml:"url"`
 	}
 	raw, meta, err := c.request(ctx, "SEND_CODE_IMG_REQ", body, &env, false)
 	if err != nil {
@@ -444,15 +457,25 @@ func (c Client) TicketImage(ctx context.Context, orderCode string) (*Artifact, [
 	if text(meta.TransactionName) != "SEND_CODE_IMG_RES" {
 		return nil, raw, fmt.Errorf("智游宝票码响应交易类型不正确: %s", text(meta.TransactionName))
 	}
-	v := env.Img
-	if text(v) == "" {
-		v = env.Image
+	values := env.Img
+	if len(values) == 0 || (len(values) == 1 && text(values[0]) == "") {
+		values = env.Image
 	}
-	if text(v) == "" {
-		v = env.URL
+	if len(values) == 0 || (len(values) == 1 && text(values[0]) == "") {
+		values = env.URL
 	}
-	a, e := ParseArtifact(v)
-	return a, raw, e
+	if len(values) == 0 {
+		return nil, raw, errors.New("智游宝票码响应为空")
+	}
+	artifacts := make([]*Artifact, 0, len(values))
+	for _, value := range values {
+		a, err := ParseArtifact(value)
+		if err != nil {
+			return nil, raw, err
+		}
+		artifacts = append(artifacts, a)
+	}
+	return artifacts, raw, nil
 }
 
 type CancelOrderResult struct {

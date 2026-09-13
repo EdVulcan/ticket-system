@@ -92,10 +92,11 @@ type Device struct {
 // TicketRule 检票规则 (M选N核心)
 type TicketRule struct {
 	Base
-	Name         string      `gorm:"size:100;not null" json:"name"`
-	TenantID     uint        `json:"tenant_id"`
-	ValidityType string      `gorm:"size:20;default:'date'" json:"validity_type"` // date, days, period
-	Groups       []RuleGroup `gorm:"foreignKey:RuleID" json:"groups,omitempty"`
+	Name            string      `gorm:"size:100;not null" json:"name"`
+	TenantID        uint        `json:"tenant_id"`
+	ValidityType    string      `gorm:"size:20;default:'date'" json:"validity_type"` // date, days, period
+	AdmissionPolicy string      `gorm:"-" json:"admission_policy,omitempty"`         // server-controlled sold-ticket snapshot policy
+	Groups          []RuleGroup `gorm:"foreignKey:RuleID" json:"groups,omitempty"`
 }
 
 // RuleGroup 规则分组 (如: A/B一组, C/D一组)

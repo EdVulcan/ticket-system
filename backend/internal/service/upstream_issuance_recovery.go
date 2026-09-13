@@ -66,9 +66,16 @@ func (w *UpstreamSupplyWorker) RecoverIssuance(ctx context.Context, tenantID, us
 		return errors.New("未确认供应商未成单，或已存在供应商订单身份，不能重新发码")
 	}
 	return model.Write(func(tx *gorm.DB) error {
-		var ticket model.Ticket
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_id = ? AND order_item_id = ? AND tenant_id = ? AND status = 'pending_provider' AND pending_refund_id = 0", order.ID, snapshot.OrderItemID, tenantID).First(&ticket).Error; err != nil {
-			return errors.New("票券已被退款或状态已变化，不能恢复出票")
+		var item model.OrderItem
+		if err := tx.Where("id = ? AND order_id = ?", snapshot.OrderItemID, order.ID).First(&item).Error; err != nil {
+			return err
+		}
+		var tickets []model.Ticket
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_id = ? AND order_item_id = ? AND tenant_id = ?", order.ID, item.ID, tenantID).Order("id").Find(&tickets).Error; err != nil {
+			return err
+		}
+		if err := upstreamTicketsPending(&item, tickets); err != nil {
+			return err
 		}
 		updates := map[string]interface{}{"next_attempt_at": time.Now(), "last_error": ""}
 		if resend {

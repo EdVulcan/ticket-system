@@ -19,6 +19,7 @@
         <el-form-item label="供应商商品编码">
           <el-input v-model="form.external_product_code" placeholder="填写供应商提供的商品编码" maxlength="200" :disabled="loading || saving" />
           <div class="field-hint">这是供应商系统中对应商品的唯一编码，不是本系统票种 ID，也不是小红书商品编码。</div>
+          <div class="field-hint">请在票种基本设置中保持双方票码模式一致：上游一票一码／一人一码，本系统选“一票一码”；上游整单一码，本系统选“整单一码”。</div>
         </el-form-item>
         </template>
       </el-form>

@@ -79,7 +79,7 @@ func seedXiaohongshuRefundFixture(t *testing.T, configure ...func(*model.Order))
 	if err := model.DB.Preload("Items.Product").Preload("Items.Tickets").First(&order, order.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(order.Items) != 1 || len(order.Items[0].Tickets) != 1 {
+	if len(order.Items) != 1 || len(order.Items[0].Tickets) == 0 {
 		t.Fatalf("unexpected local order shape: %+v", order)
 	}
 	ticket := order.Items[0].Tickets[0]
@@ -98,7 +98,7 @@ func seedXiaohongshuRefundFixture(t *testing.T, configure ...func(*model.Order))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ticket.CodeMode == "order" && order.Items[0].Quantity > 1 {
+	if order.Items[0].Quantity > 1 {
 		var vouchers []xiaohongshu.VoucherInfo
 		for i := 0; i < order.Items[0].Quantity; i++ {
 			code := voucherCode

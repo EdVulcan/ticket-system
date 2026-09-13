@@ -348,8 +348,8 @@ func resolveProductSupplyTx(tx *gorm.DB, product *model.Product, environment, co
 	if err := tx.Where("id = ? AND tenant_id = ? AND status = 'active'", mapping.UpstreamConnectionID, product.TenantID).First(&conn).Error; err != nil || !completeConnection(&conn) || conn.Environment != environment {
 		return false, ErrUpstreamSupplyNotReady
 	}
-	if quantity <= 0 || (product.CodeMode != "order" && quantity > 1) {
-		return false, errors.New("智游宝供票要求订单码或单张票")
+	if quantity <= 0 {
+		return false, errors.New("智游宝供票数量必须大于零")
 	}
 	if strings.TrimSpace(contactName) == "" || utf8.RuneCountInString(strings.TrimSpace(contactName)) > 50 || !zybPhonePattern.MatchString(strings.TrimSpace(contactPhone)) {
 		return false, errors.New("智游宝订单联系人姓名和手机号必填且格式有效")

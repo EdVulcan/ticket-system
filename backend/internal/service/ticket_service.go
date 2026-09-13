@@ -25,6 +25,8 @@ var (
 	ErrGroupLimitReached  = errors.New("ticket benefit group limit reached")
 )
 
+const ticketAdmissionPolicyPooledV1 = "pool_v1"
+
 type TicketService struct{}
 
 func (s *TicketService) Verify(code string, checkPointID, deviceID, tenantID uint) error {
@@ -199,7 +201,7 @@ func (s *TicketService) verifyDeviceRequestWithReservation(code string, checkPoi
 		if limit <= 0 || countAtCheckpoint(records, checkPointID) >= limit {
 			return ErrPointLimitReached
 		}
-		if !groupAllowsCheckpoint(records, matchedGroup, checkPointID) {
+		if !groupAllowsCheckpointForTicket(records, &product, &ticket.OrderItem, matchedGroup, checkPointID) {
 			return ErrGroupLimitReached
 		}
 		if prepareOnly {
@@ -295,11 +297,20 @@ func matchRule(rule model.TicketRule, checkpointID uint) (*model.RuleGroup, *mod
 }
 
 func admissionLimit(product *model.Product, item *model.OrderItem, ruleItem *model.RuleItem) int {
-	limit := ruleItem.MaxPerCheckIn
-	if product.CodeMode == "order" && item.Quantity > 1 {
-		limit *= item.Quantity
+	if ruleItem == nil {
+		return 0
 	}
-	return limit
+	return ruleItem.MaxPerCheckIn * admissionUnits(product, item)
+}
+
+// admissionUnits is the number of ticket entitlements represented by this
+// QR code. An order-code QR pools all quantity units; a ticket-code QR always
+// represents one unit, even when its order item has a larger quantity.
+func admissionUnits(product *model.Product, item *model.OrderItem) int {
+	if product != nil && item != nil && product.CodeMode == "order" && item.Quantity > 1 {
+		return item.Quantity
+	}
+	return 1
 }
 
 func countAtCheckpoint(records []model.CheckInRecord, checkpointID uint) int {
@@ -313,6 +324,9 @@ func countAtCheckpoint(records []model.CheckInRecord, checkpointID uint) int {
 }
 
 func groupAllowsCheckpoint(records []model.CheckInRecord, group *model.RuleGroup, checkpointID uint) bool {
+	if group == nil {
+		return false
+	}
 	if group.MaxTotalCheckIn <= 0 {
 		return true
 	}
@@ -331,12 +345,61 @@ func groupAllowsCheckpoint(records []model.CheckInRecord, group *model.RuleGroup
 	return len(used) < group.MaxTotalCheckIn
 }
 
+func groupAllowsCheckpointForTicket(records []model.CheckInRecord, product *model.Product, item *model.OrderItem, group *model.RuleGroup, checkpointID uint) bool {
+	if product == nil || product.Rule.AdmissionPolicy != ticketAdmissionPolicyPooledV1 {
+		return groupAllowsCheckpoint(records, group, checkpointID)
+	}
+	return groupAllowsCheckpointWithCapacity(records, group, checkpointID, admissionUnits(product, item))
+}
+
+// groupAllowsCheckpointWithCapacity evaluates the group rule after the
+// requested checkpoint admission. Each checkpoint consumes ceil(c_j/r_j)
+// selections, so repeated use of a point with a larger per-point allowance
+// does not consume a fresh group selection until that allowance is crossed.
+func groupAllowsCheckpointWithCapacity(records []model.CheckInRecord, group *model.RuleGroup, checkpointID uint, capacity int) bool {
+	if group == nil {
+		return false
+	}
+	if group.MaxTotalCheckIn <= 0 {
+		return true
+	}
+	if capacity < 1 {
+		capacity = 1
+	}
+	maxUsage := int64(group.MaxTotalCheckIn) * int64(capacity)
+	var usage int64
+	for _, item := range group.Items {
+		if item.MaxPerCheckIn <= 0 {
+			return false
+		}
+		count := countAtCheckpoint(records, item.CheckPointID)
+		if item.CheckPointID == checkpointID {
+			count++
+		}
+		usage += int64(ceilAdmissionSelections(count, item.MaxPerCheckIn))
+		if usage > maxUsage {
+			return false
+		}
+	}
+	return true
+}
+
+func ceilAdmissionSelections(count, perCheckpoint int) int {
+	if count <= 0 {
+		return 0
+	}
+	if perCheckpoint <= 0 {
+		return count
+	}
+	return (count + perCheckpoint - 1) / perCheckpoint
+}
+
 func hasRemainingAdmission(product *model.Product, orderItem *model.OrderItem, records []model.CheckInRecord) bool {
 	for groupIndex := range product.Rule.Groups {
 		group := &product.Rule.Groups[groupIndex]
 		for itemIndex := range group.Items {
 			item := &group.Items[itemIndex]
-			if groupAllowsCheckpoint(records, group, item.CheckPointID) &&
+			if groupAllowsCheckpointForTicket(records, product, orderItem, group, item.CheckPointID) &&
 				countAtCheckpoint(records, item.CheckPointID) < admissionLimit(product, orderItem, item) {
 				return true
 			}

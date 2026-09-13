@@ -370,3 +370,26 @@ test('refund and issuance gates still suppress ticket codes', async () => {
   await flush();
   assert.equal(notIssued.data.ticketCodes.length, 0);
 });
+
+test('upstream multiple tickets appear after issuance and retain individual usage and refund gating', async () => {
+  let response = { status: 'paid', amount_cents: 19900, ticket_issuance_status: 'pending', voucher_issuance_status: 'ready', ticket_codes: [] };
+  const page = loadOrderDetail({ request: () => Promise.resolve(response) }, {});
+  page.orderNo = 'MULTI-UPSTREAM';
+  await page.loadOrder();
+  assert.equal(page.data.issuancePending, true);
+  assert.equal(page.data.ticketCodes.length, 0);
+  response = { ...response, ticket_issuance_status: 'ready', ticket_codes: ['ZYB-FIRST', 'ZYB-SECOND'],
+    tickets: [{ code: 'ZYB-FIRST', status: 'active', check_in_count: 1 }, { code: 'ZYB-SECOND', status: 'unused', check_in_count: 0 }] };
+  await page.loadOrder();
+  assert.equal(page.data.issuancePending, false);
+  assert.equal(page.data.ticketCodes.length, 2);
+  assert.equal(page.data.ticketCodes[0].usageLabel, '已使用');
+  assert.equal(page.data.ticketCodes[1].usageLabel, '未使用');
+  assert.equal(page.data.ticketCodes[1].index, 2);
+  page.showTicketQR({ currentTarget: { dataset: { canvasId: 'ticket-qr-2' } } });
+  assert.equal(page.data.expandedTicket.code, 'ZYB-SECOND');
+  response = { ...response, refund_pending: true };
+  await page.loadOrder();
+  assert.equal(page.data.ticketCodes.length, 0);
+  assert.equal(page.data.expandedTicket, null);
+});
