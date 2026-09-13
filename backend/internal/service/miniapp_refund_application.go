@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -53,6 +54,17 @@ func (s MiniappService) ApplyXiaohongshuRefund(customer *model.MiniappCustomer, 
 	ownedCustomer, err := loadMiniappRefundApplicationCustomer(customer, orderNo, s.now())
 	if err != nil {
 		return nil, err
+	}
+	// Read-only supplier check. Cancellation happens only after the refund
+	// transaction has reserved the ticket and created durable payment work.
+	var replayCount int64
+	if err := model.DB.Model(&model.Refund{}).Where("tenant_id = ? AND order_no = ? AND idempotency_key = ?", ownedCustomer.TenantID, orderNo, "after-sale:"+key).Count(&replayCount).Error; err != nil {
+		return nil, err
+	}
+	if replayCount == 0 {
+		if err := (&RefundService{}).preflightUpstreamRefund(context.Background(), ownedCustomer.TenantID, orderNo); err != nil {
+			return nil, err
+		}
 	}
 	result := &MiniappRefundApplicationResult{}
 	err = model.Write(func(tx *gorm.DB) error {
@@ -238,7 +250,7 @@ func validateXiaohongshuCustomerRefundApplicationTx(tx *gorm.DB, customer *model
 	}
 	codes := make([]string, 0, len(item.Tickets))
 	for _, ticket := range item.Tickets {
-		if ticket.PendingRefundID != 0 || ticket.PendingXiaohongshuVerificationID != 0 || ticket.Status != "unused" || ticket.CheckInCount != 0 {
+		if ticket.PendingRefundID != 0 || ticket.PendingXiaohongshuVerificationID != 0 || (ticket.Status != "unused" && ticket.Status != "pending_provider") || ticket.CheckInCount != 0 {
 			return nil, 0, errors.New("ticket is already used or being verified")
 		}
 		var voucher model.XiaohongshuVoucherLink

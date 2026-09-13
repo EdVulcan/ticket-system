@@ -36,9 +36,10 @@ type RefundProvider interface {
 }
 
 type RefundService struct {
-	PaymentService       *PaymentService
-	Provider             RefundProvider
-	NewXiaohongshuClient func(string, string, string) *xiaohongshu.Client
+	PaymentService          *PaymentService
+	Provider                RefundProvider
+	NewXiaohongshuClient    func(string, string, string) *xiaohongshu.Client
+	NewUpstreamRefundClient UpstreamRefundClientFactory
 }
 
 type RefundGroupView struct {
@@ -50,11 +51,14 @@ type RefundGroupView struct {
 // RefundActor is resolved from the authenticated request. A zero actor keeps
 // the historical service API fail-closed for tests, jobs and internal callers.
 type RefundActor struct {
-	TenantID             uint
-	UserID               uint
-	OrderTenantID        uint
-	FulfillmentOrderID   uint
-	OverrideRefundPolicy bool
+	TenantID              uint
+	UserID                uint
+	OrderTenantID         uint
+	FulfillmentOrderID    uint
+	OverrideRefundPolicy  bool
+	ConfirmUpstreamRefund bool
+	// Set only by the authenticated upstream funding recovery service.
+	upstreamRecoveryRefundID uint
 }
 
 func refundOrderTenantID(actor RefundActor) uint {
@@ -130,6 +134,9 @@ func (s *RefundService) CreateCashRefund(tenantID uint, orderNo, idempotencyKey 
 }
 
 func (s *RefundService) CreateCashRefundAs(actor RefundActor, orderNo, idempotencyKey string, amount float64, ticketCodes []string, reason string) (*model.Refund, error) {
+	if actor.ConfirmUpstreamRefund && strings.TrimSpace(reason) == "" {
+		return nil, errors.New("供应商特殊退款需要填写原因")
+	}
 	tenantID := refundOrderTenantID(actor)
 	if actor.TenantID == 0 || tenantID == 0 || strings.TrimSpace(orderNo) == "" || strings.TrimSpace(idempotencyKey) == "" {
 		return nil, errors.New("tenant, order and idempotency key are required")
@@ -216,15 +223,34 @@ func (s *RefundService) CreateCashRefundAs(actor RefundActor, orderNo, idempoten
 		if paymentRefundedCents+amountCents > paymentAmountCents {
 			return errors.New("refund amount exceeds paid amount")
 		}
+		hasUpstream, err := upstreamRefundRequiredTx(tx, order.ID, selected)
+		if err != nil {
+			return err
+		}
+		if hasUpstream && actor.ConfirmUpstreamRefund {
+			if err := authorizeUpstreamRefundTx(tx, actor, &order, selected); err != nil {
+				return err
+			}
+		}
 
 		result = model.Refund{
 			TenantID: tenantID, RefundNo: generateRefundNo(), IdempotencyKey: idempotencyKey,
 			OrderNo: orderNo, PaymentID: payment.ID, Amount: roundMoney(amount), AmountCents: moneyCents(amount), Method: "cash",
 			Status: "succeeded", Reason: strings.TrimSpace(reason), TicketCodesJSON: string(codesJSON),
-			AuthorizedUsedRefund: allowUsed, AuthorizedPolicyOverride: allowPolicyOverride, AuthorizedBy: actor.UserID,
+			AuthorizedUsedRefund: allowUsed, AuthorizedPolicyOverride: allowPolicyOverride, AuthorizedUpstreamRefund: actor.ConfirmUpstreamRefund && hasUpstream, AuthorizedBy: actor.UserID,
 		}
 		if err := tx.Create(&result).Error; err != nil {
 			return err
+		}
+		if hasUpstream {
+			if err := reserveRefundTicketsTx(tx, selected, result.ID); err != nil {
+				return err
+			}
+			result.Status = "pending"
+			if err := tx.Model(&result).Update("status", "pending").Error; err != nil {
+				return err
+			}
+			return tx.Create(&model.DigitalRefundTask{RefundID: result.ID, TenantID: tenantID, Provider: "upstream", PaymentNo: payment.PaymentNo, Status: "pending", MaxAttempts: defaultDigitalRefundMaxAttempts, NextAttemptAt: ptrTime(time.Now())}).Error
 		}
 		return applySuccessfulRefundTx(tx, &order, &payment, &result, selected)
 	})
@@ -255,6 +281,9 @@ func (s *RefundService) CreateDigitalRefund(tenantID uint, orderNo, idempotencyK
 }
 
 func (s *RefundService) CreateDigitalRefundAs(actor RefundActor, orderNo, idempotencyKey string, amount float64, ticketCodes []string, reason string) (*model.Refund, error) {
+	if actor.ConfirmUpstreamRefund && strings.TrimSpace(reason) == "" {
+		return nil, errors.New("供应商特殊退款需要填写原因")
+	}
 	var result *model.Refund
 	err := model.Write(func(tx *gorm.DB) error {
 		var err error
@@ -350,6 +379,15 @@ func (s *RefundService) createDigitalRefundAsTx(tx *gorm.DB, actor RefundActor, 
 	if len(selected) != len(cleanCodes) || amountCents != moneyCents(refundableAmount) {
 		return nil, fmt.Errorf("refund amount must equal selected ticket value %.2f", refundableAmount)
 	}
+	hasUpstream, err := upstreamRefundRequiredTx(tx, order.ID, selected)
+	if err != nil {
+		return nil, err
+	}
+	if hasUpstream && actor.ConfirmUpstreamRefund {
+		if err := authorizeUpstreamRefundTx(tx, actor, &order, selected); err != nil {
+			return nil, err
+		}
+	}
 	if beforeCreate != nil {
 		if err := beforeCreate(tx, &order, &payment, selected, amountCents); err != nil {
 			return nil, err
@@ -359,13 +397,29 @@ func (s *RefundService) createDigitalRefundAsTx(tx *gorm.DB, actor RefundActor, 
 		TenantID: tenantID, RefundNo: generateRefundNo(), IdempotencyKey: idempotencyKey,
 		OrderNo: orderNo, PaymentID: payment.ID, Amount: roundMoney(amount), AmountCents: moneyCents(amount), Method: payment.Method,
 		Status: "pending", Reason: strings.TrimSpace(reason), TicketCodesJSON: string(codesJSON),
-		AuthorizedUsedRefund: allowUsed, AuthorizedPolicyOverride: allowPolicyOverride, AuthorizedBy: actor.UserID,
+		AuthorizedUsedRefund: allowUsed, AuthorizedPolicyOverride: allowPolicyOverride, AuthorizedUpstreamRefund: actor.ConfirmUpstreamRefund && hasUpstream, AuthorizedBy: actor.UserID,
+	}
+	if actor.upstreamRecoveryRefundID != 0 {
+		var previous model.Refund
+		if err := tx.Where("id = ? AND tenant_id = ? AND payment_id = ? AND status = 'failed'", actor.upstreamRecoveryRefundID, tenantID, payment.ID).First(&previous).Error; err != nil {
+			return nil, err
+		}
+		result.ReferenceNo = "UPR:" + previous.RefundNo
 	}
 	if err := tx.Create(result).Error; err != nil {
 		return nil, err
 	}
 	if err := reserveRefundTicketsTx(tx, selected, result.ID); err != nil {
 		return nil, err
+	}
+	if actor.upstreamRecoveryRefundID != 0 {
+		changed := tx.Model(&model.OrderItemSupplySnapshot{}).Where("order_id = ? AND sales_tenant_id = ? AND refund_id = ? AND cancel_status IN ('succeeded','override')", order.ID, tenantID, actor.upstreamRecoveryRefundID).Update("refund_id", result.ID)
+		if changed.Error != nil {
+			return nil, changed.Error
+		}
+		if changed.RowsAffected != 1 {
+			return nil, errors.New("上游退款关联已变化")
+		}
 	}
 	if err := prepareXiaohongshuRefundTx(tx, &order, &payment, result, selected); err != nil {
 		return nil, err
@@ -407,6 +461,9 @@ func (s *RefundService) CreateMixedRefund(tenantID uint, orderNo, idempotencyKey
 }
 
 func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempotencyKey string, amount float64, ticketCodes []string, reason string) (*model.Refund, error) {
+	if actor.ConfirmUpstreamRefund && strings.TrimSpace(reason) == "" {
+		return nil, errors.New("供应商特殊退款需要填写原因")
+	}
 	// The auto-refund entry also serves single-provider XHS orders. Do not
 	// manufacture a mixed root or relax mixed-payment support for this channel.
 	var channelOrder model.Order
@@ -478,6 +535,15 @@ func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempote
 		if amountCents != moneyCents(refundableAmount) {
 			return fmt.Errorf("refund amount must equal selected ticket value %.2f", refundableAmount)
 		}
+		hasUpstream, err := upstreamRefundRequiredTx(tx, order.ID, selected)
+		if err != nil {
+			return err
+		}
+		if hasUpstream && actor.ConfirmUpstreamRefund {
+			if err := authorizeUpstreamRefundTx(tx, actor, &order, selected); err != nil {
+				return err
+			}
+		}
 
 		var payments []model.Payment
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(
@@ -493,7 +559,7 @@ func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempote
 			TenantID: tenantID, RefundNo: generateRefundNo(), IdempotencyKey: idempotencyKey,
 			OrderNo: orderNo, Amount: centsMoney(amountCents), AmountCents: amountCents,
 			Method: "mixed", Status: "group_pending", Reason: strings.TrimSpace(reason), TicketCodesJSON: string(codesJSON),
-			AuthorizedUsedRefund: allowUsed, AuthorizedPolicyOverride: allowPolicyOverride, AuthorizedBy: actor.UserID,
+			AuthorizedUsedRefund: allowUsed, AuthorizedPolicyOverride: allowPolicyOverride, AuthorizedUpstreamRefund: actor.ConfirmUpstreamRefund && hasUpstream, AuthorizedBy: actor.UserID,
 		}
 		if err := tx.Create(&root).Error; err != nil {
 			return err
@@ -532,7 +598,11 @@ func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempote
 			allocationSeq++
 			status := "pending"
 			if payment.Method == "cash" || payment.Method == "pos" || payment.Method == "team_account" {
-				status = "succeeded"
+				if !hasUpstream {
+					status = "succeeded"
+				} else {
+					digitalAllocations++
+				}
 			} else if payment.Method != "wechat" && payment.Method != "alipay" {
 				return fmt.Errorf("unsupported refund payment method %s", payment.Method)
 			} else {
@@ -548,7 +618,11 @@ func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempote
 				return err
 			}
 			if payment.Method == "cash" || payment.Method == "pos" || payment.Method == "team_account" {
-				if err := applyRefundPaymentFactTx(tx, payment, &allocation); err != nil {
+				if hasUpstream {
+					if err := tx.Create(&model.DigitalRefundTask{RefundID: allocation.ID, TenantID: tenantID, Provider: "upstream", PaymentNo: payment.PaymentNo, Status: "pending", MaxAttempts: defaultDigitalRefundMaxAttempts, NextAttemptAt: ptrTime(time.Now())}).Error; err != nil {
+						return err
+					}
+				} else if err := applyRefundPaymentFactTx(tx, payment, &allocation); err != nil {
 					return err
 				}
 			} else if err := tx.Create(&model.DigitalRefundTask{
@@ -566,12 +640,12 @@ func (s *RefundService) CreateMixedRefundAs(actor RefundActor, orderNo, idempote
 		if remaining != 0 {
 			return errors.New("refund amount exceeds the remaining paid balance")
 		}
-		if digitalAllocations > 0 {
+		if digitalAllocations > 0 || hasUpstream {
 			if err := reserveRefundTicketsTx(tx, selected, root.ID); err != nil {
 				return err
 			}
 		}
-		if digitalAllocations == 0 {
+		if digitalAllocations == 0 && !hasUpstream {
 			if err := completeMixedRefundBusinessTx(tx, &root, &order, selected); err != nil {
 				return err
 			}
@@ -620,7 +694,7 @@ func selectRefundTickets(order *model.Order, cleanCodes []string, allowUsed, all
 			if ticket.PendingRefundID != 0 && ticket.PendingRefundID != allowedPendingRefundID {
 				return nil, 0, fmt.Errorf("ticket %s already has a pending refund", ticket.TicketCode)
 			}
-			unused := (ticket.Status == "unused" || ticket.Status == "pending_booking") && ticket.CheckInCount == 0
+			unused := (ticket.Status == "unused" || ticket.Status == "pending_booking" || ticket.Status == "pending_provider") && ticket.CheckInCount == 0
 			used := ticket.CheckInCount > 0 && (ticket.Status == "used" || ticket.Status == "active" || ticket.Status == "unused")
 			if !unused && !(allowUsed && used) {
 				return nil, 0, fmt.Errorf("ticket %s is already used", ticket.TicketCode)
@@ -658,7 +732,10 @@ func releaseRefundTicketsTx(tx *gorm.DB, refundID uint) error {
 	if refundID == 0 {
 		return nil
 	}
-	return tx.Model(&model.Ticket{}).Where("pending_refund_id = ?", refundID).Update("pending_refund_id", 0).Error
+	// Cancelling supply is irreversible locally. A failed funds operation must
+	// not reopen admission; its hold is transferred only by funding recovery.
+	return tx.Model(&model.Ticket{}).Where("pending_refund_id = ?", refundID).
+		Where("NOT EXISTS (SELECT 1 FROM order_item_supply_snapshots s WHERE s.order_item_id = tickets.order_item_id AND s.mode = 'upstream' AND s.cancel_status IN ('succeeded','override'))").Update("pending_refund_id", 0).Error
 }
 
 func reacquireFailedRefundTx(tx *gorm.DB, refund *model.Refund) error {
@@ -697,7 +774,7 @@ func reacquireFailedRefundTx(tx *gorm.DB, refund *model.Refund) error {
 		Where("order_no = ? AND tenant_id = ?", refund.OrderNo, refund.TenantID).First(&order).Error; err != nil {
 		return err
 	}
-	selected, amount, err := selectRefundTickets(&order, codes, refund.AuthorizedUsedRefund, refund.AuthorizedPolicyOverride, 0)
+	selected, amount, err := selectRefundTickets(&order, codes, refund.AuthorizedUsedRefund, refund.AuthorizedPolicyOverride, refund.ID)
 	if err != nil {
 		return err
 	}
@@ -706,6 +783,11 @@ func reacquireFailedRefundTx(tx *gorm.DB, refund *model.Refund) error {
 	}
 	if err := (PackageFulfillmentLifecycle{}).AssertRefundSupported(tx, selected, refund.AuthorizedPolicyOverride); err != nil {
 		return err
+	}
+	for code, ticket := range selected {
+		if ticket.PendingRefundID == refund.ID {
+			delete(selected, code)
+		}
 	}
 	return reserveRefundTicketsTx(tx, selected, refund.ID)
 }
@@ -908,6 +990,30 @@ func (s *RefundService) processDigitalRefundTask(ctx context.Context, taskID uin
 	if refund.ProviderRefundID == "" {
 		refund.ProviderRefundID = task.ProviderRefund
 	}
+	requiresUpstream, upstreamErr := s.upstreamRefundRequired(&refund)
+	if upstreamErr != nil {
+		return s.deferClaimedDigitalRefundTask(task.ID, task.LockedAt, now, upstreamErr)
+	}
+	if task.Provider == "upstream" || requiresUpstream {
+		if err := s.processUpstreamRefundCancellation(ctx, &refund); err != nil {
+			switch {
+			case errors.Is(err, ErrUpstreamRefundPending):
+				return s.deferClaimedDigitalRefundTask(task.ID, task.LockedAt, now, err)
+			case errors.Is(err, ErrUpstreamRefundUsed), errors.Is(err, ErrUpstreamRefundUnknown), errors.Is(err, ErrUpstreamRefundRejected):
+				return model.Write(func(tx *gorm.DB) error {
+					if err := updateClaimedDigitalRefundTask(tx, task.ID, task.LockedAt, map[string]interface{}{
+						"status": "manual_review", "locked_at": nil, "next_attempt_at": nil,
+						"failure_code": "upstream_confirmation_required", "last_error": truncateError(err.Error()), "manual_review_at": now,
+					}); err != nil {
+						return err
+					}
+					return markMixedRefundGroupManualReviewForTaskTx(tx, task.TenantID, task.RefundID)
+				})
+			default:
+				return s.deferClaimedDigitalRefundTask(task.ID, task.LockedAt, now, err)
+			}
+		}
+	}
 	provider := s.Provider
 	if provider == nil {
 		if payment.Method == "xiaohongshu" {
@@ -915,6 +1021,9 @@ func (s *RefundService) processDigitalRefundTask(ctx context.Context, taskID uin
 		} else {
 			provider = &gopayRefundProvider{payments: s.PaymentService}
 		}
+	}
+	if task.Provider == "upstream" && (payment.Method == "cash" || payment.Method == "pos" || payment.Method == "team_account") {
+		return s.completeDigitalRefund(task.ID, task.LockedAt, &refund, &payment, "upstream-cancelled")
 	}
 	result, err := provider.Process(ctx, &refund, &payment)
 	if err != nil {
@@ -1210,6 +1319,13 @@ func (s *RefundService) ResolveMixedRefundGroup(tenantID, rootRefundID, operator
 			}
 			return recordAuditTx(tx, operatorID, tenantID, operatorRole, "tenant", "payment.refund.group.retry", "refund", root.ID, strings.TrimSpace(reason), before, `{"status":"group_pending"}`)
 		case "close_failed":
+			var upstreamCancelled int64
+			if err := tx.Model(&model.OrderItemSupplySnapshot{}).Where("sales_tenant_id = ? AND refund_id = ? AND mode = 'upstream' AND cancel_status IN ('succeeded','override')", tenantID, root.ID).Count(&upstreamCancelled).Error; err != nil {
+				return err
+			}
+			if upstreamCancelled > 0 {
+				return errors.New("上游退票已完成，请继续处理款项退款，不能关闭并解除锁票")
+			}
 			for i := range allocations {
 				if allocations[i].Status == "succeeded" {
 					return errors.New("mixed refund group has a completed allocation and must remain under manual review")

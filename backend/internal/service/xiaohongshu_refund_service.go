@@ -38,7 +38,7 @@ func prepareXiaohongshuRefundTx(tx *gorm.DB, order *model.Order, payment *model.
 	}
 	for _, ticket := range lockedTickets {
 		usedException := refund.AuthorizedUsedRefund && ticket.CheckInCount > 0 && (ticket.Status == "used" || ticket.Status == "active" || ticket.Status == "unused")
-		unused := ticket.CheckInCount == 0 && ticket.Status == "unused"
+		unused := ticket.CheckInCount == 0 && (ticket.Status == "unused" || ticket.Status == "pending_provider")
 		if ticket.PendingRefundID != refund.ID || ticket.PendingXiaohongshuVerificationID != 0 || (!unused && !usedException) {
 			return errors.New("小红书退款票券占用不匹配")
 		}
@@ -77,7 +77,9 @@ func prepareXiaohongshuRefundTx(tx *gorm.DB, order *model.Order, payment *model.
 		return err
 	}
 	if previousFailures != 0 {
-		return errors.New("该订单已有失败的小红书退款，请先核查平台售后结果")
+		if err := validateUpstreamRefundReplacementTx(tx, order, payment, refund); err != nil {
+			return err
+		}
 	}
 	request := xiaohongshu.AfterSalesAddRequest{
 		ExternalOrderID: link.ExternalOrderID, ExternalAfterSalesOrderID: refund.RefundNo, OpenID: payload.Request.OpenID,

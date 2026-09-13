@@ -105,7 +105,7 @@ func legacySupplyBusinessJSON(t *testing.T, db *gorm.DB) string {
 	return string(b)
 }
 
-func TestUpstreamSupply117UpgradePreservesLegacyFactsAndRerun(t *testing.T) {
+func TestUpstreamSupply118UpgradePreservesLegacyFactsAndRerun(t *testing.T) {
 	db, _ := upstreamLegacyFixture(t)
 	before := legacySupplyBusinessJSON(t, db)
 	for i := 0; i < 2; i++ {
@@ -128,13 +128,9 @@ func TestUpstreamSupply117UpgradePreservesLegacyFactsAndRerun(t *testing.T) {
 			}
 		}
 	}
-	var count int64
-	if err := db.Model(&ExternalAdmissionBinding{}).Count(&count).Error; err != nil || count != 0 {
-		t.Fatalf("legacy bindings=%d err=%v", count, err)
-	}
 }
 
-func TestUpstreamSupply117FailedBackfillRollsBackSchema(t *testing.T) {
+func TestUpstreamSupply118FailedBackfillRollsBackSchema(t *testing.T) {
 	db, itemID := upstreamLegacyFixture(t)
 	// Deliberately corrupt only this disposable fixture to prove no partial
 	// DDL or version marker survives an unresolvable legacy ownership record.

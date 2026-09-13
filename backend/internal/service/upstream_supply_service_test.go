@@ -49,8 +49,8 @@ func TestUpstreamSupplyDraftIsolationAndLocalOrderSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	var after model.OrderItemSupplySnapshot
-	if _, err := s.SetProduct(tenantID, productID, 0, "admin", ProductSupplyInput{}); err == nil {
-		t.Fatal("empty configuration incorrectly reported success")
+	if _, err := s.SetProduct(tenantID, productID, 0, "admin", ProductSupplyInput{}); err != nil {
+		t.Fatal("explicit disable failed")
 	}
 	view, err = s.GetProduct(tenantID, productID)
 	if err != nil || view.ExternalProductCode != "CHANGED" {

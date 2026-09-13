@@ -353,6 +353,11 @@ func (s XiaohongshuOrderService) orderResult(link *model.XiaohongshuOrderLink, o
 		if err := model.DB.Model(&model.Refund{}).Where("tenant_id = ? AND order_no = ? AND method = ? AND status IN ?", order.TenantID, order.OrderNo, "xiaohongshu", []string{"pending", "processing", "submitted", "manual_review"}).Count(&pendingRefunds).Error; err != nil {
 			return nil, err
 		}
+		if pendingRefunds == 0 {
+			if err := model.DB.Model(&model.Ticket{}).Where("order_id = ? AND tenant_id = ? AND pending_refund_id <> 0", order.ID, order.TenantID).Count(&pendingRefunds).Error; err != nil {
+				return nil, err
+			}
+		}
 		result.RefundPending = pendingRefunds > 0
 		if result.RefundPending {
 			return result, nil

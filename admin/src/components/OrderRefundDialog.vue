@@ -51,6 +51,7 @@ const businessNotice = ref('')
 const unavailable = ref('')
 const currentUser = ref(readStoredUser())
 const overridePolicy = ref(false)
+const confirmUpstream = ref(false)
 const needsPolicyOverride = computed(() => (order.value?.items || []).some((item: any) => item.refund_type === 'no_refund'))
 // Visibility mirrors existing authority; RefundService reauthorizes every request.
 const canOverridePolicy = computed(() => currentUser.value.is_initial_admin === true &&
@@ -87,6 +88,7 @@ const open = async (orderNo: string, detailURL?: string) => {
   attempted.value = false
   uncertain.value = false
   overridePolicy.value = false
+  confirmUpstream.value = false
   currentUser.value = readStoredUser()
   order.value = null
   reason.value = ''
@@ -109,7 +111,7 @@ const open = async (orderNo: string, detailURL?: string) => {
     else if (order.value.status === 'completed' && !hasUsedTickets.value) unavailable.value = '已完成订单没有已核销票券，不能从误核销退款入口提交'
     else if (tickets.value.some(ticket => {
       const checkInCount = Number(ticket.check_in_count || 0)
-      return checkInCount === 0 ? ticket.status !== 'unused' : !['unused', 'active', 'used'].includes(ticket.status)
+      return checkInCount === 0 ? !['unused', 'pending_provider'].includes(ticket.status) : !['unused', 'active', 'used'].includes(ticket.status)
     })) unavailable.value = '订单包含不可退票券，请在售后工作台核查'
     else if (tickets.value.some(ticket => Number(ticket.pending_refund_id || 0) || Number(ticket.pending_xiaohongshu_verification_id || 0)) ||
       (data.refunds || []).some((refund: any) => ['pending', 'group_pending', 'processing', 'submitted', 'manual_review'].includes(refund.status))) unavailable.value = '订单正在退款或核销处理中，请勿重复申请'
@@ -167,6 +169,19 @@ const submit = async () => {
   if (checking.value || loading.value || submitting.value || submitted.value || unavailable.value || !order.value || !reason.value.trim() ||
     (requiresExceptionAcknowledgement.value && (!canAuthorizeException.value || !overridePolicy.value))) return
   submitting.value = true
+  if (!payload && order.value.has_upstream_supply) {
+    try {
+      const { data } = await request.post('/payments/refunds/upstream-check', { order_no: order.value.order_no }, { skipErrorToast: true } as any)
+      if (data.requires_confirmation) {
+        if (!canOverridePolicy.value) { error.value = '供应商状态不允许普通退款，请联系本景区初始管理员处理'; submitting.value = false; return }
+        await ElMessageBox.confirm(data.message, '确认供应商状态冲突', { type: 'warning', confirmButtonText: '确认仍然退款', cancelButtonText: '返回检查' })
+        confirmUpstream.value = true
+      }
+    } catch (cause: any) {
+      if (cause !== 'cancel' && cause !== 'close') error.value = cause.response?.data?.error || '供应商状态检查失败，请重试'
+      submitting.value = false; return
+    }
+  }
   if (!payload && requiresExceptionAcknowledgement.value) {
     try {
       const usedNotice = hasUsedTickets.value ? '原核销记录会保留，退款成功后票券失效。' : ''
@@ -182,6 +197,7 @@ const submit = async () => {
   // was lost. Do not turn a timeout into a second refund application.
   if (!payload) payload = { order_no: order.value.order_no, idempotency_key: requestKey,
     amount: order.value.total_amount, ticket_codes: tickets.value.map(ticket => ticket.ticket_code), reason: reason.value.trim(),
+    ...(confirmUpstream.value ? { confirm_upstream_refund: true } : {}),
     ...(needsPolicyOverride.value ? { override_refund_policy: true } : {}) }
   attempted.value = true
   error.value = ''

@@ -109,6 +109,7 @@
 		  <el-descriptions-item v-if="currentOrder.discount_cents > 0" label="限时立减">¥{{ (currentOrder.discount_cents / 100).toFixed(2) }}（原价 ¥{{ (currentOrder.original_amount_cents / 100).toFixed(2) }}）</el-descriptions-item>
         </el-descriptions>
 
+        <UpstreamOrderStatus v-if="currentOrder.has_upstream_supply" :order-no="currentOrder.order_no" :refresh-key="detailRequestVersion" />
         <el-divider content-position="left">供应履约责任</el-divider>
         <el-empty v-if="!detailLoading && responsibilities.length === 0" description="暂无履约信息" :image-size="72" />
         <div v-for="fulfillment in responsibilities" :key="fulfillment.id" class="responsibility-section">
@@ -138,7 +139,7 @@
           <div v-for="item in fulfillment.items" :key="item.id" class="mt-4">
             <div class="font-medium text-sm mb-2"><span v-if="item.bundle_name">{{ item.bundle_name }} · </span>{{ item.product_name }}（{{ item.quantity }}张）</div>
             <el-table :data="item.tickets" border size="small" empty-text="暂无票据">
-              <el-table-column prop="ticket_code" label="核销码" min-width="170" />
+              <el-table-column prop="ticket_code" label="核销码" min-width="170"><template #default="{ row }">{{ row.status === 'pending_provider' ? '等待供应商出票' : row.ticket_code }}</template></el-table-column>
               <el-table-column prop="visitor_name" label="游客姓名" min-width="110" />
               <el-table-column prop="status" label="状态" width="100">
                 <template #default="{ row }">
@@ -187,6 +188,7 @@
 </template>
 
 <script setup lang="ts">
+import UpstreamOrderStatus from '@/components/UpstreamOrderStatus.vue'
 import { computed, ref, reactive, onMounted, onUnmounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
@@ -407,7 +409,7 @@ const getStatusText = (status: string) => {
 const centsToYuan = (value: number) => ((value || 0) / 100).toFixed(2)
 const fulfillmentStatusText = (status: string) => ({ reserved: '已预占', paid: '待履约', fulfilled: '已履约', cancelled: '已取消' } as Record<string, string>)[status] || '未知状态'
 const settlementStatusText = (status: string) => ({ open: '待结算', draft: '待供应商确认', supplier_confirmed: '待分销商确认', confirmed: '待付款', disputed: '有争议', paid: '已结清' } as Record<string, string>)[status] || '待结算'
-const ticketStatusText = (status: string) => ({ unused: '未使用', active: '可继续使用', used: '已核销', refunded: '已退款', expired: '已过期', void: '已作废' } as Record<string, string>)[status] || '未知状态'
+const ticketStatusText = (status: string) => ({ pending_provider: '等待出票', unused: '未使用', active: '可继续使用', used: '已核销', refunded: '已退款', expired: '已过期', void: '已作废' } as Record<string, string>)[status] || '未知状态'
 const ticketStatusType = (status: string) => ({ unused: 'success', active: 'success', used: 'info', refunded: 'warning', expired: 'info', void: 'danger' } as Record<string, string>)[status] || 'info'
 
 onUnmounted(() => {

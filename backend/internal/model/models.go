@@ -216,6 +216,7 @@ type Order struct {
 	SaleDeviceSerial      string `gorm:"-" json:"sale_device_serial,omitempty"`
 	SaleShiftID           uint   `gorm:"-" json:"sale_shift_id,omitempty"`
 	SaleShiftNo           string `gorm:"-" json:"sale_shift_no,omitempty"`
+	HasUpstreamSupply     bool   `gorm:"-" json:"has_upstream_supply,omitempty"`
 }
 
 // OrderItem 订单明细 (按产品聚合)

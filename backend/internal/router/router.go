@@ -221,6 +221,8 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	upstreamGroup := protected.Group("/upstream-connections", middleware.RequireAnyTenantCapability("supplier"), middleware.RequireAnySupplierBusinessType("scenic"))
 	upstreamGroup.GET("", middleware.RequireTenantPermission(authz.PermissionCatalogRead), upstreamSupplyController.ListConnections)
 	upstreamGroup.POST("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), upstreamSupplyController.CreateConnection)
+	upstreamGroup.PUT("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), upstreamSupplyController.UpdateConnection)
+	upstreamGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), upstreamSupplyController.SetConnectionStatus)
 	productGroup := protected.Group("/products")
 	productGroup.Use(middleware.RequireAnyTenantCapability("supplier", "distributor"))
 	{
@@ -309,6 +311,9 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		orderGroup.POST("", middleware.RequireTenantPermission(authz.PermissionOrdersWrite), orderController.Create)
 		orderGroup.GET("", middleware.RequireTenantPermission(authz.PermissionOrdersRead), orderController.List)
 		orderGroup.GET("/:orderNo", middleware.RequireTenantPermission(authz.PermissionOrdersRead), orderController.Get)
+		orderGroup.GET("/:orderNo/upstream", middleware.RequireTenantPermission(authz.PermissionOrdersRead), orderController.Upstream)
+		orderGroup.POST("/:orderNo/upstream/refresh", middleware.RequireTenantPermission(authz.PermissionOrdersRead), orderController.RefreshUpstream)
+		orderGroup.POST("/:orderNo/upstream/recover-issuance", middleware.RequireTenantPermission(authz.PermissionAfterSalesWrite), orderController.RecoverUpstreamIssuance)
 		orderGroup.POST("/:orderNo/cancel", middleware.RequireTenantPermission(authz.PermissionOrdersWrite), orderController.Cancel)
 	}
 
@@ -673,6 +678,9 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		paymentGroup.POST("/orders/:orderNo/cancel-partial-cash", middleware.RequireTenantPermission(authz.PermissionPaymentsWrite), middleware.RequireAnyTenantCapability("supplier"), paymentController.CancelPartialCash)
 		paymentGroup.POST("/refunds/cash", middleware.RequireTenantPermission(authz.PermissionRefundsWrite), middleware.RequireAnyTenantCapability("supplier"), refundController.CreateCash)
 		paymentGroup.POST("/refunds/mixed", middleware.RequireTenantPermission(authz.PermissionRefundsWrite), middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"), refundController.CreateMixed)
+		paymentGroup.POST("/refunds/upstream-check", middleware.RequireTenantPermission(authz.PermissionRefundsWrite), refundController.CheckUpstream)
+		paymentGroup.POST("/refunds/upstream-confirm", middleware.RequireTenantPermission(authz.PermissionRefundsWrite), refundController.ConfirmUpstream)
+		paymentGroup.POST("/refunds/upstream-recover", middleware.RequireTenantPermission(authz.PermissionRefundsWrite), refundController.RecoverUpstreamFunding)
 		paymentGroup.GET("/refunds/:id", middleware.RequireTenantPermission(authz.PermissionRefundsRead), middleware.RequireAnyTenantCapability("supplier", "distributor", "travel_agency"), refundController.GetGroup)
 		paymentGroup.POST("/refunds/digital", middleware.RequireTenantPermission(authz.PermissionRefundsWrite), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.CreateDigital)
 		paymentGroup.GET("/refund-tasks", middleware.RequireTenantPermission(authz.PermissionRefundsRead), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.ListDigitalTasks)

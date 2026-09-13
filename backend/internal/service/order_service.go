@@ -313,8 +313,15 @@ func (s *OrderService) createTx(tx *gorm.DB, req *model.Order, beforePersist fun
 		if fulfillment.ScenicAreaID == 0 {
 			return errors.New("fulfillment product has no scenic area")
 		}
-		if err := ensureLocalSupplyAvailableTx(tx, fulfillment); err != nil {
-			return err
+		supply := false
+		if req.Channel != "window" {
+			supply, err = resolveProductSupplyTx(tx, fulfillment, req.Environment, req.ContactName, req.ContactPhone, item.Quantity)
+			if err != nil {
+				return err
+			}
+		}
+		if supply && len(req.Items) != 1 {
+			return errors.New("智游宝供票请单独下单，不能与其他票种合并订单")
 		}
 		revision, err := ensureProductRevisionTx(tx, fulfillment)
 		if err != nil {
@@ -397,6 +404,11 @@ func (s *OrderService) createTx(tx *gorm.DB, req *model.Order, beforePersist fun
 		if deferredPackage {
 			for ticketIndex := range item.Tickets {
 				item.Tickets[ticketIndex].Status = "pending_booking"
+			}
+		}
+		if supply {
+			for ticketIndex := range item.Tickets {
+				item.Tickets[ticketIndex].Status = "pending_provider"
 			}
 		}
 		for ticketIndex := range item.Tickets {
@@ -1263,6 +1275,9 @@ func (s *OrderService) GetByOrderNo(orderNo string, tenantID uint) (*model.Order
 	}
 	// The helper works on a slice so list and detail use identical attribution rules.
 	orders := []model.Order{order}
+	if err := populateOrderUpstreamFlag(&orders[0]); err != nil {
+		return nil, err
+	}
 	if err := hydrateOrderSaleAttribution(model.DB, tenantID, orders); err != nil {
 		return nil, err
 	}

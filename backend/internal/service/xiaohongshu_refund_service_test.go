@@ -29,7 +29,7 @@ type xiaohongshuRefundFixture struct {
 
 // seedXiaohongshuRefundFixture creates the smallest production group-voucher
 // order that satisfies the refund adapter's sale-time evidence checks.
-func seedXiaohongshuRefundFixture(t *testing.T) xiaohongshuRefundFixture {
+func seedXiaohongshuRefundFixture(t *testing.T, configure ...func(*model.Order)) xiaohongshuRefundFixture {
 	t.Helper()
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
@@ -67,6 +67,9 @@ func seedXiaohongshuRefundFixture(t *testing.T) xiaohongshuRefundFixture {
 	}
 	externalNo := "XHS-REFUND-ORDER"
 	order := model.Order{TenantID: tenantID, Channel: "xiaohongshu", ChannelAccountID: account.ID, ExternalNo: &externalNo, Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	for _, f := range configure {
+		f(&order)
+	}
 	if err := (&OrderService{}).Create(&order); err != nil {
 		t.Fatal(err)
 	}

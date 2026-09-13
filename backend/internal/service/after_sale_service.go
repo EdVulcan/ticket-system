@@ -66,6 +66,15 @@ func (s *AfterSaleService) Create(req *model.AfterSaleRequest, ticketCodes []str
 		if req.Type == "exchange" {
 			return ErrNewExchangeAfterSaleDisabled
 		}
+		if req.Type == "void" {
+			var upstream int64
+			if err := tx.Model(&model.OrderItemSupplySnapshot{}).Where("sales_tenant_id = ? AND mode = 'upstream' AND order_id IN (SELECT id FROM orders WHERE tenant_id = ? AND order_no = ?)", req.TenantID, req.TenantID, req.OrderNo).Count(&upstream).Error; err != nil {
+				return err
+			}
+			if upstream > 0 {
+				return errors.New("智游宝供票不能直接作废，请办理退票")
+			}
+		}
 		// Xiaohongshu customer auto-refunds serialize on the original digital
 		// payment. Do not lock this order first: that would invert the shared
 		// payment -> ticket -> account sequence used by the refund helper.

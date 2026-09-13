@@ -216,16 +216,17 @@ func (c *DistributionController) RefundUsedFulfillmentTicket(ctx *gin.Context) {
 		return
 	}
 	var body struct {
-		IdempotencyKey string   `json:"idempotency_key" binding:"required"`
-		TicketCodes    []string `json:"ticket_codes" binding:"required"`
-		Reason         string   `json:"reason" binding:"required"`
+		IdempotencyKey        string   `json:"idempotency_key" binding:"required"`
+		TicketCodes           []string `json:"ticket_codes" binding:"required"`
+		Reason                string   `json:"reason" binding:"required"`
+		ConfirmUpstreamRefund bool     `json:"confirm_upstream_refund"`
 	}
 	if err := ctx.ShouldBindJSON(&body); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	refund, err := c.RefundService.CreateSupplierUsedRefund(service.RefundActor{
-		TenantID: ctx.GetUint("tenant_id"), UserID: ctx.GetUint("user_id"),
+		TenantID: ctx.GetUint("tenant_id"), UserID: ctx.GetUint("user_id"), ConfirmUpstreamRefund: body.ConfirmUpstreamRefund,
 	}, uint(id), body.IdempotencyKey, body.TicketCodes, body.Reason)
 	if err != nil {
 		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})

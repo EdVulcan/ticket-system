@@ -1,0 +1,347 @@
+package service
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"ticket-backend/internal/model"
+	"ticket-backend/internal/utils"
+	"ticket-backend/internal/zyb"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+// The sale snapshot also holds the small, restartable supplier workflow. Local
+// orders never enter this worker; payment callbacks and verification are unchanged.
+type UpstreamSupplyWorker struct {
+	NewClient func(model.UpstreamConnection) (*zyb.Client, error)
+	Decoder   interface {
+		Decode(context.Context, []byte) (string, error)
+	}
+}
+
+func newUpstreamClient(c model.UpstreamConnection) (*zyb.Client, error) {
+	key, err := utils.DecryptAES(c.PrivateKeyCiphertext)
+	if err != nil {
+		return nil, errors.New("供应商凭据不可读取")
+	}
+	return &zyb.Client{Config: zyb.Config{Endpoint: c.Endpoint, CorpCode: c.CorpCode, Username: c.Username, PrivateKey: key, Timeout: 15 * time.Second}}, nil
+}
+
+func (w *UpstreamSupplyWorker) ProcessTasks(ctx context.Context, now time.Time, limit int) (int, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	processed := 0
+	for processed < limit {
+		leaseNow := time.Now()
+		if now.After(leaseNow) {
+			leaseNow = now
+		}
+		var snapshot model.OrderItemSupplySnapshot
+		err := model.Write(func(tx *gorm.DB) error {
+			err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
+				Where("mode = 'upstream' AND issue_status IN ?", []string{"pending", "ready"}).
+				Where("(next_attempt_at IS NULL OR next_attempt_at <= ?) AND (locked_at IS NULL OR locked_at < ?)", now, leaseNow.Add(-2*time.Minute)).
+				Where("EXISTS (SELECT 1 FROM orders o WHERE o.id = order_item_supply_snapshots.order_id AND o.tenant_id = order_item_supply_snapshots.sales_tenant_id AND o.status IN ('paid','completed','partial_refunded') AND o.deleted_at IS NULL)").
+				Order("next_attempt_at ASC NULLS FIRST, id ASC").First(&snapshot).Error
+			if err != nil {
+				return err
+			}
+			snapshot.LockedAt = &leaseNow
+			return tx.Model(&snapshot).Update("locked_at", leaseNow).Error
+		})
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			break
+		}
+		if err != nil {
+			return processed, err
+		}
+		callCtx, cancel := context.WithTimeout(ctx, 50*time.Second)
+		err = w.processSnapshot(callCtx, &snapshot)
+		cancel()
+		next := leaseNow.Add(time.Minute)
+		message := ""
+		if err != nil {
+			message = truncateChannelError(err.Error())
+		}
+		if updateErr := model.Write(func(tx *gorm.DB) error {
+			return tx.Model(&model.OrderItemSupplySnapshot{}).Where("id = ? AND locked_at = ?", snapshot.ID, snapshot.LockedAt).
+				Updates(map[string]interface{}{"locked_at": nil, "next_attempt_at": next, "last_error": message}).Error
+		}); updateErr != nil {
+			return processed, updateErr
+		}
+		processed++
+		if ctx.Err() != nil {
+			return processed, ctx.Err()
+		}
+	}
+	return processed, nil
+}
+
+func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.OrderItemSupplySnapshot) error {
+	var order model.Order
+	if err := model.DB.Preload("Items.Tickets").Where("id = ? AND tenant_id = ?", s.OrderID, s.SalesTenantID).First(&order).Error; err != nil {
+		return err
+	}
+	if len(order.Items) != 1 {
+		return errors.New("上游订单必须对应一个票种")
+	}
+	item := &order.Items[0]
+	if s.Provider != "zhiyoubao" || s.OrderItemID != item.ID || s.ProductID != item.FulfillmentProductID || s.ProductRevisionID != item.ProductRevisionID || s.ScenicAreaID == 0 || s.ScenicAreaID != item.FulfillmentScenicAreaID || s.FulfillmentTenantID != item.FulfillmentTenantID || s.Environment != order.Environment {
+		return errors.New("上游销售快照归属不匹配")
+	}
+	var connection model.UpstreamConnection
+	if err := model.DB.Where("id = ? AND tenant_id = ? AND provider = ? AND environment = ?", s.ConnectionID, s.FulfillmentTenantID, s.Provider, s.Environment).First(&connection).Error; err != nil {
+		return err
+	}
+	// Disabling new sales must not strand already-paid orders or refunds.
+	factory := w.NewClient
+	if factory == nil {
+		factory = newUpstreamClient
+	}
+	client, err := factory(connection)
+	if err != nil {
+		return err
+	}
+	if s.IssueStatus == "ready" {
+		return w.syncStatus(ctx, client, s, &order)
+	}
+	if len(item.Tickets) != 1 || item.Tickets[0].Status != "pending_provider" || item.Tickets[0].PendingRefundID != 0 || s.CancelStatus != "" {
+		return errors.New("上游出票已暂停：票券正在退款或状态已变化")
+	}
+	var request zyb.SendCodeRequest
+	if s.RequestPayloadCiphertext != "" {
+		plain, e := utils.DecryptAES(s.RequestPayloadCiphertext)
+		if e != nil {
+			return e
+		}
+		if e = json.Unmarshal([]byte(plain), &request); e != nil {
+			return e
+		}
+	} else {
+		date := order.CreatedAt.In(time.FixedZone("CST", 8*3600)).Format("2006-01-02")
+		if item.UseDate != nil {
+			date = item.UseDate.Format("2006-01-02")
+		}
+		request = zyb.SendCodeRequest{ThirdPartyOrderCode: order.OrderNo, ChildOrderCode: fmt.Sprintf("%s_%d", order.OrderNo, item.ID), ContactName: order.ContactName, ContactMobile: order.ContactPhone, GoodsCode: s.ExternalProductCode, GoodsName: item.ProductName, VisitDate: date + " 00:00:00", PriceCents: moneyCents(item.Price), Quantity: item.Quantity, PayMethod: "vm"}
+		encoded, e := json.Marshal(request)
+		if e != nil {
+			return e
+		}
+		cipher, e := utils.EncryptAES(string(encoded))
+		if e != nil {
+			return e
+		}
+		if e = model.Write(func(tx *gorm.DB) error {
+			return tx.Model(s).Where("locked_at = ? AND request_payload_ciphertext = ''", s.LockedAt).Update("request_payload_ciphertext", cipher).Error
+		}); e != nil {
+			return e
+		}
+		s.RequestPayloadCiphertext = cipher
+	}
+	if request.ThirdPartyOrderCode != order.OrderNo || request.ChildOrderCode != fmt.Sprintf("%s_%d", order.OrderNo, item.ID) || request.GoodsCode != s.ExternalProductCode || request.Quantity != item.Quantity || request.PriceCents != moneyCents(item.Price) {
+		return errors.New("上游出票请求与销售快照不匹配")
+	}
+	if s.ProviderOrderCode == "" {
+		var providerOrder, providerSub string
+		if s.IssueAttemptedAt == nil {
+			// Persist intent before sending. An unknown response is recovered by
+			// querying the SAME third-party order; it is never a second SendCode.
+			attempted := time.Now()
+			err = model.Write(func(tx *gorm.DB) error {
+				result := tx.Model(s).Where("locked_at = ? AND issue_attempted_at IS NULL AND cancel_status = ''", s.LockedAt).Update("issue_attempted_at", attempted)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 {
+					return errors.New("上游出票任务已被接管")
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			s.IssueAttemptedAt = &attempted
+			result, _, e := client.SendCode(ctx, request)
+			if e != nil {
+				return e
+			}
+			if len(result.Order.Tickets) != 1 {
+				return errors.New("供应商出票票项数量不匹配")
+			}
+			t := result.Order.Tickets[0]
+			if e = validateUpstreamIssuedItem(t.GoodsCode, t.Quantity, t.Price, t.TotalPrice, t.VisitDate, request); e != nil {
+				return e
+			}
+			providerOrder, providerSub = result.Order.ProviderOrderCode, t.ProviderSubOrderCode
+		} else {
+			result, _, e := client.QueryOrder(ctx, order.OrderNo)
+			if e != nil {
+				return fmt.Errorf("出票已尝试，只查原订单恢复：%w", e)
+			}
+			if len(result.Tickets) != 1 {
+				return errors.New("供应商查单票项数量不匹配")
+			}
+			t := result.Tickets[0]
+			if e = validateUpstreamIssuedItem(t.GoodsCode, t.Quantity, t.Price, t.TotalPrice, t.VisitDate, request); e != nil {
+				return e
+			}
+			providerOrder, providerSub = result.ProviderOrderCode, t.ProviderSubOrderCode
+		}
+		if providerOrder == "" || providerSub == "" {
+			return errors.New("供应商订单号缺失")
+		}
+		// Save successful issuance BEFORE retrieving the image.
+		if err = model.Write(func(tx *gorm.DB) error {
+			r := tx.Model(s).Where("locked_at = ? AND provider_order_code = ''", s.LockedAt).Updates(map[string]interface{}{"provider_order_code": providerOrder, "provider_sub_order_code": providerSub})
+			if r.Error != nil {
+				return r.Error
+			}
+			if r.RowsAffected != 1 {
+				return errors.New("上游出票任务已被接管")
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		s.ProviderOrderCode, s.ProviderSubOrderCode = providerOrder, providerSub
+	}
+	artifact, _, err := client.TicketImage(ctx, order.OrderNo)
+	if err != nil {
+		return err
+	}
+	if artifact == nil || artifact.Kind != "image" {
+		return errors.New("供应商未返回二维码图片")
+	}
+	data, err := base64.StdEncoding.DecodeString(artifact.Value)
+	if err != nil {
+		return err
+	}
+	decoder := w.Decoder
+	if decoder == nil {
+		decoder = zyb.QRCodeDecoder{}
+	}
+	code, err := decoder.Decode(ctx, data)
+	if err != nil {
+		return err
+	}
+	if code == "" || strings.TrimSpace(code) != code || utf8.RuneCountInString(code) > 50 {
+		return errors.New("供应商票码为空或超过现有票码字段长度")
+	}
+	return w.finishIssue(s, code)
+}
+
+func validateUpstreamIssuedItem(goods, quantity, price, total, date string, request zyb.SendCodeRequest) error {
+	q, err := strconv.Atoi(quantity)
+	if err != nil || q != request.Quantity || goods != request.GoodsCode {
+		return errors.New("供应商出票商品或数量不匹配")
+	}
+	if price != fmt.Sprintf("%d.%02d", request.PriceCents/100, request.PriceCents%100) || total != fmt.Sprintf("%d.%02d", request.PriceCents*int64(q)/100, request.PriceCents*int64(q)%100) {
+		return errors.New("供应商出票金额不匹配")
+	}
+	if len(date) < 10 || len(request.VisitDate) < 10 || date[:10] != request.VisitDate[:10] {
+		return errors.New("供应商出票日期不匹配")
+	}
+	return nil
+}
+
+func (w *UpstreamSupplyWorker) finishIssue(s *model.OrderItemSupplySnapshot, code string) error {
+	return model.Write(func(tx *gorm.DB) error {
+		var order model.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", s.OrderID, s.SalesTenantID).First(&order).Error; err != nil {
+			return err
+		}
+		if order.Status != "paid" && order.Status != "completed" && order.Status != "partial_refunded" {
+			return errors.New("订单已取消或退款，停止出票")
+		}
+		var ticket model.Ticket
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_id = ? AND order_item_id = ? AND tenant_id = ? AND fulfillment_tenant_id = ?", s.OrderID, s.OrderItemID, s.SalesTenantID, s.FulfillmentTenantID).First(&ticket).Error; err != nil {
+			return err
+		}
+		if ticket.Status != "pending_provider" || ticket.PendingRefundID != 0 || ticket.CheckInCount != 0 {
+			return errors.New("票券已退款或被占用，停止出票")
+		}
+		var current model.OrderItemSupplySnapshot
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND locked_at = ? AND issue_status = 'pending' AND cancel_status = ''", s.ID, s.LockedAt).First(&current).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&ticket).Updates(map[string]interface{}{"ticket_code": code, "status": "unused"}).Error; err != nil {
+			return err
+		}
+		result := tx.Model(&model.TicketEntitlement{}).Where("ticket_id = ? AND sales_tenant_id = ? AND supplier_tenant_id = ? AND scenic_area_id = ?", ticket.ID, s.SalesTenantID, s.FulfillmentTenantID, s.ScenicAreaID).Updates(map[string]interface{}{"ticket_code": code, "status": "issued"})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("票券履约记录缺失")
+		}
+		return tx.Model(&current).Updates(map[string]interface{}{"issue_status": "ready", "last_error": ""}).Error
+	})
+}
+
+func (w *UpstreamSupplyWorker) syncStatus(ctx context.Context, client *zyb.Client, s *model.OrderItemSupplySnapshot, order *model.Order) error {
+	result, err := client.QueryCheckStatus(ctx, order.OrderNo)
+	if err != nil {
+		return err
+	}
+	if len(result.SubOrders) == 0 {
+		return errors.New("供应商状态为空")
+	}
+	status := ""
+	used := false
+	for _, row := range result.SubOrders {
+		if row.OrderCode != s.ProviderSubOrderCode && !strings.HasPrefix(row.OrderCode, s.ProviderSubOrderCode+"_") {
+			return errors.New("供应商核销状态订单不匹配")
+		}
+		if status == "" {
+			status = row.CheckStatus
+		}
+		if row.CheckStatus == "checked" || row.CheckStatus == "checking" {
+			used = true
+			status = row.CheckStatus
+		}
+	}
+	updates := map[string]interface{}{"provider_status": status, "last_synced_at": time.Now()}
+	if used {
+		records, e := client.QueryCheckRecords(ctx, fmt.Sprintf("%s_%d", order.OrderNo, s.OrderItemID))
+		if e == nil {
+			first := s.ProviderFirstUsedAt
+			for _, row := range records.SubOrders {
+				if row.OrderCode != s.ProviderSubOrderCode && !strings.HasPrefix(row.OrderCode, s.ProviderSubOrderCode+"_") {
+					return errors.New("供应商核销记录订单不匹配")
+				}
+				for _, record := range row.CheckRecords {
+					if count, err := strconv.Atoi(record.CheckNum); err != nil || count <= 0 {
+						continue
+					}
+					at, e := time.ParseInLocation("2006-01-02 15:04:05", record.CheckTime, time.FixedZone("CST", 8*3600))
+					if e == nil && !at.After(time.Now()) && (first == nil || at.Before(*first)) {
+						v := at
+						first = &v
+					}
+				}
+			}
+			if first != nil {
+				updates["provider_first_used_at"] = gorm.Expr("LEAST(provider_first_used_at, ?)", first)
+			}
+		}
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		q := tx.Model(s)
+		if s.LockedAt == nil {
+			q = q.Where("locked_at IS NULL")
+		} else {
+			q = q.Where("locked_at = ?", s.LockedAt)
+		}
+		return q.Updates(updates).Error
+	})
+}

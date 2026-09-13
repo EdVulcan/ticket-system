@@ -631,6 +631,9 @@ func (s *ChannelService) GetOrder(tenantID, accountID uint, orderNo string) (*Ch
 		return nil, err
 	}
 	detail := &ChannelOrderDetail{Order: order}
+	if err := populateOrderUpstreamFlag(&detail.Order); err != nil {
+		return nil, err
+	}
 	if err := model.DB.Where("tenant_id = ? AND order_no = ?", tenantID, order.OrderNo).Order("created_at").Find(&detail.Payments).Error; err != nil {
 		return nil, err
 	}

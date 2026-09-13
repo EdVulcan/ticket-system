@@ -77,5 +77,6 @@ type Refund struct {
 	ProviderRefundID         string  `gorm:"size:100" json:"provider_refund_id,omitempty"`
 	AuthorizedUsedRefund     bool    `gorm:"not null;default:false" json:"-"`
 	AuthorizedPolicyOverride bool    `gorm:"not null;default:false" json:"-"`
+	AuthorizedUpstreamRefund bool    `gorm:"not null;default:false" json:"-"`
 	AuthorizedBy             uint    `gorm:"index" json:"-"`
 }

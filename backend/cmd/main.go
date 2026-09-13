@@ -103,6 +103,7 @@ func main() {
 	holdContext, stopHoldWorker := context.WithCancel(context.Background())
 	defer stopHoldWorker()
 	go runPOSHoldExpiryWorker(holdContext)
+	go runUpstreamSupplyWorker(holdContext)
 
 	// 4. Init Router
 	gin.SetMode(config.GlobalConfig.Server.Mode)
@@ -400,6 +401,22 @@ func runPOSHoldExpiryWorker(ctx context.Context) {
 			return
 		case now := <-ticker.C:
 			process(now)
+		}
+	}
+}
+
+func runUpstreamSupplyWorker(ctx context.Context) {
+	worker := &service.UpstreamSupplyWorker{}
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		if _, err := worker.ProcessTasks(ctx, time.Now(), 20); err != nil && ctx.Err() == nil {
+			logger.Log.Error(fmt.Sprintf("upstream supply processing failed: %v", err))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }

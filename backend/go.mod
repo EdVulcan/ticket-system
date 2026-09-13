@@ -8,11 +8,13 @@ require (
 	github.com/gin-gonic/gin v1.11.0
 	github.com/go-pay/gopay v1.5.115
 	github.com/golang-jwt/jwt/v5 v5.3.0
+	github.com/makiuchi-d/gozxing v0.1.1
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/natefinch/lumberjack v2.0.0+incompatible
 	github.com/spf13/viper v1.21.0
 	go.uber.org/zap v1.27.1
 	golang.org/x/crypto v0.50.0
+	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1
 )

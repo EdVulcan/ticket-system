@@ -65,6 +65,7 @@
             <el-form-item label="退款方式"><el-select v-model="form.payment_method" class="w-full"><el-option label="按原支付方式自动分摊" value="auto" /><el-option v-if="isSupplier" label="现金" value="cash" /><el-option label="微信" value="wechat" /><el-option label="支付宝" value="alipay" /></el-select></el-form-item>
           </template>
           <template v-if="form.type === 'reschedule'">
+            <p class="col-span-2 text-sm text-gray-500">本操作只修改本系统日期；如为上游供票订单，请同时在供应商系统人工改签。</p>
             <el-form-item label="目标日期"><el-date-picker v-model="form.target_date" value-format="YYYY-MM-DD" class="w-full" /></el-form-item>
             <el-form-item label="目标时段"><el-input v-model="form.target_slot" placeholder="不填则保留原时段" /></el-form-item>
           </template>
