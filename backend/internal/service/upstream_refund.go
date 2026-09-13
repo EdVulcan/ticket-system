@@ -155,7 +155,7 @@ func queryUpstreamUsage(ctx context.Context, client UpstreamRefundClient, orderN
 	}
 	used := false
 	for _, r := range result.SubOrders {
-		if snapshot.ProviderSubOrderCode == "" || (r.OrderCode != snapshot.ProviderSubOrderCode && !strings.HasPrefix(r.OrderCode, snapshot.ProviderSubOrderCode+"_")) {
+		if !upstreamCheckChildMatches(r.OrderCode, snapshot, orderNo) {
 			return false, false
 		}
 		checked, e := strconv.Atoi(r.AlreadyCheckNum)
@@ -290,17 +290,24 @@ func (s *RefundService) processUpstreamRefundCancellation(ctx context.Context, r
 		if err := model.DB.Where("id = ? AND order_id = ?", snapshot.OrderItemID, order.ID).First(&item).Error; err != nil {
 			return err
 		}
-		if query.Tickets[0].Quantity != strconv.Itoa(item.Quantity) || (snapshot.ProviderSubOrderCode != "" && query.Tickets[0].ProviderSubOrderCode != snapshot.ProviderSubOrderCode) {
+		if !upstreamQueryTicketMatches(&snapshot, &item, order.OrderNo, query.Tickets[0]) {
 			return ErrUpstreamRefundUnknown
 		}
 		if snapshot.ProviderOrderCode == "" || snapshot.ProviderSubOrderCode == "" {
-			if query.ProviderOrderCode == "" || query.Tickets[0].ProviderSubOrderCode == "" {
+			if query.ProviderOrderCode == "" {
 				return ErrUpstreamRefundUnknown
 			}
-			if err := updateUpstreamSnapshot(snapshot.ID, map[string]interface{}{"provider_order_code": query.ProviderOrderCode, "provider_sub_order_code": query.Tickets[0].ProviderSubOrderCode}); err != nil {
+			identityUpdates := map[string]interface{}{"provider_order_code": query.ProviderOrderCode}
+			if query.Tickets[0].ProviderSubOrderCode != "" {
+				identityUpdates["provider_sub_order_code"] = query.Tickets[0].ProviderSubOrderCode
+			}
+			if err := updateUpstreamSnapshot(snapshot.ID, identityUpdates); err != nil {
 				return err
 			}
-			snapshot.ProviderOrderCode, snapshot.ProviderSubOrderCode = query.ProviderOrderCode, query.Tickets[0].ProviderSubOrderCode
+			snapshot.ProviderOrderCode = query.ProviderOrderCode
+			if query.Tickets[0].ProviderSubOrderCode != "" {
+				snapshot.ProviderSubOrderCode = query.Tickets[0].ProviderSubOrderCode
+			}
 		}
 		ticket := query.Tickets[0]
 		quantity, qErr := strconv.Atoi(ticket.Quantity)
@@ -415,10 +422,17 @@ func (s *RefundService) preflightUpstreamRefund(ctx context.Context, tenantID ui
 		}
 		query, _, err := client.QueryOrder(ctx, order.OrderNo)
 		if err != nil {
-			return ErrUpstreamRefundUnknown
+			return fmt.Errorf("%w: 供应商查单失败：%v", ErrUpstreamRefundUnknown, err)
 		}
 		if query == nil || len(query.Tickets) != 1 || query.Tickets[0].GoodsCode != snapshot.ExternalProductCode || (snapshot.ProviderOrderCode != "" && query.ProviderOrderCode != snapshot.ProviderOrderCode) {
-			return ErrUpstreamRefundUnknown
+			return fmt.Errorf("%w: 供应商主订单或商品关联不匹配", ErrUpstreamRefundUnknown)
+		}
+		var item model.OrderItem
+		if err := model.DB.Where("id = ? AND order_id = ?", snapshot.OrderItemID, order.ID).First(&item).Error; err != nil {
+			return err
+		}
+		if !upstreamQueryTicketMatches(&snapshot, &item, order.OrderNo, query.Tickets[0]) {
+			return fmt.Errorf("%w: 供应商子单或数量关联不匹配", ErrUpstreamRefundUnknown)
 		}
 		used, known := queryUpstreamUsage(ctx, client, order.OrderNo, &snapshot, query)
 		if !known {

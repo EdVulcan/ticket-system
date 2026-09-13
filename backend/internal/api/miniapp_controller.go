@@ -204,6 +204,12 @@ func miniappRefundApplicationError(err error) string {
 // Keep the HTTP boundary on a customer-safe vocabulary. The service retains
 // detailed evidence only in its internal errors and audit records.
 func serviceMiniappRefundMessage(err error) string {
+	if errors.Is(err, service.ErrUpstreamRefundUnknown) {
+		return "暂时无法确认门票状态，退款尚未提交，请稍后重试"
+	}
+	if errors.Is(err, service.ErrUpstreamRefundUsed) {
+		return "门票已在合作景区使用，暂不支持自助退票"
+	}
 	message := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(message, "does not allow refunds"):

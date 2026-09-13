@@ -98,15 +98,29 @@ func seedXiaohongshuRefundFixture(t *testing.T, configure ...func(*model.Order))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := model.DB.Create(&model.XiaohongshuVoucherLink{TenantID: tenantID, ChannelAccountID: account.ID, XiaohongshuOrderLinkID: link.ID, TicketID: ticket.ID, VoucherCodeHash: hashMiniappValue(voucherCode), VoucherCodeCiphertext: voucherCiphertext, Status: 1}).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := model.DB.Model(&link).Update("voucher_issuance_status", "ready").Error; err != nil {
-		t.Fatal(err)
+	if ticket.CodeMode == "order" && order.Items[0].Quantity > 1 {
+		var vouchers []xiaohongshu.VoucherInfo
+		for i := 0; i < order.Items[0].Quantity; i++ {
+			code := voucherCode
+			if i > 0 {
+				code = fmt.Sprintf("%s-%d", voucherCode, i+1)
+			}
+			vouchers = append(vouchers, xiaohongshu.VoucherInfo{Code: code, Status: 1, PayAmount: amountCents / int64(order.Items[0].Quantity)})
+		}
+		if err := (&XiaohongshuOrderService{}).applyXiaohongshuVoucherIssuanceTx(model.DB, &link, &order, vouchers); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if err := model.DB.Create(&model.XiaohongshuVoucherLink{TenantID: tenantID, ChannelAccountID: account.ID, XiaohongshuOrderLinkID: link.ID, TicketID: ticket.ID, VoucherCodeHash: hashMiniappValue(voucherCode), VoucherCodeCiphertext: voucherCiphertext, Status: 1}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := model.DB.Model(&link).Update("voucher_issuance_status", "ready").Error; err != nil {
+			t.Fatal(err)
+		}
 	}
 	snapshotRequest := xiaohongshu.OrderUpsertRequest{
 		ExternalOrderID: externalNo, OpenID: openID, Path: "/pages/order", CreatedAt: now.Unix(),
-		Products: []xiaohongshu.OrderProduct{{ExternalProductID: mapping.ExternalCode, ExternalSKUID: "XHS-REFUND-SKU", Count: 1, SalePrice: amountCents, RealPrice: amountCents}},
+		Products: []xiaohongshu.OrderProduct{{ExternalProductID: mapping.ExternalCode, ExternalSKUID: "XHS-REFUND-SKU", Count: order.Items[0].Quantity, SalePrice: amountCents, RealPrice: amountCents}},
 		Price:    xiaohongshu.OrderPrice{OrderPrice: amountCents},
 	}
 	snapshot, err := encryptXiaohongshuOrderOperationPayload(snapshotRequest, xiaohongshu.ProductTypeGroupVoucher)

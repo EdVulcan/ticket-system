@@ -401,7 +401,7 @@ func (c Client) QueryOrder(ctx context.Context, orderCode string) (*QueryOrderRe
 	}
 	r := &QueryOrderResult{TransactionName: text(meta.TransactionName), Code: text(meta.Code), Description: text(meta.Description), ProviderOrderCode: text(o.ProviderOrderCode), AssistCheckNo: text(o.AssistCheckNo), ContactName: text(o.ContactName), ContactMobile: text(o.ContactMobile), OrderPrice: text(o.OrderPrice), PayMethod: text(o.PayMethod), Source: text(o.Source)}
 	for _, t := range o.TicketOrders.Tickets {
-		if text(t.ProviderSubOrderCode) == "" || text(t.GoodsCode) == "" || text(t.Quantity) == "" {
+		if (text(t.ProviderSubOrderCode) == "" && text(t.ScenicThirdCode) == "") || text(t.GoodsCode) == "" || text(t.Quantity) == "" {
 			return nil, raw, errors.New("智游宝订单查询票项身份不完整")
 		}
 		r.Tickets = append(r.Tickets, QueryOrderTicket{ProviderSubOrderCode: text(t.ProviderSubOrderCode), GoodsCode: text(t.GoodsCode), GoodsName: text(t.GoodsName), Quantity: text(t.Quantity), ReturnedQuantity: text(t.ReturnedQuantity), CheckedQuantity: text(t.CheckedQuantity), VisitDate: text(t.VisitDate), Price: text(t.Price), TotalPrice: text(t.TotalPrice), ValidFrom: text(t.ValidFrom), ValidTo: text(t.ValidTo), ScenicThirdCode: text(t.ScenicThirdCode), SeatInfo: text(t.SeatInfo)})
@@ -410,6 +410,13 @@ func (c Client) QueryOrder(ctx context.Context, orderCode string) (*QueryOrderRe
 		return nil, raw, errors.New("智游宝订单查询缺少票项")
 	}
 	return r, raw, nil
+}
+
+func ParseAmountCents(value string) (int64, error) {
+	if strings.TrimSpace(value) == "" {
+		return 0, errors.New("金额缺失")
+	}
+	return amountCents(value, 0)
 }
 
 type Artifact struct {

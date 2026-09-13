@@ -31,6 +31,7 @@ Page({
     this.orderNo = options.order_no || '';
     this.setData({ orderNo: this.orderNo, storeName: app.globalData.storeName || '' });
     this.pollCount = 0;
+    this.issuancePollCount = 0;
     this.refundPollCount = 0;
     this.paymentInFlight = false;
     this.awaitingPaymentConfirmation = false;
@@ -44,6 +45,7 @@ Page({
 
   onShow() {
     this.isPageVisible = true;
+    this.issuancePollCount = 0;
     this.refundPollCount = 0;
     if (this.orderNo && !this.hasActiveOrderRequest) this.loadOrder();
   },
@@ -55,6 +57,7 @@ Page({
     this.qrRenderVersion = (this.qrRenderVersion || 0) + 1;
   },
   onPullDownRefresh() {
+    this.issuancePollCount = 0;
     this.refundPollCount = 0;
     return Promise.resolve(this.loadOrder()).finally(() => xhs.stopPullDownRefresh());
   },
@@ -125,7 +128,7 @@ Page({
           used: Boolean(used) };
       });
       const packageAwaitingBooking = order.isPackage && order.package_entitlements.some(item => item.status === 'pending_booking');
-      const issuanceStatus = order.voucher_issuance_status || '';
+      const issuanceStatus = order.ticket_issuance_status || order.voucher_issuance_status || '';
       const issuancePending = coreStatus === 'paid' && !order.refund_pending && !packageAwaitingBooking && ticketCodes.length === 0 && (issuanceStatus === 'pending' || issuanceStatus === '');
       const issuanceManualReview = coreStatus === 'paid' && !order.refund_pending && !packageAwaitingBooking && issuanceStatus === 'manual_review';
 	  const view = this.statusView(coreStatus, order.product_kind, Boolean(order.pay_token), issuancePending, issuanceManualReview);
@@ -165,7 +168,10 @@ Page({
 		  });
 		}
 	  });
-	  if (order.refund_pending && Number(this.refundPollCount || 0) < 48) {
+	  if (issuancePending && Number(this.issuancePollCount || 0) < 120) {
+        this.issuancePollCount = Number(this.issuancePollCount || 0) + 1;
+        this.schedulePoll(2500);
+      } else if (order.refund_pending && Number(this.refundPollCount || 0) < 48) {
         this.refundPollCount = Number(this.refundPollCount || 0) + 1;
         this.schedulePoll(2500);
       } else if (coreStatus === 'unpaid' && this.pollCount < 15) {
@@ -184,6 +190,10 @@ Page({
         paying: this.paymentInFlight,
         error: error.message || '订单查询失败，请稍后重试'
       });
+      if (this.data.issuancePending && Number(this.issuancePollCount || 0) < 120) {
+        this.issuancePollCount = Number(this.issuancePollCount || 0) + 1;
+        this.schedulePoll(3000);
+      }
     });
   },
 
@@ -231,6 +241,7 @@ Page({
 
   retry() {
     this.pollCount = 0;
+    this.issuancePollCount = 0;
     this.refundPollCount = 0;
     this.paymentFeedback = '';
     this.setData({ loading: true, error: '' });
@@ -328,7 +339,7 @@ Page({
     if (status === 'unpaid') return { label: '待支付', title: '订单待支付', detail: '完成支付后出票，无需重复下单' };
     if (status === 'paid' && issuanceManualReview) return { label: '已支付', title: '支付成功，出票待处理', detail: '票码正在人工核查，请联系商家确认' };
     if (status === 'paid' && issuancePending) {
-	  return { label: '已支付', title: '支付成功，正在出票', detail: '正在生成可核验票码，请稍后重新查询' };
+	  return { label: '正在出票', title: '支付成功，正在出票', detail: '正在生成电子票，出票后会自动显示二维码，无需重复下单' };
 	}
     if (status === 'paid') return { label: '已支付', title: '支付成功', detail: isPackage ? '请在下方查看或完成每份套餐的入住预约' : '门票已经出票，请妥善保管票码' };
     if (status === 'completed') return { label: '已使用', title: '订单已使用', detail: '具体使用记录以实际核销结果为准' };

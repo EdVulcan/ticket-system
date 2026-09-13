@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 118
+const CurrentPostgresSchemaVersion = 119
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -28,6 +28,14 @@ func runPostgresMigrations(db *gorm.DB) error {
 		)
 	}
 	hadSettlementSource := db.Migrator().HasColumn(&SettlementLine{}, "Source")
+	if previousSchemaVersion > 0 && previousSchemaVersion < 119 && db.Migrator().HasTable(&XiaohongshuVoucherLink{}) {
+		if err := db.Exec("DROP INDEX IF EXISTS idx_xiaohongshu_voucher_links_ticket_id").Error; err != nil {
+			return err
+		}
+		if err := db.Exec("DROP INDEX IF EXISTS idx_xiaohongshu_voucher_verifications_ticket_id").Error; err != nil {
+			return err
+		}
+	}
 	hadTravelRelationshipStatus := db.Migrator().HasColumn(&DistributorRelationship{}, "TravelStatus")
 	if previousSchemaVersion > 0 && previousSchemaVersion < 76 && db.Migrator().HasIndex(&ChannelRequest{}, "idx_channel_request") {
 		if err := db.Migrator().DropIndex(&ChannelRequest{}, "idx_channel_request"); err != nil {
@@ -701,7 +709,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "upstream supply activation and issuance runtime snapshots",
+		Name:      "xiaohongshu grouped vouchers and issuance readiness",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -1487,7 +1495,7 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 					OR EXISTS (
 						SELECT 1 FROM tickets ticket
 						WHERE ticket.order_id = NEW.order_id AND ticket.tenant_id = NEW.tenant_id AND ticket.deleted_at IS NULL
-						  AND NOT EXISTS (SELECT 1 FROM xiaohongshu_voucher_links voucher WHERE voucher.xiaohongshu_order_link_id = NEW.id AND voucher.ticket_id = ticket.id)
+						  AND (SELECT COUNT(*) FROM xiaohongshu_voucher_links voucher WHERE voucher.xiaohongshu_order_link_id = NEW.id AND voucher.ticket_id = ticket.id AND voucher.deleted_at IS NULL) <> CASE WHEN ticket.code_mode='order' THEN (SELECT quantity FROM order_items WHERE id=ticket.order_item_id) ELSE 1 END
 					) OR EXISTS (
 						SELECT 1 FROM xiaohongshu_voucher_links voucher
 						WHERE voucher.xiaohongshu_order_link_id = NEW.id
@@ -1557,12 +1565,24 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 				  AND (NEW.type <> 'refund_status_sync' OR (e.status = 'refunded' AND t.status = 'refunded'))
 			   ) THEN RAISE EXCEPTION 'xiaohongshu booking operation ownership mismatch'; END IF;
 		WHEN 'xiaohongshu_voucher_links' THEN
+			IF TG_OP='INSERT' THEN
+				PERFORM 1 FROM tickets WHERE id=NEW.ticket_id FOR UPDATE;
+				IF (SELECT COUNT(*) FROM xiaohongshu_voucher_links WHERE ticket_id=NEW.ticket_id AND deleted_at IS NULL) >=
+				   (SELECT CASE WHEN t.code_mode='order' THEN i.quantity ELSE 1 END FROM tickets t JOIN order_items i ON i.id=t.order_item_id WHERE t.id=NEW.ticket_id) THEN
+					RAISE EXCEPTION 'voucher count exceeds ticket units';
+				END IF;
+				IF EXISTS(SELECT 1 FROM tickets t JOIN order_items i ON i.id=t.order_item_id WHERE t.id=NEW.ticket_id AND t.code_mode='order' AND i.quantity>1) AND NEW.pay_amount_cents IS NULL THEN
+					RAISE EXCEPTION 'group voucher amount is required';
+				END IF;
+			END IF;
+			IF NEW.pay_amount_cents < 0 THEN RAISE EXCEPTION 'voucher amount is invalid'; END IF;
 			IF NEW.tenant_id = 0 OR COALESCE(BTRIM(NEW.voucher_code_hash), '') = '' OR COALESCE(BTRIM(NEW.voucher_code_ciphertext), '') = ''
 			   OR (TG_OP = 'UPDATE' AND (NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
 				OR NEW.channel_account_id IS DISTINCT FROM OLD.channel_account_id
 				OR NEW.xiaohongshu_order_link_id IS DISTINCT FROM OLD.xiaohongshu_order_link_id
 				OR NEW.ticket_id IS DISTINCT FROM OLD.ticket_id
 				OR NEW.voucher_code_hash IS DISTINCT FROM OLD.voucher_code_hash
+				OR NEW.pay_amount_cents IS DISTINCT FROM OLD.pay_amount_cents
 				OR NEW.voucher_code_ciphertext IS DISTINCT FROM OLD.voucher_code_ciphertext))
 			   OR NOT EXISTS (
 				SELECT 1 FROM xiaohongshu_order_links l JOIN tickets t ON t.id = NEW.ticket_id

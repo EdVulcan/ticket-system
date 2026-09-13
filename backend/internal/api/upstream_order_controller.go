@@ -16,8 +16,12 @@ func (c *RefundController) CheckUpstream(ctx *gin.Context) {
 		return
 	}
 	err := c.Service.CheckUpstreamRefund(ctx.Request.Context(), ctx.GetUint("tenant_id"), input.OrderNo)
-	if errors.Is(err, service.ErrUpstreamRefundUsed) || errors.Is(err, service.ErrUpstreamRefundUnknown) {
-		ctx.JSON(http.StatusOK, gin.H{"requires_confirmation": true, "message": "供应商已使用、不可退或暂时无法确认状态。继续将按管理员特殊退款处理，不代表旧系统票码已经失效。"})
+	if errors.Is(err, service.ErrUpstreamRefundUsed) {
+		ctx.JSON(http.StatusOK, gin.H{"requires_confirmation": true, "reason_code": "upstream_used", "message": "供应商确认已使用。继续将按管理员特殊退款处理，不代表旧系统票码已经失效。"})
+		return
+	}
+	if errors.Is(err, service.ErrUpstreamRefundUnknown) {
+		ctx.JSON(http.StatusOK, gin.H{"requires_confirmation": true, "reason_code": "upstream_check_unavailable", "message": "供应商状态暂未核实（不代表已使用）。建议稍后重查；继续将按管理员特殊退款处理，不保证旧系统票码失效。", "detail": err.Error()})
 		return
 	}
 	if err != nil {

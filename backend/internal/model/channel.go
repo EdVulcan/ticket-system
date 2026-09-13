@@ -110,7 +110,8 @@ type XiaohongshuVoucherLink struct {
 	TenantID               uint   `gorm:"index;not null" json:"tenant_id"`
 	ChannelAccountID       uint   `gorm:"index;not null;uniqueIndex:idx_xhs_voucher_hash,priority:1" json:"channel_account_id"`
 	XiaohongshuOrderLinkID uint   `gorm:"index;not null" json:"xiaohongshu_order_link_id"`
-	TicketID               uint   `gorm:"uniqueIndex;not null" json:"ticket_id"`
+	TicketID               uint   `gorm:"index;not null" json:"ticket_id"`
+	PayAmountCents         *int64 `json:"-"`
 	VoucherCodeHash        string `gorm:"size:64;not null;uniqueIndex:idx_xhs_voucher_hash,priority:2" json:"-"`
 	VoucherCodeCiphertext  string `gorm:"type:text;not null" json:"-"`
 	Status                 int    `gorm:"not null;default:1" json:"status"`
@@ -126,7 +127,7 @@ type XiaohongshuVoucherVerification struct {
 	TenantID             uint `gorm:"index;not null" json:"tenant_id"`
 	ChannelAccountID     uint `gorm:"index;not null" json:"channel_account_id"`
 	VoucherLinkID        uint `gorm:"uniqueIndex;not null" json:"voucher_link_id"`
-	TicketID             uint `gorm:"index;not null" json:"ticket_id"`
+	TicketID             uint `gorm:"uniqueIndex;not null" json:"ticket_id"`
 	DeviceVerificationID uint `gorm:"uniqueIndex;not null" json:"device_verification_id"`
 	DeviceID             uint `gorm:"index;not null" json:"device_id"`
 	CheckPointID         uint `gorm:"index;not null" json:"check_point_id"`

@@ -89,12 +89,18 @@ func prepareXiaohongshuRefundTx(tx *gorm.DB, order *model.Order, payment *model.
 	}
 	// Iterate sale-time tickets, not map order, to freeze stable voucher allocation.
 	for _, ticket := range item.Tickets {
-		var voucher model.XiaohongshuVoucherLink
-		if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND xiaohongshu_order_link_id = ? AND ticket_id = ?", order.TenantID, account.ID, link.ID, ticket.ID).First(&voucher).Error; err != nil {
+		group, err := xiaohongshuTicketVouchers(tx, &ticket)
+		if err != nil {
 			return err
 		}
-		if voucher.Status != 1 {
-			return errors.New("小红书平台券状态不允许退款")
+		voucher := group[0]
+		if voucher.ChannelAccountID != account.ID || voucher.XiaohongshuOrderLinkID != link.ID {
+			return errors.New("小红书券组订单归属不匹配")
+		}
+		for _, member := range group {
+			if member.Status != 1 || member.VerifyID != voucher.VerifyID {
+				return errors.New("小红书平台券组状态不允许退款")
+			}
 		}
 		if ticket.CheckInCount > 0 {
 			// Preserve the original external consume and local admission evidence.
@@ -118,12 +124,12 @@ func prepareXiaohongshuRefundTx(tx *gorm.DB, order *model.Order, payment *model.
 				return errors.New("小红书核销结果待确认，不能退款")
 			}
 		}
-		code, err := utils.DecryptAES(voucher.VoucherCodeCiphertext)
-		if err != nil || code == "" || hashMiniappValue(code) != voucher.VoucherCodeHash {
-			return errors.New("小红书凭证关联无效")
-		}
 		value := ticketSaleCents(&item, &ticket)
-		request.Vouchers = append(request.Vouchers, xiaohongshu.AfterSalesVoucherDetail{VoucherCode: code, RefundPrice: value})
+		details, err := xiaohongshuGroupRefundDetails(group, value)
+		if err != nil {
+			return err
+		}
+		request.Vouchers = append(request.Vouchers, details...)
 	}
 	if err := xiaohongshu.ValidateAfterSalesAdd(request); err != nil {
 		return err

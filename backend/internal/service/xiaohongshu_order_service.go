@@ -375,6 +375,9 @@ func (s XiaohongshuOrderService) orderResult(link *model.XiaohongshuOrderLink, o
 			result.Tickets = append(result.Tickets, MiniappTicket{Code: ticket.TicketCode, Status: ticket.Status, CheckInCount: ticket.CheckInCount})
 		}
 	}
+	if err := populateMiniappTicketIssuance(result, order); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -459,8 +462,8 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 			// order and reservation protocol is enabled for this channel.
 			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "酒店产品暂未开放小红书交易，请先完成住宿订单协议联调")
 		}
-		if product.CodeMode == "order" && input.Quantity > 1 {
-			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "该票种为整单一码，小红书暂只支持每单购买一份，请分次下单")
+		if product.CodeMode == "order" && ((product.ProductKind != "ticket" && input.Quantity > 1) || input.Quantity > maxXiaohongshuOrderCodeQuantity) {
+			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "普通整单码最多购买十份，预约类每单一份")
 		}
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("channel_product_mapping_id = ? AND tenant_id = ? AND channel_account_id = ? AND sync_status IN ? AND audit_status = ?", mapping.ID, customer.TenantID, account.ID, []string{"submitted", "synced"}, "approved").First(&config).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -469,6 +472,9 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 			return err
 		}
 		var hotelPackage model.ScenicHotelPackage
+		if product.CodeMode == "order" && input.Quantity > 1 && config.ProductType != xiaohongshu.ProductTypeGroupVoucher {
+			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "预约类整单码每单限一份")
+		}
 		hasHotelPackage := false
 		if err := tx.Where("tenant_id = ? AND product_id = ?", customer.TenantID, product.ID).First(&hotelPackage).Error; err == nil {
 			hasHotelPackage = true

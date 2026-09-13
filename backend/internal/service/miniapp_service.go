@@ -25,8 +25,9 @@ var (
 )
 
 type MiniappService struct {
-	NewXiaohongshuClient func(appID, secret, environment string) *xiaohongshu.Client
-	Now                  func() time.Time
+	NewXiaohongshuClient    func(appID, secret, environment string) *xiaohongshu.Client
+	NewUpstreamRefundClient UpstreamRefundClientFactory
+	Now                     func() time.Time
 }
 
 type MiniappLoginResult struct {
@@ -138,6 +139,7 @@ type MiniappOrderResult struct {
 	CoreOrderStatus          string                      `json:"core_order_status"`
 	PlatformPaymentState     string                      `json:"platform_payment_state"`
 	VoucherIssuanceStatus    string                      `json:"voucher_issuance_status"`
+	TicketIssuanceStatus     string                      `json:"ticket_issuance_status"`
 	RefundPending            bool                        `json:"refund_pending"`
 	CanApplyRefund           bool                        `json:"can_apply_refund"`
 	RefundApplicationStatus  string                      `json:"refund_application_status"`
@@ -385,6 +387,9 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 		maxQuantity := 100
 		if row.CodeMode == "order" {
 			maxQuantity = 1
+			if kind == "ticket" && row.ProductType == xiaohongshu.ProductTypeGroupVoucher {
+				maxQuantity = maxXiaohongshuOrderCodeQuantity
+			}
 		}
 		products = append(products, MiniappCatalogProduct{
 			ID: row.MappingID, Name: name, ScenicAreaName: row.ScenicAreaName,

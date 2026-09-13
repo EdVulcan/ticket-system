@@ -65,7 +65,7 @@ function flush() {
   return new Promise(resolve => setImmediate(resolve));
 }
 
-function loadOrderDetail(app, xhs) {
+function loadOrderDetail(app, xhs, timers = {}) {
   let definition;
   const source = fs.readFileSync(path.join(miniappRoot, 'pages/order/detail.js'), 'utf8');
   vm.runInNewContext(source, {
@@ -76,7 +76,7 @@ function loadOrderDetail(app, xhs) {
       throw new Error(`unexpected require: ${request}`);
     },
     Boolean, Math, Number, String, encodeURIComponent,
-    setTimeout: () => 1, clearTimeout: () => {}
+    setTimeout: timers.setTimeout || (() => 1), clearTimeout: timers.clearTimeout || (() => {})
   }, { filename: 'pages/order/detail.js' });
   const page = { ...definition, data: JSON.parse(JSON.stringify(definition.data)) };
   page.setData = (update, callback) => { Object.assign(page.data, update); if (callback) callback(); };
@@ -124,6 +124,31 @@ test('a paid order without a server ticket code remains issuance-pending and ret
   assert.equal(page.data.issuancePending, true);
   assert.equal(page.data.ticketCodes.length, 0);
   assert.match(page.data.statusTitle, /正在出票/);
+});
+
+test('supplier issuance polls automatically after XHS vouchers are ready and stops once QR arrives', async () => {
+  let calls = 0; let nextId = 0; const pending = new Map();
+  const app = { request: async () => (++calls === 1
+    ? { status: 'paid', product_kind: 'ticket', amount_cents: 100, voucher_issuance_status: 'ready', ticket_issuance_status: 'pending', ticket_codes: [] }
+    : { status: 'paid', product_kind: 'ticket', amount_cents: 100, voucher_issuance_status: 'ready', ticket_issuance_status: 'ready', ticket_codes: ['SUPPLIER-CODE'] }) };
+  const page = loadOrderDetail(app, {}, { setTimeout: callback => { pending.set(++nextId, callback); return nextId; }, clearTimeout: id => pending.delete(id) });
+  page.orderNo = 'ORDER-SUPPLIER'; page.isPageVisible = true;
+  await page.loadOrder();
+  assert.equal(page.data.issuancePending, true);
+  assert.match(page.data.statusTitle, /正在出票/);
+  assert.equal(pending.size, 1);
+  const [id, callback] = [...pending.entries()][0]; pending.delete(id); callback(); await flush();
+  assert.equal(calls, 2);
+  assert.equal(page.data.ticketCodes[0].code, 'SUPPLIER-CODE');
+  assert.equal(page.data.issuancePending, false);
+  assert.equal(pending.size, 0);
+});
+
+test('hiding the page cancels supplier issuance polling', async () => {
+  const pending = new Map();
+  const page = loadOrderDetail({ request: async () => ({ status: 'paid', product_kind: 'ticket', voucher_issuance_status: 'ready', ticket_issuance_status: 'pending', ticket_codes: [] }) }, {}, { setTimeout: callback => { pending.set(1, callback); return 1; }, clearTimeout: id => pending.delete(id) });
+  page.orderNo = 'ORDER-SUPPLIER'; await page.loadOrder();
+  assert.equal(pending.size, 1); page.onHide(); assert.equal(pending.size, 0);
 });
 
 test('manual-review issuance is not presented as a retrying provider state', async () => {

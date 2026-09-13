@@ -62,7 +62,7 @@ func (s MiniappService) ApplyXiaohongshuRefund(customer *model.MiniappCustomer, 
 		return nil, err
 	}
 	if replayCount == 0 {
-		if err := (&RefundService{}).preflightUpstreamRefund(context.Background(), ownedCustomer.TenantID, orderNo); err != nil {
+		if err := (&RefundService{NewUpstreamRefundClient: s.NewUpstreamRefundClient}).preflightUpstreamRefund(context.Background(), ownedCustomer.TenantID, orderNo); err != nil {
 			return nil, err
 		}
 	}
@@ -253,9 +253,18 @@ func validateXiaohongshuCustomerRefundApplicationTx(tx *gorm.DB, customer *model
 		if ticket.PendingRefundID != 0 || ticket.PendingXiaohongshuVerificationID != 0 || (ticket.Status != "unused" && ticket.Status != "pending_provider") || ticket.CheckInCount != 0 {
 			return nil, 0, errors.New("ticket is already used or being verified")
 		}
-		var voucher model.XiaohongshuVoucherLink
-		if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND xiaohongshu_order_link_id = ? AND ticket_id = ?", order.TenantID, account.ID, link.ID, ticket.ID).First(&voucher).Error; err != nil || voucher.VerifyID != "" || voucher.Status != 1 {
+		group, groupErr := xiaohongshuTicketVouchers(tx, &ticket)
+		if groupErr != nil {
+			return nil, 0, groupErr
+		}
+		voucher := group[0]
+		if voucher.ChannelAccountID != account.ID || voucher.XiaohongshuOrderLinkID != link.ID {
 			return nil, 0, errors.New("ticket voucher is not eligible for a refund application")
+		}
+		for _, member := range group {
+			if member.VerifyID != "" || member.Status != 1 {
+				return nil, 0, errors.New("ticket voucher is not eligible for a refund application")
+			}
 		}
 		var activeVerifications int64
 		if err := tx.Model(&model.XiaohongshuVoucherVerification{}).Where("voucher_link_id = ? AND state <> ?", voucher.ID, "external_rejected").Count(&activeVerifications).Error; err != nil {

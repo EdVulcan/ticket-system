@@ -1052,8 +1052,8 @@ func buildTickets(service *OrderService, product *model.Product, quantity int, o
 	// The current XHS adapter binds one platform voucher to one local ticket.
 	// Check again inside order creation so a concurrent product edit cannot
 	// produce an order that can be paid but never finish voucher issuance.
-	if order.Channel == "xiaohongshu" && product.CodeMode == "order" && quantity > 1 {
-		return nil, errors.New("小红书整单一码票种暂只支持每单购买一份")
+	if order.Channel == "xiaohongshu" && product.CodeMode == "order" && ((product.ProductKind != "ticket" && quantity > 1) || quantity > maxXiaohongshuOrderCodeQuantity) {
+		return nil, errors.New("小红书普通整单一码最多十份，预约类每单一份")
 	}
 	count := quantity
 	if product.CodeMode == "order" {

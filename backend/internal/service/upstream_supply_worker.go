@@ -192,12 +192,15 @@ func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.Ord
 				return errors.New("供应商查单票项数量不匹配")
 			}
 			t := result.Tickets[0]
+			if !upstreamQueryTicketMatches(s, item, order.OrderNo, t) {
+				return errors.New("供应商查单的第三方子单或商品不匹配")
+			}
 			if e = validateUpstreamIssuedItem(t.GoodsCode, t.Quantity, t.Price, t.TotalPrice, t.VisitDate, request); e != nil {
 				return e
 			}
 			providerOrder, providerSub = result.ProviderOrderCode, t.ProviderSubOrderCode
 		}
-		if providerOrder == "" || providerSub == "" {
+		if providerOrder == "" {
 			return errors.New("供应商订单号缺失")
 		}
 		// Save successful issuance BEFORE retrieving the image.
@@ -245,7 +248,9 @@ func validateUpstreamIssuedItem(goods, quantity, price, total, date string, requ
 	if err != nil || q != request.Quantity || goods != request.GoodsCode {
 		return errors.New("供应商出票商品或数量不匹配")
 	}
-	if price != fmt.Sprintf("%d.%02d", request.PriceCents/100, request.PriceCents%100) || total != fmt.Sprintf("%d.%02d", request.PriceCents*int64(q)/100, request.PriceCents*int64(q)%100) {
+	unit, unitErr := zyb.ParseAmountCents(price)
+	sum, sumErr := zyb.ParseAmountCents(total)
+	if unitErr != nil || sumErr != nil || unit != request.PriceCents || sum != request.PriceCents*int64(q) {
 		return errors.New("供应商出票金额不匹配")
 	}
 	if len(date) < 10 || len(request.VisitDate) < 10 || date[:10] != request.VisitDate[:10] {
@@ -299,7 +304,7 @@ func (w *UpstreamSupplyWorker) syncStatus(ctx context.Context, client *zyb.Clien
 	status := ""
 	used := false
 	for _, row := range result.SubOrders {
-		if row.OrderCode != s.ProviderSubOrderCode && !strings.HasPrefix(row.OrderCode, s.ProviderSubOrderCode+"_") {
+		if !upstreamCheckChildMatches(row.OrderCode, s, order.OrderNo) {
 			return errors.New("供应商核销状态订单不匹配")
 		}
 		if status == "" {
@@ -316,7 +321,7 @@ func (w *UpstreamSupplyWorker) syncStatus(ctx context.Context, client *zyb.Clien
 		if e == nil {
 			first := s.ProviderFirstUsedAt
 			for _, row := range records.SubOrders {
-				if row.OrderCode != s.ProviderSubOrderCode && !strings.HasPrefix(row.OrderCode, s.ProviderSubOrderCode+"_") {
+				if !upstreamCheckChildMatches(row.OrderCode, s, order.OrderNo) {
 					return errors.New("供应商核销记录订单不匹配")
 				}
 				for _, record := range row.CheckRecords {

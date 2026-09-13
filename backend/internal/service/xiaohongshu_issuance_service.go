@@ -35,11 +35,29 @@ func (s XiaohongshuOrderService) applyXiaohongshuVoucherIssuanceTx(tx *gorm.DB, 
 	}
 
 	var existing []model.XiaohongshuVoucherLink
+	targets := make([]model.Ticket, 0, len(vouchers))
+	grouped := false
+	for _, ticket := range tickets {
+		var item model.OrderItem
+		if err := tx.Where("id = ? AND order_id = ?", ticket.OrderItemID, order.ID).First(&item).Error; err != nil {
+			return err
+		}
+		units := xiaohongshuTicketUnits(ticket, item)
+		if units < 1 || units > maxXiaohongshuOrderCodeQuantity {
+			return fmt.Errorf("小红书整单码数量超出支持范围")
+		}
+		if units > 1 {
+			grouped = true
+		}
+		for n := 0; n < units; n++ {
+			targets = append(targets, ticket)
+		}
+	}
 	if err := tx.Where("xiaohongshu_order_link_id = ?", link.ID).Order("ticket_id ASC").Find(&existing).Error; err != nil {
 		return err
 	}
 	if len(existing) > 0 {
-		if link.VoucherIssuanceStatus == "ready" && xiaohongshuVoucherIssuanceMatches(tickets, existing, vouchers) {
+		if link.VoucherIssuanceStatus == "ready" && xiaohongshuVoucherIssuanceMatches(targets, existing, vouchers) {
 			// A repeated paid query may return the same vouchers. The first exact
 			// binding remains authoritative; do not remap or demote it.
 			updates["voucher_issuance_status"] = "ready"
@@ -51,12 +69,26 @@ func (s XiaohongshuOrderService) applyXiaohongshuVoucherIssuanceTx(tx *gorm.DB, 
 		updates["voucher_issuance_last_error"] = "已有小红书券绑定，拒绝覆盖不可变票券关联"
 		return tx.Model(link).Updates(updates).Error
 	}
-	if len(vouchers) != len(tickets) {
+	if len(vouchers) != len(targets) {
 		updates["voucher_issuance_status"] = "pending"
-		updates["voucher_issuance_last_error"] = fmt.Sprintf("小红书券码数量 %d 与本地票数 %d 不一致", len(vouchers), len(tickets))
+		updates["voucher_issuance_last_error"] = fmt.Sprintf("小红书券码数量 %d 与购买份数 %d 不一致", len(vouchers), len(targets))
 		return tx.Model(link).Updates(updates).Error
 	}
-	if order.DiscountCents > 0 {
+	if grouped {
+		if len(tickets) != 1 {
+			return errorsForVoucherGroup(tx, link, updates, "整单码券组不能混合其他票")
+		}
+		var total int64
+		for _, v := range vouchers {
+			if v.PayAmount < 0 || v.PayAmount > moneyCents(order.TotalAmount) {
+				return errorsForVoucherGroup(tx, link, updates, "平台券金额无效")
+			}
+			total += v.PayAmount
+		}
+		if total != moneyCents(order.TotalAmount) {
+			return errorsForVoucherGroup(tx, link, updates, "平台券总实付与订单实付不一致")
+		}
+	} else if order.DiscountCents > 0 {
 		// Provider array order is not a financial identity. Match each voucher
 		// to the immutable ticket allocation before recording its code binding.
 		byAmount := make(map[int64][]xiaohongshu.VoucherInfo, len(vouchers))
@@ -101,10 +133,15 @@ func (s XiaohongshuOrderService) applyXiaohongshuVoucherIssuanceTx(tx *gorm.DB, 
 		if err != nil {
 			return err
 		}
-		rows = append(rows, model.XiaohongshuVoucherLink{
+		row := model.XiaohongshuVoucherLink{
 			TenantID: link.TenantID, ChannelAccountID: link.ChannelAccountID, XiaohongshuOrderLinkID: link.ID,
-			TicketID: tickets[index].ID, VoucherCodeHash: hash, VoucherCodeCiphertext: ciphertext, Status: voucher.Status,
-		})
+			TicketID: targets[index].ID, VoucherCodeHash: hash, VoucherCodeCiphertext: ciphertext, Status: voucher.Status,
+		}
+		if grouped || order.DiscountCents > 0 {
+			amount := voucher.PayAmount
+			row.PayAmountCents = &amount
+		}
+		rows = append(rows, row)
 	}
 	if err := tx.Create(&rows).Error; err != nil {
 		return err
@@ -113,34 +150,38 @@ func (s XiaohongshuOrderService) applyXiaohongshuVoucherIssuanceTx(tx *gorm.DB, 
 	return tx.Model(link).Updates(updates).Error
 }
 
+func errorsForVoucherGroup(tx *gorm.DB, link *model.XiaohongshuOrderLink, updates map[string]interface{}, message string) error {
+	updates["voucher_issuance_status"] = "manual_review"
+	updates["voucher_issuance_last_error"] = message
+	return tx.Model(link).Updates(updates).Error
+}
+
 func xiaohongshuVoucherIssuanceMatches(tickets []model.Ticket, existing []model.XiaohongshuVoucherLink, vouchers []xiaohongshu.VoucherInfo) bool {
 	if len(tickets) == 0 || len(existing) != len(tickets) || len(vouchers) != len(tickets) {
 		return false
 	}
-	ticketIDs := make(map[uint]struct{}, len(tickets))
+	ticketIDs := make(map[uint]int, len(tickets))
 	ticketAmounts := make(map[uint]int64, len(tickets))
 	for _, ticket := range tickets {
-		ticketIDs[ticket.ID] = struct{}{}
+		ticketIDs[ticket.ID]++
 		if ticket.SaleAmountCents != nil {
 			ticketAmounts[ticket.ID] = *ticket.SaleAmountCents
 		}
 	}
 	boundCodes := make(map[string]struct{}, len(existing))
 	boundAmounts := make(map[string]int64, len(existing))
-	boundTicketIDs := make(map[uint]struct{}, len(existing))
 	for _, voucher := range existing {
-		if _, knownTicket := ticketIDs[voucher.TicketID]; !knownTicket || strings.TrimSpace(voucher.VoucherCodeHash) == "" {
+		if ticketIDs[voucher.TicketID] <= 0 || strings.TrimSpace(voucher.VoucherCodeHash) == "" {
 			return false
 		}
-		if _, duplicate := boundTicketIDs[voucher.TicketID]; duplicate {
-			return false
-		}
-		boundTicketIDs[voucher.TicketID] = struct{}{}
+		ticketIDs[voucher.TicketID]--
 		if _, duplicate := boundCodes[voucher.VoucherCodeHash]; duplicate {
 			return false
 		}
 		boundCodes[voucher.VoucherCodeHash] = struct{}{}
-		if amount, allocated := ticketAmounts[voucher.TicketID]; allocated {
+		if voucher.PayAmountCents != nil {
+			boundAmounts[voucher.VoucherCodeHash] = *voucher.PayAmountCents
+		} else if amount, allocated := ticketAmounts[voucher.TicketID]; allocated {
 			boundAmounts[voucher.VoucherCodeHash] = amount
 		}
 	}

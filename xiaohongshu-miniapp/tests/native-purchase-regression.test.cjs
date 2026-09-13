@@ -74,3 +74,11 @@ test('confirmation applies the product max_quantity before allowing requested qu
   assert.equal(page.data.maxQuantity, 1);
   assert.equal(page.data.quantity, 1);
 });
+
+test('ordinary shared-code product permits multiple units up to the server limit', async () => {
+  const app = { globalData: {}, setNavigationTitle() {}, setStoreName() {}, request: async () => ({ products: [{ id: 42, name: '整单票', product_kind: 'ticket', price_cents: 8000, max_quantity: 10 }], max_order_cents: 100000 }) };
+  const page = loadPage('pages/order/confirm.js', app, {});
+  page.mappingId = 42; page.requestedQuantity = 2; page.requestedUseDate = '';
+  page.loadProduct(); await flush();
+  assert.equal(page.data.maxQuantity, 10); assert.equal(page.data.quantity, 2);
+});

@@ -231,8 +231,8 @@ func TestXiaohongshuOrderCodeQuantityRejectedBeforeOrderOrProviderWrite(t *testi
 	}
 	var before, after int64
 	model.DB.Model(&model.Order{}).Where("tenant_id = ?", order.TenantID).Count(&before)
-	_, err := service.CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 2, ClientRequestID: "unsupported-order-code"})
-	if err == nil || !strings.Contains(err.Error(), "整单一码") {
+	_, err := service.CreateXiaohongshuOrder(context.Background(), &customer, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 11, ClientRequestID: "unsupported-order-code"})
+	if err == nil {
 		t.Fatalf("unsupported quantity err=%v", err)
 	}
 	model.DB.Model(&model.Order{}).Where("tenant_id = ?", order.TenantID).Count(&after)
@@ -241,12 +241,12 @@ func TestXiaohongshuOrderCodeQuantityRejectedBeforeOrderOrProviderWrite(t *testi
 	}
 	// The lower-level creator also rejects it, rather than trusting a stale
 	// channel-side product read. Window orders remain governed by normal rules.
-	invalid := model.Order{TenantID: order.TenantID, Channel: "xiaohongshu", ChannelAccountID: link.ChannelAccountID, Items: []model.OrderItem{{ProductID: item.ProductID, Quantity: 2}}}
+	invalid := model.Order{TenantID: order.TenantID, Channel: "xiaohongshu", ChannelAccountID: link.ChannelAccountID, Items: []model.OrderItem{{ProductID: item.ProductID, Quantity: 11}}}
 	if err := (&OrderService{}).Create(&invalid); err == nil {
 		t.Fatal("core creator bypassed quantity restriction")
 	}
 	catalog, err := NewMiniappService().ListCatalog(&customer)
-	if err != nil || len(catalog.Products) != 1 || catalog.Products[0].MaxQuantity != 1 {
+	if err != nil || len(catalog.Products) != 1 || catalog.Products[0].MaxQuantity != 10 {
 		t.Fatalf("catalog limit=%+v err=%v", catalog, err)
 	}
 }

@@ -111,7 +111,7 @@ func (s *DeviceService) ResolveXiaohongshuVoucherVerification(request Xiaohongsh
 				if (saga.VerifyID != "" && saga.VerifyID != request.ExternalVerifyID) || (link.VerifyID != "" && link.VerifyID != request.ExternalVerifyID) {
 					return ErrXiaohongshuVoucherResolutionNotResolvable
 				}
-				if err := tx.Model(&link).Update("verify_id", request.ExternalVerifyID).Error; err != nil {
+				if err := updateXiaohongshuGroupVerifyID(tx, &link, request.ExternalVerifyID); err != nil {
 					return err
 				}
 				updates := map[string]interface{}{
@@ -263,21 +263,28 @@ func (s *DeviceService) resolveXiaohongshuVoucher(tenantID uint, scannedCode str
 	if len(links) == 0 {
 		return nil, "", false, nil
 	}
-	if len(links) != 1 {
-		return nil, "", false, errors.New("小红书券码归属不明确")
+	for _, candidate := range links {
+		if candidate.TicketID != links[0].TicketID || candidate.ChannelAccountID != links[0].ChannelAccountID || candidate.XiaohongshuOrderLinkID != links[0].XiaohongshuOrderLinkID {
+			return nil, "", false, errors.New("小红书券码归属不明确")
+		}
 	}
 	link := &links[0]
 	var ticket model.Ticket
 	if err := s.DB.Where("id = ? AND (fulfillment_tenant_id = ? OR (fulfillment_tenant_id = 0 AND tenant_id = ?))", link.TicketID, tenantID, tenantID).First(&ticket).Error; err != nil {
 		return nil, "", false, errors.New("小红书券码未绑定有效票权")
 	}
-	return link, ticket.TicketCode, true, nil
+	group, err := xiaohongshuTicketVouchers(s.DB, &ticket)
+	if err != nil {
+		return nil, "", false, err
+	}
+	return &group[0], ticket.TicketCode, true, nil
 }
 
 type xiaohongshuVoucherVerificationInput struct {
 	Account       model.ChannelAccount
 	OrderLink     model.XiaohongshuOrderLink
 	VoucherCode   string
+	VoucherCodes  []xiaohongshu.VoucherCode
 	POIID         string
 	ExternalOrder string
 }
@@ -302,6 +309,20 @@ func (s *DeviceService) loadXiaohongshuVoucherVerificationInput(link *model.Xiao
 	var ticket model.Ticket
 	if err := s.DB.Where("id = ? AND tenant_id = ?", link.TicketID, link.TenantID).First(&ticket).Error; err != nil {
 		return nil, errors.New("小红书券码未绑定有效票权")
+	}
+	group, err := xiaohongshuTicketVouchers(s.DB, &ticket)
+	if err != nil {
+		return nil, err
+	}
+	for _, member := range group {
+		if member.Status != 1 {
+			return nil, errors.New("小红书券组状态不允许核销")
+		}
+		code, err := xiaohongshuVoucherPlainCode(member)
+		if err != nil {
+			return nil, err
+		}
+		input.VoucherCodes = append(input.VoucherCodes, xiaohongshu.VoucherCode{Code: code})
 	}
 	var item model.OrderItem
 	if err := s.DB.Where("id = ? AND order_id = ?", ticket.OrderItemID, ticket.OrderID).First(&item).Error; err == nil {
@@ -427,7 +448,7 @@ func (s *DeviceService) persistXiaohongshuVoucherExternalSuccess(sagaID uint, ve
 		if link.VerifyID != "" && link.VerifyID != verifyID {
 			return errors.New("小红书券关联已有不同核销编号")
 		}
-		if err := tx.Model(&link).Update("verify_id", verifyID).Error; err != nil {
+		if err := updateXiaohongshuGroupVerifyID(tx, &link, verifyID); err != nil {
 			return err
 		}
 		updates := map[string]interface{}{"state": "local_pending", "verify_id": verifyID, "external_confirmed_at": now, "last_error": ""}
@@ -571,7 +592,7 @@ func (s *DeviceService) executeXiaohongshuVoucherExternal(ctx context.Context, s
 	requestContext, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	remote, remoteErr := newClient(input.Account.AppID, secret, input.Account.Environment).VerifyVouchers(requestContext, xiaohongshu.VoucherVerifyRequest{
-		ExternalOrderID: input.ExternalOrder, POIID: input.POIID, Vouchers: []xiaohongshu.VoucherCode{{Code: input.VoucherCode}},
+		ExternalOrderID: input.ExternalOrder, POIID: input.POIID, Vouchers: input.VoucherCodes,
 	})
 	if remoteErr != nil {
 		state := "external_rejected"
