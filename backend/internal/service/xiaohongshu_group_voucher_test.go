@@ -133,6 +133,14 @@ func TestXiaohongshuGroupVoucherVerifyOnceAndRefundAll(t *testing.T) {
 }
 
 func TestXiaohongshuGroupCustomerRefundWithDocumentedZybResponse(t *testing.T) {
+	testXiaohongshuCustomerRefundQueryVariant(t, "scenicThirdCode", "99.5", "199")
+}
+
+func TestXiaohongshuCustomerRefundWithLiveZybResponse(t *testing.T) {
+	testXiaohongshuCustomerRefundQueryVariant(t, "ticketThirdCode", "9950", "19900")
+}
+
+func testXiaohongshuCustomerRefundQueryVariant(t *testing.T, thirdField, price, total string) {
 	f := seedGroupedXhs(t, true)
 	var link model.XiaohongshuOrderLink
 	model.DB.Where("order_id = ?", f.order.ID).First(&link)
@@ -153,7 +161,7 @@ func TestXiaohongshuGroupCustomerRefundWithDocumentedZybResponse(t *testing.T) {
 			if wrongIdentity.Load() {
 				child = "OTHER-ORDER"
 			}
-			fmt.Fprintf(w, `<PWBResponse><transactionName>QUERY_ORDER_NEW_RES</transactionName><code>0</code><order><orderCode>PROVIDER</orderCode><ticketOrders><ticketOrder><scenicThirdCode>%s</scenicThirdCode><goodsCode>GOODS</goodsCode><quantity>2</quantity><returnNum>0</returnNum><alreadyCheckNum>0</alreadyCheckNum><price>99.5</price><totalPrice>199</totalPrice></ticketOrder></ticketOrders></order></PWBResponse>`, child)
+			fmt.Fprintf(w, `<PWBResponse><transactionName>QUERY_ORDER_NEW_RES</transactionName><code>0</code><orderResponse><order><orderCode>PROVIDER</orderCode><ticketOrders><ticketOrder><%s>%s</%s><goodsCode>GOODS</goodsCode><quantity>2</quantity><returnNum>0</returnNum><alreadyCheckNum>0</alreadyCheckNum><price>%s</price><totalPrice>%s</totalPrice></ticketOrder></ticketOrders></order></orderResponse></PWBResponse>`, thirdField, child, thirdField, price, total)
 		case strings.Contains(xml, "CHECK_STATUS_QUERY_REQ"):
 			fmt.Fprintf(w, `<PWBResponse><transactionName>CHECK_STATUS_QUERY_RES</transactionName><code>0</code><subOrders><subOrder><orderCode>%s_1</orderCode><needCheckNum>2</needCheckNum><alreadyCheckNum>0</alreadyCheckNum><returnNum>0</returnNum><checkStatus>un_check</checkStatus></subOrder></subOrders></PWBResponse>`, third)
 		case strings.Contains(xml, "SEND_CODE_CANCEL_NEW_REQ"):

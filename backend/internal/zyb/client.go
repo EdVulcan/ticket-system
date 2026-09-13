@@ -338,6 +338,7 @@ type responseTicket struct {
 	ValidFrom            string `xml:"startDate"`
 	ValidTo              string `xml:"endDate"`
 	ScenicThirdCode      string `xml:"scenicThirdCode"`
+	TicketThirdCode      string `xml:"ticketThirdCode"`
 	ReturnedQuantity     string `xml:"returnNum"`
 	CheckedQuantity      string `xml:"alreadyCheckNum"`
 	SeatInfo             string `xml:"seatInfo"`
@@ -401,6 +402,31 @@ func (c Client) QueryOrder(ctx context.Context, orderCode string) (*QueryOrderRe
 	}
 	r := &QueryOrderResult{TransactionName: text(meta.TransactionName), Code: text(meta.Code), Description: text(meta.Description), ProviderOrderCode: text(o.ProviderOrderCode), AssistCheckNo: text(o.AssistCheckNo), ContactName: text(o.ContactName), ContactMobile: text(o.ContactMobile), OrderPrice: text(o.OrderPrice), PayMethod: text(o.PayMethod), Source: text(o.Source)}
 	for _, t := range o.TicketOrders.Tickets {
+		// The observed distributor query variant uses ticketThirdCode for our
+		// child order and integer cents for ticket prices. SEND_CODE_RES and the
+		// older scenicThirdCode query retain their existing yuan representation.
+		if third := text(t.TicketThirdCode); third != "" {
+			if text(t.ScenicThirdCode) != "" && text(t.ScenicThirdCode) != third {
+				return nil, raw, errors.New("智游宝订单查询第三方子单字段冲突")
+			}
+			t.ScenicThirdCode = third
+			for _, amount := range []*string{&t.Price, &t.TotalPrice} {
+				if text(*amount) == "" {
+					continue
+				}
+				value := text(*amount)
+				for _, digit := range value {
+					if digit < '0' || digit > '9' {
+						return nil, raw, errors.New("智游宝订单查询分金额格式无效")
+					}
+				}
+				cents, err := strconv.ParseInt(value, 10, 64)
+				if err != nil {
+					return nil, raw, errors.New("智游宝订单查询分金额超出范围")
+				}
+				*amount = formatCents(cents)
+			}
+		}
 		if (text(t.ProviderSubOrderCode) == "" && text(t.ScenicThirdCode) == "") || text(t.GoodsCode) == "" || text(t.Quantity) == "" {
 			return nil, raw, errors.New("智游宝订单查询票项身份不完整")
 		}
