@@ -10,9 +10,42 @@
       <view class="product-meta"><text class="official-chip">{{product.kindLabel}}</text><text class="scenic" xhs:if="{{product.scenic_area_name}}">{{product.scenic_area_name}}</text></view>
       <text class="title">{{product.name}}</text>
       <view class="tags" xhs:if="{{product.tags.length}}"><text class="tag" xhs:for="{{product.tags}}" xhs:key="*this">{{item}}</text></view>
-      <text class="price-caption" xhs:if="{{product.hasPromotionPrice}}">单张立减后</text>
-      <view class="price {{product.hasPromotionPrice ? 'discounted-price' : ''}}"><text class="currency">¥</text><text class="amount">{{product.displayPriceText}}</text><text class="original-price" xhs:if="{{product.hasPromotionPrice}}">原价 ¥{{product.originalPriceText}}</text></view>
+      <!-- Price & Promotion Tag Row -->
+      <view class="price-header-row">
+        <view class="price {{product.hasPromotionPrice ? 'discounted-price' : ''}}">
+          <text class="currency">¥</text>
+          <text class="amount">{{product.displayPriceText}}</text>
+          <text class="original-price" xhs:if="{{product.hasPromotionPrice}}">原价 ¥{{product.originalPriceText}}</text>
+        </view>
+        <view class="promo-tag-human" xhs:if="{{product.hasPromotionPrice}}">
+          <text class="tag-brand">专享优惠</text>
+          <text class="tag-val">立减 ¥{{product.promotionDiscountText}}</text>
+        </view>
+      </view>
       <text class="discount-note" xhs:if="{{product.hasPromotionPrice}}">本单立减 ¥{{product.promotionDiscountText}} · 购买多张也只减一次</text>
+
+      <!-- Guarantee Card Strip (Design A) -->
+      <view class="guarantee-card-human">
+        <view class="guarantee-grid-human">
+          <view class="guarantee-item-human">
+            <view class="guarantee-badge"><text class="badge-check">✓</text></view>
+            <text class="guarantee-label">未核销随时退</text>
+          </view>
+          <view class="guarantee-item-human">
+            <view class="guarantee-badge"><text class="badge-check">✓</text></view>
+            <text class="guarantee-label">过期自动原路退</text>
+          </view>
+          <view class="guarantee-item-human">
+            <view class="guarantee-badge"><text class="badge-check">✓</text></view>
+            <text class="guarantee-label">商家直营质保</text>
+          </view>
+          <view class="guarantee-item-human">
+            <view class="guarantee-badge"><text class="badge-check">✓</text></view>
+            <text class="guarantee-label">免换票刷二维码</text>
+          </view>
+        </view>
+      </view>
+
       <view class="opportunity-strip product-opportunity-strip" xhs:if="{{opportunityVisible}}" bindtap="openPromotionOrder" role="button" aria-label="查看随机立减机会">
         <view xhs:if="{{opportunityReservedOrderNo}}"><text class="opportunity-title">优惠已用于待支付订单</text><text class="opportunity-copy">查看原订单</text></view>
         <view xhs:else><text class="opportunity-title">随机立减 ¥{{opportunityAmountText}}</text><text class="opportunity-copy">本商品可用 · 剩余 {{opportunityCountdown}}</text></view>
