@@ -19,11 +19,20 @@ type upstreamTestDecoder func(context.Context, []byte) (string, error)
 func (f upstreamTestDecoder) Decode(c context.Context, b []byte) (string, error) { return f(c, b) }
 
 func seedUpstreamWorkerOrder(t *testing.T, endpoint string) model.Order {
+	return seedUpstreamWorkerOrderWithMode(t, endpoint, 1, "")
+}
+
+func seedUpstreamWorkerOrderWithMode(t *testing.T, endpoint string, quantity int, codeMode string) model.Order {
 	t.Helper()
 	resetBusinessData(t)
 	tenant, product := seedSellableProduct(t, "unlimited", 0)
 	var p model.Product
 	model.DB.First(&p, product)
+	if codeMode != "" {
+		if err := model.DB.Model(&p).Update("code_mode", codeMode).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	var group model.RuleGroup
 	model.DB.Where("rule_id = ?", p.RuleID).First(&group)
 	if err := model.DB.Model(&group).Update("max_total_check_in", 2).Error; err != nil {
@@ -51,7 +60,7 @@ func seedUpstreamWorkerOrder(t *testing.T, endpoint string) model.Order {
 		t.Fatal(err)
 	}
 	date := startOfDay(time.Now())
-	order := model.Order{TenantID: tenant, Channel: "online", ContactName: "测试", ContactPhone: "13800000000", Items: []model.OrderItem{{ProductID: product, Quantity: 1, UseDate: &date}}}
+	order := model.Order{TenantID: tenant, Channel: "online", ContactName: "测试", ContactPhone: "13800000000", Items: []model.OrderItem{{ProductID: product, Quantity: quantity, UseDate: &date}}}
 	if err = (&OrderService{}).Create(&order); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +142,7 @@ func TestUpstreamWorkerImageRetryDoesNotReissue(t *testing.T) {
 }
 
 func TestUpstreamWorkerResolvesOnePersonOneCodePage(t *testing.T) {
-	var sends, imageRequests, searchRequests, qrRequests atomic.Int32
+	var sends, imageRequests, urlRequests, searchRequests, qrRequests atomic.Int32
 	date := time.Now().Format("2006-01-02")
 	var server *httptest.Server
 	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -152,7 +161,7 @@ func TestUpstreamWorkerResolvesOnePersonOneCodePage(t *testing.T) {
 				t.Errorf("unexpected page search form: %v", r.Form)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprint(w, `{"isSuccess":true,"result":[{"assistCheckNo":"ASSIST-1","gmCode":"TOKEN-1"}]}`)
+			fmt.Fprint(w, `{"isSuccess":true,"result":[{"assistCheckNo":"ASSIST-1","gmCode":"TOKEN-1"},{"assistCheckNo":"ASSIST-2","gmCode":"TOKEN-1"}]}`)
 			return
 		}
 		if r.Method == http.MethodGet && r.URL.Path == "/boss/gmCheckCode.htm" {
@@ -160,11 +169,11 @@ func TestUpstreamWorkerResolvesOnePersonOneCodePage(t *testing.T) {
 			if _, err := r.Cookie("zyb-session"); err != nil {
 				t.Errorf("QR request lost page session: %v", err)
 			}
-			if r.URL.RawQuery != "TOKEN-1@@ASSIST-1" {
+			if r.URL.RawQuery != "TOKEN-1@@ASSIST-1" && r.URL.RawQuery != "TOKEN-1@@ASSIST-2" {
 				t.Errorf("unexpected QR query: %q", r.URL.RawQuery)
 			}
 			w.Header().Set("Content-Type", "image/gif")
-			fmt.Fprint(w, "gif-bytes")
+			fmt.Fprintf(w, "gif-bytes-%s", r.URL.RawQuery)
 			return
 		}
 		if r.Method != http.MethodPost {
@@ -176,21 +185,27 @@ func TestUpstreamWorkerResolvesOnePersonOneCodePage(t *testing.T) {
 		switch {
 		case strings.Contains(xml, "<transactionName>SEND_CODE_REQ</transactionName>"):
 			sends.Add(1)
-			fmt.Fprintf(w, `<PWBResponse><transactionName>SEND_CODE_RES</transactionName><code>0</code><orderResponse><order><orderCode>ZYB-PAGE-ORDER</orderCode><orderPrice>99.50</orderPrice><ticketOrders><ticketOrder><orderCode>ZYB-PAGE-SUB</orderCode><goodsCode>GOODS</goodsCode><quantity>1</quantity><price>99.50</price><totalPrice>99.50</totalPrice><occDate>%s</occDate></ticketOrder></ticketOrders></order></orderResponse></PWBResponse>`, date)
+			fmt.Fprintf(w, `<PWBResponse><transactionName>SEND_CODE_RES</transactionName><code>0</code><orderResponse><order><orderCode>ZYB-PAGE-ORDER</orderCode><orderPrice>199.00</orderPrice><ticketOrders><ticketOrder><orderCode>ZYB-PAGE-SUB</orderCode><goodsCode>GOODS</goodsCode><quantity>2</quantity><price>99.50</price><totalPrice>199.00</totalPrice><occDate>%s</occDate></ticketOrder></ticketOrders></order></orderResponse></PWBResponse>`, date)
 		case strings.Contains(xml, "SEND_CODE_IMG_REQ"):
 			imageRequests.Add(1)
-			fmt.Fprintf(w, `<PWBResponse><transactionName>SEND_CODE_IMG_RES</transactionName><code>0</code><img>%s/boss/showCheckNo.htm?token</img></PWBResponse>`, server.URL)
+			fmt.Fprint(w, `<PWBResponse><transactionName>SEND_CODE_IMG_RES</transactionName><code>6</code><description>失败: 履约-查询发码图片返回空</description></PWBResponse>`)
+		case strings.Contains(xml, "QUERY_IMG_URL_REQ"):
+			urlRequests.Add(1)
+			fmt.Fprintf(w, `<PWBResponse><transactionName>QUERY_IMG_URL_RES</transactionName><code>0</code><img>%s/boss/showCheckNo.htm?token</img></PWBResponse>`, server.URL)
 		default:
 			t.Errorf("unexpected XML request: %s", xml)
 		}
 	}))
 	defer server.Close()
 
-	order := seedUpstreamWorkerOrder(t, server.URL)
+	order := seedUpstreamWorkerOrderWithMode(t, server.URL, 2, "ticket")
 	worker := UpstreamSupplyWorker{NewClient: func(c model.UpstreamConnection) (*zyb.Client, error) {
 		return &zyb.Client{Config: zyb.Config{Endpoint: c.Endpoint, CorpCode: c.CorpCode, Username: c.Username, PrivateKey: "key"}, HTTP: server.Client()}, nil
-	}, Decoder: upstreamTestDecoder(func(context.Context, []byte) (string, error) {
-		return "ONE-PERSON-UPSTREAM-CODE", nil
+	}, Decoder: upstreamTestDecoder(func(_ context.Context, image []byte) (string, error) {
+		if strings.Contains(string(image), "ASSIST-1") {
+			return "ONE-PERSON-UPSTREAM-CODE-1", nil
+		}
+		return "ONE-PERSON-UPSTREAM-CODE-2", nil
 	})}
 	payment := model.Payment{OrderNo: order.OrderNo, Method: "cash", IdempotencyKey: "one-person-page"}
 	if err := (&PaymentService{}).CreatePayment(order.TenantID, &payment); err != nil {
@@ -199,10 +214,10 @@ func TestUpstreamWorkerResolvesOnePersonOneCodePage(t *testing.T) {
 	if _, err := worker.ProcessTasks(context.Background(), time.Now(), 1); err != nil {
 		t.Fatal(err)
 	}
-	var ticket model.Ticket
-	model.DB.Where("order_id = ?", order.ID).First(&ticket)
-	if sends.Load() != 1 || imageRequests.Load() != 1 || searchRequests.Load() != 1 || qrRequests.Load() != 1 || ticket.Status != "unused" || ticket.TicketCode != "ONE-PERSON-UPSTREAM-CODE" {
-		t.Fatalf("send=%d images=%d searches=%d qrs=%d ticket=%+v", sends.Load(), imageRequests.Load(), searchRequests.Load(), qrRequests.Load(), ticket)
+	var tickets []model.Ticket
+	model.DB.Where("order_id = ?", order.ID).Order("id").Find(&tickets)
+	if sends.Load() != 1 || imageRequests.Load() != 1 || urlRequests.Load() != 1 || searchRequests.Load() != 1 || qrRequests.Load() != 2 || len(tickets) != 2 || tickets[0].Status != "unused" || tickets[1].Status != "unused" || tickets[0].TicketCode != "ONE-PERSON-UPSTREAM-CODE-1" || tickets[1].TicketCode != "ONE-PERSON-UPSTREAM-CODE-2" {
+		t.Fatalf("send=%d images=%d urls=%d searches=%d qrs=%d tickets=%+v", sends.Load(), imageRequests.Load(), urlRequests.Load(), searchRequests.Load(), qrRequests.Load(), tickets)
 	}
 }
 

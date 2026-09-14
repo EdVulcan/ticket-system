@@ -562,9 +562,14 @@ func (c Client) TicketImages(ctx context.Context, orderCode string) ([]*Artifact
 		Image []string `xml:"image"`
 		URL   []string `xml:"url"`
 	}
-	raw, meta, err := c.request(ctx, "SEND_CODE_IMG_REQ", body, &env, false)
+	// Zhiyoubao returns code=6 when this endpoint has no direct image even
+	// though QUERY_IMG_URL_REQ can still provide the order's QR page.
+	raw, meta, err := c.request(ctx, "SEND_CODE_IMG_REQ", body, &env, true)
 	if err != nil {
 		return nil, raw, err
+	}
+	if text(meta.Code) == "6" {
+		return c.ticketImageURLs(ctx, orderCode)
 	}
 	if text(meta.TransactionName) != "SEND_CODE_IMG_RES" {
 		return nil, raw, fmt.Errorf("智游宝票码响应交易类型不正确: %s", text(meta.TransactionName))

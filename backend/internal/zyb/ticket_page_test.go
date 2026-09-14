@@ -35,7 +35,7 @@ func TestTicketImagesFallsBackToDocumentedURLEndpoint(t *testing.T) {
 		switch {
 		case strings.Contains(xml, "SEND_CODE_IMG_REQ"):
 			imageRequests++
-			_, _ = io.WriteString(w, `<PWBResponse><transactionName>SEND_CODE_IMG_RES</transactionName><code>0</code><img></img></PWBResponse>`)
+			_, _ = io.WriteString(w, `<PWBResponse><transactionName>SEND_CODE_IMG_RES</transactionName><code>6</code><description>失败: 履约-查询发码图片返回空</description><img></img></PWBResponse>`)
 		case strings.Contains(xml, "QUERY_IMG_URL_REQ"):
 			urlRequests++
 			fmt.Fprintf(w, `<PWBResponse><transactionName>QUERY_IMG_URL_RES</transactionName><code>0</code><img>%s/boss/showCheckNo.htm?token</img></PWBResponse>`, server.URL)
