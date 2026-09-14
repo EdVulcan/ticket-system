@@ -132,6 +132,80 @@ func TestUpstreamWorkerImageRetryDoesNotReissue(t *testing.T) {
 	}
 }
 
+func TestUpstreamWorkerResolvesOnePersonOneCodePage(t *testing.T) {
+	var sends, imageRequests, searchRequests, qrRequests atomic.Int32
+	date := time.Now().Format("2006-01-02")
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/boss/showCheckNo.htm" {
+			http.SetCookie(w, &http.Cookie{Name: "zyb-session", Value: "page-session", Path: "/"})
+			fmt.Fprint(w, `<html><body><div data-id="DETAIL-1" data-gmcode="TOKEN-1"></div></body></html>`)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/boss/gm/code/searchData.htm" {
+			searchRequests.Add(1)
+			if _, err := r.Cookie("zyb-session"); err != nil {
+				t.Errorf("page session was not retained: %v", err)
+			}
+			_ = r.ParseForm()
+			if r.Form.Get("orderDetailId") != "DETAIL-1" || r.Form.Get("gmCode") != "TOKEN-1" {
+				t.Errorf("unexpected page search form: %v", r.Form)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"isSuccess":true,"result":[{"assistCheckNo":"ASSIST-1","gmCode":"TOKEN-1"}]}`)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/boss/gmCheckCode.htm" {
+			qrRequests.Add(1)
+			if _, err := r.Cookie("zyb-session"); err != nil {
+				t.Errorf("QR request lost page session: %v", err)
+			}
+			if r.URL.RawQuery != "TOKEN-1@@ASSIST-1" {
+				t.Errorf("unexpected QR query: %q", r.URL.RawQuery)
+			}
+			w.Header().Set("Content-Type", "image/gif")
+			fmt.Fprint(w, "gif-bytes")
+			return
+		}
+		if r.Method != http.MethodPost {
+			t.Errorf("unexpected method=%s path=%s", r.Method, r.URL.Path)
+			return
+		}
+		_ = r.ParseForm()
+		xml := r.Form.Get("xmlMsg")
+		switch {
+		case strings.Contains(xml, "<transactionName>SEND_CODE_REQ</transactionName>"):
+			sends.Add(1)
+			fmt.Fprintf(w, `<PWBResponse><transactionName>SEND_CODE_RES</transactionName><code>0</code><orderResponse><order><orderCode>ZYB-PAGE-ORDER</orderCode><orderPrice>99.50</orderPrice><ticketOrders><ticketOrder><orderCode>ZYB-PAGE-SUB</orderCode><goodsCode>GOODS</goodsCode><quantity>1</quantity><price>99.50</price><totalPrice>99.50</totalPrice><occDate>%s</occDate></ticketOrder></ticketOrders></order></orderResponse></PWBResponse>`, date)
+		case strings.Contains(xml, "SEND_CODE_IMG_REQ"):
+			imageRequests.Add(1)
+			fmt.Fprintf(w, `<PWBResponse><transactionName>SEND_CODE_IMG_RES</transactionName><code>0</code><img>%s/boss/showCheckNo.htm?token</img></PWBResponse>`, server.URL)
+		default:
+			t.Errorf("unexpected XML request: %s", xml)
+		}
+	}))
+	defer server.Close()
+
+	order := seedUpstreamWorkerOrder(t, server.URL)
+	worker := UpstreamSupplyWorker{NewClient: func(c model.UpstreamConnection) (*zyb.Client, error) {
+		return &zyb.Client{Config: zyb.Config{Endpoint: c.Endpoint, CorpCode: c.CorpCode, Username: c.Username, PrivateKey: "key"}, HTTP: server.Client()}, nil
+	}, Decoder: upstreamTestDecoder(func(context.Context, []byte) (string, error) {
+		return "ONE-PERSON-UPSTREAM-CODE", nil
+	})}
+	payment := model.Payment{OrderNo: order.OrderNo, Method: "cash", IdempotencyKey: "one-person-page"}
+	if err := (&PaymentService{}).CreatePayment(order.TenantID, &payment); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worker.ProcessTasks(context.Background(), time.Now(), 1); err != nil {
+		t.Fatal(err)
+	}
+	var ticket model.Ticket
+	model.DB.Where("order_id = ?", order.ID).First(&ticket)
+	if sends.Load() != 1 || imageRequests.Load() != 1 || searchRequests.Load() != 1 || qrRequests.Load() != 1 || ticket.Status != "unused" || ticket.TicketCode != "ONE-PERSON-UPSTREAM-CODE" {
+		t.Fatalf("send=%d images=%d searches=%d qrs=%d ticket=%+v", sends.Load(), imageRequests.Load(), searchRequests.Load(), qrRequests.Load(), ticket)
+	}
+}
+
 func TestUpstreamFinishCannotReviveRefundedTicket(t *testing.T) {
 	order := seedUpstreamWorkerOrder(t, "https://supplier.example/api")
 	if err := model.DB.Model(&order).Update("status", "paid").Error; err != nil {

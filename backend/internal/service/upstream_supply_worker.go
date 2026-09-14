@@ -254,6 +254,10 @@ func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.Ord
 	if err != nil {
 		return err
 	}
+	artifacts, err = client.ResolveTicketArtifacts(ctx, artifacts)
+	if err != nil {
+		return err
+	}
 	decoder := w.Decoder
 	if decoder == nil {
 		decoder = zyb.QRCodeDecoder{}

@@ -577,13 +577,66 @@ func (c Client) TicketImages(ctx context.Context, orderCode string) ([]*Artifact
 		values = env.URL
 	}
 	if len(values) == 0 {
-		return nil, raw, errors.New("智游宝票码响应为空")
+		// Some one-person-one-code products expose the QR page only through
+		// QUERY_IMG_URL_REQ. Keep the original image request as the first
+		// choice, then use the documented URL endpoint when it has no artifact.
+		return c.ticketImageURLs(ctx, orderCode)
 	}
 	artifacts := make([]*Artifact, 0, len(values))
 	for _, value := range values {
 		a, err := ParseArtifact(value)
 		if err != nil {
 			return nil, raw, err
+		}
+		artifacts = append(artifacts, a)
+	}
+	return artifacts, raw, nil
+}
+
+// TicketImageURLs retrieves the documented QR-page URL response. The page is
+// resolved separately by ResolveTicketArtifacts so the XML protocol client
+// remains independent from the provider's HTML implementation.
+func (c Client) TicketImageURLs(ctx context.Context, orderCode string) ([]*Artifact, []byte, error) {
+	return c.ticketImageURLs(ctx, orderCode)
+}
+
+func (c Client) ticketImageURLs(ctx context.Context, orderCode string) ([]*Artifact, []byte, error) {
+	orderCode = strings.TrimSpace(orderCode)
+	if orderCode == "" {
+		return nil, nil, errors.New("智游宝订单号不能为空")
+	}
+	body := fmt.Sprintf("  <orderRequest><order><orderCode>%s</orderCode></order></orderRequest>", escapeXML(orderCode))
+	var env struct {
+		responseMeta
+		Img   []string `xml:"img"`
+		Image []string `xml:"image"`
+		URL   []string `xml:"url"`
+	}
+	raw, meta, err := c.request(ctx, "QUERY_IMG_URL_REQ", body, &env, false)
+	if err != nil {
+		return nil, raw, err
+	}
+	if text(meta.TransactionName) != "QUERY_IMG_URL_RES" {
+		return nil, raw, fmt.Errorf("智游宝票码链接响应交易类型不正确: %s", text(meta.TransactionName))
+	}
+	values := env.Img
+	if len(values) == 0 || (len(values) == 1 && text(values[0]) == "") {
+		values = env.Image
+	}
+	if len(values) == 0 || (len(values) == 1 && text(values[0]) == "") {
+		values = env.URL
+	}
+	if len(values) == 0 {
+		return nil, raw, errors.New("智游宝票码链接响应为空")
+	}
+	artifacts := make([]*Artifact, 0, len(values))
+	for _, value := range values {
+		a, err := ParseArtifact(value)
+		if err != nil {
+			return nil, raw, err
+		}
+		if a.Kind != "url" {
+			return nil, raw, errors.New("智游宝票码链接响应不是 URL")
 		}
 		artifacts = append(artifacts, a)
 	}
