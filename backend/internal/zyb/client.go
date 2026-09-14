@@ -31,6 +31,7 @@ type Config struct {
 	PrivateKey string
 	Timeout    time.Duration
 	Now        func() time.Time
+	Gate       RequestGate
 }
 
 type Client struct {
@@ -56,13 +57,11 @@ type responseMeta struct {
 }
 
 func (c Client) request(ctx context.Context, transaction, body string, out any, allowPending bool) ([]byte, responseMeta, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if strings.TrimSpace(c.Config.Endpoint) == "" || strings.TrimSpace(c.Config.CorpCode) == "" || strings.TrimSpace(c.Config.Username) == "" || strings.TrimSpace(c.Config.PrivateKey) == "" {
 		return nil, responseMeta{}, errors.New("智游宝连接配置不完整")
-	}
-	if c.Config.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.Config.Timeout)
-		defer cancel()
 	}
 	now := time.Now().In(time.FixedZone("CST", 8*3600))
 	if c.Config.Now != nil {
@@ -84,17 +83,80 @@ func (c Client) request(ctx context.Context, transaction, body string, out any, 
 		}
 		hc = &http.Client{Timeout: timeout}
 	}
+	// Redirects are additional HTTP requests and must not bypass the gate.
+	transportClient := *hc
+	transportClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	hc = &transportClient
+	gate := c.Config.Gate
+	var permit RequestPermit
+	if gate != nil {
+		permit, err = gate.Acquire(ctx, transaction, body)
+		if err != nil {
+			return nil, responseMeta{}, err
+		}
+		if permit == nil {
+			return nil, responseMeta{}, &DeferredError{RetryAt: time.Now().Add(defaultGateLease), Cause: ErrRequestGateUnavailable}
+		}
+	}
+	networkCtx := ctx
+	var cancel context.CancelFunc
+	if c.Config.Timeout > 0 {
+		networkCtx, cancel = context.WithTimeout(ctx, c.Config.Timeout)
+		defer cancel()
+	}
+	if permit != nil {
+		if err = permit.Start(networkCtx); err != nil {
+			return nil, responseMeta{}, err
+		}
+	}
+	req = req.WithContext(networkCtx)
+	finish := func(limited *RateLimitError) error {
+		if permit == nil {
+			return nil
+		}
+		return permit.Finish(context.WithoutCancel(networkCtx), limited)
+	}
 	resp, err := hc.Do(req)
 	if err != nil {
+		if finishErr := finish(nil); finishErr != nil {
+			return nil, responseMeta{}, errors.Join(err, fmt.Errorf("智游宝请求已开始但释放调度租约失败: %w", finishErr))
+		}
 		return nil, responseMeta{}, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+		limited := &RateLimitError{RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), now), StatusCode: resp.StatusCode, ResponseStatus: resp.Status, HeaderValue: resp.Header.Get("Retry-After")}
+		finishErr := finish(limited)
+		if len(raw) > maxResponseBytes {
+			raw = raw[:maxResponseBytes]
+		}
+		if readErr != nil && finishErr != nil {
+			return raw, responseMeta{}, errors.Join(limited, readErr, fmt.Errorf("智游宝限流后释放调度租约失败: %w", finishErr))
+		}
+		if readErr != nil {
+			return raw, responseMeta{}, errors.Join(limited, readErr)
+		}
+		if finishErr != nil {
+			return raw, responseMeta{}, errors.Join(limited, fmt.Errorf("智游宝限流后释放调度租约失败: %w", finishErr))
+		}
+		return raw, responseMeta{}, limited
+	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
+		if finishErr := finish(nil); finishErr != nil {
+			return nil, responseMeta{}, errors.Join(err, fmt.Errorf("智游宝请求已开始但释放调度租约失败: %w", finishErr))
+		}
 		return nil, responseMeta{}, err
 	}
 	if len(raw) > maxResponseBytes {
+		if finishErr := finish(nil); finishErr != nil {
+			return raw[:maxResponseBytes], responseMeta{}, fmt.Errorf("智游宝响应过大；释放调度租约失败: %w", finishErr)
+		}
 		return raw[:maxResponseBytes], responseMeta{}, errors.New("智游宝响应过大")
+	}
+	if finishErr := finish(nil); finishErr != nil {
+		return raw, responseMeta{}, fmt.Errorf("智游宝请求已开始但释放调度租约失败: %w", finishErr)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return raw, responseMeta{}, fmt.Errorf("智游宝 HTTP %d", resp.StatusCode)
@@ -124,6 +186,30 @@ func (c Client) request(ctx context.Context, transaction, body string, out any, 
 		return raw, meta, fmt.Errorf("智游宝请求失败(code=%s): %s", strings.TrimSpace(meta.Code), strings.TrimSpace(meta.Description))
 	}
 	return raw, meta, nil
+}
+
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.ParseInt(value, 10, 64); err == nil {
+		if seconds <= 0 {
+			return 0
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	when, err := http.ParseTime(value)
+	if err != nil {
+		return 0
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if !when.After(now) {
+		return 0
+	}
+	return when.Sub(now)
 }
 
 func buildEnvelope(transaction, corp, user, body string, now time.Time) string {

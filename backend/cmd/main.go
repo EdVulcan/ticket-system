@@ -407,7 +407,8 @@ func runPOSHoldExpiryWorker(ctx context.Context) {
 
 func runUpstreamSupplyWorker(ctx context.Context) {
 	worker := &service.UpstreamSupplyWorker{}
-	ticker := time.NewTicker(15 * time.Second)
+	// Pick up due work promptly; the shared HTTP gate controls supplier QPS.
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
 		if _, err := worker.ProcessTasks(ctx, time.Now(), 20); err != nil && ctx.Err() == nil {

@@ -215,7 +215,7 @@ func TestUpstreamMultiCodeWorkerRetriesOnlyImageAndBindsStableSet(t *testing.T) 
 	worker := UpstreamSupplyWorker{NewClient: func(c model.UpstreamConnection) (*zyb.Client, error) {
 		return &zyb.Client{Config: zyb.Config{Endpoint: c.Endpoint, CorpCode: "C", Username: "U", PrivateKey: "K"}, HTTP: server.Client()}, nil
 	}, Decoder: upstreamMultiTestDecoder{codes: []string{"CODE-Z", "CODE-A"}}}
-	for _, now := range []time.Time{time.Now(), time.Now().Add(2 * time.Minute)} {
+	for _, now := range []time.Time{time.Now(), time.Now().Add(3 * time.Minute)} {
 		if _, err := worker.ProcessTasks(context.Background(), now, 1); err != nil {
 			t.Fatal(err)
 		}

@@ -102,7 +102,7 @@ func TestUpstreamWorkerImageRetryDoesNotReissue(t *testing.T) {
 	if snap.ProviderOrderCode != "ZYB-ORDER" || snap.IssueStatus != "pending" {
 		t.Fatalf("identity not saved before image: %+v", snap)
 	}
-	if _, err := worker.ProcessTasks(context.Background(), now.Add(2*time.Minute), 1); err != nil {
+	if _, err := worker.ProcessTasks(context.Background(), snap.NextAttemptAt.Add(time.Second), 1); err != nil {
 		t.Fatal(err)
 	}
 	var ticket model.Ticket

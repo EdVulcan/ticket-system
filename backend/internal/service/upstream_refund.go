@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"ticket-backend/internal/model"
-	"ticket-backend/internal/utils"
 	"ticket-backend/internal/zyb"
 	"time"
 
@@ -40,11 +39,7 @@ func (s *RefundService) upstreamRefundClient(conn *model.UpstreamConnection) (Up
 	if conn == nil || conn.Provider != "zhiyoubao" {
 		return nil, errors.New("upstream refund provider is not configured")
 	}
-	key, err := utils.DecryptAES(conn.PrivateKeyCiphertext)
-	if err != nil {
-		return nil, fmt.Errorf("upstream credential decrypt failed: %w", err)
-	}
-	return zyb.Client{Config: zyb.Config{Endpoint: conn.Endpoint, CorpCode: conn.CorpCode, Username: conn.Username, PrivateKey: key}}, nil
+	return newUpstreamClient(*conn)
 }
 
 func upstreamRefundRequiredTx(tx *gorm.DB, orderID uint, selected map[string]*model.Ticket) (bool, error) {
@@ -158,34 +153,35 @@ func providerState(order *zyb.QueryOrderResult) (used, known bool) {
 	return used, true
 }
 
-func queryUpstreamUsage(ctx context.Context, client UpstreamRefundClient, orderNo string, snapshot *model.OrderItemSupplySnapshot, order *zyb.QueryOrderResult) (bool, bool) {
+func queryUpstreamUsage(ctx context.Context, client UpstreamRefundClient, orderNo string, snapshot *model.OrderItemSupplySnapshot, order *zyb.QueryOrderResult) (bool, bool, error) {
 	checker, ok := client.(interface {
 		QueryCheckStatus(context.Context, string, ...string) (*zyb.CheckStatusResult, error)
 	})
 	if !ok {
-		return providerState(order)
+		used, known := providerState(order)
+		return used, known, nil
 	}
 	result, err := checker.QueryCheckStatus(ctx, orderNo)
 	if err != nil || result == nil || len(result.SubOrders) == 0 {
-		return false, false
+		return false, false, err
 	}
 	used := false
 	for _, r := range result.SubOrders {
 		if !upstreamCheckChildMatches(r.OrderCode, snapshot, orderNo) {
-			return false, false
+			return false, false, nil
 		}
 		checked, e := strconv.Atoi(r.AlreadyCheckNum)
 		returned, re := strconv.Atoi(r.ReturnNum)
 		if e != nil || re != nil || checked < 0 || returned != 0 {
-			return false, false
+			return false, false, nil
 		}
 		if checked > 0 || r.CheckStatus == "checked" {
 			used = true
 		} else if r.CheckStatus != "un_check" {
-			return false, false
+			return false, false, nil
 		}
 	}
-	return used, true
+	return used, true, nil
 }
 
 // processUpstreamRefundCancellation performs query -> whole-order cancel ->
@@ -212,6 +208,7 @@ func (s *RefundService) processUpstreamRefundCancellation(ctx context.Context, r
 		return err
 	}
 	for _, snapshot := range snapshots {
+		ctx := WithUpstreamDispatch(ctx, fmt.Sprintf("refund:%d:%d", root.ID, snapshot.ID), 30, nil)
 		approved := root.AuthorizedUpstreamRefund || root.AuthorizedUsedRefund
 		if snapshot.CancelStatus == "succeeded" || snapshot.CancelStatus == "override" {
 			if snapshot.RefundID != root.ID {
@@ -281,6 +278,9 @@ func (s *RefundService) processUpstreamRefundCancellation(ctx context.Context, r
 		}
 		checkBatch := func(batch string) error {
 			result, _, err := client.QueryRefund(ctx, batch)
+			if _, queued := upstreamDispatchRetry(err); queued {
+				return err
+			}
 			if err != nil || result == nil || result.Pending {
 				return ErrUpstreamRefundPending
 			}
@@ -305,6 +305,9 @@ func (s *RefundService) processUpstreamRefundCancellation(ctx context.Context, r
 			continue
 		}
 		query, _, err := client.QueryOrder(ctx, order.OrderNo)
+		if _, queued := upstreamDispatchRetry(err); queued {
+			return err
+		}
 		if err != nil || query == nil || len(query.Tickets) != 1 || query.Tickets[0].GoodsCode != snapshot.ExternalProductCode || (snapshot.ProviderOrderCode != "" && query.ProviderOrderCode != snapshot.ProviderOrderCode) {
 			if e := bypass(); e != nil {
 				return e
@@ -359,7 +362,10 @@ func (s *RefundService) processUpstreamRefundCancellation(ctx context.Context, r
 			}
 			continue
 		}
-		used, known := queryUpstreamUsage(ctx, client, order.OrderNo, &snapshot, query)
+		used, known, usageErr := queryUpstreamUsage(ctx, client, order.OrderNo, &snapshot, query)
+		if _, queued := upstreamDispatchRetry(usageErr); queued {
+			return usageErr
+		}
 		if used || !known {
 			if !approved {
 				if used {
@@ -383,20 +389,25 @@ func (s *RefundService) processUpstreamRefundCancellation(ctx context.Context, r
 		}
 		if snapshot.CancelStatus == "" {
 			// A conditional durable claim also serializes mixed-payment workers.
-			var claimed int64
-			err := model.Write(func(tx *gorm.DB) error {
+			intent := func(tx *gorm.DB) error {
 				r := tx.Model(&model.OrderItemSupplySnapshot{}).Where("id = ? AND cancel_status = '' AND (refund_id = 0 OR refund_id = ?)", snapshot.ID, root.ID).
 					Updates(map[string]interface{}{"cancel_status": "submitted", "cancel_attempted_at": time.Now(), "refund_id": root.ID})
-				claimed = r.RowsAffected
-				return r.Error
-			})
+				if r.Error != nil {
+					return r.Error
+				}
+				if r.RowsAffected != 1 {
+					return ErrUpstreamRefundPending
+				}
+				return nil
+			}
+			sendCtx, err := prepareUpstreamMutation(ctx, client, fmt.Sprintf("refund:%d:%d", root.ID, snapshot.ID), 30, intent)
 			if err != nil {
 				return err
 			}
-			if claimed != 1 {
-				return ErrUpstreamRefundPending
+			cancel, _, err := client.CancelOrder(sendCtx, order.OrderNo)
+			if _, queued := upstreamDispatchRetry(err); queued {
+				return err
 			}
-			cancel, _, err := client.CancelOrder(ctx, order.OrderNo)
 			if err != nil || cancel == nil || cancel.RetreatBatchNo == "" {
 				return ErrUpstreamRefundPending
 			}
@@ -434,6 +445,7 @@ func (s *RefundService) preflightUpstreamRefund(ctx context.Context, tenantID ui
 		return nil
 	}
 	for _, snapshot := range snapshots {
+		ctx := WithUpstreamDispatch(ctx, fmt.Sprintf("refund-preflight:%d:%d", order.ID, snapshot.ID), 20, nil)
 		if snapshot.IssueAttemptedAt == nil && snapshot.ProviderOrderCode == "" {
 			continue
 		}
@@ -446,6 +458,9 @@ func (s *RefundService) preflightUpstreamRefund(ctx context.Context, tenantID ui
 			return ErrUpstreamRefundUnknown
 		}
 		query, _, err := client.QueryOrder(ctx, order.OrderNo)
+		if _, queued := upstreamDispatchRetry(err); queued {
+			return err
+		}
 		if err != nil {
 			return fmt.Errorf("%w: 供应商查单失败：%v", ErrUpstreamRefundUnknown, err)
 		}
@@ -459,7 +474,10 @@ func (s *RefundService) preflightUpstreamRefund(ctx context.Context, tenantID ui
 		if !upstreamQueryTicketMatches(&snapshot, &item, order.OrderNo, query.Tickets[0]) {
 			return fmt.Errorf("%w: 供应商子单或数量关联不匹配", ErrUpstreamRefundUnknown)
 		}
-		used, known := queryUpstreamUsage(ctx, client, order.OrderNo, &snapshot, query)
+		used, known, usageErr := queryUpstreamUsage(ctx, client, order.OrderNo, &snapshot, query)
+		if _, queued := upstreamDispatchRetry(usageErr); queued {
+			return usageErr
+		}
 		if !known {
 			return ErrUpstreamRefundUnknown
 		}

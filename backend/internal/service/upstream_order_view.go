@@ -24,6 +24,8 @@ type UpstreamOrderView struct {
 	RequiresConfirmation bool       `json:"requires_confirmation"`
 	CanRecoverFunding    bool       `json:"can_recover_funding"`
 	CanRecoverIssuance   bool       `json:"can_recover_issuance"`
+	SyncPending          bool       `json:"sync_pending"`
+	NextSyncAt           *time.Time `json:"next_sync_at,omitempty"`
 }
 
 func populateOrderUpstreamFlag(order *model.Order) error {
@@ -51,6 +53,7 @@ func GetUpstreamOrderView(tenantID uint, orderNo string) ([]UpstreamOrderView, e
 			return nil, err
 		}
 		row := UpstreamOrderView{ProductName: item.ProductName, ProviderOrderCode: s.ProviderOrderCode, ExternalProductCode: s.ExternalProductCode, IssueStatus: s.IssueStatus, ProviderStatus: s.ProviderStatus, CancelStatus: s.CancelStatus, LastSyncedAt: s.LastSyncedAt, ProviderFirstUsedAt: s.ProviderFirstUsedAt, FirstUsedAt: s.ProviderFirstUsedAt, LastError: s.LastError}
+		row.SyncPending, row.NextSyncAt = s.SyncRequestedAt != nil, s.NextAttemptAt
 		if s.CancelStatus == "succeeded" && s.ProviderOrderCode != "" {
 			row.ProviderStatus = "refunded"
 		}
@@ -100,8 +103,8 @@ func GetUpstreamOrderView(tenantID uint, orderNo string) ([]UpstreamOrderView, e
 	return rows, nil
 }
 
-// Refresh requests are read-only at the provider. Issuing and cancellation
-// remain owned by their workers; a browser refresh cannot resend either.
+// Refresh only queues the existing status task. Concurrent refreshes reuse the
+// same snapshot and lease, without sending another supplier request.
 func RefreshUpstreamOrder(ctx context.Context, tenantID uint, orderNo string) error {
 	var order model.Order
 	if err := model.DB.Where("tenant_id = ? AND order_no = ?", tenantID, orderNo).First(&order).Error; err != nil {
@@ -115,19 +118,12 @@ func RefreshUpstreamOrder(ctx context.Context, tenantID uint, orderNo string) er
 		if s.IssueStatus != "ready" {
 			continue
 		}
-		var c model.UpstreamConnection
-		if err := model.DB.Where("id = ? AND tenant_id = ? AND provider = ? AND environment = ?", s.ConnectionID, s.FulfillmentTenantID, s.Provider, s.Environment).First(&c).Error; err != nil {
-			return err
-		}
-		client, err := newUpstreamClient(c)
-		if err != nil {
-			return err
-		}
-		if s.LockedAt != nil {
-			continue
-		}
-		// Reuse the periodic status parser without changing issuance/cancellation.
-		if err = (&UpstreamSupplyWorker{}).syncStatus(ctx, client, &s, &order); err != nil {
+		now := time.Now()
+		if err := model.Write(func(tx *gorm.DB) error {
+			return tx.Model(&model.OrderItemSupplySnapshot{}).Where("id = ? AND sales_tenant_id = ? AND sync_requested_at IS NULL", s.ID, tenantID).
+				Where("last_synced_at IS NULL OR last_synced_at < ?", now.Add(-10*time.Second)).
+				Updates(map[string]interface{}{"sync_requested_at": now, "next_attempt_at": now}).Error
+		}); err != nil {
 			return err
 		}
 	}

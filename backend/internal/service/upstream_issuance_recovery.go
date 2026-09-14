@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"strings"
@@ -57,6 +58,7 @@ func (w *UpstreamSupplyWorker) RecoverIssuance(ctx context.Context, tenantID, us
 	if err != nil {
 		return err
 	}
+	ctx = WithUpstreamDispatch(ctx, fmt.Sprintf("issuance-recovery:%d", snapshot.ID), 30, nil)
 	_, _, queryErr := client.QueryOrder(ctx, order.OrderNo)
 	resend := errors.Is(queryErr, zyb.ErrOrderNotFound)
 	if queryErr != nil && !resend {

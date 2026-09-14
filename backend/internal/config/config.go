@@ -14,13 +14,14 @@ import (
 )
 
 type Config struct {
-	Server      ServerConfig      `mapstructure:"server"`
-	Database    DatabaseConfig    `mapstructure:"database"`
-	Log         LogConfig         `mapstructure:"log"`
-	Security    SecurityConfig    `mapstructure:"security"`
-	Bootstrap   BootstrapConfig   `mapstructure:"bootstrap"`
-	Backup      BackupConfig      `mapstructure:"backup"`
-	Maintenance MaintenanceConfig `mapstructure:"maintenance"`
+	Server             ServerConfig             `mapstructure:"server"`
+	Database           DatabaseConfig           `mapstructure:"database"`
+	Log                LogConfig                `mapstructure:"log"`
+	Security           SecurityConfig           `mapstructure:"security"`
+	Bootstrap          BootstrapConfig          `mapstructure:"bootstrap"`
+	Backup             BackupConfig             `mapstructure:"backup"`
+	Maintenance        MaintenanceConfig        `mapstructure:"maintenance"`
+	UpstreamScheduling UpstreamSchedulingConfig `mapstructure:"upstream_scheduling"`
 }
 
 type ServerConfig struct {
@@ -113,6 +114,56 @@ type MaintenanceConfig struct {
 	MaxSessionTTL     int    `mapstructure:"max_session_ttl_seconds"`
 }
 
+const (
+	defaultUpstreamRequestIntervalMS = 500
+	defaultUpstreamCooldownSeconds   = 60
+	defaultUpstreamMaxCooldown       = 1800
+	defaultUpstreamTodayPoll         = 120
+	defaultUpstreamFuturePoll        = 3600
+	defaultUpstreamUsedPoll          = 600
+	defaultUpstreamNightPoll         = 1800
+)
+
+// UpstreamSchedulingConfig controls deployment-wide pacing for external upstream
+// requests. These defaults are conservative starting values, not vendor-
+// guaranteed limits; all connections share one deployment egress budget.
+type UpstreamSchedulingConfig struct {
+	RequestIntervalMS  int `mapstructure:"request_interval_ms"`
+	CooldownSeconds    int `mapstructure:"cooldown_seconds"`
+	MaxCooldownSeconds int `mapstructure:"max_cooldown_seconds"`
+	TodayPollSeconds   int `mapstructure:"today_poll_seconds"`
+	FuturePollSeconds  int `mapstructure:"future_poll_seconds"`
+	UsedPollSeconds    int `mapstructure:"used_poll_seconds"`
+	NightPollSeconds   int `mapstructure:"night_poll_seconds"`
+}
+
+// Effective applies the conservative defaults to zero-valued fields so partial
+// configurations used by existing tests and callers remain compatible.
+func (c UpstreamSchedulingConfig) Effective() UpstreamSchedulingConfig {
+	if c.RequestIntervalMS == 0 {
+		c.RequestIntervalMS = defaultUpstreamRequestIntervalMS
+	}
+	if c.CooldownSeconds == 0 {
+		c.CooldownSeconds = defaultUpstreamCooldownSeconds
+	}
+	if c.MaxCooldownSeconds == 0 {
+		c.MaxCooldownSeconds = defaultUpstreamMaxCooldown
+	}
+	if c.TodayPollSeconds == 0 {
+		c.TodayPollSeconds = defaultUpstreamTodayPoll
+	}
+	if c.FuturePollSeconds == 0 {
+		c.FuturePollSeconds = defaultUpstreamFuturePoll
+	}
+	if c.UsedPollSeconds == 0 {
+		c.UsedPollSeconds = defaultUpstreamUsedPoll
+	}
+	if c.NightPollSeconds == 0 {
+		c.NightPollSeconds = defaultUpstreamNightPoll
+	}
+	return c
+}
+
 type LogConfig struct {
 	Level      string `mapstructure:"level"`
 	Filename   string `mapstructure:"filename"`
@@ -163,6 +214,13 @@ func InitConfig() error {
 	viper.SetDefault("maintenance.path", "/api/v1/hardware/maintenance/ws")
 	viper.SetDefault("maintenance.session_ttl_seconds", 900)
 	viper.SetDefault("maintenance.max_session_ttl_seconds", 1800)
+	viper.SetDefault("upstream_scheduling.request_interval_ms", defaultUpstreamRequestIntervalMS)
+	viper.SetDefault("upstream_scheduling.cooldown_seconds", defaultUpstreamCooldownSeconds)
+	viper.SetDefault("upstream_scheduling.max_cooldown_seconds", defaultUpstreamMaxCooldown)
+	viper.SetDefault("upstream_scheduling.today_poll_seconds", defaultUpstreamTodayPoll)
+	viper.SetDefault("upstream_scheduling.future_poll_seconds", defaultUpstreamFuturePoll)
+	viper.SetDefault("upstream_scheduling.used_poll_seconds", defaultUpstreamUsedPoll)
+	viper.SetDefault("upstream_scheduling.night_poll_seconds", defaultUpstreamNightPoll)
 
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
@@ -261,6 +319,13 @@ func (c Config) Validate() error {
 	}
 	if c.Maintenance.Enabled && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(c.Server.PublicBaseURL)), "https://") {
 		return fmt.Errorf("enabled maintenance gateway requires an HTTPS public base URL")
+	}
+	upstreamScheduling := c.UpstreamScheduling.Effective()
+	if upstreamScheduling.RequestIntervalMS < 0 || upstreamScheduling.CooldownSeconds < 0 || upstreamScheduling.MaxCooldownSeconds < 0 || upstreamScheduling.TodayPollSeconds < 0 || upstreamScheduling.FuturePollSeconds < 0 || upstreamScheduling.UsedPollSeconds < 0 || upstreamScheduling.NightPollSeconds < 0 {
+		return fmt.Errorf("upstream scheduling values must not be negative")
+	}
+	if upstreamScheduling.MaxCooldownSeconds < upstreamScheduling.CooldownSeconds {
+		return fmt.Errorf("upstream scheduling max cooldown must be at least the base cooldown")
 	}
 	if c.Bootstrap.AdminPassword != "" && c.Bootstrap.PlatformPassword != "" && c.Bootstrap.AdminPassword == c.Bootstrap.PlatformPassword {
 		return fmt.Errorf("platform bootstrap password must differ from tenant administrator password")

@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 119
+const CurrentPostgresSchemaVersion = 120
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -68,6 +68,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&MobileVerificationSession{},
 		&UpstreamConnection{}, &UpstreamProductMapping{}, &ProductSupplyConfig{},
 		&OrderItemSupplySnapshot{}, &ExternalAdmissionCredential{}, &ExternalAdmissionBinding{},
+		&UpstreamDispatchGate{}, &UpstreamDispatchWaiter{},
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
@@ -707,11 +708,49 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateUpstreamSupplyFoundation(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateUpstreamDispatch(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "xiaohongshu grouped vouchers and issuance readiness",
+		Name:      "shared upstream dispatch gate",
 		AppliedAt: time.Now(),
 	}).Error
+}
+
+// migrateUpstreamDispatch adds the durable, payload-free queue used by the
+// shared ZYB request scheduler. It is intentionally independent of tenant
+// ownership tables: the default egress budget is global to the deployment.
+func migrateUpstreamDispatch(db *gorm.DB, previous int) error {
+	if previous >= 120 {
+		return nil
+	}
+	if err := db.Exec(`
+		ALTER TABLE upstream_dispatch_waiters
+			DROP CONSTRAINT IF EXISTS chk_upstream_dispatch_waiter_status;
+		ALTER TABLE upstream_dispatch_waiters
+			ADD CONSTRAINT chk_upstream_dispatch_waiter_status
+			CHECK (status IN ('queued','leased','started','finished','expired','orphaned','cancelled'));
+		ALTER TABLE upstream_dispatch_waiters
+			DROP CONSTRAINT IF EXISTS chk_upstream_dispatch_waiter_priority;
+		ALTER TABLE upstream_dispatch_waiters
+			ADD CONSTRAINT chk_upstream_dispatch_waiter_priority
+			CHECK (priority >= 0 AND priority <= 1000);
+		CREATE INDEX IF NOT EXISTS idx_upstream_dispatch_waiter_queue_order
+			ON upstream_dispatch_waiters(egress_key, status, priority DESC, enqueued_at, id)
+			WHERE deleted_at IS NULL;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_upstream_dispatch_waiter_active_identity
+			ON upstream_dispatch_waiters(egress_key, semantic_key, "transaction", body_hash)
+			WHERE status IN ('queued','leased','started') AND deleted_at IS NULL;
+		CREATE INDEX IF NOT EXISTS idx_upstream_dispatch_gate_cooldown
+			ON upstream_dispatch_gates(egress_key, cooldown_until);
+		CREATE INDEX IF NOT EXISTS idx_upstream_dispatch_waiter_history
+			ON upstream_dispatch_waiters(egress_key, updated_at)
+			WHERE status IN ('finished','expired','orphaned','cancelled');
+	`).Error; err != nil {
+		return fmt.Errorf("create shared upstream dispatch gate indexes: %w", err)
+	}
+	return nil
 }
 
 func validateTeamUniquenessMigrationData(db *gorm.DB) error {

@@ -16,6 +16,9 @@ func (c *RefundController) CheckUpstream(ctx *gin.Context) {
 		return
 	}
 	err := c.Service.CheckUpstreamRefund(ctx.Request.Context(), ctx.GetUint("tenant_id"), input.OrderNo)
+	if respondUpstreamDeferred(ctx, err) {
+		return
+	}
 	if errors.Is(err, service.ErrUpstreamRefundUsed) {
 		ctx.JSON(http.StatusOK, gin.H{"requires_confirmation": true, "reason_code": "upstream_used", "message": "供应商确认已使用。继续将按管理员特殊退款处理，不代表旧系统票码已经失效。"})
 		return

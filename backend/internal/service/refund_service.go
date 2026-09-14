@@ -1113,6 +1113,12 @@ func (s *RefundService) deferClaimedDigitalRefundTask(taskID uint, lockedAt *tim
 		if err := query.First(&task, taskID).Error; err != nil {
 			return err
 		}
+		if retry, queued := upstreamDispatchRetry(cause); queued {
+			return updateClaimedDigitalRefundTask(tx, task.ID, lockedAt, map[string]interface{}{
+				"status": "pending", "locked_at": nil, "next_attempt_at": retry,
+				"last_error": "等待供应商请求调度", "failure_code": "upstream_waiting",
+			})
+		}
 		attempt := task.AttemptCount + 1
 		callbackPending := lockedAt != nil && task.NextAttemptAt != nil
 		if callbackPending {

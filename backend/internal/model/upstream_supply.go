@@ -64,6 +64,8 @@ type OrderItemSupplySnapshot struct {
 	ProviderFirstUsedAt      *time.Time `json:"provider_first_used_at,omitempty"`
 	LastSyncedAt             *time.Time `json:"last_synced_at,omitempty"`
 	NextAttemptAt            *time.Time `json:"next_attempt_at,omitempty"`
+	SyncRequestedAt          *time.Time `json:"sync_requested_at,omitempty"`
+	SyncFailureCount         int        `gorm:"not null;default:0" json:"-"`
 	LockedAt                 *time.Time `json:"locked_at,omitempty"`
 	LastError                string     `gorm:"type:text;not null;default:''" json:"last_error"`
 	RequestPayloadCiphertext string     `gorm:"type:text;not null;default:''" json:"-"`

@@ -34,7 +34,7 @@ func newUpstreamClient(c model.UpstreamConnection) (*zyb.Client, error) {
 	if err != nil {
 		return nil, errors.New("供应商凭据不可读取")
 	}
-	return &zyb.Client{Config: zyb.Config{Endpoint: c.Endpoint, CorpCode: c.CorpCode, Username: c.Username, PrivateKey: key, Timeout: 15 * time.Second}}, nil
+	return &zyb.Client{Config: zyb.Config{Endpoint: c.Endpoint, CorpCode: c.CorpCode, Username: c.Username, PrivateKey: key, Timeout: 15 * time.Second, Gate: newUpstreamDispatchGate(c)}}, nil
 }
 
 func (w *UpstreamSupplyWorker) ProcessTasks(ctx context.Context, now time.Time, limit int) (int, error) {
@@ -52,8 +52,8 @@ func (w *UpstreamSupplyWorker) ProcessTasks(ctx context.Context, now time.Time, 
 			err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
 				Where("mode = 'upstream' AND issue_status IN ?", []string{"pending", "ready"}).
 				Where("(next_attempt_at IS NULL OR next_attempt_at <= ?) AND (locked_at IS NULL OR locked_at < ?)", now, leaseNow.Add(-2*time.Minute)).
-				Where("EXISTS (SELECT 1 FROM orders o WHERE o.id = order_item_supply_snapshots.order_id AND o.tenant_id = order_item_supply_snapshots.sales_tenant_id AND o.status IN ('paid','completed','partial_refunded') AND o.deleted_at IS NULL)").
-				Order("next_attempt_at ASC NULLS FIRST, id ASC").First(&snapshot).Error
+				Where("EXISTS (SELECT 1 FROM orders o WHERE o.id = order_item_supply_snapshots.order_id AND o.tenant_id = order_item_supply_snapshots.sales_tenant_id AND (o.status IN ('paid','completed','partial_refunded') OR (order_item_supply_snapshots.issue_status = 'ready' AND order_item_supply_snapshots.sync_requested_at IS NOT NULL)) AND o.deleted_at IS NULL)").
+				Order("CASE WHEN issue_status = 'pending' THEN 0 WHEN sync_requested_at IS NOT NULL THEN 1 ELSE 2 END, next_attempt_at ASC NULLS FIRST, id ASC").First(&snapshot).Error
 			if err != nil {
 				return err
 			}
@@ -69,14 +69,31 @@ func (w *UpstreamSupplyWorker) ProcessTasks(ctx context.Context, now time.Time, 
 		callCtx, cancel := context.WithTimeout(ctx, 50*time.Second)
 		err = w.processSnapshot(callCtx, &snapshot)
 		cancel()
-		next := leaseNow.Add(time.Minute)
+		var item model.OrderItem
+		if e := model.DB.Select("id", "use_date").Where("id = ?", snapshot.OrderItemID).First(&item).Error; e != nil {
+			return processed, e
+		}
+		if err != nil {
+			snapshot.SyncFailureCount++
+		} else {
+			snapshot.SyncFailureCount = 0
+		}
+		next := time.Now().Add(upstreamPollDelay(snapshot, item.UseDate, time.Now()))
 		message := ""
 		if err != nil {
 			message = truncateChannelError(err.Error())
 		}
+		if retry, deferred := upstreamDispatchRetry(err); deferred {
+			next = retry
+			snapshot.SyncFailureCount--
+			message = "等待供应商请求调度"
+		}
 		if updateErr := model.Write(func(tx *gorm.DB) error {
-			return tx.Model(&model.OrderItemSupplySnapshot{}).Where("id = ? AND locked_at = ?", snapshot.ID, snapshot.LockedAt).
-				Updates(map[string]interface{}{"locked_at": nil, "next_attempt_at": next, "last_error": message}).Error
+			updates := map[string]interface{}{"locked_at": nil, "next_attempt_at": next, "last_error": message, "sync_failure_count": snapshot.SyncFailureCount}
+			if err == nil {
+				updates["sync_requested_at"] = nil
+			}
+			return tx.Model(&model.OrderItemSupplySnapshot{}).Where("id = ? AND locked_at = ?", snapshot.ID, snapshot.LockedAt).Updates(updates).Error
 		}); updateErr != nil {
 			return processed, updateErr
 		}
@@ -114,8 +131,18 @@ func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.Ord
 		return err
 	}
 	if s.IssueStatus == "ready" {
+		priority := 0
+		if s.SyncRequestedAt != nil {
+			priority = 10
+		}
+		ctx = WithUpstreamDispatch(ctx, fmt.Sprintf("status-sync:%d", s.ID), priority, nil)
 		return w.syncStatus(ctx, client, s, &order)
 	}
+	priority := 20
+	if s.IssueAttemptedAt != nil {
+		priority = 30
+	}
+	ctx = WithUpstreamDispatch(ctx, fmt.Sprintf("issuance:%d", s.ID), priority, nil)
 	if s.CancelStatus != "" {
 		return errors.New("上游出票已暂停：票券正在退款或状态已变化")
 	}
@@ -161,7 +188,7 @@ func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.Ord
 			// Persist intent before sending. An unknown response is recovered by
 			// querying the SAME third-party order; it is never a second SendCode.
 			attempted := time.Now()
-			err = model.Write(func(tx *gorm.DB) error {
+			intent := func(tx *gorm.DB) error {
 				result := tx.Model(s).Where("locked_at = ? AND issue_attempted_at IS NULL AND cancel_status = ''", s.LockedAt).Update("issue_attempted_at", attempted)
 				if result.Error != nil {
 					return result.Error
@@ -169,13 +196,14 @@ func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.Ord
 				if result.RowsAffected != 1 {
 					return errors.New("上游出票任务已被接管")
 				}
+				s.IssueAttemptedAt = &attempted
 				return nil
-			})
+			}
+			sendCtx, err := prepareUpstreamMutation(ctx, client, fmt.Sprintf("issuance:%d", s.ID), 20, intent)
 			if err != nil {
 				return err
 			}
-			s.IssueAttemptedAt = &attempted
-			result, _, e := client.SendCode(ctx, request)
+			result, _, e := client.SendCode(sendCtx, request)
 			if e != nil {
 				return e
 			}
@@ -357,7 +385,7 @@ func (w *UpstreamSupplyWorker) syncStatus(ctx context.Context, client *zyb.Clien
 		return err
 	}
 	updates := map[string]interface{}{"provider_status": status, "last_synced_at": time.Now()}
-	if used {
+	if used && s.ProviderFirstUsedAt == nil {
 		records, e := client.QueryCheckRecords(ctx, fmt.Sprintf("%s_%d", order.OrderNo, s.OrderItemID))
 		if e == nil {
 			first := s.ProviderFirstUsedAt

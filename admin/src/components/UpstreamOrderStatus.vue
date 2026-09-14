@@ -9,6 +9,7 @@
       <el-descriptions-item label="供应商状态">{{ text(row.provider_status) }}</el-descriptions-item>
       <el-descriptions-item label="上游取消">{{ text(row.cancel_status) }}</el-descriptions-item>
       <el-descriptions-item label="最近查询">{{ date(row.last_synced_at) }}</el-descriptions-item>
+      <el-descriptions-item v-if="row.sync_pending" label="同步进度">等待同步{{ row.next_sync_at ? ' · 最早 ' + date(row.next_sync_at) : '' }}</el-descriptions-item>
       <el-descriptions-item label="本系统首次核销">{{ date(row.local_first_used_at) }}</el-descriptions-item>
       <el-descriptions-item label="供应商首次核销">{{ date(row.provider_first_used_at) }}</el-descriptions-item>
       <el-descriptions-item label="最早使用时间">{{ date(row.first_used_at) }}</el-descriptions-item>
@@ -21,7 +22,7 @@
   </section>
 </template>
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { ref, watch, onBeforeUnmount } from 'vue'
 import request from '@/utils/request'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { readStoredUser, isScenicHistorySupplier } from '@/utils/tenantAccess'
@@ -31,6 +32,9 @@ const rows = ref<any[]>([])
 const busy = ref(false)
 const error = ref('')
 let generation = 0
+let pollTimer: ReturnType<typeof setTimeout> | undefined
+let pollCount = 0
+function stopPolling() { if (pollTimer) clearTimeout(pollTimer); pollTimer = undefined }
 const user = readStoredUser()
 const canConfirm = user.is_initial_admin === true && isScenicHistorySupplier(user) && hasPermission(user, 'refunds.write')
 const canRecoverIssuance = user.is_initial_admin === true && isScenicHistorySupplier(user) && hasPermission(user, 'after_sales.write')
@@ -65,6 +69,8 @@ async function confirm(refundID: number) {
 const date = (value?: string) => value ? new Date(value).toLocaleString() : '暂无记录'
 const text = (value: string) => ({ pending: '等待出票', ready: '出票成功', local_ready: '本系统出票', un_check: '未使用', checked: '已使用', checking: '部分使用', refunded: '已退票', partial_refunded: '部分退票', unknown: '状态待核实', submitted: '取消处理中', succeeded: '已取消', failed: '取消失败', override: '管理员特殊退款' } as Record<string,string>)[value] || value || '暂无'
 async function load(refresh = false) {
+  stopPolling()
+  if (refresh) pollCount = 0
   const current = ++generation
   const orderNo = props.orderNo
   if (!orderNo) { rows.value = []; return }
@@ -76,12 +82,19 @@ async function load(refresh = false) {
       catch (cause: any) { if (current === generation) error.value = cause.response?.data?.error || '供应商查询失败，以下仍显示本地处理进度' }
     }
     const result = await request.get(url, { skipErrorToast: true } as any)
-    if (current === generation) rows.value = result.data.data || []
+    if (current === generation) {
+      rows.value = result.data.data || []
+      // Poll our saved projection only; this never enqueues another request.
+      if (rows.value.some(row => row.sync_pending) && pollCount++ < 20) {
+        pollTimer = setTimeout(() => { void load() }, 3000)
+      }
+    }
   } catch (cause: any) {
     if (current === generation) error.value = cause.response?.data?.error || '供应商状态读取失败'
   } finally { if (current === generation) busy.value = false }
 }
-watch(() => [props.orderNo, props.refreshKey], () => { rows.value = []; void load() }, { immediate: true })
+watch(() => [props.orderNo, props.refreshKey], () => { rows.value = []; pollCount = 0; void load() }, { immediate: true })
+onBeforeUnmount(() => { generation++; stopPolling() })
 </script>
 <style scoped>
 .upstream-status { margin: 20px 0; }

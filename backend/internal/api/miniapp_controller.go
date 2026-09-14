@@ -161,6 +161,9 @@ func (c *MiniappController) ApplyRefund(ctx *gin.Context) {
 		return
 	}
 	result, err := c.Service.ApplyXiaohongshuRefund(customer, ctx.Param("orderNo"), body)
+	if respondUpstreamDeferred(ctx, err) {
+		return
+	}
 	if err != nil && (errors.Is(err, gorm.ErrRecordNotFound) || strings.Contains(strings.ToLower(err.Error()), "order not found")) {
 		// Do not disclose whether an order exists outside the authenticated
 		// customer/account ownership scope.

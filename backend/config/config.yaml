@@ -26,6 +26,18 @@ database:
   conn_max_lifetime_minutes: 30
   write_timeout_seconds: 10
 
+upstream_scheduling:
+  # Trial query budget, not a vendor-guaranteed limit. Connections share this
+  # budget; SEND_CODE_REQ uses a separate order-submission path.
+  # Override individual values with TICKET_UPSTREAM_SCHEDULING_<FIELD>.
+  request_interval_ms: 500
+  cooldown_seconds: 60
+  max_cooldown_seconds: 1800
+  today_poll_seconds: 120
+  future_poll_seconds: 3600
+  used_poll_seconds: 600
+  night_poll_seconds: 1800
+
 security:
   # Environment variables override these values. If blank, a persistent key file is generated.
   jwt_secret: ""
