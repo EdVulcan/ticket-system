@@ -146,13 +146,49 @@ func mobileSessionToken(ctx *gin.Context) string {
 }
 
 func writeMobileError(ctx *gin.Context, err error) {
-	status := http.StatusBadRequest
-	if errors.Is(err, service.ErrMobileSessionInvalid) {
-		status = http.StatusUnauthorized
-	} else if errors.Is(err, service.ErrMobileTargetDenied) {
-		status = http.StatusForbidden
-	} else if errors.Is(err, service.ErrMobileRepeatConfirmation) {
-		status = http.StatusConflict
+	status, reasonCode, message := mobileErrorPresentation(err)
+	ctx.JSON(status, gin.H{"error": message, "display_text": message, "reason_code": reasonCode})
+}
+
+func mobileErrorPresentation(err error) (int, string, string) {
+	switch {
+	case errors.Is(err, service.ErrMobileSessionInvalid):
+		return http.StatusUnauthorized, "session_expired", "核销会话已失效，请重新选择检票点"
+	case errors.Is(err, service.ErrMobileTargetDenied):
+		return http.StatusForbidden, "target_denied", "当前账号不能使用这个检票点或移动终端"
+	case errors.Is(err, service.ErrMobileRepeatConfirmation):
+		return http.StatusConflict, "repeat_confirmation_required", "该票码刚刚核销过，请重新核对后再继续"
+	case errors.Is(err, service.ErrInvalidTicket):
+		return http.StatusUnprocessableEntity, "invalid_ticket", "无效票"
+	case errors.Is(err, service.ErrTicketRefunded):
+		return http.StatusUnprocessableEntity, "refunded", "订单已退款，不能核销"
+	case errors.Is(err, service.ErrTicketExpired):
+		return http.StatusUnprocessableEntity, "expired", "门票已过期"
+	case errors.Is(err, service.ErrTicketNotStarted):
+		return http.StatusUnprocessableEntity, "not_started", "门票尚未生效"
+	case errors.Is(err, service.ErrOrderNotPaid):
+		return http.StatusUnprocessableEntity, "order_not_paid", "订单尚未支付"
+	case errors.Is(err, service.ErrAccessDenied), errors.Is(err, service.ErrCheckpointNotFound):
+		return http.StatusUnprocessableEntity, "wrong_checkpoint", "当前检票点不能核销此票"
+	case errors.Is(err, service.ErrPointLimitReached):
+		return http.StatusUnprocessableEntity, "already_used", "当前检票点可用次数已满"
+	case errors.Is(err, service.ErrGroupLimitReached):
+		return http.StatusUnprocessableEntity, "benefit_exhausted", "该票可用权益已用完"
+	case errors.Is(err, service.ErrTicketUnavailable):
+		return http.StatusConflict, "processing", "门票状态正在处理中，请稍后重试"
 	}
-	ctx.JSON(status, gin.H{"error": err.Error()})
+	message := strings.TrimSpace(err.Error())
+	if message == "" || isASCIIText(message) {
+		message = "暂时无法读取票券，请稍后重试"
+	}
+	return http.StatusBadRequest, "request_failed", message
+}
+
+func isASCIIText(value string) bool {
+	for _, character := range value {
+		if character > 127 {
+			return false
+		}
+	}
+	return true
 }

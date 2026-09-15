@@ -21,6 +21,7 @@ import top.edvulcan.ticket.verify.data.TicketApi
 import top.edvulcan.ticket.verify.data.VerificationPreview
 import top.edvulcan.ticket.verify.data.VerificationResult
 import top.edvulcan.ticket.verify.domain.VerificationPolicy
+import top.edvulcan.ticket.verify.domain.VerificationMessages
 
 enum class VerifyScreen { LOGIN, TARGETS, VERIFY }
 enum class ConnectionState { OFFLINE, CHECKING, ONLINE, DEGRADED }
@@ -104,9 +105,29 @@ class MobileVerifyViewModel(application: Application) : AndroidViewModel(applica
     fun inspectCode(raw: String) {
         val ticketCode = normalizeTicketCode(raw)
         if (ticketCode.isBlank() || _state.value.busy || _state.value.uncertain || _state.value.preview != null) return
-        launchBusy {
-            val preview = api.preview(ticketCode)
-            _state.value = _state.value.copy(preview = preview, quantity = 1, continuationConfirmed = false, result = null, error = "")
+        _state.value = _state.value.copy(busy = true, result = null, error = "")
+        viewModelScope.launch {
+            try {
+                val preview = api.preview(ticketCode)
+                _state.value = _state.value.copy(preview = preview, quantity = 1, continuationConfirmed = false, error = "")
+            } catch (error: Throwable) {
+                if (error is ApiException && error.statusCode == 401) {
+                    stored = stored.copy(mobileSessionToken = "", checkpointId = 0, deviceId = 0, expiresAt = "", pendingOperation = null)
+                    store.save(stored)
+                    api.setCredentials(stored.authToken, "")
+                    _state.value = _state.value.copy(screen = VerifyScreen.TARGETS, connection = ConnectionState.OFFLINE, error = "核销会话已失效，请重新选择检票点")
+                } else if (error is ApiException && error.statusCode in 400..499) {
+                    val message = VerificationMessages.rejection(error.reasonCode, error.message.orEmpty())
+                    _state.value = _state.value.copy(
+                        result = VerificationResult("preview-${UUID.randomUUID()}", "denied", "deny", error.reasonCode.ifBlank { "invalid_ticket" }, message, 0, -1, ""),
+                        error = "",
+                    )
+                } else {
+                    _state.value = _state.value.copy(error = "网络连接失败，请检查网络后重新扫码")
+                }
+            } finally {
+                _state.value = _state.value.copy(busy = false)
+            }
         }
     }
 

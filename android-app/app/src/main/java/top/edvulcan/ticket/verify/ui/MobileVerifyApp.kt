@@ -66,11 +66,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -83,6 +85,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import top.edvulcan.ticket.verify.ConnectionState
 import top.edvulcan.ticket.verify.MobileVerifyViewModel
 import top.edvulcan.ticket.verify.VerifyScreen
@@ -107,14 +112,14 @@ fun MobileVerifyApp(viewModel: MobileVerifyViewModel, cameraGranted: Boolean, re
     LaunchedEffect(state.result?.operationId) {
         state.result?.let { result ->
             val tone = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 85)
-            tone.startTone(if (result.allowed) ToneGenerator.TONE_PROP_ACK else ToneGenerator.TONE_PROP_NACK, 220)
+            tone.startTone(if (result.allowed) ToneGenerator.TONE_PROP_ACK else ToneGenerator.TONE_CDMA_ABBR_ALERT, if (result.allowed) 220 else 420)
             val vibrator = context.getSystemService(Vibrator::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                vibrator?.vibrate(VibrationEffect.createOneShot(if (result.allowed) 70 else 160, VibrationEffect.DEFAULT_AMPLITUDE))
+                vibrator?.vibrate(if (result.allowed) VibrationEffect.createOneShot(70, VibrationEffect.DEFAULT_AMPLITUDE) else VibrationEffect.createWaveform(longArrayOf(0, 120, 70, 180), -1))
             } else {
-                @Suppress("DEPRECATION") vibrator?.vibrate(if (result.allowed) 70 else 160)
+                @Suppress("DEPRECATION") if (result.allowed) vibrator?.vibrate(70) else vibrator?.vibrate(longArrayOf(0, 120, 70, 180), -1)
             }
-            delay(260)
+            delay(if (result.allowed) 260 else 460)
             tone.release()
         }
     }
@@ -212,31 +217,71 @@ private fun VerifyWorkspace(viewModel: MobileVerifyViewModel, cameraGranted: Boo
     var manualVisible by remember { mutableStateOf(false) }
     var manualCode by remember { mutableStateOf("") }
     var torchEnabled by remember { mutableStateOf(false) }
+    var scannerActive by rememberSaveable { mutableStateOf(false) }
+    var cameraPermissionRequested by rememberSaveable { mutableStateOf(false) }
+    val lifecycleOwner = LocalLifecycleOwner.current
     val checkpoint = state.checkpoints.firstOrNull { it.id == state.selectedCheckpointId }
     val device = state.devices.firstOrNull { it.id == state.selectedDeviceId }
-    val scanning = cameraGranted && !state.busy && !state.uncertain && state.preview == null && state.result == null && !manualVisible
-    Box(Modifier.fillMaxSize().background(Color(0xFF101A1D))) {
-        if (cameraGranted) {
-            CameraScanner(scanning, torchEnabled, Modifier.fillMaxSize(), viewModel::inspectCode)
-        } else {
-            CameraPermissionState(requestCamera, Modifier.align(Alignment.Center))
+    val scanning = scannerActive && cameraGranted && !state.busy && !state.uncertain && state.preview == null && state.result == null && !manualVisible
+    LaunchedEffect(cameraGranted) {
+        if (cameraGranted && cameraPermissionRequested) {
+            scannerActive = true
+            cameraPermissionRequested = false
         }
-        if (cameraGranted) ScanFrame(scanning)
+    }
+    LaunchedEffect(state.preview, state.result, state.uncertain) {
+        if (state.preview != null || state.result != null || state.uncertain) {
+            scannerActive = false
+            torchEnabled = false
+        }
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                scannerActive = false
+                torchEnabled = false
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    Box(Modifier.fillMaxSize().background(Color(0xFF101A1D))) {
+        if (scanning) {
+            CameraScanner(true, torchEnabled, Modifier.fillMaxSize()) { code ->
+                scannerActive = false
+                torchEnabled = false
+                viewModel.inspectCode(code)
+            }
+        } else {
+            CameraIdleState(cameraGranted, Modifier.align(Alignment.Center))
+        }
+        if (scanning) ScanFrame(true)
         ScannerTopBar(
             tenant = state.tenantName,
             checkpoint = checkpoint,
             connection = state.connection,
-            onChangePoint = viewModel::changePoint,
-            onLogout = viewModel::logout,
+            onChangePoint = { scannerActive = false; torchEnabled = false; viewModel.changePoint() },
+            onLogout = { scannerActive = false; torchEnabled = false; viewModel.logout() },
             modifier = Modifier.align(Alignment.TopCenter),
         )
         ScannerDock(
             state = state,
             device = device,
+            scannerActive = scanning,
             torchEnabled = torchEnabled,
             onTorch = { torchEnabled = !torchEnabled },
-            onManual = { manualVisible = true },
-            onContinue = viewModel::clearResult,
+            onScanToggle = {
+                if (scanning) {
+                    scannerActive = false
+                    torchEnabled = false
+                } else if (cameraGranted) {
+                    scannerActive = true
+                } else {
+                    cameraPermissionRequested = true
+                    requestCamera()
+                }
+            },
+            onManual = { scannerActive = false; torchEnabled = false; manualVisible = true },
             onRetry = viewModel::retryPending,
             modifier = Modifier.align(Alignment.BottomCenter),
         )
@@ -247,6 +292,9 @@ private fun VerifyWorkspace(viewModel: MobileVerifyViewModel, cameraGranted: Boo
                     Text("正在${if (state.preview == null) "读取票券" else "确认核销"}", color = Color.White, modifier = Modifier.padding(start = 10.dp))
                 }
             }
+        }
+        state.result?.let { result ->
+            OutcomeOverlay(result, onContinue = { viewModel.clearResult(); scannerActive = true }, modifier = Modifier.fillMaxSize())
         }
     }
     state.preview?.let {
@@ -301,7 +349,7 @@ private fun ScanFrame(active: Boolean) {
 }
 
 @Composable
-private fun ScannerDock(state: top.edvulcan.ticket.verify.MobileVerifyUiState, device: MobileDevice?, torchEnabled: Boolean, onTorch: () -> Unit, onManual: () -> Unit, onContinue: () -> Unit, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+private fun ScannerDock(state: top.edvulcan.ticket.verify.MobileVerifyUiState, device: MobileDevice?, scannerActive: Boolean, torchEnabled: Boolean, onTorch: () -> Unit, onScanToggle: () -> Unit, onManual: () -> Unit, onRetry: () -> Unit, modifier: Modifier = Modifier) {
     Surface(color = Color.White, shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp), shadowElevation = 14.dp, modifier = modifier.fillMaxWidth()) {
         Column(Modifier.safeDrawingPadding().padding(horizontal = 18.dp, vertical = 14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -309,17 +357,25 @@ private fun ScannerDock(state: top.edvulcan.ticket.verify.MobileVerifyUiState, d
                     Text(device?.name ?: "移动终端", style = MaterialTheme.typography.titleMedium)
                     Text(device?.serialNumber.orEmpty(), style = MaterialTheme.typography.bodySmall, color = VerifyMuted)
                 }
-                IconButton(onClick = onTorch, enabled = !state.busy && !state.uncertain) {
+                IconButton(onClick = onTorch, enabled = scannerActive && !state.busy && !state.uncertain) {
                     Icon(if (torchEnabled) Icons.Rounded.FlashOn else Icons.Rounded.FlashOff, "手电筒", tint = if (torchEnabled) VerifyWarning else VerifyInk)
                 }
                 IconButton(onClick = onManual, enabled = !state.busy && !state.uncertain && state.preview == null) {
                     Icon(Icons.Rounded.Edit, "输入票码", tint = VerifyInk)
                 }
             }
-            state.result?.let { CompactResult(it, onContinue) }
             if (state.uncertain) UncertainResult(state.error, state.busy, onRetry)
             if (state.result == null && !state.uncertain) {
-                Text("扫描只读取票券信息，不会自动扣除次数", style = MaterialTheme.typography.bodySmall, color = VerifyMuted, modifier = Modifier.padding(top = 6.dp))
+                if (scannerActive) {
+                    OutlinedButton(onClick = onScanToggle, enabled = !state.busy, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                        Icon(Icons.Rounded.Close, null, Modifier.size(18.dp)); Spacer(Modifier.width(7.dp)); Text("停止扫码")
+                    }
+                } else {
+                    Button(onClick = onScanToggle, enabled = !state.busy, colors = ButtonDefaults.buttonColors(containerColor = VerifyTeal), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                        Icon(Icons.Rounded.Bolt, null, Modifier.size(19.dp)); Spacer(Modifier.width(7.dp)); Text("扫码核销")
+                    }
+                }
+                Text(if (scannerActive) "识别后会先关闭相机，再由你确认核销" else "点击后才会打开相机，不会在后台持续占用", style = MaterialTheme.typography.bodySmall, color = VerifyMuted, modifier = Modifier.padding(top = 8.dp))
                 if (state.error.isNotBlank()) ErrorBanner(state.error)
                 state.recent.firstOrNull()?.let { recent ->
                     HorizontalDivider(Modifier.padding(vertical = 10.dp), color = VerifyBorder)
@@ -334,20 +390,51 @@ private fun ScannerDock(state: top.edvulcan.ticket.verify.MobileVerifyUiState, d
 }
 
 @Composable
-private fun CompactResult(result: VerificationResult, onContinue: () -> Unit) {
-    val color = if (result.allowed) VerifySuccess else VerifyDanger
-    Column(Modifier.fillMaxWidth().padding(top = 8.dp).background(if (result.allowed) Color(0xFFE6F4ED) else Color(0xFFFBE9E6), RoundedCornerShape(16.dp)).padding(14.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(36.dp).background(color, CircleShape), contentAlignment = Alignment.Center) {
-                Icon(if (result.allowed) Icons.Rounded.Check else Icons.Rounded.Close, null, tint = Color.White)
-            }
-            Column(Modifier.weight(1f).padding(start = 11.dp)) {
-                Text(if (result.allowed) "核销成功" else "核销未通过", style = MaterialTheme.typography.titleLarge, color = color)
-                Text(result.displayText, style = MaterialTheme.typography.bodyMedium, color = VerifyInk, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (result.allowed && result.quantity > 0) Text("本次 ${result.quantity} 人${if (result.pointRemaining >= 0) " · 本点剩余 ${result.pointRemaining} 次" else ""}", style = MaterialTheme.typography.labelMedium, color = color)
+private fun OutcomeOverlay(result: VerificationResult, onContinue: () -> Unit, modifier: Modifier = Modifier) {
+    val semantic = if (result.allowed) VerifySuccess else VerifyDanger
+    val headline = if (result.allowed) "核销成功" else when (result.reasonCode) {
+        "invalid_ticket" -> "无效票"
+        "refunded" -> "订单已退款"
+        "expired" -> "门票已过期"
+        "not_started" -> "门票尚未生效"
+        "order_not_paid" -> "订单尚未支付"
+        "wrong_checkpoint" -> "当前点位不可用"
+        "already_used" -> "可用次数已满"
+        "benefit_exhausted" -> "票券权益已用完"
+        else -> "核销未通过"
+    }
+    val guidance = if (result.allowed) {
+        "请放行游客"
+    } else when (result.reasonCode) {
+        "invalid_ticket" -> "请确认二维码是否属于本系统，或改用手动输入核对票码"
+        "refunded" -> "此票已经退款，请勿放行"
+        "expired" -> "请引导游客联系售票窗口处理"
+        "wrong_checkpoint" -> "请引导游客前往正确的检票点"
+        "already_used", "benefit_exhausted" -> "请核对游客是否已经使用过对应权益"
+        else -> "请核对票券信息后再处理"
+    }
+    Box(modifier.background(Color(0xB3152023)).safeDrawingPadding().padding(horizontal = 22.dp), contentAlignment = Alignment.Center) {
+        Surface(color = Color.White, shape = RoundedCornerShape(22.dp), shadowElevation = 12.dp, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(Modifier.size(64.dp).background(if (result.allowed) Color(0xFFE4F3EB) else Color(0xFFF9E8E5), CircleShape), contentAlignment = Alignment.Center) {
+                    Icon(if (result.allowed) Icons.Rounded.Check else Icons.Rounded.Close, null, tint = semantic, modifier = Modifier.size(34.dp))
+                }
+                Text(headline, color = VerifyInk, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(top = 16.dp))
+                if (result.displayText.isNotBlank() && result.displayText != headline) {
+                    Text(result.displayText, color = semantic, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 7.dp), maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+                Text(guidance, color = VerifyMuted, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 10.dp))
+                if (result.allowed && result.quantity > 0) {
+                    Text("本次核销 ${result.quantity} 人${if (result.pointRemaining >= 0) " · 本点剩余 ${result.pointRemaining} 次" else ""}", color = semantic, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 14.dp))
+                }
+                Button(
+                    onClick = onContinue,
+                    colors = ButtonDefaults.buttonColors(containerColor = semantic, contentColor = Color.White),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 18.dp).height(54.dp),
+                ) { Text("继续扫码", style = MaterialTheme.typography.labelLarge) }
             }
         }
-        Button(onClick = onContinue, colors = ButtonDefaults.buttonColors(containerColor = color), modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) { Text("继续扫码") }
     }
 }
 
@@ -481,11 +568,11 @@ private fun BrandMark(size: Int = 48) {
 }
 
 @Composable
-private fun CameraPermissionState(request: () -> Unit, modifier: Modifier = Modifier) {
+private fun CameraIdleState(cameraGranted: Boolean, modifier: Modifier = Modifier) {
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Box(Modifier.size(68.dp).background(Color(0xFF24363A), CircleShape), contentAlignment = Alignment.Center) { Icon(Icons.Rounded.Bolt, null, tint = Color.White) }
-        Text("开启相机开始验票", color = Color.White, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 15.dp))
-        Button(onClick = request, colors = ButtonDefaults.buttonColors(containerColor = VerifyTeal), modifier = Modifier.padding(top = 12.dp)) { Text("允许相机") }
+        Text(if (cameraGranted) "相机处于待机状态" else "点击扫码时申请相机权限", color = Color.White, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 15.dp))
+        Text("相机不会在待机时持续运行", color = Color(0xFFB7C6C9), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
     }
 }
 
