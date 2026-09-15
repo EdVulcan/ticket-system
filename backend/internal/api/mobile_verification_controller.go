@@ -25,6 +25,16 @@ type mobileVerifyRequest struct {
 	RequestID  string `json:"request_id" binding:"required"`
 }
 
+type mobilePreviewRequest struct {
+	TicketCode string `json:"ticket_code" binding:"required"`
+}
+type mobileOperationRequest struct {
+	PreviewID      string `json:"preview_id" binding:"required"`
+	OperationID    string `json:"operation_id" binding:"required"`
+	Quantity       int    `json:"quantity" binding:"required"`
+	ContinuationOf string `json:"continuation_of"`
+}
+
 func NewMobileVerificationController(s *service.MobileVerificationService) *MobileVerificationController {
 	return &MobileVerificationController{Service: s}
 }
@@ -76,10 +86,55 @@ func (c *MobileVerificationController) Verify(ctx *gin.Context) {
 	}
 	result, err := c.Service.Verify(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), mobileSessionToken(ctx), req.TicketCode, req.RequestID, ctx.GetString("role"))
 	if err != nil {
+		if errors.Is(err, service.ErrMobileRepeatConfirmation) {
+			ctx.JSON(http.StatusOK, gin.H{"code": 409, "result": "deny", "reason_code": "repeat_confirmation_required", "display_text": err.Error()})
+			return
+		}
 		if errors.Is(err, service.ErrVerificationProcessing) {
 			ctx.JSON(http.StatusConflict, gin.H{"error": "该扫码请求正在处理中，请稍后重试", "request_id": req.RequestID, "retryable": true})
 			return
 		}
+		writeMobileError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, result)
+}
+
+func (c *MobileVerificationController) VerificationPreview(ctx *gin.Context) {
+	var req mobilePreviewRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := c.Service.VerificationPreview(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), mobileSessionToken(ctx), req.TicketCode, ctx.GetString("role"))
+	if err != nil {
+		writeMobileError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, result)
+}
+
+func (c *MobileVerificationController) VerificationOperation(ctx *gin.Context) {
+	var req mobileOperationRequest
+	if err := ctx.ShouldBindJSON(&req); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := c.Service.VerificationOperation(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), mobileSessionToken(ctx), req.PreviewID, req.OperationID, req.Quantity, req.ContinuationOf, ctx.GetString("role"))
+	if err != nil {
+		if errors.Is(err, service.ErrMobileRepeatConfirmation) {
+			ctx.JSON(http.StatusConflict, gin.H{"error": err.Error(), "requires_confirmation": true})
+			return
+		}
+		writeMobileError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, result)
+}
+
+func (c *MobileVerificationController) GetVerificationOperation(ctx *gin.Context) {
+	result, err := c.Service.GetVerificationOperation(ctx.GetUint("tenant_id"), ctx.GetUint("user_id"), mobileSessionToken(ctx), ctx.Param("operationID"), ctx.GetString("role"))
+	if err != nil {
 		writeMobileError(ctx, err)
 		return
 	}
@@ -96,6 +151,8 @@ func writeMobileError(ctx *gin.Context, err error) {
 		status = http.StatusUnauthorized
 	} else if errors.Is(err, service.ErrMobileTargetDenied) {
 		status = http.StatusForbidden
+	} else if errors.Is(err, service.ErrMobileRepeatConfirmation) {
+		status = http.StatusConflict
 	}
 	ctx.JSON(status, gin.H{"error": err.Error()})
 }

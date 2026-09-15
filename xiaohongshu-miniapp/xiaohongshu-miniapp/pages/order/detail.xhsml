@@ -11,24 +11,37 @@
     <view class="order-info"><text class="order-name">{{order.product_name}} × {{order.quantity}} {{order.isPackage ? '份' : '张'}}</text></view>
   </view>
   <view class="keepsake-tickets" xhs:if="{{ticketCodes.length}}">
-    <view class="keepsake-ticket" xhs:for="{{ticketCodes}}" xhs:key="canvasId">
+    <view class="keepsake-ticket">
       <view class="ticket-heading">
         <text class="ticket-product">{{order.product_name}} × {{order.quantity}} {{order.isPackage ? '份' : '张'}}</text>
         <text class="ticket-merchant" xhs:if="{{storeName}}">{{storeName}}</text>
       </view>
       <image class="ticket-art" src="/assets/ticket-art.svg" mode="aspectFill" aria-hidden="true" />
-      <view class="ticket-admission">
-        <view class="ticket-entry-info">
-          <text class="ticket-entry-title">电子票</text>
-          <text class="ticket-usage {{item.used ? 'is-used' : ''}}">{{item.usageLabel}}</text>
-          <text class="ticket-instruction">请出示此码核验</text>
-          <text class="ticket-instruction">{{item.usageDetail}}</text>
-          <text class="ticket-instruction" xhs:if="{{ticketCodes.length > 1}}">票码 {{item.index}} / {{ticketCodes.length}}</text>
+      <view class="ticket-code-section">
+        <view class="ticket-code-summary">
+          <view class="ticket-entry-info">
+            <text class="ticket-entry-title">电子票码</text>
+            <text class="ticket-instruction">点击二维码可放大出示</text>
+          </view>
+          <text class="ticket-code-count">共 {{ticketCodes.length}} 个</text>
         </view>
-        <button class="ticket-qr-button" data-canvas-id="{{item.canvasId}}" bindtap="showTicketQR" aria-label="放大票码"><canvas class="ticket-qr" canvas-id="{{item.canvasId}}" width="280" height="280"></canvas></button>
+        <scroll-view class="ticket-code-scroll" scroll-x="{{true}}">
+          <view class="ticket-code-list">
+            <view class="ticket-code-card" xhs:for="{{ticketCodes}}" xhs:key="canvasId">
+              <view class="ticket-code-card-head">
+                <text class="ticket-code-index">第 {{item.index}} 个票码</text>
+                <text class="ticket-usage {{item.used ? 'is-used' : ''}}">{{item.usageLabel}}</text>
+              </view>
+              <button class="ticket-qr-button" data-canvas-id="{{item.canvasId}}" bindtap="showTicketQR" aria-label="放大第 {{item.index}} 个票码"><canvas class="ticket-qr" canvas-id="{{item.canvasId}}" width="280" height="280"></canvas></button>
+              <text class="ticket-instruction ticket-usage-detail">{{item.usageDetail}}</text>
+              <text class="ticket-value">{{item.code}}</text>
+            </view>
+          </view>
+        </scroll-view>
+        <text class="ticket-scroll-hint" xhs:if="{{ticketCodes.length > 1}}">左右滑动查看其他票码</text>
       </view>
       <view class="ticket-stub">
-        <text class="ticket-value">{{item.code}}</text><text class="ticket-privacy">请勿公开分享票码</text>
+        <text class="ticket-privacy">请妥善保管票码，勿公开分享</text>
       </view>
     </view>
   </view>

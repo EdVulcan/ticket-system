@@ -155,9 +155,6 @@ page {
 .keepsake-ticket {
   background: #fff;
 }
-.keepsake-ticket + .keepsake-ticket {
-  border-top: 16rpx solid #f5f7f8;
-}
 .ticket-heading {
   padding: 29rpx 50rpx 50rpx;
 }
@@ -185,13 +182,15 @@ page {
   height: 292rpx;
   margin: 0 50rpx;
 }
-.ticket-admission {
+.ticket-code-section {
+  margin-top: 42rpx;
+}
+.ticket-code-summary {
   display: flex;
   align-items: center;
-  gap: 30rpx;
-  margin: 58rpx 50rpx 0;
-  padding-bottom: 50rpx;
-  border-bottom: 1rpx solid #edf0f2;
+  justify-content: space-between;
+  gap: 24rpx;
+  padding: 0 50rpx 24rpx;
 }
 .ticket-entry-info {
   flex: 1;
@@ -199,9 +198,50 @@ page {
 }
 .ticket-entry-title {
   display: block;
-  margin-bottom: 12rpx;
-  font-size: 40rpx;
+  margin-bottom: 6rpx;
+  font-size: 34rpx;
   font-weight: 700;
+}
+.ticket-code-count {
+  flex-shrink: 0;
+  color: #087f8c;
+  font-size: 24rpx;
+  font-weight: 600;
+}
+.ticket-code-scroll {
+  width: 100%;
+  white-space: nowrap;
+}
+.ticket-code-list {
+  display: inline-flex;
+  gap: 22rpx;
+  padding: 0 50rpx 12rpx;
+}
+.ticket-code-card {
+  display: inline-flex;
+  box-sizing: border-box;
+  width: 470rpx;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  padding: 26rpx 30rpx 24rpx;
+  border: 1rpx solid #dce4e7;
+  border-radius: 16rpx;
+  background: #fff;
+  vertical-align: top;
+}
+.ticket-code-card-head {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18rpx;
+  margin-bottom: 20rpx;
+}
+.ticket-code-index {
+  color: #20262b;
+  font-size: 25rpx;
+  font-weight: 600;
 }
 .ticket-instruction {
   display: block;
@@ -234,15 +274,36 @@ page {
   height: 290rpx;
   background: #fff;
 }
+.ticket-usage-detail {
+  width: 100%;
+  margin-top: 18rpx;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ticket-code-card .ticket-value {
+  width: 100%;
+  margin-top: 10rpx;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ticket-scroll-hint {
+  display: block;
+  margin-top: 12rpx;
+  color: #879398;
+  font-size: 21rpx;
+  text-align: center;
+}
 .ticket-stub {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 24rpx;
-  padding: 30rpx 50rpx 50rpx;
+  align-items: center;
+  justify-content: center;
+  padding: 24rpx 50rpx 42rpx;
 }
-.ticket-stub .ticket-value { min-width: 0; }
-.ticket-stub .ticket-privacy { flex-shrink: 0; margin-top: 0; }
+.ticket-stub .ticket-privacy { margin-top: 0; }
 .ticket-value,
 .ticket-privacy {
   display: block;
@@ -380,8 +441,8 @@ page {
   line-height: 1.6;
 }
 @media (max-width: 350px) {
-  .ticket-qr { width: 328rpx; height: 328rpx; }
-  .ticket-admission { gap: 20rpx; }
+  .ticket-code-card { width: 440rpx; }
+  .ticket-qr { width: 270rpx; height: 270rpx; }
 }
 
 .issuance-pending {
@@ -515,9 +576,8 @@ page {
 
 .ticket-usage {
   display: inline-block;
-  align-self: flex-start;
   padding: 6rpx 16rpx;
-  margin: 10rpx 0 12rpx;
+  margin: 0;
   border-radius: 8rpx;
   background: #e8f4f3;
   color: #087f8c;

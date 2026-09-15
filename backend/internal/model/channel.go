@@ -136,6 +136,7 @@ type XiaohongshuVoucherVerification struct {
 	// partial index used to retain only non-deleted coordination rows.
 	RequestID           string     `gorm:"size:100;not null" json:"request_id"`
 	RequestHash         string     `gorm:"size:64;not null" json:"-"`
+	RequestedQuantity   int        `gorm:"not null;default:1" json:"requested_quantity"`
 	State               string     `gorm:"size:30;not null;index;check:chk_xhs_voucher_verification_state,state IN ('prepared','external_in_flight','external_unknown','external_confirmed','local_pending','local_completed','external_rejected','local_rejected','manual_review')" json:"state"`
 	VerifyID            string     `gorm:"size:100;index" json:"verify_id,omitempty"`
 	CheckInRecordID     uint       `gorm:"index" json:"check_in_record_id,omitempty"`

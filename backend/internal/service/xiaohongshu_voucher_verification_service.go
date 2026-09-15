@@ -347,13 +347,20 @@ func (s *DeviceService) ensureXiaohongshuVoucherVerification(req DirectVerifyReq
 			if saga.TenantID != req.TenantID || saga.TicketID != link.TicketID || saga.ChannelAccountID != link.ChannelAccountID {
 				return errors.New("小红书券核销协调归属不一致")
 			}
+			quantity := req.Quantity
+			if quantity <= 0 {
+				quantity = 1
+			}
+			if saga.RequestID == req.RequestID && saga.DeviceID == req.DeviceID && saga.RequestedQuantity != quantity {
+				return errors.New("同一小红书核销请求不能变更核销数量")
+			}
 			// A local preflight rejection has never contacted the provider. A new
 			// scan may try its own checkpoint; the old device response stays denied.
 			if saga.State == "local_rejected" && saga.AttemptCount == 0 && saga.ExternalStartedAt == nil && saga.VerifyID == "" &&
 				(saga.RequestID != req.RequestID || saga.DeviceID != req.DeviceID) {
 				if err := tx.Model(&saga).Updates(map[string]interface{}{
 					"state": "prepared", "device_verification_id": verificationID, "device_id": req.DeviceID,
-					"check_point_id": req.CheckPointID, "request_id": req.RequestID, "request_hash": req.RequestHash, "last_error": "",
+					"check_point_id": req.CheckPointID, "request_id": req.RequestID, "request_hash": req.RequestHash, "requested_quantity": quantity, "last_error": "",
 				}).Error; err != nil {
 					return err
 				}
@@ -363,10 +370,14 @@ func (s *DeviceService) ensureXiaohongshuVoucherVerification(req DirectVerifyReq
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
+		quantity := req.Quantity
+		if quantity <= 0 {
+			quantity = 1
+		}
 		saga = model.XiaohongshuVoucherVerification{
 			TenantID: req.TenantID, ChannelAccountID: link.ChannelAccountID, VoucherLinkID: link.ID,
 			TicketID: link.TicketID, DeviceVerificationID: verificationID, DeviceID: req.DeviceID,
-			CheckPointID: req.CheckPointID, RequestID: req.RequestID, RequestHash: req.RequestHash, State: "prepared",
+			CheckPointID: req.CheckPointID, RequestID: req.RequestID, RequestHash: req.RequestHash, RequestedQuantity: quantity, State: "prepared",
 		}
 		return tx.Create(&saga).Error
 	})
@@ -692,9 +703,15 @@ func (s *DeviceService) verifyXiaohongshuVoucher(req DirectVerifyRequest, device
 		case "external_confirmed", "local_pending":
 			return s.finishXiaohongshuVoucherLocal(localReq, saga, verification.ID)
 		case "prepared":
-			if err := s.TicketService.PrepareDeviceRequest(localTicketCode, req.CheckPointID, req.DeviceID, req.TenantID, saga.ID, req.RequestID); err != nil {
-				_ = s.rejectPreparedXiaohongshuVoucher(saga, err)
-				response := xiaohongshuVoucherRejectedResponse(err.Error())
+			var prepareErr error
+			if req.Quantity > 1 {
+				prepareErr = s.TicketService.PrepareBatchDeviceRequest(localTicketCode, req.CheckPointID, req.DeviceID, req.TenantID, req.RequestID, req.Quantity, saga.ID)
+			} else {
+				prepareErr = s.TicketService.PrepareDeviceRequest(localTicketCode, req.CheckPointID, req.DeviceID, req.TenantID, saga.ID, req.RequestID)
+			}
+			if prepareErr != nil {
+				_ = s.rejectPreparedXiaohongshuVoucher(saga, prepareErr)
+				response := xiaohongshuVoucherRejectedResponse(prepareErr.Error())
 				if completeErr := s.completeXiaohongshuDeviceVerification(verification.ID, response, 0); completeErr != nil {
 					return nil, completeErr
 				}
@@ -725,7 +742,12 @@ func (s *DeviceService) verifyXiaohongshuVoucher(req DirectVerifyRequest, device
 // The provider voucher is consumed once; each later admission is a new local
 // business fact governed by the same ticket rules as any other sales channel.
 func (s *DeviceService) verifyActivatedXiaohongshuTicket(req DirectVerifyRequest, verificationID uint) (*VerifyResponse, error) {
-	err := s.TicketService.VerifyDeviceRequest(req.TicketCode, req.CheckPointID, req.DeviceID, req.TenantID, req.RequestID)
+	var err error
+	if req.Quantity > 1 {
+		_, err = s.TicketService.VerifyBatchDeviceRequest(req.TicketCode, req.CheckPointID, req.DeviceID, req.TenantID, req.RequestID, req.Quantity)
+	} else {
+		err = s.TicketService.VerifyDeviceRequest(req.TicketCode, req.CheckPointID, req.DeviceID, req.TenantID, req.RequestID)
+	}
 	response := denyResponse(err)
 	var checkIn model.CheckInRecord
 	queryErr := s.DB.Where("device_id = ? AND device_request_id = ? AND tenant_id = ?", req.DeviceID, req.RequestID, req.TenantID).First(&checkIn).Error
@@ -745,7 +767,12 @@ func (s *DeviceService) verifyActivatedXiaohongshuTicket(req DirectVerifyRequest
 }
 
 func (s *DeviceService) finishXiaohongshuVoucherLocal(req DirectVerifyRequest, saga *model.XiaohongshuVoucherVerification, verificationID uint) (*VerifyResponse, error) {
-	err := s.TicketService.VerifyDeviceRequestReserved(req.TicketCode, req.CheckPointID, req.DeviceID, req.TenantID, req.RequestID, saga.ID)
+	var err error
+	if req.Quantity > 1 {
+		_, err = s.TicketService.VerifyBatchDeviceRequestReserved(req.TicketCode, req.CheckPointID, req.DeviceID, req.TenantID, req.RequestID, req.Quantity, saga.ID)
+	} else {
+		err = s.TicketService.VerifyDeviceRequestReserved(req.TicketCode, req.CheckPointID, req.DeviceID, req.TenantID, req.RequestID, saga.ID)
+	}
 	var checkIn model.CheckInRecord
 	_ = s.DB.Where("device_id = ? AND device_request_id = ? AND result = ?", req.DeviceID, req.RequestID, "success").Order("id desc").First(&checkIn).Error
 	if err != nil && checkIn.ID == 0 {
@@ -815,16 +842,26 @@ func (s *DeviceService) ProcessPendingXiaohongshuVoucherVerifications(ctx contex
 		if err := s.DB.Where("id = ? AND tenant_id = ?", sagas[i].TicketID, sagas[i].TenantID).First(&ticket).Error; err != nil {
 			continue
 		}
-		request := DirectVerifyRequest{TenantID: sagas[i].TenantID, DeviceID: sagas[i].DeviceID, CheckPointID: sagas[i].CheckPointID, RequestID: sagas[i].RequestID, RequestHash: sagas[i].RequestHash, TicketCode: ticket.TicketCode}
+		quantity := sagas[i].RequestedQuantity
+		if quantity <= 0 {
+			quantity = 1
+		}
+		request := DirectVerifyRequest{TenantID: sagas[i].TenantID, DeviceID: sagas[i].DeviceID, CheckPointID: sagas[i].CheckPointID, RequestID: sagas[i].RequestID, RequestHash: sagas[i].RequestHash, TicketCode: ticket.TicketCode, Quantity: quantity}
 		if sagas[i].State == "prepared" {
 			var link model.XiaohongshuVoucherLink
 			if err := s.DB.Where("id = ? AND tenant_id = ? AND ticket_id = ?", sagas[i].VoucherLinkID, sagas[i].TenantID, sagas[i].TicketID).First(&link).Error; err != nil {
 				continue
 			}
-			if err := s.TicketService.PrepareDeviceRequest(ticket.TicketCode, sagas[i].CheckPointID, sagas[i].DeviceID, sagas[i].TenantID, sagas[i].ID, sagas[i].RequestID); err != nil {
-				if isDeterministicLocalVerificationError(err) {
-					_ = s.rejectPreparedXiaohongshuVoucher(&sagas[i], err)
-					_ = s.completeXiaohongshuDeviceVerification(sagas[i].DeviceVerificationID, xiaohongshuVoucherRejectedResponse(err.Error()), 0)
+			var prepareErr error
+			if quantity > 1 {
+				prepareErr = s.TicketService.PrepareBatchDeviceRequest(ticket.TicketCode, sagas[i].CheckPointID, sagas[i].DeviceID, sagas[i].TenantID, sagas[i].RequestID, quantity, sagas[i].ID)
+			} else {
+				prepareErr = s.TicketService.PrepareDeviceRequest(ticket.TicketCode, sagas[i].CheckPointID, sagas[i].DeviceID, sagas[i].TenantID, sagas[i].ID, sagas[i].RequestID)
+			}
+			if prepareErr != nil {
+				if isDeterministicLocalVerificationError(prepareErr) {
+					_ = s.rejectPreparedXiaohongshuVoucher(&sagas[i], prepareErr)
+					_ = s.completeXiaohongshuDeviceVerification(sagas[i].DeviceVerificationID, xiaohongshuVoucherRejectedResponse(prepareErr.Error()), 0)
 				}
 				continue
 			}

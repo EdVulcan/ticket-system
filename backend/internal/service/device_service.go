@@ -128,6 +128,7 @@ type DirectVerifyRequest struct {
 	TicketCode   string
 	MediaType    string
 	ScanTime     string
+	Quantity     int
 }
 
 type OpenResultRequest struct {
@@ -527,6 +528,12 @@ func (s *DeviceService) VerifyDirect(req DirectVerifyRequest) (*VerifyResponse, 
 	if device.Type != "gate" && device.Type != "handheld" {
 		return denyResponse(ErrAccessDenied), nil
 	}
+	if req.Quantity <= 0 {
+		req.Quantity = 1
+	}
+	if req.Quantity > 1 && device.Type != "handheld" {
+		return denyResponse(ErrAccessDenied), nil
+	}
 	if voucherLink, localTicketCode, found, resolveErr := s.resolveXiaohongshuVoucher(req.TenantID, req.TicketCode); resolveErr != nil {
 		return nil, resolveErr
 	} else if found {
@@ -541,7 +548,12 @@ func (s *DeviceService) VerifyDirect(req DirectVerifyRequest) (*VerifyResponse, 
 		return replay, nil
 	}
 
-	verifyErr := s.TicketService.VerifyDeviceRequest(req.TicketCode, req.CheckPointID, req.DeviceID, req.TenantID, req.RequestID)
+	var verifyErr error
+	if req.Quantity > 1 {
+		_, verifyErr = s.TicketService.VerifyBatchDeviceRequest(req.TicketCode, req.CheckPointID, req.DeviceID, req.TenantID, req.RequestID, req.Quantity)
+	} else {
+		verifyErr = s.TicketService.VerifyDeviceRequest(req.TicketCode, req.CheckPointID, req.DeviceID, req.TenantID, req.RequestID)
+	}
 	resp := denyResponse(verifyErr)
 	if verifyErr == nil {
 		resp = s.allowResponse(req.TicketCode)

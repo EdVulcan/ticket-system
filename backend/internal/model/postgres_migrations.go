@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 120
+const CurrentPostgresSchemaVersion = 121
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -65,7 +65,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&POSShift{}, &POSShiftCorrection{}, &PrintJob{}, &PrintTemplate{}, &PrintTemplateRevision{}, &DeviceAlert{}, &POSHold{}, &POSHoldLine{},
 		&SettlementStatement{}, &SettlementLine{}, &SettlementAdjustment{}, &StaffResourceScope{},
 		&AfterSaleRequest{}, &AfterSaleEvent{}, &HardwareCommand{}, &HardwareEvent{}, &DeviceRequestNonce{}, &DeviceVerification{}, &DeviceMaintenanceCredential{}, &DeviceMaintenanceSession{}, &DeviceProvisioningLease{}, &MigrationAuditIssue{},
-		&MobileVerificationSession{},
+		&MobileVerificationSession{}, &MobileVerificationPreview{}, &MobileVerificationOperation{},
 		&UpstreamConnection{}, &UpstreamProductMapping{}, &ProductSupplyConfig{},
 		&OrderItemSupplySnapshot{}, &ExternalAdmissionCredential{}, &ExternalAdmissionBinding{},
 		&UpstreamDispatchGate{}, &UpstreamDispatchWaiter{},
@@ -711,11 +711,91 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateUpstreamDispatch(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateMobileVerificationBatch(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "shared upstream dispatch gate",
+		Name:      "mobile verification preview and atomic confirmation",
 		AppliedAt: time.Now(),
 	}).Error
+}
+
+func migrateMobileVerificationBatch(db *gorm.DB, previous int) error {
+	if previous >= 121 {
+		return nil
+	}
+	if err := db.Exec(`
+		ALTER TABLE mobile_verification_previews DROP CONSTRAINT IF EXISTS chk_mobile_verification_preview_status;
+		ALTER TABLE mobile_verification_previews ADD CONSTRAINT chk_mobile_verification_preview_status
+			CHECK (status IN ('active','consuming','consumed','expired'));
+		ALTER TABLE mobile_verification_operations DROP CONSTRAINT IF EXISTS chk_mobile_verification_operation_status;
+		ALTER TABLE mobile_verification_operations ADD CONSTRAINT chk_mobile_verification_operation_status
+			CHECK (status IN ('processing','completed','denied'));
+		ALTER TABLE mobile_verification_operations DROP CONSTRAINT IF EXISTS chk_mobile_verification_operation_quantity;
+		ALTER TABLE mobile_verification_operations ADD CONSTRAINT chk_mobile_verification_operation_quantity
+			CHECK (quantity > 0 AND point_remaining >= 0);
+		CREATE INDEX IF NOT EXISTS idx_mobile_verification_previews_active
+			ON mobile_verification_previews(tenant_id, session_id, status, expires_at);
+		CREATE INDEX IF NOT EXISTS idx_mobile_verification_operations_ticket
+			ON mobile_verification_operations(tenant_id, ticket_code, completed_at);
+		CREATE OR REPLACE FUNCTION enforce_mobile_verification_preview() RETURNS trigger AS $$
+		BEGIN
+			IF NEW.tenant_id = 0 OR NEW.staff_id = 0 OR NEW.session_id = 0 OR NEW.device_id = 0 OR NEW.check_point_id = 0 OR NEW.scenic_area_id = 0
+			   OR COALESCE(BTRIM(NEW.preview_id), '') = '' OR COALESCE(BTRIM(NEW.ticket_code), '') = ''
+			   OR NOT EXISTS (
+				SELECT 1 FROM mobile_verification_sessions s
+				JOIN devices d ON d.id = NEW.device_id
+				JOIN check_points c ON c.id = NEW.check_point_id
+				WHERE s.id = NEW.session_id AND s.tenant_id = NEW.tenant_id AND s.staff_id = NEW.staff_id
+				  AND s.device_id = NEW.device_id AND s.check_point_id = NEW.check_point_id AND s.scenic_area_id = NEW.scenic_area_id
+				  AND d.tenant_id = NEW.tenant_id AND d.scenic_area_id = NEW.scenic_area_id AND d.check_point_id = NEW.check_point_id
+				  AND c.tenant_id = NEW.tenant_id AND c.scenic_area_id = NEW.scenic_area_id
+			   )
+			   OR NOT EXISTS (
+				SELECT 1 FROM tickets t
+				WHERE t.ticket_code = NEW.ticket_code
+				  AND (t.fulfillment_tenant_id = NEW.tenant_id OR (t.fulfillment_tenant_id = 0 AND t.tenant_id = NEW.tenant_id))
+				  AND t.fulfillment_scenic_area_id = NEW.scenic_area_id
+			   )
+			THEN RAISE EXCEPTION 'mobile verification preview ownership mismatch'; END IF;
+			IF TG_OP = 'UPDATE' AND (NEW.preview_id IS DISTINCT FROM OLD.preview_id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+			   OR NEW.staff_id IS DISTINCT FROM OLD.staff_id OR NEW.session_id IS DISTINCT FROM OLD.session_id
+			   OR NEW.device_id IS DISTINCT FROM OLD.device_id OR NEW.check_point_id IS DISTINCT FROM OLD.check_point_id
+			   OR NEW.scenic_area_id IS DISTINCT FROM OLD.scenic_area_id OR NEW.ticket_code IS DISTINCT FROM OLD.ticket_code
+			   OR NEW.max_quantity IS DISTINCT FROM OLD.max_quantity OR NEW.expires_at IS DISTINCT FROM OLD.expires_at)
+			THEN RAISE EXCEPTION 'mobile verification preview identity is immutable'; END IF;
+			RETURN NEW;
+		END; $$ LANGUAGE plpgsql;
+		DROP TRIGGER IF EXISTS mobile_verification_preview_guard ON mobile_verification_previews;
+		CREATE TRIGGER mobile_verification_preview_guard BEFORE INSERT OR UPDATE ON mobile_verification_previews
+			FOR EACH ROW EXECUTE FUNCTION enforce_mobile_verification_preview();
+		CREATE OR REPLACE FUNCTION enforce_mobile_verification_operation() RETURNS trigger AS $$
+		BEGIN
+			IF NEW.tenant_id = 0 OR NEW.staff_id = 0 OR NEW.session_id = 0 OR NEW.device_id = 0 OR NEW.check_point_id = 0 OR NEW.scenic_area_id = 0
+			   OR COALESCE(BTRIM(NEW.operation_id), '') = '' OR COALESCE(BTRIM(NEW.ticket_code), '') = '' OR COALESCE(BTRIM(NEW.request_hash), '') = ''
+			   OR NOT EXISTS (
+				SELECT 1 FROM mobile_verification_previews p
+				WHERE p.operation_id = NEW.operation_id AND p.tenant_id = NEW.tenant_id AND p.staff_id = NEW.staff_id
+				  AND p.device_id = NEW.device_id AND p.check_point_id = NEW.check_point_id AND p.scenic_area_id = NEW.scenic_area_id
+				  AND p.ticket_code = NEW.ticket_code AND p.status IN ('consuming','consumed')
+			   )
+			THEN RAISE EXCEPTION 'mobile verification operation ownership mismatch'; END IF;
+			IF TG_OP = 'UPDATE' AND (NEW.operation_id IS DISTINCT FROM OLD.operation_id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+			   OR NEW.staff_id IS DISTINCT FROM OLD.staff_id OR NEW.device_id IS DISTINCT FROM OLD.device_id
+			   OR NEW.check_point_id IS DISTINCT FROM OLD.check_point_id OR NEW.scenic_area_id IS DISTINCT FROM OLD.scenic_area_id
+			   OR NEW.ticket_code IS DISTINCT FROM OLD.ticket_code OR NEW.quantity IS DISTINCT FROM OLD.quantity
+			   OR NEW.continuation_of IS DISTINCT FROM OLD.continuation_of OR NEW.request_hash IS DISTINCT FROM OLD.request_hash)
+			THEN RAISE EXCEPTION 'mobile verification operation identity is immutable'; END IF;
+			RETURN NEW;
+		END; $$ LANGUAGE plpgsql;
+		DROP TRIGGER IF EXISTS mobile_verification_operation_guard ON mobile_verification_operations;
+		CREATE TRIGGER mobile_verification_operation_guard BEFORE INSERT OR UPDATE ON mobile_verification_operations
+			FOR EACH ROW EXECUTE FUNCTION enforce_mobile_verification_operation();
+	`).Error; err != nil {
+		return fmt.Errorf("create mobile verification batch indexes: %w", err)
+	}
+	return nil
 }
 
 // migrateUpstreamDispatch adds the durable, payload-free queue used by the
@@ -1632,7 +1712,8 @@ func applyPostgresOwnershipGuards(db *gorm.DB) error {
 			IF NEW.tenant_id = 0 OR NEW.channel_account_id = 0 OR NEW.voucher_link_id = 0
 			   OR NEW.ticket_id = 0 OR NEW.device_verification_id = 0 OR NEW.device_id = 0 OR NEW.check_point_id = 0
 			   OR COALESCE(NEW.request_id, '') = '' OR COALESCE(NEW.request_hash, '') = ''
-			   OR NEW.attempt_count < 0
+			   OR NEW.attempt_count < 0 OR NEW.requested_quantity <= 0
+			   OR (TG_OP = 'UPDATE' AND NEW.requested_quantity IS DISTINCT FROM OLD.requested_quantity)
 			   OR NEW.state NOT IN ('prepared','external_in_flight','external_unknown','external_confirmed','local_pending','local_completed','external_rejected','local_rejected','manual_review')
 			   OR (NEW.state IN ('external_confirmed','local_pending','local_completed','manual_review') AND COALESCE(NEW.verify_id, '') = '')
 			   OR (NEW.state = 'local_completed' AND (NEW.check_in_record_id = 0 OR NEW.local_completed_at IS NULL))

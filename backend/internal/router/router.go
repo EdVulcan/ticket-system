@@ -351,6 +351,9 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		mobileGroup.POST("/session/heartbeat", mobileVerificationController.Heartbeat)
 		mobileGroup.POST("/session/close", mobileVerificationController.Close)
 		mobileGroup.POST("/session/verify", mobileVerificationController.Verify)
+		mobileGroup.POST("/session/verification-previews", mobileVerificationController.VerificationPreview)
+		mobileGroup.POST("/session/verification-operations", mobileVerificationController.VerificationOperation)
+		mobileGroup.GET("/verification-operations/:operationID", mobileVerificationController.GetVerificationOperation)
 	}
 
 	// CheckPoint Routes

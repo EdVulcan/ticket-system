@@ -12,8 +12,8 @@ func TestPostgresSchema120CreatesPayloadFreeUpstreamDispatchTables(t *testing.T)
 	if err := runMigrations(db); err != nil {
 		t.Fatal(err)
 	}
-	if CurrentPostgresSchemaVersion != 120 {
-		t.Fatalf("schema version=%d, want 120", CurrentPostgresSchemaVersion)
+	if CurrentPostgresSchemaVersion < 120 {
+		t.Fatalf("schema version=%d, want at least 120", CurrentPostgresSchemaVersion)
 	}
 	for _, table := range []interface{}{&UpstreamDispatchGate{}, &UpstreamDispatchWaiter{}} {
 		if !db.Migrator().HasTable(table) {
@@ -119,7 +119,7 @@ func TestPostgresSchema119To120KeepsExistingRowsAndAddsDispatchQueue(t *testing.
 		t.Fatal("schema 120 dispatch tables are missing")
 	}
 	var latest SchemaMigration
-	if err := db.Order("version DESC").First(&latest).Error; err != nil || latest.Version != 120 {
+	if err := db.Order("version DESC").First(&latest).Error; err != nil || latest.Version != CurrentPostgresSchemaVersion {
 		t.Fatalf("latest migration=%+v err=%v", latest, err)
 	}
 }

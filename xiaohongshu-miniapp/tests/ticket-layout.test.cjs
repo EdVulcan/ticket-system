@@ -28,3 +28,16 @@ test('ticket product title uses bounded fluid sizing without clipping long names
   assert.match(styles, /\.ticket-product\s*\{[\s\S]*(?:word-break|overflow-wrap):/);
   assert.doesNotMatch(styles, /\.ticket-product\s*\{[^}]*text-overflow\s*:/);
 });
+
+test('multiple QR codes share one ticket shell and scroll horizontally', () => {
+  const template = fs.readFileSync(templatePath, 'utf8');
+  const styles = fs.readFileSync(stylePath, 'utf8');
+  const ticketBlock = template.slice(template.indexOf('<view class="keepsake-tickets"'), template.indexOf('<view class="ticket-after-sale"'));
+
+  assert.match(ticketBlock, /<view class="keepsake-ticket">/);
+  assert.doesNotMatch(ticketBlock, /class="keepsake-ticket"[^>]*xhs:for/);
+  assert.match(ticketBlock, /<scroll-view class="ticket-code-scroll" scroll-x="\{\{true\}\}">/);
+  assert.match(ticketBlock, /class="ticket-code-card" xhs:for="\{\{ticketCodes\}\}"/);
+  assert.match(styles, /\.ticket-code-list\s*\{[\s\S]*display:\s*inline-flex/);
+  assert.match(styles, /\.ticket-code-card\s*\{[\s\S]*flex:\s*none/);
+});

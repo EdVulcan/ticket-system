@@ -27,9 +27,18 @@ type xiaohongshuVoucherFixture struct {
 }
 
 func seedXiaohongshuVoucherFixture(t *testing.T) xiaohongshuVoucherFixture {
+	return seedXiaohongshuVoucherFixtureWithQuantity(t, 1)
+}
+
+func seedXiaohongshuVoucherFixtureWithQuantity(t *testing.T, quantity int) xiaohongshuVoucherFixture {
 	t.Helper()
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)
+	if quantity > 1 {
+		if err := model.DB.Model(&model.Product{}).Where("id = ? AND tenant_id = ?", productID, tenantID).Update("code_mode", "order").Error; err != nil {
+			t.Fatal(err)
+		}
+	}
 	account := model.ChannelAccount{Code: fmt.Sprintf("xhs-verify-%d", time.Now().UnixNano()), Status: "sandbox"}
 	if err := (&ChannelService{}).CreateXiaohongshu(tenantID, &account, "miniapp-verify", "app-secret"); err != nil {
 		t.Fatal(err)
@@ -38,7 +47,7 @@ func seedXiaohongshuVoucherFixture(t *testing.T) xiaohongshuVoucherFixture {
 	if err := (&ChannelService{}).AddMapping(tenantID, &mapping); err != nil {
 		t.Fatal(err)
 	}
-	order := model.Order{TenantID: tenantID, Channel: "xiaohongshu", ChannelAccountID: account.ID, Items: []model.OrderItem{{ProductID: productID, Quantity: 1}}}
+	order := model.Order{TenantID: tenantID, Channel: "xiaohongshu", ChannelAccountID: account.ID, Items: []model.OrderItem{{ProductID: productID, Quantity: quantity}}}
 	if err := (&OrderService{}).Create(&order); err != nil {
 		t.Fatal(err)
 	}
@@ -82,14 +91,21 @@ func seedXiaohongshuVoucherFixture(t *testing.T) xiaohongshuVoucherFixture {
 	if err := model.DB.Create(&orderLink).Error; err != nil {
 		t.Fatal(err)
 	}
-	voucherCode := fmt.Sprintf("XHS-CODE-%d", time.Now().UnixNano())
-	ciphertext, err := utils.EncryptAES(voucherCode)
-	if err != nil {
-		t.Fatal(err)
-	}
-	link := model.XiaohongshuVoucherLink{TenantID: tenantID, ChannelAccountID: account.ID, XiaohongshuOrderLinkID: orderLink.ID, TicketID: ticket.ID, VoucherCodeHash: hashMiniappValue(voucherCode), VoucherCodeCiphertext: ciphertext, Status: 1}
-	if err := model.DB.Create(&link).Error; err != nil {
-		t.Fatal(err)
+	var link model.XiaohongshuVoucherLink
+	for index := 0; index < quantity; index++ {
+		voucherCode := fmt.Sprintf("XHS-CODE-%d-%d", time.Now().UnixNano(), index)
+		ciphertext, err := utils.EncryptAES(voucherCode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payAmount := int64(1)
+		member := model.XiaohongshuVoucherLink{TenantID: tenantID, ChannelAccountID: account.ID, XiaohongshuOrderLinkID: orderLink.ID, TicketID: ticket.ID, PayAmountCents: &payAmount, VoucherCodeHash: hashMiniappValue(voucherCode), VoucherCodeCiphertext: ciphertext, Status: 1}
+		if err := model.DB.Create(&member).Error; err != nil {
+			t.Fatal(err)
+		}
+		if index == 0 {
+			link = member
+		}
 	}
 	if err := model.DB.Model(&orderLink).Update("voucher_issuance_status", "ready").Error; err != nil {
 		t.Fatal(err)
@@ -166,6 +182,59 @@ func TestXiaohongshuVoucherVerificationCommitsExternalAndLocalFactsOnce(t *testi
 	var successful int64
 	if err := model.DB.Model(&model.CheckInRecord{}).Where("ticket_id = ? AND result = ?", fixture.ticket.ID, "success").Count(&successful).Error; err != nil || successful != 1 {
 		t.Fatalf("successful check-ins=%d err=%v", successful, err)
+	}
+}
+
+func TestXiaohongshuSharedCodeBatchCallsProviderOnceAndCommitsAllLocalAdmissions(t *testing.T) {
+	fixture := seedXiaohongshuVoucherFixtureWithQuantity(t, 3)
+	if err := model.DB.Model(&model.Device{}).Where("id = ?", fixture.device.ID).Updates(map[string]interface{}{"type": "handheld", "status": "online"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var remoteCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/rmp/token":
+			_, _ = w.Write([]byte(`{"data":{"access_token":"ACCESS","expire_in":7200},"success":true,"msg":"success","code":0}`))
+		case "/api/rmp/mp/deal/voucher/verify":
+			remoteCalls.Add(1)
+			var request xiaohongshu.VoucherVerifyRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("decode request: %v", err)
+			}
+			if len(request.Vouchers) != 3 {
+				t.Errorf("voucher count=%d, want 3", len(request.Vouchers))
+			}
+			_, _ = w.Write([]byte(`{"data":{"verify_id":"VERIFY-BATCH"},"success":true,"msg":"success","code":0}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	svc := NewDeviceService(model.DB, &TicketService{})
+	svc.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
+	}
+	req := DirectVerifyRequest{TenantID: fixture.tenantID, DeviceID: fixture.device.ID, CheckPointID: fixture.checkpoint.ID, RequestID: "xhs-batch", RequestHash: "xhs-batch-hash", TicketCode: fixture.ticket.TicketCode, Quantity: 2}
+	response, err := svc.VerifyDirect(req)
+	if err != nil || response.Result != "allow" {
+		t.Fatalf("response=%+v err=%v", response, err)
+	}
+	replay, err := svc.VerifyDirect(req)
+	if err != nil || replay.Result != "allow" || remoteCalls.Load() != 1 {
+		t.Fatalf("replay=%+v err=%v remote=%d", replay, err, remoteCalls.Load())
+	}
+	var successful int64
+	if err := model.DB.Model(&model.CheckInRecord{}).Where("ticket_id = ? AND device_request_id = ? AND result = ?", fixture.ticket.ID, req.RequestID, "success").Count(&successful).Error; err != nil || successful != 2 {
+		t.Fatalf("successful=%d err=%v", successful, err)
+	}
+	var saga model.XiaohongshuVoucherVerification
+	if err := model.DB.Where("ticket_id = ?", fixture.ticket.ID).First(&saga).Error; err != nil || saga.State != "local_completed" || saga.RequestedQuantity != 2 {
+		t.Fatalf("saga=%+v err=%v", saga, err)
+	}
+	var verifiedLinks int64
+	if err := model.DB.Model(&model.XiaohongshuVoucherLink{}).Where("ticket_id = ? AND verify_id = ?", fixture.ticket.ID, "VERIFY-BATCH").Count(&verifiedLinks).Error; err != nil || verifiedLinks != 3 {
+		t.Fatalf("verified links=%d err=%v", verifiedLinks, err)
 	}
 }
 

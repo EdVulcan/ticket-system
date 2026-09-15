@@ -130,7 +130,7 @@
 
       <section v-else class="verify-view">
         <div class="workspace-toolbar">
-          <button class="location-button" type="button" :disabled="verifying || verificationPhase === 'uncertain'" @click="closeSession()">
+          <button class="location-button" type="button" :disabled="previewing || verifying || verificationPhase === 'uncertain'" @click="closeSession()">
             <span class="toolbar-icon" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12 20s6-5.2 6-10a6 6 0 1 0-12 0c0 4.8 6 10 6 10Z" /><circle cx="12" cy="10" r="2" />
@@ -179,9 +179,9 @@
           </span>
         </div>
 
-        <div v-if="verifying" class="processing-strip" role="status" aria-live="polite">
+        <div v-if="previewing || verifying" class="processing-strip" role="status" aria-live="polite">
           <span class="spinner" aria-hidden="true"></span>
-          <span>正在核验，请不要关闭页面</span>
+          <span>{{ previewing ? '正在读取票券信息，请稍候' : '正在确认核销，请不要关闭页面' }}</span>
         </div>
 
         <div v-if="scanResult" class="result-card" :class="resultIsSuccess ? 'is-success' : 'is-deny'" role="status" aria-live="polite" data-testid="verification-result">
@@ -197,6 +197,7 @@
             <span class="result-kicker">{{ resultIsSuccess ? '核验通过' : '核验结果' }}</span>
             <h2>{{ resultTitle }}</h2>
             <p>{{ resultDetail }}</p>
+            <small v-if="resultIsSuccess && resultQuantity">本次核销 {{ resultQuantity }} 人<span v-if="resultRemaining >= 0"> · 本点剩余 {{ resultRemaining }} 次</span></small>
           </div>
           <span class="result-time">{{ resultTimeText }}</span>
         </div>
@@ -211,14 +212,14 @@
         </div>
 
         <div class="primary-action-block">
-          <button class="primary-button scan-button" type="button" :disabled="verifying || verificationPhase === 'uncertain'" @click="toggleScanner">
+          <button class="primary-button scan-button" type="button" :disabled="previewing || verifying || confirmationVisible || verificationPhase === 'uncertain'" @click="toggleScanner">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M8 5H6a2 2 0 0 0-2 2v2M16 5h2a2 2 0 0 1 2 2v2M8 19H6a2 2 0 0 1-2-2v-2M16 19h2a2 2 0 0 0 2-2v-2" />
               <path d="M8 9h8v6H8z" />
             </svg>
             <span>{{ scanButtonLabel }}</span>
           </button>
-          <p class="action-note">{{ scanning ? '扫描到二维码后会自动提交核验' : '相机无法使用时，可从下方选择备用方式' }}</p>
+          <p class="action-note">{{ scanning ? '扫描到二维码后会先读取票券，再由你确认核销' : '相机无法使用时，可从下方选择备用方式' }}</p>
         </div>
 
         <div class="fallback-actions">
@@ -278,11 +279,54 @@
           </div>
           <form class="manual-form" @submit.prevent="submitManual">
             <label class="field"><span>票码</span><input ref="manualInputRef" v-model.trim="manualCode" placeholder="输入票码" autocomplete="off" required /></label>
-            <button class="primary-button" type="submit" :disabled="verifying || !manualCode.trim()">
-              <span>{{ verifying ? '核验中…' : '核销' }}</span>
+            <button class="primary-button" type="submit" :disabled="previewing || verifying || !manualCode.trim()">
+              <span>{{ previewing ? '读取中…' : '读取票券' }}</span>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h13M13 6l6 6-6 6" /></svg>
             </button>
           </form>
+        </section>
+      </div>
+    </Transition>
+
+    <Transition name="sheet">
+      <div v-if="confirmationVisible && verificationPreview" class="sheet-backdrop" @click.self="closeConfirmation">
+        <section class="confirmation-sheet" role="dialog" aria-modal="true" aria-labelledby="confirmation-title">
+          <div class="sheet-grabber" aria-hidden="true"></div>
+          <div class="sheet-header">
+            <div><span class="screen-kicker">确认后才会计次</span><h2 id="confirmation-title">确认核销</h2></div>
+            <button class="icon-button light" type="button" aria-label="关闭确认核销" :disabled="verifying" @click="closeConfirmation">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+            </button>
+          </div>
+
+          <div class="preview-summary">
+            <strong>{{ verificationPreview.product_name || '当前票券' }}</strong>
+            <span>{{ activeCheckpoint?.name || '当前检票点' }}</span>
+            <small>本点已使用 {{ verificationPreview.point_used }} 次 · 剩余可用 {{ verificationPreview.point_remaining }} 次</small>
+          </div>
+
+          <div v-if="verificationPreview.batch_allowed && verificationPreview.code_mode === 'order'" class="quantity-control">
+            <div><strong>本次核销数量</strong><small>最多可核销 {{ verificationPreview.max_quantity }} 人</small></div>
+            <div class="stepper" aria-label="核销数量">
+              <button type="button" aria-label="减少核销数量" :disabled="confirmationQuantity <= 1 || verifying" @click="decrementQuantity">−</button>
+              <output data-testid="confirmation-quantity">{{ confirmationQuantity }}</output>
+              <button type="button" aria-label="增加核销数量" :disabled="confirmationQuantity >= verificationPreview.max_quantity || verifying" @click="incrementQuantity">＋</button>
+            </div>
+          </div>
+          <div v-else class="fixed-quantity"><strong>本次核销 1 人</strong><span>此票码按单张票处理</span></div>
+
+          <div v-if="verificationPreview.requires_repeat_confirmation" class="repeat-warning" role="alert">
+            <strong>该票码刚刚有核销记录</strong>
+            <p v-if="verificationPreview.recent_operation">上次核销 {{ verificationPreview.recent_operation.quantity }} 人，完成于 {{ formatClock(verificationPreview.recent_operation.completed_at) }}。</p>
+            <p>确认继续才会再次计次，请先核对同行人数。</p>
+            <label class="continuation-check"><input v-model="continuationConfirmed" type="checkbox" /> <span>我确认这是继续核销</span></label>
+          </div>
+
+          <button class="primary-button" type="button" data-testid="confirm-verification" :disabled="verifying || !canConfirmPreview" @click="confirmPreview">
+            <span>确认核销 {{ confirmationQuantity }} 人</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4.5 4.5L19 7" /></svg>
+          </button>
+          <p class="sheet-note">扫描只读取票券信息，不会自动扣除次数。</p>
         </section>
       </div>
     </Transition>
@@ -297,9 +341,26 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'v
 type VerificationPhase = 'idle' | 'scanning' | 'processing' | 'success' | 'denied' | 'uncertain' | 'session_expired'
 type ConnectionState = 'checking' | 'online' | 'degraded' | 'offline'
 
-interface PendingRequest {
-  id: string
+interface VerificationPreview {
+  preview_id: string
+  expires_at: string
+  product_name: string
+  code_mode: 'order' | 'ticket' | string
+  batch_allowed: boolean
+  max_quantity: number
+  point_used: number
+  point_remaining: number
+  requires_repeat_confirmation: boolean
+  recent_operation?: { operation_id: string; quantity: number; completed_at: string }
+  ticket_code?: string
+}
+
+interface PendingOperation {
+  operationID: string
+  previewID: string
   ticketCode: string
+  quantity: number
+  continuationOf?: string
 }
 
 interface RecentScan {
@@ -326,6 +387,7 @@ const loginForm = reactive({ system_code: '', job_number: '', password: '' })
 const isLoggedIn = ref(Boolean(sessionStorage.getItem('mobile_token')))
 const tenantName = ref(sessionStorage.getItem('mobile_tenant_name') || '')
 const busy = ref(false)
+const previewing = ref(false)
 const verifying = ref(false)
 const heartbeatBusy = ref(false)
 const errorMessage = ref('')
@@ -338,19 +400,21 @@ const devices = ref<any[]>([])
 const selectedCheckpointID = ref(Number(sessionStorage.getItem('mobile_checkpoint_id') || 0))
 const selectedDeviceID = ref(Number(sessionStorage.getItem('mobile_device_id') || 0))
 const scanResult = ref<any>(null)
-const readPendingRequest = (): PendingRequest | null => {
+const verificationPreview = ref<VerificationPreview | null>(null)
+const confirmationVisible = ref(false)
+const confirmationQuantity = ref(1)
+const continuationConfirmed = ref(false)
+const readPendingOperation = (): PendingOperation | null => {
   try {
-    const parsed = JSON.parse(sessionStorage.getItem('mobile_pending_verification') || 'null')
-    if (parsed && typeof parsed.id === 'string' && parsed.id.trim() && typeof parsed.ticketCode === 'string' && parsed.ticketCode.trim()) {
-      return { id: parsed.id.trim(), ticketCode: parsed.ticketCode.trim() }
+    const parsed = JSON.parse(sessionStorage.getItem('mobile_pending_operation') || 'null')
+    if (parsed && typeof parsed.operation_id === 'string' && typeof parsed.preview_id === 'string' && typeof parsed.ticket_code === 'string') {
+      return { operationID: parsed.operation_id, previewID: parsed.preview_id, ticketCode: parsed.ticket_code, quantity: Number(parsed.quantity) || 1, continuationOf: parsed.continuation_of || undefined }
     }
-  } catch {
-    // Ignore malformed session data and let the operator start a fresh scan.
-  }
+  } catch { /* Ignore malformed recovery data. */ }
   return null
 }
-const pendingRequest = ref<PendingRequest | null>(readPendingRequest())
-const verificationPhase = ref<VerificationPhase>(pendingRequest.value && sessionToken.value ? 'uncertain' : 'idle')
+const pendingOperation = ref<PendingOperation | null>(readPendingOperation())
+const verificationPhase = ref<VerificationPhase>(pendingOperation.value && sessionToken.value ? 'uncertain' : 'idle')
 const sessionRestoring = ref(Boolean(sessionToken.value && isLoggedIn.value))
 const recentScans = ref<RecentScan[]>([])
 const manualEntryVisible = ref(false)
@@ -383,9 +447,12 @@ const resultTitle = computed(() => {
   return titles[String(scanResult.value?.reason_code || '')] || '核销未通过'
 })
 const resultDetail = computed(() => String(scanResult.value?.display_text || '请查看票券状态'))
+const resultQuantity = computed(() => Number(scanResult.value?.quantity || 0))
+const resultRemaining = computed(() => Number(scanResult.value?.point_remaining ?? scanResult.value?.remaining ?? -1))
 const resultTimeText = computed(() => scanResult.value?.checked_at ? formatClock(scanResult.value.checked_at) : formatClock(Date.now()))
-const scanButtonLabel = computed(() => scannerStarting.value ? '取消启动' : scanning.value ? '停止扫码' : scanResult.value ? '继续扫码' : '打开相机扫码')
-const canUseFallback = computed(() => Boolean(sessionToken.value) && !verifying.value && !scanning.value && !scannerStarting.value && verificationPhase.value !== 'uncertain')
+const scanButtonLabel = computed(() => previewing.value ? '读取票券中…' : scannerStarting.value ? '取消启动' : scanning.value ? '停止扫码' : scanResult.value ? '继续扫码' : '打开相机扫码')
+const canUseFallback = computed(() => Boolean(sessionToken.value) && !previewing.value && !verifying.value && !confirmationVisible.value && !scanning.value && !scannerStarting.value && verificationPhase.value !== 'uncertain')
+const canConfirmPreview = computed(() => Boolean(verificationPreview.value) && confirmationQuantity.value > 0 && confirmationQuantity.value <= Number(verificationPreview.value?.max_quantity || 1) && (!verificationPreview.value?.requires_repeat_confirmation || continuationConfirmed.value))
 const connectionLabel = computed(() => ({ checking: '连接中', online: '连接正常', degraded: '网络不稳', offline: '已断开' })[connectionState.value])
 const lastHeartbeatText = computed(() => lastHeartbeatAt.value ? `同步于 ${formatClock(lastHeartbeatAt.value)}` : '等待同步')
 const sessionExpiryText = computed(() => sessionExpiresAt.value ? `会话至 ${formatClock(sessionExpiresAt.value)}` : '会话有效')
@@ -434,22 +501,52 @@ const addRecentScan = (response: any, ticketCode: string) => {
   }, ...recentScans.value].slice(0, 5)
 }
 
-const persistPendingRequest = () => {
-  if (!pendingRequest.value) {
-    sessionStorage.removeItem('mobile_pending_verification')
-    return
-  }
-  sessionStorage.setItem('mobile_pending_verification', JSON.stringify(pendingRequest.value))
+const clearPendingRequest = () => {
+  sessionStorage.removeItem('mobile_pending_verification')
 }
 
-const clearPendingRequest = () => {
-  pendingRequest.value = null
-  sessionStorage.removeItem('mobile_pending_verification')
+const persistPendingOperation = () => {
+  if (!pendingOperation.value) {
+    sessionStorage.removeItem('mobile_pending_operation')
+    return
+  }
+  sessionStorage.setItem('mobile_pending_operation', JSON.stringify({
+    operation_id: pendingOperation.value.operationID,
+    preview_id: pendingOperation.value.previewID,
+    ticket_code: pendingOperation.value.ticketCode,
+    quantity: pendingOperation.value.quantity,
+    continuation_of: pendingOperation.value.continuationOf,
+  }))
+}
+
+const clearPendingOperation = () => {
+  pendingOperation.value = null
+  sessionStorage.removeItem('mobile_pending_operation')
 }
 
 const vibrateForResult = (allowed: boolean) => {
   if (typeof navigator.vibrate !== 'function') return
   navigator.vibrate(allowed ? [24, 36, 24] : 80)
+}
+
+const playResultTone = (allowed: boolean) => {
+  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext
+  if (!AudioContextClass) return
+  try {
+    const context = new AudioContextClass()
+    const oscillator = context.createOscillator()
+    const gain = context.createGain()
+    oscillator.type = 'sine'
+    oscillator.frequency.setValueAtTime(allowed ? 880 : 220, context.currentTime)
+    if (allowed) oscillator.frequency.setValueAtTime(1175, context.currentTime + 0.11)
+    gain.gain.setValueAtTime(0.0001, context.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.18, context.currentTime + 0.02)
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + (allowed ? 0.26 : 0.2))
+    oscillator.connect(gain).connect(context.destination)
+    oscillator.start()
+    oscillator.stop(context.currentTime + (allowed ? 0.28 : 0.22))
+    oscillator.addEventListener('ended', () => { void context.close() })
+  } catch { /* Audio feedback is best effort and must never affect verification. */ }
 }
 
 const login = async () => {
@@ -554,6 +651,9 @@ const closeSession = async (revoke = true, force = false) => {
   sessionToken.value = ''
   sessionExpiresAt.value = ''
   scanResult.value = null
+  verificationPreview.value = null
+  confirmationVisible.value = false
+  continuationConfirmed.value = false
   clearPendingRequest()
   recentScans.value = []
   verificationPhase.value = 'idle'
@@ -597,7 +697,7 @@ const toggleScanner = async () => {
     scannerStarting.value = true
     verificationPhase.value = 'scanning'
     const controls = await reader.decodeFromVideoDevice(undefined, videoRef.value || undefined, (result, error) => {
-      if (result && !verifying.value) {
+      if (result && !verifying.value && !previewing.value && !confirmationVisible.value && !pendingOperation.value) {
         const value = result.getText().trim()
         const now = Date.now()
         if (value === lastScanCode && now - lastScanAt < 1500) return
@@ -669,61 +769,166 @@ const submitManual = async () => {
 }
 
 const retryPendingVerification = async () => {
-  if (!pendingRequest.value) return
-  await submitCode(pendingRequest.value.ticketCode)
+  if (!pendingOperation.value || verifying.value) return
+  await recoverPendingOperation(pendingOperation.value)
 }
 
-const submitCode = async (value: string) => {
-  const ticketCode = normalizeTicketCode(value)
-  if (!ticketCode || verifying.value || !sessionToken.value) return
-  if (verificationPhase.value === 'uncertain' && pendingRequest.value && pendingRequest.value.ticketCode !== ticketCode) {
-    setError('上一笔核验结果尚未确认，请先重试或等待结果返回。')
-    return
+const finishOperation = (response: any, operation: PendingOperation) => {
+  const normalized = response?.operation || response || {}
+  if (responseNeedsRetry(normalized) || ['processing', 'unknown'].includes(String(normalized.status || ''))) {
+    verificationPhase.value = 'uncertain'
+    connectionState.value = 'degraded'
+    setError('核销结果仍在处理中，请重试上一笔核验。')
+    cameraMessage.value = '结果未确认前不会允许提交下一张票。'
+    return false
   }
-  clearError()
-  cameraMessage.value = ''
-  const request = verificationPhase.value === 'uncertain' && pendingRequest.value?.ticketCode === ticketCode
-    ? pendingRequest.value
-    : { id: createRequestID(), ticketCode }
-  pendingRequest.value = request
-  persistPendingRequest()
+  const allowed = resultIsAllow(normalized)
+  const quantity = Number(normalized.quantity || operation.quantity)
+  const remaining = normalized.point_remaining ?? normalized.remaining ?? (verificationPreview.value ? Math.max(0, verificationPreview.value.point_remaining - quantity) : undefined)
+  scanResult.value = { ...normalized, quantity, point_remaining: remaining, ticket_code: operation.ticketCode, operation_id: operation.operationID, checked_at: normalized.completed_at || new Date().toISOString() }
+  verificationPhase.value = allowed ? 'success' : 'denied'
+  clearPendingOperation()
+  clearPendingRequest()
+  verificationPreview.value = null
+  confirmationVisible.value = false
+  continuationConfirmed.value = false
+  manualCode.value = ''
+  addRecentScan(normalized, operation.ticketCode)
+  vibrateForResult(allowed)
+  playResultTone(allowed)
+  return true
+}
+
+const recoverPendingOperation = async (operation: PendingOperation) => {
+  if (!operation || verifying.value || !sessionToken.value) return
   verifying.value = true
   verificationPhase.value = 'processing'
-  scanResult.value = null
+  clearError()
   try {
-    const response = await api.post('/mobile/session/verify', { ticket_code: ticketCode, request_id: request.id })
-    if (responseNeedsRetry(response.data)) {
-      verificationPhase.value = 'uncertain'
-      connectionState.value = 'degraded'
-      setError('核验请求仍在处理中，请重试上一笔核验。')
-      cameraMessage.value = '结果未确认前不会允许提交下一张票。'
-      return
+    const response = await api.get(`/mobile/verification-operations/${encodeURIComponent(operation.operationID)}`)
+    const current = response.data?.operation || response.data || {}
+    if (String(current.status || '') === 'processing') {
+      const payload: Record<string, unknown> = { preview_id: operation.previewID, operation_id: operation.operationID, quantity: operation.quantity }
+      if (operation.continuationOf) payload.continuation_of = operation.continuationOf
+      const resumed = await api.post('/mobile/session/verification-operations', payload)
+      finishOperation(resumed.data, operation)
+    } else {
+      finishOperation(current, operation)
     }
-    scanResult.value = { ...response.data, ticket_code: ticketCode, request_id: request.id, checked_at: new Date().toISOString() }
-    verificationPhase.value = resultIsAllow(response.data) ? 'success' : 'denied'
-    clearPendingRequest()
-    manualCode.value = ''
-    addRecentScan(response.data, ticketCode)
-    vibrateForResult(resultIsAllow(response.data))
   } catch (error: any) {
-    if (error.response?.status === 401) {
-      clearPendingRequest()
-      await closeSession(false, true)
-      verificationPhase.value = 'session_expired'
-      setError('会话已过期，请重新选择点位')
-    } else if (error.response?.status === 409 || !error.response || error.response.status >= 500) {
+    if (error.response?.status === 409 && error.response?.data?.requires_confirmation) {
+      clearPendingOperation()
+      verificationPhase.value = 'denied'
+      setError('该票码已有新的核销记录，请重新读取并核对剩余次数。')
+      cameraMessage.value = ''
+    } else {
       verificationPhase.value = 'uncertain'
       connectionState.value = error.response ? 'degraded' : 'offline'
-      setError('核验结果暂时未返回，请重试上一笔核验。')
+      setError('核销结果暂时未返回，请重试上一笔核验。')
       cameraMessage.value = '结果未确认前不会允许提交下一张票。'
-    } else {
-      clearPendingRequest()
-      verificationPhase.value = 'denied'
-      setError(error.response?.data?.error || '核验请求失败，请重试')
     }
   } finally {
     verifying.value = false
   }
+}
+
+const submitCode = async (value: string) => {
+  const ticketCode = normalizeTicketCode(value)
+  if (!ticketCode || verifying.value || previewing.value || !sessionToken.value || pendingOperation.value) return
+  if (confirmationVisible.value) {
+    setError('请先处理当前票券。')
+    return
+  }
+  clearError()
+  cameraMessage.value = ''
+  previewing.value = true
+  verificationPhase.value = 'processing'
+  scanResult.value = null
+  try {
+    const response = await api.post('/mobile/session/verification-previews', { ticket_code: ticketCode })
+    const raw = response.data?.preview || response.data
+    const preview: VerificationPreview = { ...raw, preview_id: String(raw.preview_id || ''), max_quantity: Math.max(1, Number(raw.max_quantity || 1)), point_used: Number(raw.point_used || 0), point_remaining: Number(raw.point_remaining || 0), batch_allowed: Boolean(raw.batch_allowed), requires_repeat_confirmation: Boolean(raw.requires_repeat_confirmation), ticket_code: ticketCode }
+    if (!preview.preview_id) throw new Error('预检响应缺少 preview_id')
+    verificationPreview.value = preview
+    confirmationQuantity.value = 1
+    continuationConfirmed.value = false
+    confirmationVisible.value = true
+    verificationPhase.value = 'idle'
+  } catch (error: any) {
+    if (error.response?.status === 401) {
+      await closeSession(false, true)
+      verificationPhase.value = 'session_expired'
+      setError('会话已过期，请重新选择点位')
+    } else if (error.response?.status === 409 && error.response?.data?.requires_confirmation) {
+      clearPendingOperation()
+      verificationPreview.value = null
+      confirmationVisible.value = false
+      continuationConfirmed.value = false
+      verificationPhase.value = 'denied'
+      setError('该票码刚刚产生了新的核销记录，请重新读取并核对剩余次数。')
+    } else {
+      verificationPhase.value = 'denied'
+      setError(error.response?.data?.error || '读取票券失败，请重试')
+    }
+  } finally {
+    previewing.value = false
+  }
+}
+
+const confirmPreview = async () => {
+  const preview = verificationPreview.value
+  if (!preview || !canConfirmPreview.value || verifying.value || !sessionToken.value) return
+  const operation: PendingOperation = { operationID: createRequestID(), previewID: preview.preview_id, ticketCode: preview.ticket_code || '', quantity: confirmationQuantity.value, continuationOf: preview.requires_repeat_confirmation ? preview.recent_operation?.operation_id : undefined }
+  pendingOperation.value = operation
+  persistPendingOperation()
+  verifying.value = true
+  verificationPhase.value = 'processing'
+  clearError()
+  try {
+    const payload: Record<string, unknown> = { preview_id: operation.previewID, operation_id: operation.operationID, quantity: operation.quantity }
+    if (operation.continuationOf) payload.continuation_of = operation.continuationOf
+    const response = await api.post('/mobile/session/verification-operations', payload)
+    finishOperation(response.data, operation)
+  } catch (error: any) {
+    if (error.response?.status === 401) {
+      await closeSession(false, true)
+      verificationPhase.value = 'session_expired'
+      setError('会话已过期，请重新选择点位')
+    } else if (error.response?.status === 409 && error.response.data?.requires_confirmation) {
+      clearPendingOperation()
+      verificationPreview.value = null
+      confirmationVisible.value = false
+      continuationConfirmed.value = false
+      verificationPhase.value = 'denied'
+      setError('该票码刚刚产生了新的核销记录，请重新读取并核对剩余次数。')
+    } else if (error.response && error.response.status < 500 && error.response.status !== 409) {
+      clearPendingOperation()
+      confirmationVisible.value = false
+      verificationPreview.value = null
+      verificationPhase.value = 'denied'
+      const rejected = error.response.data || {}
+      scanResult.value = { ...rejected, result: 'deny', reason_code: rejected.reason_code || 'invalid_ticket', display_text: rejected.error || '核销未通过', ticket_code: operation.ticketCode, quantity: 0, checked_at: new Date().toISOString() }
+      playResultTone(false)
+      setError(rejected.error || '核销未通过，请重新读取票券')
+    } else {
+      verificationPhase.value = 'uncertain'
+      connectionState.value = error.response ? 'degraded' : 'offline'
+      setError('核销结果暂时未返回，请重试上一笔核验。')
+      cameraMessage.value = '结果未确认前不会允许提交下一张票。'
+    }
+  } finally {
+    verifying.value = false
+  }
+}
+
+const incrementQuantity = () => { if (verificationPreview.value) confirmationQuantity.value = Math.min(verificationPreview.value.max_quantity, confirmationQuantity.value + 1) }
+const decrementQuantity = () => { confirmationQuantity.value = Math.max(1, confirmationQuantity.value - 1) }
+const closeConfirmation = () => {
+  if (verifying.value) return
+  confirmationVisible.value = false
+  verificationPreview.value = null
+  continuationConfirmed.value = false
+  verificationPhase.value = scanResult.value ? (resultIsSuccess.value ? 'success' : 'denied') : 'idle'
 }
 
 const openManualEntry = async () => {
@@ -747,6 +952,7 @@ const restoreSession = async () => {
     if (sessionToken.value) {
       await sendHeartbeat()
       if (sessionToken.value) startHeartbeat(false)
+      if (pendingOperation.value) await recoverPendingOperation(pendingOperation.value)
     }
   } finally {
     sessionRestoring.value = false
@@ -911,6 +1117,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .result-kicker { display: block; font-size: 11px; font-weight: 700; opacity: .76; }
 .result-copy h2 { margin: 2px 0 5px; color: inherit; font-size: 19px; line-height: 1.2; font-weight: 780; }
 .result-copy p { margin: 0; color: inherit; font-size: 13px; line-height: 1.5; opacity: .86; white-space: pre-line; }
+.result-copy small { display: block; margin-top: 7px; color: inherit; font-size: 11px; font-weight: 700; opacity: .86; }
 .result-time { position: absolute; top: 16px; right: 14px; color: inherit; font-size: 10px; opacity: .68; }
 .uncertain-card { display: flex; align-items: flex-start; gap: 10px; margin-top: 10px; padding: 13px; color: #855a1a; background: #fff6df; border: 1px solid #f2dfb3; border-radius: 16px; }
 .uncertain-icon { display: grid; place-items: center; flex: 0 0 26px; width: 26px; height: 26px; color: #fff; background: #bb7b1c; border-radius: 50%; font-weight: 800; }
@@ -953,6 +1160,28 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .sheet-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
 .sheet-header h2 { margin: 3px 0 0; font-size: 20px; }
 .manual-form { display: grid; gap: 16px; }
+.confirmation-sheet { width: min(100%, 520px); padding: 9px 18px max(18px, env(safe-area-inset-bottom)); background: #fff; border-radius: 22px 22px 16px 16px; box-shadow: 0 -18px 45px rgba(25, 40, 47, .18); }
+.preview-summary { display: grid; gap: 5px; margin: -2px 0 18px; padding: 14px; color: #36505b; background: #f1f7f7; border: 1px solid #dcebea; border-radius: 15px; }
+.preview-summary strong { color: var(--mobile-ink); font-size: 18px; line-height: 1.3; }
+.preview-summary span { font-size: 13px; font-weight: 700; }
+.preview-summary small { color: #74878d; font-size: 11px; }
+.quantity-control { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; padding: 2px 0; }
+.quantity-control > div:first-child { display: grid; gap: 3px; }
+.quantity-control strong { color: var(--mobile-ink); font-size: 14px; }
+.quantity-control small { color: var(--mobile-muted); font-size: 11px; }
+.stepper { display: inline-flex; align-items: center; gap: 12px; }
+.stepper button { display: grid; place-items: center; width: 36px; height: 36px; color: var(--mobile-primary); background: #edf5f5; border: 1px solid #cfe1e1; border-radius: 11px; cursor: pointer; font-size: 22px; line-height: 1; }
+.stepper button:disabled { cursor: not-allowed; opacity: .4; }
+.stepper output { min-width: 22px; color: var(--mobile-ink); font-size: 20px; font-weight: 800; text-align: center; }
+.fixed-quantity { display: grid; gap: 4px; margin-bottom: 16px; padding: 13px 14px; color: #36505b; background: #f6f8f8; border-radius: 13px; }
+.fixed-quantity strong { color: var(--mobile-ink); font-size: 14px; }
+.fixed-quantity span { color: var(--mobile-muted); font-size: 11px; }
+.repeat-warning { margin-bottom: 16px; padding: 13px 14px; color: #7d551e; background: #fff7e4; border: 1px solid #f1ddb0; border-radius: 14px; }
+.repeat-warning strong { display: block; font-size: 13px; }
+.repeat-warning p { margin: 4px 0 0; font-size: 11px; line-height: 1.5; }
+.continuation-check { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: #6d4b1c; font-size: 12px; font-weight: 750; }
+.continuation-check input { width: 16px; height: 16px; accent-color: #b47824; }
+.sheet-note { margin: 9px 0 0; color: #8b9ba0; font-size: 10px; line-height: 1.5; text-align: center; }
 .sheet-enter-active, .sheet-leave-active { transition: opacity 180ms ease; }
 .sheet-enter-active .manual-sheet, .sheet-leave-active .manual-sheet { transition: transform 180ms ease; }
 .sheet-enter-from, .sheet-leave-to { opacity: 0; }
