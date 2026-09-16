@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/utils"
@@ -59,14 +60,22 @@ type MiniappCatalogProduct struct {
 	VoucherValidityDays int      `json:"voucher_validity_days,omitempty"`
 	MinAdvanceDays      int      `json:"min_advance_days,omitempty"`
 	MaxReschedules      int      `json:"max_reschedules,omitempty"`
+	StorefrontCategory  string   `json:"storefront_category"`
+	StorefrontOrder     int      `json:"storefront_order"`
+}
+
+type MiniappCatalogCategory struct {
+	Name      string `json:"name"`
+	SortOrder int    `json:"sort_order"`
 }
 
 type MiniappCatalog struct {
-	StoreName          string                  `json:"store_name"`
-	StorefrontImageURL string                  `json:"storefront_image_url"`
-	Environment        string                  `json:"environment"`
-	MaxOrderCents      int64                   `json:"max_order_cents,omitempty"`
-	Products           []MiniappCatalogProduct `json:"products"`
+	StoreName          string                   `json:"store_name"`
+	StorefrontImageURL string                   `json:"storefront_image_url"`
+	Environment        string                   `json:"environment"`
+	MaxOrderCents      int64                    `json:"max_order_cents,omitempty"`
+	Categories         []MiniappCatalogCategory `json:"categories"`
+	Products           []MiniappCatalogProduct  `json:"products"`
 }
 
 type MiniappOrderCreateInput struct {
@@ -319,6 +328,9 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 		VoucherValidityDays     int
 		MinAdvanceDays          int
 		MaxReschedules          int
+		StorefrontCategory      string
+		StorefrontCategoryOrder int
+		StorefrontProductOrder  int
 	}
 	var rows []catalogRow
 	err := model.DB.Table("channel_product_mappings AS mapping").
@@ -326,6 +338,7 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 			scenic.name AS scenic_area_name, mapping.channel_sale_cents, product.price AS product_price,
 			product.tags, product.validity_type, product.validity_days, product.stock_type, product.code_mode,
 			xhs_config.image_url, xhs_config.description, xhs_config.product_type,
+			xhs_config.storefront_category, xhs_config.storefront_category_order, xhs_config.storefront_product_order,
 			hotel_package.id AS package_id, hotel.name AS hotel_name, room.name AS room_type_name,
 			rate.name AS rate_plan_name, hotel_package.nights, hotel_package.rooms_per_package,
 			hotel_package.booking_mode, hotel_package.voucher_validity_days,
@@ -359,10 +372,45 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 			(product.product_kind <> 'hotel' AND supplier_business.id IS NOT NULL AND (hotel_package.id IS NULL OR (hotel_package.status = 'online' AND hotel.status = 'active' AND room.status = 'active' AND rate.status = 'active' AND hotel_business.id IS NOT NULL)))
 		)`).
 		Where("supplier_capability.expires_at IS NULL OR supplier_capability.expires_at > ?", s.now()).
-		Order("mapping.created_at ASC, mapping.id ASC").Scan(&rows).Error
+		Order("mapping.id ASC").Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
+	categoryOrders := make(map[string]int)
+	for index := range rows {
+		category := strings.TrimSpace(rows[index].StorefrontCategory)
+		if category == "" {
+			category = "其他"
+		}
+		rows[index].StorefrontCategory = category
+		order := rows[index].StorefrontCategoryOrder
+		if current, exists := categoryOrders[category]; !exists || order < current {
+			categoryOrders[category] = order
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		leftCategory, rightCategory := rows[i].StorefrontCategory, rows[j].StorefrontCategory
+		if categoryOrders[leftCategory] != categoryOrders[rightCategory] {
+			return categoryOrders[leftCategory] < categoryOrders[rightCategory]
+		}
+		if leftCategory != rightCategory {
+			return leftCategory < rightCategory
+		}
+		if rows[i].StorefrontProductOrder != rows[j].StorefrontProductOrder {
+			return rows[i].StorefrontProductOrder < rows[j].StorefrontProductOrder
+		}
+		return rows[i].MappingID < rows[j].MappingID
+	})
+	categories := make([]MiniappCatalogCategory, 0, len(categoryOrders))
+	for name, order := range categoryOrders {
+		categories = append(categories, MiniappCatalogCategory{Name: name, SortOrder: order})
+	}
+	sort.Slice(categories, func(i, j int) bool {
+		if categories[i].SortOrder != categories[j].SortOrder {
+			return categories[i].SortOrder < categories[j].SortOrder
+		}
+		return categories[i].Name < categories[j].Name
+	})
 	products := make([]MiniappCatalogProduct, 0, len(rows))
 	for _, row := range rows {
 		name := strings.TrimSpace(row.DisplayName)
@@ -401,10 +449,11 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 			HotelName:       row.HotelName, RoomTypeName: row.RoomTypeName, RatePlanName: row.RatePlanName,
 			Nights: nights, RoomsPerPackage: rooms, BookingMode: row.BookingMode,
 			VoucherValidityDays: row.VoucherValidityDays, MinAdvanceDays: row.MinAdvanceDays,
-			MaxReschedules: row.MaxReschedules,
+			MaxReschedules:     row.MaxReschedules,
+			StorefrontCategory: row.StorefrontCategory, StorefrontOrder: row.StorefrontProductOrder,
 		})
 	}
-	catalog := &MiniappCatalog{StoreName: tenant.Name, StorefrontImageURL: account.StorefrontImageURL, Environment: account.Environment, Products: products}
+	catalog := &MiniappCatalog{StoreName: tenant.Name, StorefrontImageURL: account.StorefrontImageURL, Environment: account.Environment, Categories: categories, Products: products}
 	if account.Environment == "sandbox" {
 		catalog.MaxOrderCents = 10
 	}

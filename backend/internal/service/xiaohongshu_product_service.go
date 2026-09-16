@@ -23,15 +23,18 @@ type XiaohongshuProductService struct {
 }
 
 type XiaohongshuProductConfigInput struct {
-	ExternalSKUID string   `json:"external_sku_id"`
-	CategoryID    string   `json:"category_id"`
-	POIIDs        []string `json:"poi_ids"`
-	ImageURL      string   `json:"image_url"`
-	Description   string   `json:"description"`
-	ProductPath   string   `json:"product_path"`
-	OrderPath     string   `json:"order_path"`
-	ProductType   int      `json:"product_type"`
-	SettleType    int      `json:"settle_type"`
+	ExternalSKUID           string   `json:"external_sku_id"`
+	CategoryID              string   `json:"category_id"`
+	POIIDs                  []string `json:"poi_ids"`
+	ImageURL                string   `json:"image_url"`
+	Description             string   `json:"description"`
+	ProductPath             string   `json:"product_path"`
+	OrderPath               string   `json:"order_path"`
+	ProductType             int      `json:"product_type"`
+	SettleType              int      `json:"settle_type"`
+	StorefrontCategory      string   `json:"storefront_category"`
+	StorefrontCategoryOrder *int     `json:"storefront_category_order"`
+	StorefrontProductOrder  *int     `json:"storefront_product_order"`
 }
 
 type XiaohongshuProductConfigView struct {
@@ -207,17 +210,35 @@ func (s XiaohongshuProductService) SaveConfig(tenantID, accountID, mappingID, ac
 		if packageErr != nil && !errors.Is(packageErr, gorm.ErrRecordNotFound) {
 			return packageErr
 		}
+		var previous model.XiaohongshuProductConfig
+		previousErr := tx.Where("channel_product_mapping_id = ? AND tenant_id = ? AND channel_account_id = ?", mappingID, tenantID, accountID).First(&previous).Error
+		if previousErr != nil && !errors.Is(previousErr, gorm.ErrRecordNotFound) {
+			return previousErr
+		}
 		config := model.XiaohongshuProductConfig{
 			TenantID: tenantID, ChannelAccountID: accountID, ChannelProductMappingID: mappingID,
 			ExternalSKUID: input.ExternalSKUID, CategoryID: input.CategoryID, POIIDsJSON: string(poiJSON),
 			ImageURL: input.ImageURL, Description: input.Description, ProductPath: input.ProductPath,
 			OrderPath: input.OrderPath, ProductType: input.ProductType, SettleType: input.SettleType,
-			SyncStatus: "pending", AuditStatus: "pending", AuditMessage: "", AuditedAt: nil,
+			StorefrontCategory:      input.StorefrontCategory,
+			StorefrontCategoryOrder: xiaohongshuStorefrontOrder(input.StorefrontCategoryOrder),
+			StorefrontProductOrder:  xiaohongshuStorefrontOrder(input.StorefrontProductOrder),
+			SyncStatus:              "pending", AuditStatus: "pending", AuditMessage: "", AuditedAt: nil,
 			LastSyncError: "", LastSyncedAt: nil,
+		}
+		if previousErr == nil && xiaohongshuProviderConfigMatches(previous, input, string(poiJSON)) {
+			config.SyncStatus = previous.SyncStatus
+			config.AuditStatus = previous.AuditStatus
+			config.AuditMessage = previous.AuditMessage
+			config.AuditedAt = previous.AuditedAt
+			config.AuditCheckedAt = previous.AuditCheckedAt
+			config.AuditCheckError = previous.AuditCheckError
+			config.LastSyncError = previous.LastSyncError
+			config.LastSyncedAt = previous.LastSyncedAt
 		}
 		if err := tx.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "channel_product_mapping_id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"external_sku_id", "category_id", "poi_ids_json", "image_url", "description", "product_path", "order_path", "product_type", "settle_type", "sync_status", "audit_status", "audit_message", "audited_at", "audit_checked_at", "audit_check_error", "last_sync_error", "last_synced_at", "updated_at"}),
+			DoUpdates: clause.AssignmentColumns([]string{"external_sku_id", "category_id", "poi_ids_json", "image_url", "description", "product_path", "order_path", "product_type", "settle_type", "storefront_category", "storefront_category_order", "storefront_product_order", "sync_status", "audit_status", "audit_message", "audited_at", "audit_checked_at", "audit_check_error", "last_sync_error", "last_synced_at", "updated_at"}),
 		}).Create(&config).Error; err != nil {
 			return err
 		}
@@ -348,6 +369,7 @@ func normalizeXiaohongshuProductInput(input *XiaohongshuProductConfigInput) {
 	input.Description = strings.TrimSpace(input.Description)
 	input.ProductPath = strings.TrimSpace(input.ProductPath)
 	input.OrderPath = strings.TrimSpace(input.OrderPath)
+	input.StorefrontCategory = strings.TrimSpace(input.StorefrontCategory)
 	seen := make(map[string]struct{})
 	pois := make([]string, 0, len(input.POIIDs))
 	for _, id := range input.POIIDs {
@@ -376,7 +398,29 @@ func validateXiaohongshuProductInput(input XiaohongshuProductConfigInput) error 
 	if input.SettleType < xiaohongshu.SettleAtHeadOffice || input.SettleType > xiaohongshu.SettleByRegion {
 		return errors.New("小红书结算方式无效")
 	}
+	if len([]rune(input.StorefrontCategory)) > 40 {
+		return errors.New("商城分类名称不能超过 40 个字")
+	}
+	for _, value := range []*int{input.StorefrontCategoryOrder, input.StorefrontProductOrder} {
+		if value != nil && (*value < 0 || *value > 9999) {
+			return errors.New("商城展示顺序必须在 0 到 9999 之间")
+		}
+	}
 	return nil
+}
+
+func xiaohongshuStorefrontOrder(value *int) int {
+	if value == nil {
+		return 9999
+	}
+	return *value
+}
+
+func xiaohongshuProviderConfigMatches(previous model.XiaohongshuProductConfig, input XiaohongshuProductConfigInput, poiJSON string) bool {
+	return previous.ExternalSKUID == input.ExternalSKUID && previous.CategoryID == input.CategoryID &&
+		previous.POIIDsJSON == poiJSON && previous.ImageURL == input.ImageURL && previous.Description == input.Description &&
+		previous.ProductPath == input.ProductPath && previous.OrderPath == input.OrderPath &&
+		previous.ProductType == input.ProductType && previous.SettleType == input.SettleType
 }
 
 func parseXiaohongshuPOIIDs(raw string) []string {

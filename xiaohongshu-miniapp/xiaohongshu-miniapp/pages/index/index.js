@@ -8,6 +8,8 @@ Page({
     allProducts: [],
     products: [],
     resultCount: 0,
+    categoryOptions: ['全部'],
+    activeCategory: '全部',
     scenicOptions: [],
     activeScenic: '全部',
     kindOptions: [],
@@ -66,6 +68,17 @@ Page({
       if (products.some(product => product.product_kind !== 'scenic_hotel_package')) kinds.push({ value: 'ticket', label: '景区门票' });
       if (products.some(product => product.product_kind === 'scenic_hotel_package')) kinds.push({ value: 'scenic_hotel_package', label: '酒景套餐' });
       const kindOptions = kinds.length > 1 ? [{ value: 'all', label: '全部' }, ...kinds] : kinds;
+      const categoryOptions = ['全部'];
+      const configuredCategories = Array.isArray(catalog.categories) ? catalog.categories : [];
+      configuredCategories.forEach(category => {
+        const name = String(category.name || '').trim();
+        if (name && categoryOptions.indexOf(name) < 0) categoryOptions.push(name);
+      });
+      products.forEach(product => {
+        const category = product.storefront_category || '其他';
+        product.storefront_category = category;
+        if (categoryOptions.indexOf(category) < 0) categoryOptions.push(category);
+      });
       this.setData({
         storeName: catalog.store_name || '官方商城',
         heroImage: catalog.storefront_image_url || '',
@@ -73,6 +86,8 @@ Page({
         resultCount: products.length,
         scenicOptions,
         kindOptions,
+        categoryOptions,
+        activeCategory: categoryOptions.indexOf(this.data.activeCategory) >= 0 ? this.data.activeCategory : '全部',
         activeKind: kindOptions.some(kind => kind.value === this.data.activeKind) ? this.data.activeKind : (kindOptions.length ? kindOptions[0].value : 'all'),
         activeScenic: scenicOptions.indexOf(this.data.activeScenic) >= 0 ? this.data.activeScenic : '全部',
         hasActiveFilters: false,
@@ -162,7 +177,11 @@ Page({
 
   resetFilters() {
     const defaultKind = this.data.kindOptions.length ? this.data.kindOptions[0].value : 'all';
-    this.setData({ keyword: '', activeScenic: '全部', activeKind: defaultKind, sort: 'default' }, () => this.applyFilters());
+    this.setData({ keyword: '', activeCategory: '全部', activeScenic: '全部', activeKind: defaultKind, sort: 'default' }, () => this.applyFilters());
+  },
+
+  selectCategory(event) {
+    this.setData({ activeCategory: event.currentTarget.dataset.category }, () => this.applyFilters());
   },
 
   selectScenic(event) {
@@ -184,17 +203,18 @@ Page({
     })).filter(product => {
       const scenic = product.scenic_area_name || '其他景区';
       const scenicMatched = this.data.activeScenic === '全部' || scenic === this.data.activeScenic;
+      const categoryMatched = this.data.activeCategory === '全部' || product.storefront_category === this.data.activeCategory;
       const kindMatched = this.data.activeKind === 'all' || (product.product_kind || 'ticket') === this.data.activeKind;
-      const text = `${product.name || ''} ${scenic} ${product.hotel_name || ''} ${product.room_type_name || ''} ${product.priceText || ''} ${(product.tags || []).join(' ')}`.toLowerCase();
-      return scenicMatched && kindMatched && (!keyword || text.indexOf(keyword) >= 0);
+      const text = `${product.name || ''} ${product.storefront_category || ''} ${scenic} ${product.hotel_name || ''} ${product.room_type_name || ''} ${product.priceText || ''} ${(product.tags || []).join(' ')}`.toLowerCase();
+      return categoryMatched && scenicMatched && kindMatched && (!keyword || text.indexOf(keyword) >= 0);
     });
     if (this.data.sort === 'priceAsc') products.sort((a, b) => a.displayPriceCents - b.displayPriceCents);
     if (this.data.sort === 'priceDesc') products.sort((a, b) => b.displayPriceCents - a.displayPriceCents);
-    const hasActiveFilters = Boolean(keyword || this.data.activeScenic !== '全部' || (this.data.kindOptions.length > 1 && this.data.activeKind !== 'all') || this.data.sort !== 'default');
+    const hasActiveFilters = Boolean(keyword || this.data.activeCategory !== '全部' || this.data.activeScenic !== '全部' || (this.data.kindOptions.length > 1 && this.data.activeKind !== 'all') || this.data.sort !== 'default');
     let emptyStateDetail = '换个关键词或分类试试';
     if (keyword && this.data.activeScenic !== '全部') emptyStateDetail = '换个关键词或景区试试';
     else if (keyword) emptyStateDetail = '换个关键词试试';
-    else if (this.data.activeScenic !== '全部' || (this.data.kindOptions.length > 1 && this.data.activeKind !== 'all')) emptyStateDetail = '换个分类或景区试试';
+    else if (this.data.activeCategory !== '全部' || this.data.activeScenic !== '全部' || (this.data.kindOptions.length > 1 && this.data.activeKind !== 'all')) emptyStateDetail = '换个分类或景区试试';
     this.setData({ products, resultCount: products.length, hasActiveFilters, emptyStateDetail });
   },
 

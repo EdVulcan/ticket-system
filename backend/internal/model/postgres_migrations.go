@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 121
+const CurrentPostgresSchemaVersion = 122
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -714,11 +714,43 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateMobileVerificationBatch(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateXiaohongshuStorefrontMerchandising(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "mobile verification preview and atomic confirmation",
+		Name:      "xiaohongshu storefront categories and ordering",
 		AppliedAt: time.Now(),
 	}).Error
+}
+
+func migrateXiaohongshuStorefrontMerchandising(db *gorm.DB, previous int) error {
+	if previous >= 122 {
+		return nil
+	}
+	if err := db.Exec(`
+		ALTER TABLE xiaohongshu_product_configs
+			ADD COLUMN IF NOT EXISTS storefront_category varchar(40) NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS storefront_category_order integer NOT NULL DEFAULT 9999,
+			ADD COLUMN IF NOT EXISTS storefront_product_order integer NOT NULL DEFAULT 9999;
+		ALTER TABLE xiaohongshu_product_configs ALTER COLUMN storefront_category_order SET DEFAULT 9999;
+		ALTER TABLE xiaohongshu_product_configs ALTER COLUMN storefront_product_order SET DEFAULT 9999;
+		UPDATE xiaohongshu_product_configs
+		SET storefront_category_order = 9999, storefront_product_order = 9999
+		WHERE deleted_at IS NULL;
+		ALTER TABLE xiaohongshu_product_configs DROP CONSTRAINT IF EXISTS chk_xhs_storefront_category_order;
+		ALTER TABLE xiaohongshu_product_configs ADD CONSTRAINT chk_xhs_storefront_category_order
+			CHECK (storefront_category_order >= 0 AND storefront_category_order <= 9999);
+		ALTER TABLE xiaohongshu_product_configs DROP CONSTRAINT IF EXISTS chk_xhs_storefront_product_order;
+		ALTER TABLE xiaohongshu_product_configs ADD CONSTRAINT chk_xhs_storefront_product_order
+			CHECK (storefront_product_order >= 0 AND storefront_product_order <= 9999);
+		CREATE INDEX IF NOT EXISTS idx_xhs_storefront_merchandising
+			ON xiaohongshu_product_configs(channel_account_id, storefront_category_order, storefront_category, storefront_product_order, channel_product_mapping_id)
+			WHERE deleted_at IS NULL;
+	`).Error; err != nil {
+		return fmt.Errorf("register xiaohongshu storefront merchandising: %w", err)
+	}
+	return nil
 }
 
 func migrateMobileVerificationBatch(db *gorm.DB, previous int) error {

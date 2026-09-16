@@ -75,6 +75,26 @@ test('catalog retains combined search, scenic, kind and price filtering', async 
   assert.equal(page.data.hasActiveFilters, false);
 });
 
+test('catalog keeps merchant ordering and filters by storefront category', async () => {
+  const { page } = catalogPage({ categories: [
+    { name: '热门推荐', sort_order: 10 }, { name: '常规门票', sort_order: 20 }
+  ], products: [
+    { id: 2, name: '热门票一', storefront_category: '热门推荐', storefront_order: 5, product_kind: 'ticket', price_cents: 9000 },
+    { id: 1, name: '热门票二', storefront_category: '热门推荐', storefront_order: 20, product_kind: 'ticket', price_cents: 8000 },
+    { id: 3, name: '常规票', storefront_category: '常规门票', storefront_order: 1, product_kind: 'ticket', price_cents: 7000 }
+  ] });
+  await page.loadCatalog();
+  assert.deepEqual(Array.from(page.data.categoryOptions), ['全部', '热门推荐', '常规门票']);
+  assert.deepEqual(Array.from(page.data.products, item => item.id), [2, 1, 3]);
+  page.selectCategory({ currentTarget: { dataset: { category: '热门推荐' } } });
+  assert.deepEqual(Array.from(page.data.products, item => item.id), [2, 1]);
+  assert.equal(page.data.hasActiveFilters, true);
+  page.selectSort({ currentTarget: { dataset: { sort: 'priceAsc' } } });
+  assert.deepEqual(Array.from(page.data.products, item => item.id), [1, 2]);
+  page.resetFilters();
+  assert.deepEqual(Array.from(page.data.products, item => item.id), [2, 1, 3]);
+});
+
 test('catalog reload retains promotion labels when opportunity arrived first', async () => {
   const { page } = catalogPage({ products: [
     { id: 1, name: '参与票', product_kind: 'ticket', price_cents: 8000 },

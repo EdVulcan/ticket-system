@@ -212,6 +212,15 @@
           <el-form-item label="商品类型"><el-select v-model="xiaohongshuMapping.product_type" class="w-full"><el-option label="团购券" :value="1" /><el-option label="预售券" :value="2" /><el-option label="日历商品" :value="3" /></el-select></el-form-item>
           <el-form-item label="结算方式"><el-select v-model="xiaohongshuMapping.settle_type" class="w-full"><el-option label="总部结算" :value="1" /><el-option label="门店结算" :value="2" /><el-option label="区域结算" :value="3" /></el-select></el-form-item>
         </div>
+        <div class="rounded border border-gray-200 bg-gray-50 p-3 mb-4">
+          <div class="mb-3 text-sm font-medium text-gray-700">商城分类与排序</div>
+          <div class="grid grid-cols-1 gap-x-4 md:grid-cols-3">
+            <el-form-item label="商城分类"><el-input v-model="xiaohongshuMapping.storefront_category" maxlength="40" placeholder="例如：热门门票" /></el-form-item>
+            <el-form-item label="分类顺序"><el-input-number v-model="xiaohongshuMapping.storefront_category_order" :min="0" :max="9999" controls-position="right" class="w-full" /></el-form-item>
+            <el-form-item label="商品顺序"><el-input-number v-model="xiaohongshuMapping.storefront_product_order" :min="0" :max="9999" controls-position="right" class="w-full" /></el-form-item>
+          </div>
+          <p class="text-xs leading-5 text-gray-500">同名分类会合并展示；数字越小越靠前。未填写分类的商品统一归入“其他”。</p>
+        </div>
         <el-form-item label="商品图片">
           <div class="w-full rounded border border-gray-200 bg-gray-50 p-3">
             <div class="flex items-center gap-4">
@@ -522,7 +531,7 @@ const xiaohongshuCategoryError = ref('')
 const xiaohongshuPOIError = ref('')
 const xiaohongshuCategories = ref<any[]>([])
 const xiaohongshuPOIs = ref<any[]>([])
-const xiaohongshuMapping = reactive({ mapping_id: 0, external_code: '', external_sku_id: '', display_name: '', channel_sale_yuan: 0, category_id: '', poi_ids: [] as string[], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, status: 'active', sync_status: '', last_sync_error: '', audit_status: '', audit_message: '', audited_at: '', audit_checked_at: '', audit_check_error: '' })
+const xiaohongshuMapping = reactive({ mapping_id: 0, external_code: '', external_sku_id: '', display_name: '', channel_sale_yuan: 0, category_id: '', poi_ids: [] as string[], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, storefront_category: '', storefront_category_order: 9999, storefront_product_order: 9999, status: 'active', sync_status: '', last_sync_error: '', audit_status: '', audit_message: '', audited_at: '', audit_checked_at: '', audit_check_error: '' })
 const xiaohongshuAuditRefreshIntervalMs = 30_000
 let xiaohongshuMappingDialogSession = 0
 let xiaohongshuAuditRefreshTimer: ReturnType<typeof window.setInterval> | undefined
@@ -726,6 +735,9 @@ const applyXiaohongshuPersistedConfig = (config: any) => {
     order_path: persisted.order_path || '/pages/order/detail',
     product_type: persisted.product_type || 1,
     settle_type: persisted.settle_type || 1,
+    storefront_category: persisted.storefront_category || '',
+    storefront_category_order: Number.isFinite(Number(persisted.storefront_category_order)) ? Number(persisted.storefront_category_order) : 9999,
+    storefront_product_order: Number.isFinite(Number(persisted.storefront_product_order)) ? Number(persisted.storefront_product_order) : 9999,
   })
   applyXiaohongshuAuditProjection(persisted)
 }
@@ -744,7 +756,10 @@ const xiaohongshuConfigMatches = (actual: any, expected: any) => Boolean(actual 
   String(actual.product_path || '') === expected.product_path &&
   String(actual.order_path || '') === expected.order_path &&
   Number(actual.product_type || 0) === expected.product_type &&
-  Number(actual.settle_type || 0) === expected.settle_type
+  Number(actual.settle_type || 0) === expected.settle_type &&
+  String(actual.storefront_category || '') === expected.storefront_category &&
+  Number(actual.storefront_category_order ?? 9999) === expected.storefront_category_order &&
+  Number(actual.storefront_product_order ?? 9999) === expected.storefront_product_order
 const refreshXiaohongshuMappingState = async (accountID: number, mappingID: number, session: number, expectedMapping: any, expectedConfig: any) => {
   const state = { mappingMatch: null as boolean | null, configMatch: null as boolean | null, syncStatus: '', errors: [] as string[] }
   const [mappingResult, configResult] = await Promise.allSettled([
@@ -820,7 +835,7 @@ const openXiaohongshuMappingEdit = async (row: any) => {
   xiaohongshuMappingSaveNotice.value = null
   xiaohongshuMappingSaving.value = false
   xiaohongshuMappingSyncing.value = false
-  Object.assign(xiaohongshuMapping, { mapping_id: mappingID, external_code: row.external_code || '', external_sku_id: `${row.external_code || 'XHS'}_SKU`, display_name: row.display_name || '', channel_sale_yuan: Number(row.channel_sale_cents || 0) / 100, category_id: '', poi_ids: [], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, status: row.status || 'active', sync_status: '', last_sync_error: '', audit_status: '', audit_message: '', audited_at: '', audit_checked_at: '', audit_check_error: '' })
+  Object.assign(xiaohongshuMapping, { mapping_id: mappingID, external_code: row.external_code || '', external_sku_id: `${row.external_code || 'XHS'}_SKU`, display_name: row.display_name || '', channel_sale_yuan: Number(row.channel_sale_cents || 0) / 100, category_id: '', poi_ids: [], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, storefront_category: '', storefront_category_order: 9999, storefront_product_order: 9999, status: row.status || 'active', sync_status: '', last_sync_error: '', audit_status: '', audit_message: '', audited_at: '', audit_checked_at: '', audit_check_error: '' })
   xiaohongshuMappingDialog.value = true
   xiaohongshuMappingLoading.value = true
   xiaohongshuCategoryError.value = ''
@@ -834,7 +849,7 @@ const openXiaohongshuMappingEdit = async (row: any) => {
     if (resourceResult.status === 'fulfilled') applyXiaohongshuResources(resourceResult.value)
     if (configResult.status === 'fulfilled') {
       const config = configResult.value.data
-      Object.assign(xiaohongshuMapping, { external_sku_id: config.external_sku_id || xiaohongshuMapping.external_sku_id, category_id: config.category_id || '', poi_ids: config.poi_ids || [], image_url: config.image_url || '', description: config.description || '', product_path: config.product_path || '/pages/index/index', order_path: config.order_path || '/pages/order/detail', product_type: config.product_type || 1, settle_type: config.settle_type || 1 })
+      Object.assign(xiaohongshuMapping, { external_sku_id: config.external_sku_id || xiaohongshuMapping.external_sku_id, category_id: config.category_id || '', poi_ids: config.poi_ids || [], image_url: config.image_url || '', description: config.description || '', product_path: config.product_path || '/pages/index/index', order_path: config.order_path || '/pages/order/detail', product_type: config.product_type || 1, settle_type: config.settle_type || 1, storefront_category: config.storefront_category || '', storefront_category_order: Number(config.storefront_category_order ?? 9999), storefront_product_order: Number(config.storefront_product_order ?? 9999) })
       applyXiaohongshuAuditProjection(config)
     }
     startXiaohongshuAuditRefresh()
@@ -889,7 +904,7 @@ const saveXiaohongshuMapping = async (syncAfterSave: boolean) => {
   const mappingID = xiaohongshuMapping.mapping_id
   const session = xiaohongshuMappingDialogSession
   const mappingPayload = { external_code: xiaohongshuMapping.external_code.trim(), display_name: xiaohongshuMapping.display_name.trim(), channel_sale_cents: Math.round(xiaohongshuMapping.channel_sale_yuan * 100), channel_cost_cents: 0, status: xiaohongshuMapping.status }
-  const configPayload = { external_sku_id: xiaohongshuMapping.external_sku_id.trim(), category_id: xiaohongshuMapping.category_id, poi_ids: [...xiaohongshuMapping.poi_ids], image_url: xiaohongshuMapping.image_url.trim(), description: xiaohongshuMapping.description.trim(), product_path: xiaohongshuMapping.product_path.trim(), order_path: xiaohongshuMapping.order_path.trim(), product_type: xiaohongshuMapping.product_type, settle_type: xiaohongshuMapping.settle_type }
+  const configPayload = { external_sku_id: xiaohongshuMapping.external_sku_id.trim(), category_id: xiaohongshuMapping.category_id, poi_ids: [...xiaohongshuMapping.poi_ids], image_url: xiaohongshuMapping.image_url.trim(), description: xiaohongshuMapping.description.trim(), product_path: xiaohongshuMapping.product_path.trim(), order_path: xiaohongshuMapping.order_path.trim(), product_type: xiaohongshuMapping.product_type, settle_type: xiaohongshuMapping.settle_type, storefront_category: xiaohongshuMapping.storefront_category.trim(), storefront_category_order: Number(xiaohongshuMapping.storefront_category_order), storefront_product_order: Number(xiaohongshuMapping.storefront_product_order) }
   ++xiaohongshuAuditProjectionGeneration
   xiaohongshuMappingSaveNotice.value = null
   xiaohongshuMappingSaving.value = true

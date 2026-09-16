@@ -10,6 +10,7 @@ import (
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/utils"
 	"ticket-backend/internal/xiaohongshu"
+	"time"
 )
 
 func TestXiaohongshuChannelCredentialsAreTenantScopedAndEncrypted(t *testing.T) {
@@ -164,9 +165,10 @@ func TestXiaohongshuProductConfigAndSyncAreTenantScoped(t *testing.T) {
 		}
 		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
 	}
-	input := XiaohongshuProductConfigInput{ExternalSKUID: "XHS-SKU", CategoryID: "SCENIC", POIIDs: []string{"POI-1"}, ImageURL: "https://example.com/ticket.png", Description: "测试景区门票", ProductPath: "/pages/index/index", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 2}
+	categoryOrder, productOrder := 10, 20
+	input := XiaohongshuProductConfigInput{ExternalSKUID: "XHS-SKU", CategoryID: "SCENIC", POIIDs: []string{"POI-1"}, ImageURL: "https://example.com/ticket.png", Description: "测试景区门票", ProductPath: "/pages/index/index", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 2, StorefrontCategory: "热门推荐", StorefrontCategoryOrder: &categoryOrder, StorefrontProductOrder: &productOrder}
 	config, err := service.SaveConfig(tenantID, account.ID, mapping.ID, 1, "admin", input)
-	if err != nil || config.SyncStatus != "pending" || config.AuditStatus != "pending" || len(config.POIIDs) != 1 {
+	if err != nil || config.SyncStatus != "pending" || config.AuditStatus != "pending" || len(config.POIIDs) != 1 || config.StorefrontCategory != "热门推荐" || config.StorefrontCategoryOrder != 10 || config.StorefrontProductOrder != 20 {
 		t.Fatalf("config=%+v err=%v", config, err)
 	}
 	categories, err := service.ListCategories(context.Background(), tenantID, account.ID)
@@ -183,6 +185,18 @@ func TestXiaohongshuProductConfigAndSyncAreTenantScoped(t *testing.T) {
 	stored, err := service.GetConfig(tenantID, account.ID, mapping.ID)
 	if err != nil || stored.SyncStatus != "submitted" || stored.AuditStatus != "pending" || stored.LastSyncedAt == nil {
 		t.Fatalf("stored=%+v err=%v", stored, err)
+	}
+	approvedAt := time.Now()
+	if err := model.DB.Model(&model.XiaohongshuProductConfig{}).Where("channel_product_mapping_id = ?", mapping.ID).Updates(map[string]interface{}{"sync_status": "synced", "audit_status": "approved", "audited_at": approvedAt}).Error; err != nil {
+		t.Fatal(err)
+	}
+	input.StorefrontCategory = "亲子推荐"
+	if _, err := service.SaveConfig(tenantID, account.ID, mapping.ID, 1, "admin", input); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = service.GetConfig(tenantID, account.ID, mapping.ID)
+	if err != nil || stored.SyncStatus != "synced" || stored.AuditStatus != "approved" || stored.StorefrontCategory != "亲子推荐" {
+		t.Fatalf("local merchandising reset provider review: stored=%+v err=%v", stored, err)
 	}
 	// Editing a published mapping changes the upstream product payload. The
 	// previous review must no longer make the edited version sellable.

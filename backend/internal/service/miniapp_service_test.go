@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -115,6 +116,59 @@ func TestXiaohongshuMiniappLoginAndCatalogAreChannelScoped(t *testing.T) {
 		if _, err := miniapp.CreateXiaohongshuOrder(context.Background(), authenticated, MiniappOrderCreateInput{MappingID: mapping.ID, Quantity: 1, ClientRequestID: "blocked-" + auditStatus}); err == nil || !strings.Contains(err.Error(), "审核") {
 			t.Fatalf("audit status %q order error=%v", auditStatus, err)
 		}
+	}
+}
+
+func TestXiaohongshuMiniappCatalogUsesAccountScopedCategoriesAndOrdering(t *testing.T) {
+	resetBusinessData(t)
+	tenantID, firstProductID := seedSellableProduct(t, "unlimited", 0)
+	var firstProduct model.Product
+	if err := model.DB.First(&firstProduct, firstProductID).Error; err != nil {
+		t.Fatal(err)
+	}
+	secondProduct := model.Product{Name: "亲子票", Price: 90, TenantID: tenantID, ScenicAreaID: firstProduct.ScenicAreaID, ProductKind: "ticket", RuleID: firstProduct.RuleID, Type: "online", Status: "online", StockType: "unlimited", CodeMode: "order"}
+	thirdProduct := model.Product{Name: "常规票", Price: 70, TenantID: tenantID, ScenicAreaID: firstProduct.ScenicAreaID, ProductKind: "ticket", RuleID: firstProduct.RuleID, Type: "online", Status: "online", StockType: "unlimited", CodeMode: "order"}
+	if err := model.DB.Create(&secondProduct).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Create(&thirdProduct).Error; err != nil {
+		t.Fatal(err)
+	}
+	account := model.ChannelAccount{Code: "xhs-merchandising", Status: "sandbox"}
+	if err := (&ChannelService{}).CreateXiaohongshu(tenantID, &account, "xhs-merchandising-app", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	products := []struct {
+		productID    uint
+		name         string
+		category     string
+		categorySort int
+		productSort  int
+	}{
+		{firstProductID, "热门票二", "热门推荐", 10, 20},
+		{secondProduct.ID, "热门票一", "热门推荐", 10, 5},
+		{thirdProduct.ID, "常规票", "常规门票", 20, 1},
+	}
+	for index, item := range products {
+		mapping := model.ChannelProductMapping{ChannelAccountID: account.ID, ProductID: item.productID, ExternalCode: fmt.Sprintf("MERCH-%d", index), DisplayName: item.name, ChannelSaleCents: int64(7000 + index*100)}
+		if err := (&ChannelService{}).AddMapping(tenantID, &mapping); err != nil {
+			t.Fatal(err)
+		}
+		config := model.XiaohongshuProductConfig{TenantID: tenantID, ChannelAccountID: account.ID, ChannelProductMappingID: mapping.ID, ExternalSKUID: fmt.Sprintf("MERCH-SKU-%d", index), CategoryID: "ticket", ImageURL: "https://example.com/ticket.png", Description: "票", ProductPath: "/pages/product/detail", OrderPath: "/pages/order/detail", ProductType: 1, SettleType: 1, StorefrontCategory: item.category, StorefrontCategoryOrder: item.categorySort, StorefrontProductOrder: item.productSort, SyncStatus: "synced", AuditStatus: "approved"}
+		if err := model.DB.Create(&config).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	customer := model.MiniappCustomer{Base: model.Base{ID: 1}, TenantID: tenantID, ChannelAccountID: account.ID}
+	catalog, err := (MiniappService{}).ListCatalog(&customer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Categories) != 2 || catalog.Categories[0].Name != "热门推荐" || catalog.Categories[1].Name != "常规门票" {
+		t.Fatalf("categories=%+v", catalog.Categories)
+	}
+	if len(catalog.Products) != 3 || catalog.Products[0].Name != "热门票一" || catalog.Products[1].Name != "热门票二" || catalog.Products[2].Name != "常规票" {
+		t.Fatalf("products=%+v", catalog.Products)
 	}
 }
 

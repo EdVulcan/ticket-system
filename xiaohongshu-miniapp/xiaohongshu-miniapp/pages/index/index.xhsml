@@ -16,6 +16,12 @@
     </view>
   </view>
 
+  <scroll-view class="category-scroll" xhs:if="{{!loading && categoryOptions.length > 2}}" scroll-x enhanced show-scrollbar="{{false}}">
+    <view class="category-row">
+      <view class="category-item {{activeCategory === item ? 'active' : ''}}" xhs:for="{{categoryOptions}}" xhs:key="*this" data-category="{{item}}" bindtap="selectCategory">{{item}}</view>
+    </view>
+  </scroll-view>
+
   <view class="selection-bar" xhs:if="{{hasActiveFilters}}">
     <view class="selection-summary"><text class="selection-label">当前筛选</text><text>{{products.length}} 个结果</text></view>
     <button class="reset-link" bindtap="resetFilters">清除筛选</button>
