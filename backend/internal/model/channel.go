@@ -61,8 +61,8 @@ type XiaohongshuProductConfig struct {
 	ProductType             int    `gorm:"not null;default:1" json:"product_type"`
 	SettleType              int    `gorm:"not null;default:1" json:"settle_type"`
 	StorefrontCategory      string `gorm:"size:40;not null;default:'';index" json:"storefront_category"`
-	StorefrontCategoryOrder int    `gorm:"not null" json:"storefront_category_order"`
-	StorefrontProductOrder  int    `gorm:"not null" json:"storefront_product_order"`
+	StorefrontCategoryOrder int    `gorm:"not null;default:9999" json:"storefront_category_order"`
+	StorefrontProductOrder  int    `gorm:"not null;default:9999" json:"storefront_product_order"`
 	SyncStatus              string `gorm:"size:20;not null;default:'pending';index" json:"sync_status"`
 	// SyncStatus describes delivery to Xiaohongshu. AuditStatus is the separate
 	// provider review decision and is the only status that can make a mapping
