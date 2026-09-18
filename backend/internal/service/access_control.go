@@ -16,6 +16,11 @@ var (
 	ErrSupplierBusinessTypeInactive = errors.New("supplier business type is not active")
 )
 
+// RequireActiveTenantBusinessCapability and
+// RequireConfiguredTenantBusinessCapability are implemented in
+// commerce_capability_service.go. Keep the declarations here near the other
+// authorization errors so callers can use one service package boundary.
+
 func requireActiveTenant(tx *gorm.DB, tenantID uint) error {
 	if tenantID == 0 {
 		return ErrTenantUnavailable

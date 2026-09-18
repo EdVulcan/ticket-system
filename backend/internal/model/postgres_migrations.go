@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 122
+const CurrentPostgresSchemaVersion = 130
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -69,6 +69,11 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&UpstreamConnection{}, &UpstreamProductMapping{}, &ProductSupplyConfig{},
 		&OrderItemSupplySnapshot{}, &ExternalAdmissionCredential{}, &ExternalAdmissionBinding{},
 		&UpstreamDispatchGate{}, &UpstreamDispatchWaiter{},
+		&TenantBusinessCapability{}, &CommerceProduct{}, &CommerceSKU{}, &CommerceOptionGroup{}, &CommerceOption{},
+		&CommerceFulfillmentLocation{}, &CommerceInventory{}, &CommerceCart{}, &CommerceCartItem{},
+		&CommerceOrder{}, &CommerceOrderItem{}, &RestaurantFulfillment{}, &RetailFulfillment{},
+		&CommercePaymentReconciliationTask{},
+		&CommerceAddress{}, &CommerceAfterSaleRequest{}, &CommerceAfterSaleEvent{},
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
@@ -717,11 +722,417 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateXiaohongshuStorefrontMerchandising(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateCommerceDomain(db, previousSchemaVersion); err != nil {
+		return err
+	}
+	if err := migrateCommerceOrderLifecycle(db, previousSchemaVersion); err != nil {
+		return err
+	}
+	if err := migrateCommerceDomainIntegrity(db, previousSchemaVersion); err != nil {
+		return err
+	}
+	if err := migrateCommercePaymentReconciliation(db, previousSchemaVersion); err != nil {
+		return err
+	}
+	if err := migrateCommerceCartIdentity(db, previousSchemaVersion); err != nil {
+		return err
+	}
+	if err := migrateCommerceRefundProviderFacts(db, previousSchemaVersion); err != nil {
+		return err
+	}
+	if err := migrateCommerceReliabilityGuards(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "xiaohongshu storefront categories and ordering",
+		Name:      "commerce reliability guards",
 		AppliedAt: time.Now(),
 	}).Error
+}
+
+// migrateCommerceReliabilityGuards prevents a payment or refund provider
+// reference from being attached to two commercial orders. Empty references are
+// deliberately excluded because an order is allowed to exist before its
+// payment adapter has returned a provider identity. The indexes are rebuilt as
+// partial unique indexes so databases created by the early AutoMigrate model do
+// not retain a weaker non-unique index with the same name.
+func migrateCommerceReliabilityGuards(db *gorm.DB, previous int) error {
+	if previous >= 130 {
+		return nil
+	}
+	statements := []string{
+		`ALTER TABLE commerce_carts ADD COLUMN IF NOT EXISTS checked_out_order_id bigint NOT NULL DEFAULT 0;
+		 CREATE INDEX IF NOT EXISTS idx_commerce_carts_checked_out_order ON commerce_carts(tenant_id, checked_out_order_id) WHERE deleted_at IS NULL AND checked_out_order_id <> 0;`,
+		`DROP INDEX IF EXISTS idx_commerce_orders_payment_reference;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_orders_payment_reference
+			ON commerce_orders(tenant_id, payment_reference)
+			WHERE deleted_at IS NULL AND payment_reference IS NOT NULL AND payment_reference <> '';`,
+		`DROP INDEX IF EXISTS idx_commerce_after_sales_provider_reference;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_after_sales_provider_reference
+			ON commerce_after_sale_requests(tenant_id, provider_refund_reference)
+			WHERE deleted_at IS NULL AND provider_refund_reference <> '';`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_payment_reconciliation_manual_review
+			ON commerce_payment_reconciliation_tasks(tenant_id, status, last_attempt_at)
+			WHERE deleted_at IS NULL AND status = 'manual_review';`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return fmt.Errorf("register commerce reliability guards: %w", err)
+		}
+	}
+	return nil
+}
+
+// migrateCommerceRefundProviderFacts separates the provider's refund
+// transaction identity from the original payment attempt identity. Existing
+// requests retain empty facts until a trusted provider confirmation arrives.
+func migrateCommerceRefundProviderFacts(db *gorm.DB, previous int) error {
+	if previous >= 129 {
+		return nil
+	}
+	statements := []string{
+		`ALTER TABLE commerce_after_sale_requests
+			ADD COLUMN IF NOT EXISTS provider_refund_reference varchar(120) NOT NULL DEFAULT '';
+		 ALTER TABLE commerce_after_sale_requests
+			ADD COLUMN IF NOT EXISTS provider_refund_amount_cents bigint NOT NULL DEFAULT 0;
+		 UPDATE commerce_after_sale_requests
+		 SET provider_refund_reference = ''
+		 WHERE provider_refund_reference IS NULL;
+		 UPDATE commerce_after_sale_requests
+		 SET provider_refund_amount_cents = 0
+		 WHERE provider_refund_amount_cents IS NULL;
+		 ALTER TABLE commerce_after_sale_requests
+			ALTER COLUMN provider_refund_reference SET DEFAULT '';
+		 ALTER TABLE commerce_after_sale_requests
+			ALTER COLUMN provider_refund_reference SET NOT NULL;
+		 ALTER TABLE commerce_after_sale_requests
+			ALTER COLUMN provider_refund_amount_cents SET DEFAULT 0;
+		 ALTER TABLE commerce_after_sale_requests
+			ALTER COLUMN provider_refund_amount_cents SET NOT NULL;
+		 ALTER TABLE commerce_after_sale_requests
+			DROP CONSTRAINT IF EXISTS chk_commerce_after_sales_provider_amount;
+		 ALTER TABLE commerce_after_sale_requests
+			ADD CONSTRAINT chk_commerce_after_sales_provider_amount
+			CHECK (provider_refund_amount_cents >= 0);
+		 ALTER TABLE commerce_after_sale_requests
+			DROP CONSTRAINT IF EXISTS chk_commerce_after_sales_provider_reference;
+		 ALTER TABLE commerce_after_sale_requests
+			ADD CONSTRAINT chk_commerce_after_sales_provider_reference
+			CHECK (provider_refund_reference <> '' OR provider_refund_amount_cents = 0);`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return fmt.Errorf("register commerce refund provider facts: %w", err)
+		}
+	}
+	return nil
+}
+
+// migrateCommercePaymentReconciliation adds the durable task used by payment
+// adapters to resolve provider responses that are unknown at request time.
+// A unique tenant/order scope is sufficient because the order service permits
+// only one active provider payment attempt per commercial order.
+func migrateCommercePaymentReconciliation(db *gorm.DB, previous int) error {
+	if previous >= 127 {
+		return nil
+	}
+	statements := []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_payment_reconciliation_order
+			ON commerce_payment_reconciliation_tasks(tenant_id, order_id)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_payment_reconciliation_due
+			ON commerce_payment_reconciliation_tasks(tenant_id, status, next_attempt_at)
+			WHERE deleted_at IS NULL;`,
+		`ALTER TABLE commerce_payment_reconciliation_tasks
+			DROP CONSTRAINT IF EXISTS chk_commerce_payment_reconciliation_status;
+		 ALTER TABLE commerce_payment_reconciliation_tasks
+			ADD CONSTRAINT chk_commerce_payment_reconciliation_status
+			CHECK (status IN ('pending','failed','completed','manual_review'));`,
+		`ALTER TABLE commerce_payment_reconciliation_tasks
+			DROP CONSTRAINT IF EXISTS chk_commerce_payment_reconciliation_attempts;
+		 ALTER TABLE commerce_payment_reconciliation_tasks
+			ADD CONSTRAINT chk_commerce_payment_reconciliation_attempts
+			CHECK (attempts >= 0);`,
+		`ALTER TABLE commerce_payment_reconciliation_tasks
+			ADD COLUMN IF NOT EXISTS provider_paid_at timestamptz;
+		 ALTER TABLE commerce_payment_reconciliation_tasks
+			ADD COLUMN IF NOT EXISTS provider_amount_cents bigint NOT NULL DEFAULT 0;
+		 UPDATE commerce_payment_reconciliation_tasks
+		 SET provider_amount_cents = 0
+		 WHERE provider_amount_cents IS NULL;
+		 ALTER TABLE commerce_payment_reconciliation_tasks
+			ALTER COLUMN provider_amount_cents SET DEFAULT 0;
+		 ALTER TABLE commerce_payment_reconciliation_tasks
+			ALTER COLUMN provider_amount_cents SET NOT NULL;
+		 ALTER TABLE commerce_payment_reconciliation_tasks
+			DROP CONSTRAINT IF EXISTS chk_commerce_payment_reconciliation_provider_amount;
+		 ALTER TABLE commerce_payment_reconciliation_tasks
+			ADD CONSTRAINT chk_commerce_payment_reconciliation_provider_amount
+			CHECK (provider_amount_cents >= 0);`,
+		`DO $$ BEGIN
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_payment_reconciliation_order_owner') THEN
+		  ALTER TABLE commerce_payment_reconciliation_tasks
+			ADD CONSTRAINT fk_commerce_payment_reconciliation_order_owner
+			FOREIGN KEY (tenant_id, order_id) REFERENCES commerce_orders(tenant_id, id);
+		 END IF;
+	END $$;`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return fmt.Errorf("register commerce payment reconciliation: %w", err)
+		}
+	}
+	return nil
+}
+
+// migrateCommerceCartIdentity replaces the first-draft global cart identity
+// index with an active-cart-only index. Abandoned and checked-out carts are
+// historical facts and must not prevent the same customer from starting a new
+// active cart for the same tenant, domain, channel account and location.
+func migrateCommerceCartIdentity(db *gorm.DB, previous int) error {
+	if previous >= 128 {
+		return nil
+	}
+	if err := db.Exec(`
+		DROP INDEX IF EXISTS idx_commerce_carts_identity;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_carts_active_identity
+			ON commerce_carts(tenant_id, business_type, customer_id, channel_account_id, location_id)
+			WHERE deleted_at IS NULL AND status = 'active';
+	`).Error; err != nil {
+		return fmt.Errorf("replace commerce cart identity index: %w", err)
+	}
+	return nil
+}
+
+// migrateCommerceDomainIntegrity applies the ownership indexes and composite
+// foreign keys that were introduced after the first commercial schema. It is
+// kept as a separate version so databases already recorded at schema 123 or
+// 124 receive the same tenant/domain guards as a fresh install.
+func migrateCommerceDomainIntegrity(db *gorm.DB, previous int) error {
+	if previous >= 125 {
+		return nil
+	}
+	statements := []string{
+		`DROP INDEX IF EXISTS idx_commerce_skus_tenant_code;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_skus_tenant_code ON commerce_skus(tenant_id, sku_code) WHERE deleted_at IS NULL;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_products_tenant_id ON commerce_products(tenant_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_skus_tenant_id ON commerce_skus(tenant_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_skus_tenant_product_id ON commerce_skus(tenant_id, product_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_option_groups_tenant_id ON commerce_option_groups(tenant_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_option_groups_tenant_product_id ON commerce_option_groups(tenant_id, product_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_locations_tenant_domain_id ON commerce_fulfillment_locations(tenant_id, business_type, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_locations_tenant_id ON commerce_fulfillment_locations(tenant_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_carts_tenant_id ON commerce_carts(tenant_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_orders_tenant_id ON commerce_orders(tenant_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_after_sales_tenant_id ON commerce_after_sale_requests(tenant_id, id);`,
+		`DO $$ BEGIN
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_skus_product_owner') THEN
+		  ALTER TABLE commerce_skus ADD CONSTRAINT fk_commerce_skus_product_owner FOREIGN KEY (tenant_id, product_id) REFERENCES commerce_products(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_option_groups_product_owner') THEN
+		  ALTER TABLE commerce_option_groups ADD CONSTRAINT fk_commerce_option_groups_product_owner FOREIGN KEY (tenant_id, product_id) REFERENCES commerce_products(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_options_group_owner') THEN
+		  ALTER TABLE commerce_options ADD CONSTRAINT fk_commerce_options_group_owner FOREIGN KEY (tenant_id, option_group_id) REFERENCES commerce_option_groups(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_inventory_sku_owner') THEN
+		  ALTER TABLE commerce_inventories ADD CONSTRAINT fk_commerce_inventory_sku_owner FOREIGN KEY (tenant_id, sku_id) REFERENCES commerce_skus(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_inventory_location_owner') THEN
+		  ALTER TABLE commerce_inventories ADD CONSTRAINT fk_commerce_inventory_location_owner FOREIGN KEY (tenant_id, location_id) REFERENCES commerce_fulfillment_locations(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_cart_location_owner') THEN
+		  ALTER TABLE commerce_carts ADD CONSTRAINT fk_commerce_cart_location_owner FOREIGN KEY (tenant_id, business_type, location_id) REFERENCES commerce_fulfillment_locations(tenant_id, business_type, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_cart_items_cart_owner') THEN
+		  ALTER TABLE commerce_cart_items ADD CONSTRAINT fk_commerce_cart_items_cart_owner FOREIGN KEY (tenant_id, cart_id) REFERENCES commerce_carts(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_cart_items_sku_owner') THEN
+		  ALTER TABLE commerce_cart_items ADD CONSTRAINT fk_commerce_cart_items_sku_owner FOREIGN KEY (tenant_id, product_id, sku_id) REFERENCES commerce_skus(tenant_id, product_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_order_location_owner') THEN
+		  ALTER TABLE commerce_orders ADD CONSTRAINT fk_commerce_order_location_owner FOREIGN KEY (tenant_id, business_type, location_id) REFERENCES commerce_fulfillment_locations(tenant_id, business_type, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_order_items_order_owner') THEN
+		  ALTER TABLE commerce_order_items ADD CONSTRAINT fk_commerce_order_items_order_owner FOREIGN KEY (tenant_id, order_id) REFERENCES commerce_orders(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_order_items_sku_owner') THEN
+		  ALTER TABLE commerce_order_items ADD CONSTRAINT fk_commerce_order_items_sku_owner FOREIGN KEY (tenant_id, product_id, sku_id) REFERENCES commerce_skus(tenant_id, product_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_restaurant_fulfillment_order_owner') THEN
+		  ALTER TABLE restaurant_fulfillments ADD CONSTRAINT fk_restaurant_fulfillment_order_owner FOREIGN KEY (tenant_id, order_id) REFERENCES commerce_orders(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_retail_fulfillment_order_owner') THEN
+		  ALTER TABLE retail_fulfillments ADD CONSTRAINT fk_retail_fulfillment_order_owner FOREIGN KEY (tenant_id, order_id) REFERENCES commerce_orders(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_after_sale_order_owner') THEN
+		  ALTER TABLE commerce_after_sale_requests ADD CONSTRAINT fk_commerce_after_sale_order_owner FOREIGN KEY (tenant_id, order_id) REFERENCES commerce_orders(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_after_sale_event_owner') THEN
+		  ALTER TABLE commerce_after_sale_events ADD CONSTRAINT fk_commerce_after_sale_event_owner FOREIGN KEY (tenant_id, request_id) REFERENCES commerce_after_sale_requests(tenant_id, id);
+		 END IF;
+	END $$;`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return fmt.Errorf("register commerce domain integrity guards: %w", err)
+		}
+	}
+	return nil
+}
+
+// migrateCommerceOrderLifecycle adds durable payment, expiry and reservation
+// facts without changing the meaning of existing commerce orders. Historical
+// order items default to released because their prior inventory state cannot be
+// reconstructed safely from the initial commercial-domain schema.
+func migrateCommerceOrderLifecycle(db *gorm.DB, previous int) error {
+	if previous >= 124 {
+		return nil
+	}
+	if err := db.Exec(`
+		ALTER TABLE commerce_orders
+			ADD COLUMN IF NOT EXISTS idempotency_key varchar(100) NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS expires_at timestamptz,
+			ADD COLUMN IF NOT EXISTS paid_at timestamptz,
+			ADD COLUMN IF NOT EXISTS payment_reference varchar(120);
+		ALTER TABLE commerce_order_items
+			ADD COLUMN IF NOT EXISTS reservation_status varchar(20) NOT NULL DEFAULT 'released',
+			ADD COLUMN IF NOT EXISTS released_at timestamptz;
+	`).Error; err != nil {
+		return fmt.Errorf("add commerce order lifecycle columns: %w", err)
+	}
+	statements := []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_orders_tenant_idempotency
+			ON commerce_orders(tenant_id, idempotency_key)
+			WHERE deleted_at IS NULL AND idempotency_key <> '';`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_orders_tenant_expires_at
+			ON commerce_orders(tenant_id, expires_at)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_orders_tenant_payment_reference
+			ON commerce_orders(tenant_id, payment_reference)
+			WHERE deleted_at IS NULL AND payment_reference <> '';`,
+		`ALTER TABLE commerce_order_items
+			DROP CONSTRAINT IF EXISTS chk_commerce_order_items_reservation_status;
+		 ALTER TABLE commerce_order_items
+			ADD CONSTRAINT chk_commerce_order_items_reservation_status
+			CHECK (reservation_status IN ('reserved','sold','released','refunded'));`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return fmt.Errorf("register commerce order lifecycle constraint: %w", err)
+		}
+	}
+	return nil
+}
+
+// migrateCommerceDomain registers the first isolated commercial-domain schema.
+// The current-model AutoMigrate above creates tables/columns; these explicit
+// constraints and indexes keep upgrades idempotent and protect cross-domain
+// state even when models are used outside the normal application path.
+func migrateCommerceDomain(db *gorm.DB, previous int) error {
+	if previous >= 123 {
+		return nil
+	}
+	statements := []string{
+		`ALTER TABLE tenant_business_capabilities DROP CONSTRAINT IF EXISTS chk_tenant_business_capability_type;
+		 ALTER TABLE tenant_business_capabilities ADD CONSTRAINT chk_tenant_business_capability_type CHECK (business_type IN ('restaurant','retail'));
+		 ALTER TABLE tenant_business_capabilities DROP CONSTRAINT IF EXISTS chk_tenant_business_capability_status;
+		 ALTER TABLE tenant_business_capabilities ADD CONSTRAINT chk_tenant_business_capability_status CHECK (status IN ('active','suspended'));`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_business_capability ON tenant_business_capabilities(tenant_id, business_type);`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_products_tenant_domain ON commerce_products(tenant_id, business_type) WHERE deleted_at IS NULL;`,
+		// Rebuild the two early indexes explicitly. The first draft of the
+		// models used a global unique index, which would incorrectly reject the
+		// same SKU code/idempotency key in two different tenants.
+		`DROP INDEX IF EXISTS idx_commerce_skus_tenant_code;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_skus_tenant_code ON commerce_skus(tenant_id, sku_code) WHERE deleted_at IS NULL;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_inventory_scope ON commerce_inventories(tenant_id, sku_id, location_id) WHERE deleted_at IS NULL;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_products_tenant_id ON commerce_products(tenant_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_skus_tenant_id ON commerce_skus(tenant_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_skus_tenant_product_id ON commerce_skus(tenant_id, product_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_option_groups_tenant_id ON commerce_option_groups(tenant_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_option_groups_tenant_product_id ON commerce_option_groups(tenant_id, product_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_locations_tenant_domain_id ON commerce_fulfillment_locations(tenant_id, business_type, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_locations_tenant_id ON commerce_fulfillment_locations(tenant_id, id);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_carts_tenant_id ON commerce_carts(tenant_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_orders_tenant_id ON commerce_orders(tenant_id, id);
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_after_sales_tenant_id ON commerce_after_sale_requests(tenant_id, id);`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_orders_tenant_status ON commerce_orders(tenant_id, business_type, payment_status, fulfillment_status) WHERE deleted_at IS NULL;`,
+		`DROP INDEX IF EXISTS idx_commerce_after_sales_idempotency;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_after_sales_idempotency ON commerce_after_sale_requests(tenant_id, idempotency_key) WHERE deleted_at IS NULL;`,
+		`ALTER TABLE commerce_products DROP CONSTRAINT IF EXISTS chk_commerce_products_business_type;
+		 ALTER TABLE commerce_products ADD CONSTRAINT chk_commerce_products_business_type CHECK (business_type IN ('restaurant','retail'));
+		 ALTER TABLE commerce_products DROP CONSTRAINT IF EXISTS chk_commerce_products_status;
+		 ALTER TABLE commerce_products ADD CONSTRAINT chk_commerce_products_status CHECK (status IN ('draft','online','offline'));`,
+		`ALTER TABLE commerce_orders DROP CONSTRAINT IF EXISTS chk_commerce_orders_business_type;
+		 ALTER TABLE commerce_orders ADD CONSTRAINT chk_commerce_orders_business_type CHECK (business_type IN ('restaurant','retail'));
+		 ALTER TABLE commerce_orders DROP CONSTRAINT IF EXISTS chk_commerce_orders_payment_status;
+		 ALTER TABLE commerce_orders ADD CONSTRAINT chk_commerce_orders_payment_status CHECK (payment_status IN ('unpaid','pending','paid','failed','refunded'));
+		 ALTER TABLE commerce_orders DROP CONSTRAINT IF EXISTS chk_commerce_orders_refund_status;
+		 ALTER TABLE commerce_orders ADD CONSTRAINT chk_commerce_orders_refund_status CHECK (refund_status IN ('none','requested','processing','partial','refunded','rejected'));`,
+		`ALTER TABLE restaurant_fulfillments DROP CONSTRAINT IF EXISTS chk_restaurant_fulfillment_method;
+		 ALTER TABLE restaurant_fulfillments ADD CONSTRAINT chk_restaurant_fulfillment_method CHECK (method IN ('pickup','delivery'));
+		 ALTER TABLE restaurant_fulfillments DROP CONSTRAINT IF EXISTS chk_restaurant_fulfillment_status;
+		 ALTER TABLE restaurant_fulfillments ADD CONSTRAINT chk_restaurant_fulfillment_status CHECK (status IN ('pending_acceptance','accepted','preparing','ready','delivering','completed','cancelled'));`,
+		`ALTER TABLE retail_fulfillments DROP CONSTRAINT IF EXISTS chk_retail_fulfillment_status;
+		 ALTER TABLE retail_fulfillments ADD CONSTRAINT chk_retail_fulfillment_status CHECK (status IN ('pending_shipment','shipped','in_transit','delivered','completed','cancelled'));`,
+		// Composite foreign keys carry tenant and business-domain ownership
+		// into the database itself. Service checks remain useful for clear
+		// errors, but a raw import or an accidental unscoped write cannot link
+		// a SKU, option, cart or order to another tenant.
+		`DO $$ BEGIN
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_skus_product_owner') THEN
+		  ALTER TABLE commerce_skus ADD CONSTRAINT fk_commerce_skus_product_owner FOREIGN KEY (tenant_id, product_id) REFERENCES commerce_products(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_option_groups_product_owner') THEN
+		  ALTER TABLE commerce_option_groups ADD CONSTRAINT fk_commerce_option_groups_product_owner FOREIGN KEY (tenant_id, product_id) REFERENCES commerce_products(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_options_group_owner') THEN
+		  ALTER TABLE commerce_options ADD CONSTRAINT fk_commerce_options_group_owner FOREIGN KEY (tenant_id, option_group_id) REFERENCES commerce_option_groups(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_inventory_sku_owner') THEN
+		  ALTER TABLE commerce_inventories ADD CONSTRAINT fk_commerce_inventory_sku_owner FOREIGN KEY (tenant_id, sku_id) REFERENCES commerce_skus(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_inventory_location_owner') THEN
+		  ALTER TABLE commerce_inventories ADD CONSTRAINT fk_commerce_inventory_location_owner FOREIGN KEY (tenant_id, location_id) REFERENCES commerce_fulfillment_locations(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_cart_location_owner') THEN
+		  ALTER TABLE commerce_carts ADD CONSTRAINT fk_commerce_cart_location_owner FOREIGN KEY (tenant_id, business_type, location_id) REFERENCES commerce_fulfillment_locations(tenant_id, business_type, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_cart_items_cart_owner') THEN
+		  ALTER TABLE commerce_cart_items ADD CONSTRAINT fk_commerce_cart_items_cart_owner FOREIGN KEY (tenant_id, cart_id) REFERENCES commerce_carts(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_cart_items_sku_owner') THEN
+		  ALTER TABLE commerce_cart_items ADD CONSTRAINT fk_commerce_cart_items_sku_owner FOREIGN KEY (tenant_id, product_id, sku_id) REFERENCES commerce_skus(tenant_id, product_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_order_location_owner') THEN
+		  ALTER TABLE commerce_orders ADD CONSTRAINT fk_commerce_order_location_owner FOREIGN KEY (tenant_id, business_type, location_id) REFERENCES commerce_fulfillment_locations(tenant_id, business_type, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_order_items_order_owner') THEN
+		  ALTER TABLE commerce_order_items ADD CONSTRAINT fk_commerce_order_items_order_owner FOREIGN KEY (tenant_id, order_id) REFERENCES commerce_orders(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_order_items_sku_owner') THEN
+		  ALTER TABLE commerce_order_items ADD CONSTRAINT fk_commerce_order_items_sku_owner FOREIGN KEY (tenant_id, product_id, sku_id) REFERENCES commerce_skus(tenant_id, product_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_restaurant_fulfillment_order_owner') THEN
+		  ALTER TABLE restaurant_fulfillments ADD CONSTRAINT fk_restaurant_fulfillment_order_owner FOREIGN KEY (tenant_id, order_id) REFERENCES commerce_orders(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_retail_fulfillment_order_owner') THEN
+		  ALTER TABLE retail_fulfillments ADD CONSTRAINT fk_retail_fulfillment_order_owner FOREIGN KEY (tenant_id, order_id) REFERENCES commerce_orders(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_after_sale_order_owner') THEN
+		  ALTER TABLE commerce_after_sale_requests ADD CONSTRAINT fk_commerce_after_sale_order_owner FOREIGN KEY (tenant_id, order_id) REFERENCES commerce_orders(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_after_sale_event_owner') THEN
+		  ALTER TABLE commerce_after_sale_events ADD CONSTRAINT fk_commerce_after_sale_event_owner FOREIGN KEY (tenant_id, request_id) REFERENCES commerce_after_sale_requests(tenant_id, id);
+		 END IF;
+	END $$;`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return fmt.Errorf("register commerce domain schema: %w", err)
+		}
+	}
+	return nil
 }
 
 func migrateXiaohongshuStorefrontMerchandising(db *gorm.DB, previous int) error {

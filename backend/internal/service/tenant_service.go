@@ -459,7 +459,7 @@ func (s *TenantService) Delete(id uint) error {
 
 func (s *TenantService) GetByID(id uint) (*model.Tenant, error) {
 	var tenant model.Tenant
-	err := model.DB.Preload("Capabilities").Preload("SupplierBusinessTypes").First(&tenant, id).Error
+	err := model.DB.Preload("Capabilities").Preload("SupplierBusinessTypes").Preload("BusinessCapabilities").First(&tenant, id).Error
 	return &tenant, err
 }
 
@@ -483,6 +483,6 @@ func (s *TenantService) List(page, pageSize int) ([]model.Tenant, int64, error) 
 		return nil, 0, err
 	}
 
-	err = model.DB.Preload("Capabilities").Preload("SupplierBusinessTypes").Offset(offset).Limit(pageSize).Find(&tenants).Error
+	err = model.DB.Preload("Capabilities").Preload("SupplierBusinessTypes").Preload("BusinessCapabilities").Offset(offset).Limit(pageSize).Find(&tenants).Error
 	return tenants, total, err
 }

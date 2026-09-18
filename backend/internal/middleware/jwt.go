@@ -79,7 +79,7 @@ func sessionIsActive(claims *service.Claims) bool {
 	if err := model.DB.Select("id", "status").First(&tenant, claims.TenantID).Error; err != nil {
 		return false
 	}
-	if tenant.Status != "" && tenant.Status != "active" {
+	if tenant.Status != "active" {
 		return false
 	}
 	if strings.HasPrefix(claims.Subject, "staff:") {
@@ -198,6 +198,64 @@ func RequireConfiguredSupplierBusinessType(allowed ...string) gin.HandlerFunc {
 			Count(&count).Error
 		if err != nil || count == 0 {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有此供应业态的历史查询权限"})
+			return
+		}
+		c.Next()
+	}
+}
+
+// RequireAnyTenantBusinessCapability protects commercial-domain writes. It
+// derives the tenant exclusively from the authenticated tenant scope and
+// fails closed when the database, tenant, or capability is unavailable.
+func RequireAnyTenantBusinessCapability(allowed ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := c.GetUint("tenant_id")
+		if c.GetString("scope") != "tenant" || tenantID == 0 || len(allowed) == 0 || model.DB == nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有此商业能力"})
+			return
+		}
+		var count int64
+		err := model.DB.Model(&model.Tenant{}).Where("id = ? AND status = ?", tenantID, "active").Count(&count).Error
+		if err != nil || count != 1 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有此商业能力"})
+			return
+		}
+		err = model.DB.Model(&model.TenantBusinessCapability{}).
+			Where("tenant_id = ? AND business_type IN ? AND status = ?", tenantID, allowed, "active").
+			Count(&count).Error
+		if err != nil || count == 0 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有此商业能力"})
+			return
+		}
+		c.Next()
+	}
+}
+
+func RequireTenantBusinessCapability(businessType string) gin.HandlerFunc {
+	return RequireAnyTenantBusinessCapability(businessType)
+}
+
+// RequireConfiguredTenantBusinessCapability is for read-only history and
+// reconciliation routes. A suspended commercial capability remains visible,
+// while writes must use RequireTenantBusinessCapability instead.
+func RequireConfiguredTenantBusinessCapability(allowed ...string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := c.GetUint("tenant_id")
+		if c.GetString("scope") != "tenant" || tenantID == 0 || len(allowed) == 0 || model.DB == nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有此商业能力的历史查询权限"})
+			return
+		}
+		var count int64
+		err := model.DB.Model(&model.Tenant{}).Where("id = ? AND status = ?", tenantID, "active").Count(&count).Error
+		if err != nil || count != 1 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有此商业能力的历史查询权限"})
+			return
+		}
+		err = model.DB.Model(&model.TenantBusinessCapability{}).
+			Where("tenant_id = ? AND business_type IN ? AND status IN ?", tenantID, allowed, []string{"active", "suspended"}).
+			Count(&count).Error
+		if err != nil || count == 0 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有此商业能力的历史查询权限"})
 			return
 		}
 		c.Next()

@@ -56,6 +56,22 @@
           </div>
         </template>
       </el-table-column>
+      <el-table-column label="经营业态" width="190">
+        <template #default="{ row }">
+          <div class="capability-actions">
+            <el-button
+              v-for="businessType in businessCapabilityOptions"
+              :key="businessType"
+              size="small"
+              :type="statusButtonType(businessCapabilityStatus(row, businessType))"
+              :loading="businessCapabilityUpdating === `${row.id}:${businessType}`"
+              @click="toggleBusinessCapability(row, businessType)"
+            >
+              {{ businessCapabilityText(businessType) }} · {{ capabilityStatusText(businessCapabilityStatus(row, businessType)) }}
+            </el-button>
+          </div>
+        </template>
+      </el-table-column>
       <el-table-column prop="contact" label="联系人" width="120" />
       <el-table-column prop="phone" label="联系电话" width="150" />
       <el-table-column prop="address" label="地址" min-width="200" show-overflow-tooltip />
@@ -157,6 +173,7 @@ const currentPage = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
 const businessTypeUpdating = ref('')
+const businessCapabilityUpdating = ref('')
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const formRef = ref()
@@ -267,6 +284,7 @@ const handleSubmit = async () => {
 
 const capabilityOptions = ['supplier', 'distributor', 'travel_agency']
 const supplierBusinessTypeOptions = ['scenic', 'hotel']
+const businessCapabilityOptions = ['restaurant', 'retail']
 const capabilityRecord = (row: any, capability: string) => row.capabilities?.find((item: any) => item.capability === capability)
 const rawCapabilityStatus = (row: any, capability: string) => capabilityRecord(row, capability)?.status || 'disabled'
 const capabilityStatus = (row: any, capability: string) => {
@@ -274,9 +292,11 @@ const capabilityStatus = (row: any, capability: string) => {
   return record?.status === 'active' && isExpired(record.expires_at) ? 'expired' : record?.status || 'disabled'
 }
 const supplierBusinessTypeStatus = (row: any, businessType: string) => row.supplier_business_types?.find((item: any) => item.business_type === businessType)?.status || 'disabled'
+const businessCapabilityStatus = (row: any, businessType: string) => row.business_capabilities?.find((item: any) => item.business_type === businessType)?.status || 'disabled'
 const qualificationStatusText = (status: string) => ({ pending: '待审核', approved: '已通过', rejected: '已驳回', expired: '已过期', legacy: '历史数据' } as Record<string, string>)[status || 'legacy'] || '待补充'
 const capabilityText = (capability: string) => ({ supplier: '供应商', distributor: '分销商', travel_agency: '旅行社' } as Record<string, string>)[capability] || '其他业务'
 const supplierBusinessTypeText = (businessType: string) => ({ scenic: '景区票务', hotel: '酒店住宿' } as Record<string, string>)[businessType] || '其他业态'
+const businessCapabilityText = (businessType: string) => ({ restaurant: '餐饮', retail: '通用电商' } as Record<string, string>)[businessType] || '其他经营业态'
 const capabilityStatusText = (status: string) => ({ active: '已启用', suspended: '已暂停', disabled: '未启用', expired: '已过期' } as Record<string, string>)[status] || '未启用'
 const statusButtonType = (status: string) => status === 'active' ? 'success' : status === 'expired' ? 'warning' : 'info'
 
@@ -366,6 +386,38 @@ const toggleSupplierBusinessType = async (row: any, businessType: string) => {
     ElMessage.error(error.response?.data?.error || '供应业态更新失败')
   } finally {
     businessTypeUpdating.value = ''
+  }
+}
+
+const toggleBusinessCapability = async (row: any, businessType: string) => {
+  const currentStatus = businessCapabilityStatus(row, businessType)
+  const status = currentStatus === 'active' ? 'suspended' : 'active'
+  const action = status === 'active' ? '启用' : '暂停'
+  const impact = status === 'active'
+    ? `启用后，该商户可以维护${businessCapabilityText(businessType)}商品、库存和订单。`
+    : `暂停后，该商户不能创建或继续销售新的${businessCapabilityText(businessType)}商品；历史订单、退款和审计记录仍会保留。`
+  try {
+    const { value } = await ElMessageBox.prompt(
+      `${impact}\n\n请输入本次${action}原因，系统会写入平台审计记录。`,
+      `确认${action}${businessCapabilityText(businessType)}？`,
+      {
+        confirmButtonText: `确认${action}`,
+        cancelButtonText: '取消',
+        type: status === 'active' ? 'info' : 'warning',
+        inputType: 'textarea',
+        inputPlaceholder: `请输入${action}原因`,
+        inputValidator: input => Boolean(String(input || '').trim()) || '必须填写原因',
+      }
+    )
+    businessCapabilityUpdating.value = `${row.id}:${businessType}`
+    await request.put(`/tenants/${row.id}/business-capabilities/${businessType}`, { status, reason: String(value).trim() })
+    ElMessage.success(`${businessCapabilityText(businessType)}已${status === 'active' ? '启用' : '暂停'}`)
+    await fetchData()
+  } catch (error: any) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error(error.response?.data?.error || '经营业态更新失败')
+  } finally {
+    businessCapabilityUpdating.value = ''
   }
 }
 

@@ -141,9 +141,9 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  CaretBottom, Connection, CopyDocument, CreditCard, Expand, Fold, Key, List, Location,
+  CaretBottom, Connection, CopyDocument, CreditCard, Expand, Fold, ForkSpoon, Key, List, Location,
   Menu as MenuIcon, Money, Monitor, Odometer, OfficeBuilding, Operation, Reading, Setting,
-  SwitchButton, Ticket, Tickets, TrendCharts, User, UserFilled, Warning
+  ShoppingBag, SwitchButton, Ticket, Tickets, TrendCharts, User, UserFilled, Warning
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
@@ -152,6 +152,7 @@ import { hasPermission, tenantRoleLabel } from '@/utils/permissions'
 import {
   activeCapabilitySet,
   activeSupplierBusinessTypeSet,
+  configuredBusinessCapabilitySet,
   configuredCapabilitySet,
   configuredSupplierBusinessTypeSet,
   readStoredUser,
@@ -173,6 +174,7 @@ const passwordForm = reactive({ currentPassword: '', newPassword: '', confirmPas
 
 const isLoginPage = computed(() => route.name === 'login' || route.name === 'platform-login' || Boolean(route.meta.standalone))
 const activeCapabilities = computed(() => activeCapabilitySet(user.value))
+const configuredBusinessCapabilities = computed(() => configuredBusinessCapabilitySet(user.value))
 const configuredCapabilities = computed(() => configuredCapabilitySet(user.value))
 const hasCapability = (value: string) => activeCapabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(value => activeCapabilities.value.has(value))
@@ -230,6 +232,16 @@ const navGroups = computed<NavGroup[]>(() => {
   const accommodation: NavItem[] = []
   if (hotelHistorySupplier && can('catalog.read')) accommodation.push({ path: '/hotel', label: '酒店经营', icon: OfficeBuilding })
 
+  const commerce: NavItem[] = []
+  // A suspended commercial vertical remains discoverable for historical
+  // review, while CommerceView removes every write action for that domain.
+  if (configuredBusinessCapabilities.value.has('restaurant') && can('catalog.read')) {
+    commerce.push({ path: '/commerce/restaurant', label: '餐饮工作台', icon: ForkSpoon })
+  }
+  if (configuredBusinessCapabilities.value.has('retail') && can('catalog.read')) {
+    commerce.push({ path: '/commerce/retail', label: '电商工作台', icon: ShoppingBag })
+  }
+
   const distribution: NavItem[] = []
   if ((scenicHistorySupplier || hasCapability('distributor')) && can('distribution.read')) distribution.push({ path: '/distribution', label: '供销合作', icon: Connection })
   if ((scenicHistorySupplier || hasCapability('distributor')) && can('channels.read')) distribution.push({ path: '/channels', label: '渠道连接', icon: Connection })
@@ -256,7 +268,7 @@ const navGroups = computed<NavGroup[]>(() => {
   if ((scenicSupplier || hasCapability('distributor')) && can('payment_config.manage')) settings.push({ path: '/payment-config', label: '支付参数配置', icon: CreditCard })
   settings.push({ path: '/settings', label: '系统设置', icon: Setting })
 
-  return [overview, { label: '销售中心', items: sales }, { label: '住宿经营', items: accommodation }, { label: '合作与渠道', items: distribution }, { label: '运营管理', items: operations }, { label: '数据与财务', items: data }, { label: '组织与设置', items: settings }]
+  return [overview, { label: '销售中心', items: sales }, { label: '住宿经营', items: accommodation }, { label: '商业经营', items: commerce }, { label: '合作与渠道', items: distribution }, { label: '运营管理', items: operations }, { label: '数据与财务', items: data }, { label: '组织与设置', items: settings }]
     .filter(group => group.items.length)
 })
 

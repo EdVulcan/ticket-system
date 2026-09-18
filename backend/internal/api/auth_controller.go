@@ -50,6 +50,7 @@ func (c *AuthController) Login(ctx *gin.Context) {
 			"scope":                   "tenant",
 			"capabilities":            user.Tenant.Capabilities,
 			"supplier_business_types": user.Tenant.SupplierBusinessTypes,
+			"business_capabilities":   user.Tenant.BusinessCapabilities,
 			"permissions":             authz.PermissionsForRole(user.Role),
 		},
 	})

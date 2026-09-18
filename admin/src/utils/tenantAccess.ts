@@ -39,6 +39,18 @@ export const configuredSupplierBusinessTypeSet = (user: TenantIdentity) => new S
   (user.supplier_business_types || []).map((item: any) => item.business_type)
 )
 
+export const activeBusinessCapabilitySet = (user: TenantIdentity, now = Date.now()) => new Set<string>(
+  (user.business_capabilities || [])
+    .filter((item: any) => capabilityIsActive(item, now))
+    .map((item: any) => item.business_type)
+)
+
+export const configuredBusinessCapabilitySet = (user: TenantIdentity) => new Set<string>(
+  (user.business_capabilities || [])
+    .filter((item: any) => item.status === 'active' || item.status === 'suspended')
+    .map((item: any) => item.business_type)
+)
+
 export const isActiveScenicSupplier = (user: TenantIdentity) => (
   activeCapabilitySet(user).has('supplier') && activeSupplierBusinessTypeSet(user).has('scenic')
 )
@@ -58,6 +70,9 @@ const mergeTenantIdentity = (current: TenantIdentity, tenant: TenantIdentity): T
   supplier_business_types: Array.isArray(tenant.supplier_business_types)
     ? tenant.supplier_business_types
     : current.supplier_business_types,
+  business_capabilities: Array.isArray(tenant.business_capabilities)
+    ? tenant.business_capabilities
+    : current.business_capabilities,
 })
 
 export const refreshStoredTenantIdentity = async (force = false): Promise<TenantIdentity> => {

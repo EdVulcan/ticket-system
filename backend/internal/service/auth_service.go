@@ -31,13 +31,13 @@ func (s *AuthService) Login(systemCode, username, password string) (string, *mod
 	if err := model.DB.Where("system_code = ?", systemCode).First(&tenant).Error; err != nil {
 		return "", nil, errors.New("系统编号无效")
 	}
-	if tenant.Status != "" && tenant.Status != "active" {
+	if tenant.Status != "active" {
 		return "", nil, errors.New("租户已被停用")
 	}
 
 	// 2. Find User by Username AND TenantID
 	var user model.User
-	if err := model.DB.Preload("Tenant").Preload("Tenant.Capabilities").Preload("Tenant.SupplierBusinessTypes").Where("username = ? AND tenant_id = ?", username, tenant.ID).First(&user).Error; err != nil {
+	if err := model.DB.Preload("Tenant").Preload("Tenant.Capabilities").Preload("Tenant.SupplierBusinessTypes").Preload("Tenant.BusinessCapabilities").Where("username = ? AND tenant_id = ?", username, tenant.ID).First(&user).Error; err != nil {
 		return "", nil, errors.New("用户名或密码错误")
 	}
 
@@ -81,7 +81,7 @@ func (s *AuthService) StaffLogin(systemCode, jobNumber, password string) (string
 	if err := model.DB.Where("system_code = ?", systemCode).First(&tenant).Error; err != nil {
 		return "", nil, errors.New("系统编号无效")
 	}
-	if tenant.Status != "" && tenant.Status != "active" {
+	if tenant.Status != "active" {
 		return "", nil, errors.New("租户已被停用")
 	}
 

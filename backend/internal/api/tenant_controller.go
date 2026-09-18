@@ -145,6 +145,34 @@ func (c *TenantController) SetCapability(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"message": "tenant capability updated"})
 }
 
+// SetBusinessCapability enables or suspends an independent commercial domain
+// for a target tenant. The route is platform-scoped; the target ID is taken
+// from the URL and the audit reason is mandatory.
+func (c *TenantController) SetBusinessCapability(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid tenant id"})
+		return
+	}
+	var body struct {
+		Status string `json:"status" binding:"required"`
+		Reason string `json:"reason" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.SetBusinessCapabilityAudited(uint(id), ctx.Param("businessType"), body.Status, body.Reason, platformActorID(ctx), ctx.GetString("role")); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+		}
+		ctx.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"message": "tenant business capability updated"})
+}
+
 func (c *TenantController) SetSupplierBusinessType(ctx *gin.Context) {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
 	if err != nil || id == 0 {

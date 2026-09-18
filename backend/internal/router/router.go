@@ -106,6 +106,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		tenantGroup.PATCH("/:id/lifecycle", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.UpdateLifecycle)
 		tenantGroup.POST("/:id/revoke-sessions", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.RevokeSessions)
 		tenantGroup.PUT("/:id/capabilities/:capability", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.SetCapability)
+		tenantGroup.PUT("/:id/business-capabilities/:businessType", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.SetBusinessCapability)
 		tenantGroup.PUT("/:id/supplier-business-types/:businessType", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.SetSupplierBusinessType)
 		tenantGroup.DELETE("/:id", middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"), tenantController.Delete)
 	}
@@ -236,6 +237,29 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		productGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), productController.UpdateStatus)
 	}
 
+	// Commercial catalog is a separate domain from scenic ticket products.
+	// The service re-checks the requested business type so a tenant with only
+	// one enabled vertical cannot use this broad route to access the other.
+	commerceCatalogController := &api.CommerceCatalogController{Service: service.CommerceCatalogService{}}
+	commerceOperationsController := &api.CommerceOperationsController{Service: service.CommerceOperationsService{}}
+	commerceCatalogGroup := protected.Group("/commerce/products")
+	commerceCatalogGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"))
+	{
+		commerceCatalogGroup.POST("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceCatalogController.CreateProduct)
+		commerceCatalogGroup.GET("", middleware.RequireTenantPermission(authz.PermissionCatalogRead), commerceCatalogController.ListProducts)
+		commerceCatalogGroup.GET("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogRead), commerceCatalogController.GetProduct)
+		commerceCatalogGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceCatalogController.SetProductStatus)
+		commerceCatalogGroup.POST("/:id/skus", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceCatalogController.CreateSKU)
+		commerceCatalogGroup.GET("/:id/options", middleware.RequireTenantPermission(authz.PermissionCatalogRead), commerceOperationsController.ListOptionGroups)
+		commerceCatalogGroup.POST("/:id/options", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.CreateOptionGroup)
+	}
+	commerceOptionGroup := protected.Group("/commerce/option-groups")
+	commerceOptionGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"))
+	commerceOptionGroup.POST("/:groupID/options", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.CreateOption)
+	commerceSKUGroup := protected.Group("/commerce/skus")
+	commerceSKUGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"))
+	commerceSKUGroup.PUT("/:skuID", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceCatalogController.UpdateSKU)
+
 	// Catalog batch changes are supplier-owned, approval-gated rule operations.
 	// They never accept distributor listing fields or client-controlled tenant IDs.
 	catalogBatchController := &api.CatalogBatchChangeController{}
@@ -248,6 +272,58 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		catalogBatchGroup.GET("/:planID", middleware.RequireTenantPermission(authz.PermissionCatalogRead), catalogBatchController.Get)
 		catalogBatchGroup.POST("/:planID/confirm", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), catalogBatchController.Confirm)
 	}
+	commerceLocationGroup := protected.Group("/commerce/locations")
+	commerceLocationGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"))
+	{
+		commerceLocationGroup.GET("", middleware.RequireTenantPermission(authz.PermissionCatalogRead), commerceOperationsController.ListLocations)
+		commerceLocationGroup.POST("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.CreateLocation)
+		commerceLocationGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.SetLocationStatus)
+	}
+	commerceInventoryGroup := protected.Group("/commerce/inventory")
+	commerceInventoryGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"))
+	{
+		commerceInventoryGroup.GET("", middleware.RequireTenantPermission(authz.PermissionCatalogRead), commerceOperationsController.ListInventory)
+		commerceInventoryGroup.PUT("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.SetInventory)
+		commerceInventoryGroup.PATCH("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.AdjustInventory)
+	}
+
+	// Commercial order reads remain available for a configured (including
+	// suspended) vertical so existing orders can be settled and refunded. New
+	// orders require an active capability; all state-changing actions use the
+	// scoped order service and never enter ticket fulfillment.
+	commerceOrderController := &api.CommerceOrderController{Service: service.CommerceOrderService{}}
+	commerceOrderReadGroup := protected.Group("/commerce/orders")
+	commerceOrderReadGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionOrdersRead))
+	{
+		commerceOrderReadGroup.GET("", commerceOrderController.List)
+		commerceOrderReadGroup.GET("/:id", commerceOrderController.Get)
+	}
+	commerceOrderWriteGroup := protected.Group("/commerce/orders")
+	commerceOrderWriteGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"))
+	commerceOrderWriteGroup.POST("", middleware.RequireTenantPermission(authz.PermissionOrdersWrite), commerceOrderController.Create)
+	commerceCartCheckoutGroup := protected.Group("/commerce/carts")
+	commerceCartCheckoutGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"))
+	commerceCartCheckoutGroup.POST("/:cartID/checkout", middleware.RequireTenantPermission(authz.PermissionOrdersWrite), commerceOperationsController.CheckoutCart)
+	// Suspending a commercial capability stops new sales/configuration but must
+	// not strand orders that were already paid. Fulfillment transitions therefore
+	// use the configured-history gate and are still guarded by the order service.
+	commerceOrderFulfillmentGroup := protected.Group("/commerce/orders")
+	commerceOrderFulfillmentGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"))
+	commerceOrderFulfillmentGroup.POST("/:id/restaurant-fulfillment", middleware.RequireTenantPermission(authz.PermissionOperationsWrite), commerceOrderController.RestaurantFulfillment)
+	commerceOrderFulfillmentGroup.POST("/:id/retail-fulfillment", middleware.RequireTenantPermission(authz.PermissionOperationsWrite), commerceOrderController.RetailFulfillment)
+	// Payment confirmation is intentionally not exposed through the ordinary
+	// tenant JWT boundary. A real payment adapter must authenticate and verify
+	// its provider callback before invoking CommerceOrderService. Until that
+	// adapter exists, exposing this transition would let an orders.write user
+	// forge a paid order.
+	commerceOrderAfterSaleGroup := protected.Group("/commerce/orders")
+	commerceOrderAfterSaleGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"))
+	{
+		commerceOrderAfterSaleGroup.POST("/:id/refund-requests", middleware.RequireTenantPermission(authz.PermissionAfterSalesWrite), commerceOrderController.RequestRefund)
+	}
+	commerceAfterSaleGroup := protected.Group("/commerce/after-sales")
+	commerceAfterSaleGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"))
+	commerceAfterSaleGroup.POST("/:requestID/complete", middleware.RequireTenantPermission(authz.PermissionAfterSalesWrite), commerceOrderController.CompleteRefund)
 
 	printTemplateController := &api.PrintTemplateController{Service: service.PrintTemplateService{}}
 	printTemplateGroup := protected.Group("/print-templates")

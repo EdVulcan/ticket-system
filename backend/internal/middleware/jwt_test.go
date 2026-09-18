@@ -6,7 +6,9 @@ import (
 	"testing"
 	"ticket-backend/internal/authz"
 	"ticket-backend/internal/config"
+	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
+	"ticket-backend/internal/testdb"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -46,6 +48,57 @@ func TestJWTAuthAcceptsHS256AndRejectsOtherAlgorithms(t *testing.T) {
 	}
 	if status := requestStatus(jwt.SigningMethodHS512); status != http.StatusUnauthorized {
 		t.Fatalf("HS512 status = %d, want 401", status)
+	}
+}
+
+func TestSessionIsActiveRequiresActiveTenant(t *testing.T) {
+	db := testdb.Open(t)
+	if err := db.AutoMigrate(&model.Tenant{}, &model.User{}); err != nil {
+		t.Fatal(err)
+	}
+	previousDB := model.DB
+	model.DB = db
+	t.Cleanup(func() { model.DB = previousDB })
+
+	tenant := model.Tenant{
+		Base:       model.Base{ID: 101},
+		Name:       "session tenant",
+		SystemCode: "SESSION-TENANT-101",
+		Status:     "active",
+	}
+	if err := db.Create(&tenant).Error; err != nil {
+		t.Fatal(err)
+	}
+	user := model.User{
+		Base:         model.Base{ID: 201},
+		Username:     "session-user",
+		Password:     "test-password",
+		Role:         "admin",
+		TenantID:     tenant.ID,
+		TokenVersion: 1,
+	}
+	if err := db.Create(&user).Error; err != nil {
+		t.Fatal(err)
+	}
+	claims := &service.Claims{
+		UserID:       user.ID,
+		Role:         user.Role,
+		TenantID:     tenant.ID,
+		Scope:        "tenant",
+		TokenVersion: user.TokenVersion,
+	}
+
+	if !sessionIsActive(claims) {
+		t.Fatal("active tenant should allow an active user session")
+	}
+
+	for _, status := range []string{"", "frozen", "closed"} {
+		if err := db.Model(&model.Tenant{}).Where("id = ?", tenant.ID).Update("status", status).Error; err != nil {
+			t.Fatalf("set tenant status %q: %v", status, err)
+		}
+		if sessionIsActive(claims) {
+			t.Fatalf("tenant status %q should reject the session", status)
+		}
 	}
 }
 

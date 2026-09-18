@@ -74,6 +74,12 @@ func main() {
 	orderExpiryContext, stopOrderExpiry := context.WithCancel(context.Background())
 	defer stopOrderExpiry()
 	go runOrderExpiryWorker(orderExpiryContext)
+	commerceOrderExpiryContext, stopCommerceOrderExpiry := context.WithCancel(context.Background())
+	defer stopCommerceOrderExpiry()
+	go runCommerceOrderExpiryWorker(commerceOrderExpiryContext)
+	commercePaymentReconciliationContext, stopCommercePaymentReconciliation := context.WithCancel(context.Background())
+	defer stopCommercePaymentReconciliation()
+	go runCommercePaymentReconciliationWorker(commercePaymentReconciliationContext)
 
 	paymentReconciliationContext, stopPaymentReconciliation := context.WithCancel(context.Background())
 	defer stopPaymentReconciliation()
@@ -218,6 +224,52 @@ func runOrderExpiryWorker(ctx context.Context) {
 			if _, err := orderService.ExpireUnpaid(now); err != nil {
 				logger.Log.Error(fmt.Sprintf("unpaid order expiry failed: %v", err))
 			}
+		}
+	}
+}
+
+func runCommerceOrderExpiryWorker(ctx context.Context) {
+	orderService := &service.CommerceOrderService{}
+	process := func(now time.Time) {
+		if _, err := orderService.ExpireUnpaidOrdersForAllTenants(now); err != nil && ctx.Err() == nil {
+			logger.Log.Error(fmt.Sprintf("commercial order expiry failed: %v", err))
+		}
+	}
+	// Recover reservations left behind by a process restart before waiting for
+	// the next interval. Pending provider payments are intentionally excluded by
+	// the service and remain frozen for reconciliation.
+	process(time.Now())
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			process(now)
+		}
+	}
+}
+
+func runCommercePaymentReconciliationWorker(ctx context.Context) {
+	reconciliation := service.NewCommercePaymentReconciliationService(nil)
+	process := func(now time.Time) {
+		if _, err := reconciliation.ProcessTasks(ctx, now, 20); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Log.Error(fmt.Sprintf("commerce payment reconciliation failed: %v", err))
+		}
+	}
+	// Recover tasks immediately after startup, then keep the durable queue
+	// observable. A configured payment adapter can be injected by the channel
+	// integration; without one, tasks are explicitly marked manual_review.
+	process(time.Now())
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			process(now)
 		}
 	}
 }

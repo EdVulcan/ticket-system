@@ -1,8 +1,10 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { hasPermission } from '@/utils/permissions'
 import {
+    activeBusinessCapabilitySet,
     activeCapabilitySet,
     activeSupplierBusinessTypeSet,
+    configuredBusinessCapabilitySet,
     configuredCapabilitySet,
     configuredSupplierBusinessTypeSet,
     readStoredUser,
@@ -151,6 +153,18 @@ const router = createRouter({
             meta: { scope: 'tenant', permission: 'operations.read', capabilities: ['supplier', 'distributor'], supplierBusinessType: 'scenic', supplierBusinessTypeAlternativeCapabilities: ['distributor'], title: '运营工作台' }
         },
         {
+            path: '/commerce/:businessType',
+            name: 'commerce',
+            component: () => import('../views/CommerceView.vue'),
+            meta: { scope: 'tenant', permission: 'catalog.read', businessCapabilities: ['restaurant', 'retail'], businessCapabilityAllowSuspended: true, title: '商业工作台' }
+        },
+        {
+            path: '/commerce',
+            name: 'commerce-index',
+            component: () => import('../views/CommerceView.vue'),
+            meta: { scope: 'tenant', permission: 'catalog.read', businessCapabilities: ['restaurant', 'retail'], businessCapabilityAllowSuspended: true, title: '商业工作台' }
+        },
+        {
             path: '/login',
             name: 'login',
             component: () => import('../views/LoginView.vue'),
@@ -245,6 +259,9 @@ router.beforeEach(async (to, _from, next) => {
         const supplierBusinessType = to.meta.supplierBusinessType as string | undefined
         const supplierBusinessTypeAllowSuspended = Boolean(to.meta.supplierBusinessTypeAllowSuspended)
         const supplierBusinessTypeAlternativeCapabilities = to.meta.supplierBusinessTypeAlternativeCapabilities as string[] | undefined
+        const businessCapability = to.meta.businessCapability as string | undefined
+        const businessCapabilities = to.meta.businessCapabilities as string[] | undefined
+        const businessCapabilityAllowSuspended = Boolean(to.meta.businessCapabilityAllowSuspended)
         const permission = to.meta.permission as string | undefined
         const permissions = to.meta.permissions as string[] | undefined
         const activeCapabilities = activeCapabilitySet(user)
@@ -255,9 +272,13 @@ router.beforeEach(async (to, _from, next) => {
         const allowedSupplierBusinessTypes = supplierBusinessTypeAllowSuspended ? configuredSupplierBusinessTypes : activeSupplierBusinessTypes
         const missingSupplierBusinessType = supplierBusinessType && !allowedSupplierBusinessTypes.has(supplierBusinessType) && !supplierBusinessTypeAlternativeCapabilities?.some(value => activeCapabilities.has(value))
         const allowedCapabilities = capabilityAllowSuspended ? configuredCapabilities : activeCapabilities
+        const requestedBusinessCapability = businessCapability || (typeof to.params.businessType === 'string' ? to.params.businessType : undefined)
+        const requiredBusinessCapabilities = requestedBusinessCapability ? [requestedBusinessCapability] : businessCapabilities
+        const allowedBusinessCapabilities = businessCapabilityAllowSuspended ? configuredBusinessCapabilitySet(user) : activeBusinessCapabilitySet(user)
+        const missingBusinessCapability = Boolean(requiredBusinessCapabilities?.length) && !requiredBusinessCapabilities?.some(value => allowedBusinessCapabilities.has(value))
         const missingPermission = permission && !hasPermission(user, permission)
         const missingAnyPermission = permissions && !permissions.some(value => hasPermission(user, value))
-        if (platformOnTenantRoute || (requiredScope && user.scope !== requiredScope) || (roles && !roles.includes(user.role)) || missingPermission || missingAnyPermission || (capability && !allowedCapabilities.has(capability)) || (capabilities && !capabilities.some(value => activeCapabilities.has(value))) || missingSupplierBusinessType) {
+        if (platformOnTenantRoute || (requiredScope && user.scope !== requiredScope) || (roles && !roles.includes(user.role)) || missingPermission || missingAnyPermission || (capability && !allowedCapabilities.has(capability)) || (capabilities && !capabilities.some(value => activeCapabilities.has(value))) || missingSupplierBusinessType || missingBusinessCapability) {
             next({ name: 'home' })
             return
         }
