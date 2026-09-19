@@ -248,7 +248,7 @@ const navGroups = computed<NavGroup[]>(() => {
 
   const channels: NavItem[] = []
   if ((scenicHistorySupplier || hasCapability('distributor') || configuredBusinessCapabilities.value.size > 0) && can('channels.read')) {
-    channels.push({ path: '/channels', label: '渠道中心', icon: Connection })
+    channels.push({ path: '/channels', label: '渠道连接', icon: Connection })
   }
 
   const operations: NavItem[] = []

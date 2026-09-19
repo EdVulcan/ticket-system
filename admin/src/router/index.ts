@@ -66,7 +66,7 @@ const router = createRouter({
             path: '/channels',
             name: 'channels',
             component: () => import('../views/ChannelView.vue'),
-            meta: { scope: 'tenant', permission: 'channels.read', channelCenter: true, title: '渠道中心' }
+            meta: { scope: 'tenant', permission: 'channels.read', channelCenter: true, title: '渠道连接' }
         },
         {
             path: '/teams',
@@ -280,8 +280,9 @@ router.beforeEach(async (to, _from, next) => {
         const allowedBusinessCapabilities = businessCapabilityAllowSuspended ? configuredBusinessCapabilitySet(user) : activeBusinessCapabilities
         const missingBusinessCapability = Boolean(requiredBusinessCapabilities?.length) && !requiredBusinessCapabilities?.some(value => allowedBusinessCapabilities.has(value))
         const configuredBusinessCapabilities = configuredBusinessCapabilitySet(user)
+        const hasActiveScenicSupplier = activeCapabilities.has('supplier') && activeSupplierBusinessTypes.has('scenic')
         const missingPaymentConfigAccess = paymentConfigAccess && !(
-            activeCapabilities.has('supplier') || activeCapabilities.has('distributor') || activeBusinessCapabilities.has('restaurant') || activeBusinessCapabilities.has('retail')
+            hasActiveScenicSupplier || activeCapabilities.has('distributor') || activeBusinessCapabilities.has('restaurant') || activeBusinessCapabilities.has('retail')
         )
         const hasChannelCenterAccess = configuredCapabilities.has('supplier') || configuredCapabilities.has('distributor') || configuredBusinessCapabilities.has('restaurant') || configuredBusinessCapabilities.has('retail')
         const missingChannelCenter = channelCenter && !hasChannelCenterAccess

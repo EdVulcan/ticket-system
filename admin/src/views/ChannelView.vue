@@ -2,7 +2,7 @@
   <section class="space-y-5">
     <header class="page-heading">
       <div class="page-heading-copy">
-        <h2 class="text-xl font-semibold text-gray-900">渠道中心</h2>
+        <h2 class="text-xl font-semibold text-gray-900">渠道连接</h2>
         <p class="text-sm text-gray-500 mt-1">统一管理渠道凭据；商业微信小程序的商品发布和履约地点在商业工作台配置。</p>
       </div>
       <div class="page-actions">
