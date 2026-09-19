@@ -2,27 +2,27 @@
   <section class="space-y-5">
     <header class="page-heading">
       <div class="page-heading-copy">
-        <h2 class="text-xl font-semibold text-gray-900">渠道连接</h2>
-        <p class="text-sm text-gray-500 mt-1">管理独立渠道凭据、权限、商品映射和账单导入。</p>
+        <h2 class="text-xl font-semibold text-gray-900">渠道中心</h2>
+        <p class="text-sm text-gray-500 mt-1">统一管理渠道凭据；商业微信小程序的商品发布和履约地点在商业工作台配置。</p>
       </div>
       <div class="page-actions">
         <el-button :icon="Refresh" title="刷新" @click="load">刷新</el-button>
-        <el-button v-if="canActiveWrite" type="primary" :icon="Plus" @click="createDialog = true">新增渠道</el-button>
+        <el-button v-if="canChannelWrite" type="primary" :icon="Plus" @click="openCreateDialog">新增渠道</el-button>
       </div>
     </header>
 
     <el-table :data="accounts" v-loading="loading" stripe>
       <el-table-column prop="code" label="渠道编码" width="180" />
       <el-table-column label="适配器类型" width="140"><template #default="{row}">{{ adapterTypeText(row.type) }}</template></el-table-column>
-      <el-table-column label="接口参数" width="120"><template #default="{row}"><el-tag v-if="['ctrip', 'xiaohongshu'].includes(row.type)" :type="row.protocol_configured ? 'success' : 'danger'" effect="plain">{{ row.protocol_configured ? '已配置' : '待配置' }}</el-tag><span v-else>-</span></template></el-table-column>
+      <el-table-column label="接口参数" width="120"><template #default="{row}"><el-tag v-if="['ctrip', 'xiaohongshu', 'wechat_miniapp'].includes(row.type)" :type="row.protocol_configured ? 'success' : 'danger'" effect="plain">{{ row.protocol_configured ? '已配置' : '待配置' }}</el-tag><span v-else>-</span></template></el-table-column>
       <el-table-column prop="status" label="状态" width="120"><template #default="{row}"><el-tag :type="row.status === 'active' ? 'success' : row.status === 'sandbox' ? 'warning' : 'info'">{{ accountStatusText(row.status) }}</el-tag></template></el-table-column>
       <el-table-column prop="rate_limit_per_min" label="限流/分钟" width="120" />
       <el-table-column prop="permissions_json" label="权限" min-width="220" show-overflow-tooltip />
       <el-table-column label="操作" width="260" fixed="right">
         <template #default="{row}">
           <div class="channel-actions">
-          <el-button link type="primary" @click="openOrders(row)">渠道订单</el-button>
-          <el-button v-if="canActiveWrite" link type="primary" @click="openMapping(row)">商品映射</el-button>
+          <el-button v-if="row.type !== 'wechat_miniapp'" link type="primary" @click="openOrders(row)">渠道订单</el-button>
+          <el-button v-if="canActiveWrite && row.type !== 'wechat_miniapp'" link type="primary" @click="openMapping(row)">商品映射</el-button>
           <el-dropdown trigger="click" @command="handleAccountCommand($event, row)">
             <el-button link type="primary" :icon="ArrowDown" title="更多操作" aria-label="更多操作">更多</el-button>
             <template #dropdown>
@@ -31,12 +31,13 @@
                 <el-dropdown-item v-if="row.type === 'xiaohongshu'" command="instant-discount">随机立减</el-dropdown-item>
                 <el-dropdown-item v-if="canActiveWrite && row.type === 'xiaohongshu'" command="xiaohongshu-config" divided>小红书参数</el-dropdown-item>
                 <el-dropdown-item v-if="canActiveWrite && row.type === 'ctrip'" command="ctrip-config">携程参数</el-dropdown-item>
+                <el-dropdown-item v-if="canCommercialChannelWrite && row.type === 'wechat_miniapp'" command="wechat-config" divided>微信小程序参数</el-dropdown-item>
                 <el-dropdown-item v-if="row.type === 'xiaohongshu'" command="diagnose">连接测试</el-dropdown-item>
-                <el-dropdown-item command="requests" :divided="['ctrip', 'xiaohongshu'].includes(row.type)">请求日志</el-dropdown-item>
-                <el-dropdown-item command="reconciliations">账单对账</el-dropdown-item>
+                <el-dropdown-item v-if="row.type !== 'wechat_miniapp'" command="requests" :divided="['ctrip', 'xiaohongshu'].includes(row.type)">请求日志</el-dropdown-item>
+                <el-dropdown-item v-if="row.type !== 'wechat_miniapp'" command="reconciliations">账单对账</el-dropdown-item>
                 <el-dropdown-item v-if="canActiveWrite && row.type === 'xiaohongshu' && row.status !== 'disabled'" command="switch-environment">{{ row.status === 'sandbox' ? '切换正式环境' : '切换测试环境' }}</el-dropdown-item>
                 <el-dropdown-item v-if="canActiveWrite && row.type === 'ctrip' && row.status === 'sandbox'" command="sandbox-consume">沙箱核销测试</el-dropdown-item>
-                <el-dropdown-item v-if="canActiveWrite || (canHistoryWrite && row.status !== 'disabled')" command="toggle-status" divided>{{ row.status === 'disabled' ? '启用渠道' : '停用渠道' }}</el-dropdown-item>
+                <el-dropdown-item v-if="(row.type === 'wechat_miniapp' ? canCommercialChannelWrite : canActiveWrite || (canHistoryWrite && row.status !== 'disabled'))" command="toggle-status" divided>{{ row.status === 'disabled' ? '启用渠道' : '停用渠道' }}</el-dropdown-item>
                 <el-dropdown-item v-if="canActiveWrite && !['ctrip', 'xiaohongshu'].includes(row.type)" command="rotate-secret">轮换密钥</el-dropdown-item>
               </el-dropdown-menu>
             </template>
@@ -49,7 +50,7 @@
     <el-dialog v-model="createDialog" title="新增渠道账号" width="520px">
       <el-form :model="form" label-position="top">
         <el-form-item label="渠道编码"><el-input v-model="form.code" placeholder="例如：携程正式渠道" /></el-form-item>
-        <el-form-item label="适配器类型"><el-select v-model="form.type" class="w-full" @change="handleAdapterTypeChange"><el-option label="通用渠道" value="core" /><el-option label="携程" value="ctrip" /><el-option label="小红书" value="xiaohongshu" /></el-select></el-form-item>
+        <el-form-item label="适配器类型"><el-select v-model="form.type" class="w-full" @change="handleAdapterTypeChange"><el-option v-if="canActiveWrite" label="通用渠道" value="core" /><el-option v-if="canActiveWrite" label="携程" value="ctrip" /><el-option v-if="canActiveWrite" label="小红书" value="xiaohongshu" /><el-option v-if="canCommercialChannelWrite" label="微信小程序（商业）" value="wechat_miniapp" /></el-select></el-form-item>
         <template v-if="form.type === 'ctrip'">
           <el-alert class="mb-4" type="info" :closable="false" title="请填写携程沙箱“订单参数”中的接口账号、接口密钥、AES 密钥和初始向量。" />
           <el-form-item label="携程接口账号"><el-input v-model="form.app_id" autocomplete="off" /></el-form-item>
@@ -59,6 +60,11 @@
         </template>
         <template v-else-if="form.type === 'xiaohongshu'">
           <el-alert class="mb-4" type="info" :closable="false" title="使用景区现有专业号小程序的 AppID 和 AppSecret；密钥保存后不会回显。" />
+          <el-form-item label="小程序 AppID"><el-input v-model="form.app_id" autocomplete="off" /></el-form-item>
+          <el-form-item label="小程序 AppSecret"><el-input v-model="form.secret" type="password" show-password autocomplete="new-password" /></el-form-item>
+        </template>
+        <template v-else-if="form.type === 'wechat_miniapp'">
+          <el-alert class="mb-4" type="info" :closable="false" title="微信小程序属于渠道账号。AppSecret 只保存在服务端；商业商品发布、门店和履约地点在商业工作台配置。" />
           <el-form-item label="小程序 AppID"><el-input v-model="form.app_id" autocomplete="off" /></el-form-item>
           <el-form-item label="小程序 AppSecret"><el-input v-model="form.secret" type="password" show-password autocomplete="new-password" /></el-form-item>
         </template>
@@ -90,6 +96,15 @@
         <el-alert v-if="xiaohongshuConfigSaved" class="mt-4" type="success" :closable="false" title="参数已保存。现在将 URL、Token 和 EncodingAESKey 分别复制到小红书后台并提交校验。" />
       </el-form>
       <template #footer><el-button @click="xiaohongshuConfigDialog = false">关闭</el-button><el-button type="primary" :loading="xiaohongshuConfigSaving" @click="saveXiaohongshuConfig">保存参数</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="wechatConfigDialog" title="微信小程序参数" width="560px" :close-on-click-modal="false">
+      <el-alert type="warning" :closable="false" title="AppSecret 加密保存且不会回显。更换参数后，商业工作台的发布绑定会继续复用该渠道账号。" />
+      <el-form class="mt-4" :model="wechatConfig" label-position="top">
+        <el-form-item label="小程序 AppID"><el-input v-model="wechatConfig.app_id" autocomplete="off" /></el-form-item>
+        <el-form-item label="小程序 AppSecret"><el-input v-model="wechatConfig.app_secret" type="password" show-password autocomplete="new-password" /></el-form-item>
+      </el-form>
+      <template #footer><el-button @click="wechatConfigDialog = false">取消</el-button><el-button type="primary" :loading="wechatConfigSaving" @click="saveWechatConfig">保存参数</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="xiaohongshuDiagnosticDialog" title="小红书连接测试" width="620px" :close-on-click-modal="false">
@@ -440,7 +455,7 @@ import { ElMessage, ElMessageBox, type UploadFile, type UploadInstance } from 'e
 import request from '@/utils/request'
 import { localizeDisplayText } from '@/utils/localize'
 import { hasPermission } from '@/utils/permissions'
-import { activeCapabilitySet, isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
+import { activeBusinessCapabilitySet, activeCapabilitySet, isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 import { usePendingRefundRefresh } from '@/composables/usePendingRefundRefresh'
 import ChannelStorefrontDialog from '@/components/ChannelStorefrontDialog.vue'
 import ChannelInstantDiscountDialog from '@/components/ChannelInstantDiscountDialog.vue'
@@ -448,8 +463,11 @@ import OrderRefundDialog from '@/components/OrderRefundDialog.vue'
 
 const currentUser = readStoredUser()
 const capabilities = activeCapabilitySet(currentUser)
+const businessCapabilities = activeBusinessCapabilitySet(currentUser)
 const hasWritePermission = hasPermission(currentUser, 'channels.write')
 const canActiveWrite = hasWritePermission && (capabilities.has('distributor') || isActiveScenicSupplier(currentUser))
+const canCommercialChannelWrite = hasWritePermission && (businessCapabilities.has('restaurant') || businessCapabilities.has('retail'))
+const canChannelWrite = canActiveWrite || canCommercialChannelWrite
 const canHistoryWrite = hasWritePermission && (capabilities.has('distributor') || isScenicHistorySupplier(currentUser))
 const canRefund = hasPermission(currentUser, 'refunds.write')
 const canUsedXiaohongshuRefund = currentUser.is_initial_admin === true &&
@@ -507,6 +525,9 @@ const xiaohongshuConfigDialog = ref(false)
 const xiaohongshuConfigSaving = ref(false)
 const xiaohongshuConfigSaved = ref(false)
 const xiaohongshuConfig = reactive({ app_id: '', app_secret: '', message_token: '', encoding_aes_key: '' })
+const wechatConfigDialog = ref(false)
+const wechatConfigSaving = ref(false)
+const wechatConfig = reactive({ app_id: '', app_secret: '' })
 const xiaohongshuDiagnosticDialog = ref(false)
 const xiaohongshuDiagnosticLoading = ref(false)
 const xiaohongshuDiagnostic = ref<any>(null)
@@ -544,11 +565,15 @@ const syncEnd = new Date(); syncEnd.setDate(syncEnd.getDate() + 30)
 const syncDateRange = ref<[string, string]>([dateValue(new Date()), dateValue(syncEnd)])
 
 const load = async () => { loading.value = true; try { accounts.value = (await request.get('/channel-accounts')).data.data || [] } finally { loading.value = false } }
+const openCreateDialog = () => {
+  Object.assign(form, { code: '', type: canActiveWrite ? 'core' : 'wechat_miniapp', app_id: '', secret: '', aes_key: '', aes_iv: '', status: canActiveWrite ? 'active' : 'active' })
+  createDialog.value = true
+}
 const handleAdapterTypeChange = (type: string) => { form.status = ['ctrip', 'xiaohongshu'].includes(type) ? 'sandbox' : 'active'; form.app_id = ''; form.secret = ''; form.aes_key = ''; form.aes_iv = '' }
 const create = async () => {
   if (!form.code.trim()) { ElMessage.warning('请填写渠道编码'); return }
   if (form.type === 'ctrip' && (!form.app_id.trim() || !form.secret.trim() || form.aes_key.length !== 16 || form.aes_iv.length !== 16)) { ElMessage.warning('请完整填写携程接口参数，AES 密钥和初始向量必须为 16 位'); return }
-  if (form.type === 'xiaohongshu' && (!form.app_id.trim() || !form.secret.trim())) { ElMessage.warning('请完整填写小红书小程序 AppID 和 AppSecret'); return }
+  if (['xiaohongshu', 'wechat_miniapp'].includes(form.type) && (!form.app_id.trim() || !form.secret.trim())) { ElMessage.warning(`请完整填写${form.type === 'wechat_miniapp' ? '微信' : '小红书'}小程序 AppID 和 AppSecret`); return }
   saving.value = true
   try {
     await request.post('/channel-accounts', { code: form.code, type: form.type, app_id: form.app_id, secret: form.secret, aes_key: form.aes_key, aes_iv: form.aes_iv, status: form.status, permissions_json: form.permissions_json, rate_limit_per_min: form.rate_limit_per_min, allowed_ips_json: form.allowed_ips_json })
@@ -572,6 +597,22 @@ const openXiaohongshuConfig = (row: any) => {
   Object.assign(xiaohongshuConfig, { app_id: row.app_id || '', app_secret: '', message_token: '', encoding_aes_key: '' })
   xiaohongshuConfigSaved.value = false
   xiaohongshuConfigDialog.value = true
+}
+const openWechatConfig = (row: any) => {
+  selectedAccount.value = row
+  Object.assign(wechatConfig, { app_id: row.app_id || '', app_secret: '' })
+  wechatConfigDialog.value = true
+}
+const saveWechatConfig = async () => {
+  if (!selectedAccount.value || !wechatConfig.app_id.trim() || !wechatConfig.app_secret.trim()) { ElMessage.warning('请完整填写微信小程序 AppID 和 AppSecret'); return }
+  wechatConfigSaving.value = true
+  try {
+    await request.put(`/channel-accounts/${selectedAccount.value.id}/wechat-miniapp-config`, { ...wechatConfig })
+    wechatConfig.app_secret = ''
+    wechatConfigDialog.value = false
+    ElMessage.success('微信小程序参数已保存')
+    await load()
+  } finally { wechatConfigSaving.value = false }
 }
 const diagnoseXiaohongshu = async (row: any) => {
   selectedAccount.value = row
@@ -648,6 +689,7 @@ const handleAccountCommand = async (command: string, row: any) => {
   if (command === 'storefront') await openStorefront(row)
   if (command === 'instant-discount') await openInstantDiscount(row)
   if (command === 'xiaohongshu-config') await openXiaohongshuConfig(row)
+  if (command === 'wechat-config') await openWechatConfig(row)
   if (command === 'ctrip-config') openCtripConfig(row)
   if (command === 'diagnose') await diagnoseXiaohongshu(row)
   if (command === 'switch-environment') await switchXiaohongshuEnvironment(row)
@@ -1020,7 +1062,7 @@ const xiaohongshuAuditAlertTitle = computed(() => {
 const cents = (value: number) => (Number(value || 0) / 100).toFixed(2)
 const signedCents = (value: number) => `${Number(value || 0) > 0 ? '+' : Number(value || 0) < 0 ? '-' : ''}¥${cents(Math.abs(Number(value || 0)))}`
 const accountStatusText = (status: string) => ({ active: '正式启用', sandbox: '测试中', disabled: '已停用' } as Record<string, string>)[status] || '未知状态'
-const adapterTypeText = (type: string) => ({ core: '通用渠道', ctrip: '携程', xiaohongshu: '小红书', meituan: '美团', zyb: '智游宝上游' } as Record<string, string>)[type] || '自定义渠道'
+const adapterTypeText = (type: string) => ({ core: '通用渠道', ctrip: '携程', xiaohongshu: '小红书', wechat_miniapp: '微信小程序（商业）', meituan: '美团', zyb: '智游宝上游' } as Record<string, string>)[type] || '自定义渠道'
 const mappingStatusText = (status: string) => ({ active: '已启用', disabled: '已停用' } as Record<string, string>)[status] || '未知状态'
 const ctripTaskKindText = (kind: string) => ({ price: '价格', inventory: '库存', consumed: '核销通知' } as Record<string, string>)[kind] || '其他'
 const syncStatusText = (status: string) => ({ pending: '等待同步', processing: '同步中', succeeded: '已成功', failed: '同步失败' } as Record<string, string>)[status] || '未知状态'

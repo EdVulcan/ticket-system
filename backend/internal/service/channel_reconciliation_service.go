@@ -32,8 +32,14 @@ func (s *ChannelService) ImportBill(tenantID, accountID uint, idempotencyKey str
 	}
 	var result model.ChannelReconciliation
 	err := model.Write(func(tx *gorm.DB) error {
-		var account model.ChannelAccount
-		if err := tx.Where("id = ? AND tenant_id = ? AND status != ?", accountID, tenantID, "disabled").First(&account).Error; err != nil {
+		account, err := requireTicketChannelAccount(tx, tenantID, accountID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("channel account is unavailable")
+			}
+			return err
+		}
+		if account.Status == "disabled" {
 			return errors.New("channel account is unavailable")
 		}
 		normalized, start, end, err := normalizeChannelBillInputs(records)
@@ -131,6 +137,9 @@ func (s *ChannelService) ImportBill(tenantID, accountID uint, idempotencyKey str
 func (s *ChannelService) GetReconciliation(tenantID, accountID, reconciliationID uint) (*model.ChannelReconciliation, error) {
 	if tenantID == 0 || accountID == 0 || reconciliationID == 0 {
 		return nil, errors.New("tenant, channel and reconciliation are required")
+	}
+	if _, err := requireTicketChannelAccount(model.DB, tenantID, accountID); err != nil {
+		return nil, err
 	}
 	var result model.ChannelReconciliation
 	if err := model.DB.Preload("Lines", func(db *gorm.DB) *gorm.DB { return db.Order("id ASC") }).
@@ -246,6 +255,9 @@ func matchChannelBill(tx *gorm.DB, tenantID, accountID uint, input ChannelBillIn
 }
 
 func (s *ChannelService) ListReconciliations(tenantID, accountID uint, page, pageSize int) ([]model.ChannelReconciliation, int64, error) {
+	if _, err := requireTicketChannelAccount(model.DB, tenantID, accountID); err != nil {
+		return nil, 0, err
+	}
 	if page < 1 {
 		page = 1
 	}

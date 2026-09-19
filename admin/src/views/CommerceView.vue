@@ -238,6 +238,51 @@
             </el-table>
           </section>
         </el-tab-pane>
+
+        <el-tab-pane label="小程序发布" name="storefront">
+          <section class="workspace-section">
+            <div class="section-toolbar">
+              <div>
+                <h2>小程序发布配置</h2>
+                <p class="muted">将当前{{ currentDomainLabel }}业务绑定到一个已配置的微信小程序账号和履约地点。</p>
+              </div>
+              <div class="section-actions">
+                <el-button :icon="Refresh" :loading="storefrontLoading" @click="loadStorefrontData">刷新</el-button>
+                <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openStorefrontBinding()">新增配置</el-button>
+              </div>
+            </div>
+            <el-alert
+              type="info"
+              :closable="false"
+              title="AppSecret 等密钥由渠道账号维护，此处只选择账号和履约地点。停用配置会阻止新用户进入交易，不会删除历史订单。"
+              class="capability-alert"
+            />
+            <el-table v-loading="storefrontLoading" :data="currentStorefrontBindings" class="commerce-table" border stripe>
+              <el-table-column label="微信账号" min-width="230">
+                <template #default="{ row }">
+                  <div class="primary-cell">{{ row.channel_code }}</div>
+                  <div class="secondary-cell">AppID：{{ row.app_id || '未填写' }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="环境" width="110" align="center">
+                <template #default="{ row }">{{ row.environment === 'sandbox' ? '测试' : '正式' }}</template>
+              </el-table-column>
+              <el-table-column label="凭据" width="110" align="center">
+                <template #default="{ row }"><el-tag :type="row.credentials_ready ? 'success' : 'warning'" effect="plain">{{ row.credentials_ready ? '已配置' : '待配置' }}</el-tag></template>
+              </el-table-column>
+              <el-table-column label="履约地点" min-width="170">
+                <template #default="{ row }">{{ row.location_name }}</template>
+              </el-table-column>
+              <el-table-column label="状态" width="100" align="center">
+                <template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">{{ row.status === 'active' ? '启用' : '停用' }}</el-tag></template>
+              </el-table-column>
+              <el-table-column label="操作" width="100" fixed="right" align="right">
+                <template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openStorefrontBinding(row)">编辑</el-button><span v-else class="secondary-cell">只读</span></template>
+              </el-table-column>
+              <template #empty><el-empty description="当前业务还没有小程序发布配置" :image-size="72" /></template>
+            </el-table>
+          </section>
+        </el-tab-pane>
       </el-tabs>
     </div>
 
@@ -469,6 +514,34 @@
       </el-form>
       <template #footer><el-button @click="shippingDialogVisible = false">取消</el-button><el-button type="primary" :loading="orderActionID !== 0" @click="submitShipping">确认发货</el-button></template>
     </el-dialog>
+
+    <el-dialog v-model="storefrontDialogVisible" :title="storefrontForm.id ? '编辑小程序发布配置' : '新增小程序发布配置'" width="min(620px, calc(100vw - 32px))" destroy-on-close>
+      <el-form :model="storefrontForm" label-position="top" class="commerce-form">
+        <el-form-item label="微信小程序账号" required>
+          <el-select v-model="storefrontForm.channel_account_id" class="full-width" filterable placeholder="选择已配置的微信小程序账号">
+            <el-option v-for="account in storefrontChannels" :key="account.id" :label="`${account.code} · ${account.app_id || '未填写 AppID'}`" :value="account.id">
+              <div class="select-option-stack"><span>{{ account.code }}</span><span class="secondary-cell">{{ account.app_id || '未填写 AppID' }} · {{ account.environment === 'sandbox' ? '测试' : '正式' }}</span></div>
+            </el-option>
+          </el-select>
+          <div v-if="storefrontChannels.length === 0" class="form-help">当前租户没有可用的微信小程序账号，请先在渠道账号中完成配置。</div>
+        </el-form-item>
+        <el-form-item label="履约地点" required>
+          <el-select v-model="storefrontForm.location_id" class="full-width" filterable placeholder="选择接收订单的履约地点">
+            <el-option v-for="location in activeLocations" :key="location.id" :label="location.name" :value="location.id" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="发布状态" required>
+          <el-radio-group v-model="storefrontForm.status">
+            <el-radio value="active">启用</el-radio>
+            <el-radio value="disabled">停用</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="操作原因" required>
+          <el-input v-model="storefrontForm.reason" type="textarea" :rows="3" maxlength="255" show-word-limit placeholder="例如：首次发布餐饮小程序、切换履约门店" />
+        </el-form-item>
+      </el-form>
+      <template #footer><el-button @click="storefrontDialogVisible = false">取消</el-button><el-button type="primary" :loading="storefrontSaving" @click="saveStorefrontBinding">保存配置</el-button></template>
+    </el-dialog>
   </section>
 </template>
 
@@ -530,6 +603,19 @@ const orderActionID = ref(0)
 const shippingDialogVisible = ref(false)
 const shippingOrder = ref<any | null>(null)
 const shippingForm = reactive({ carrier: '', tracking_no: '' })
+const storefrontLoading = ref(false)
+const storefrontSaving = ref(false)
+const storefrontDialogVisible = ref(false)
+const storefrontBindings = ref<any[]>([])
+const storefrontChannels = ref<any[]>([])
+const storefrontForm = reactive({
+  id: 0,
+  channel_account_id: 0,
+  business_type: 'restaurant' as CommerceDomain,
+  location_id: 0,
+  status: 'active',
+  reason: '',
+})
 
 const productDialogVisible = ref(false)
 const productDetailVisible = ref(false)
@@ -575,6 +661,7 @@ const canOperationsWrite = computed(() => isCurrentDomainActive.value && hasPerm
 const currentDomainLabel = computed(() => businessTypeLabel(currentDomain.value))
 const capabilityStatusLabel = computed(() => isCurrentDomainActive.value ? '能力正常' : '能力已暂停')
 const activeLocations = computed(() => locations.value.filter(row => row.status === 'active'))
+const currentStorefrontBindings = computed(() => storefrontBindings.value.filter(row => row.business_type === currentDomain.value))
 const skuOptions = computed(() => products.value.flatMap(product => (product.skus || []).map((sku: any) => ({ ...sku, product_name: product.name }))))
 const fulfillmentStatusOptions = computed(() => currentDomain.value === 'restaurant'
   ? [
@@ -697,6 +784,23 @@ async function loadInventory() {
   }
 }
 
+async function loadStorefrontData() {
+  if (!isCurrentDomainConfigured.value) return
+  storefrontLoading.value = true
+  try {
+    const [bindingsResponse, channelsResponse] = await Promise.all([
+      request.get('/commerce/storefront-bindings', silentConfig({ business_type: currentDomain.value })),
+      request.get('/commerce/storefront-channels', silentConfig({})),
+    ])
+    storefrontBindings.value = bindingsResponse.data?.data || []
+    storefrontChannels.value = (channelsResponse.data?.data || []).filter((account: any) => account.status !== 'disabled')
+  } catch (error) {
+    if (statusCode(error) !== 403) loadError.value = '小程序发布配置暂时无法加载'
+  } finally {
+    storefrontLoading.value = false
+  }
+}
+
 async function loadWorkspace() {
   if (!isCurrentDomainConfigured.value) return
   products.value = []
@@ -797,6 +901,47 @@ function resetOrderFilters() {
 
 function handleTabChange(name: string | number) {
   if (String(name) === 'orders') void loadOrders()
+  if (String(name) === 'storefront') void loadStorefrontData()
+}
+
+function openStorefrontBinding(row?: any) {
+  Object.assign(storefrontForm, {
+    id: Number(row?.id || 0),
+    channel_account_id: Number(row?.channel_account_id || storefrontChannels.value[0]?.id || 0),
+    business_type: currentDomain.value,
+    location_id: Number(row?.location_id || activeLocations.value[0]?.id || 0),
+    status: row?.status || 'active',
+    reason: '',
+  })
+  storefrontDialogVisible.value = true
+}
+
+async function saveStorefrontBinding() {
+  if (!canWrite.value) return
+  if (!storefrontForm.channel_account_id || !storefrontForm.location_id || !storefrontForm.reason.trim()) {
+    ElMessage.warning('请选择微信账号、履约地点并填写操作原因')
+    return
+  }
+  storefrontSaving.value = true
+  try {
+    const payload = {
+      channel_account_id: storefrontForm.channel_account_id,
+      business_type: currentDomain.value,
+      location_id: storefrontForm.location_id,
+      status: storefrontForm.status,
+      reason: storefrontForm.reason.trim(),
+    }
+    if (storefrontForm.id) {
+      await request.put(`/commerce/storefront-bindings/${storefrontForm.id}`, payload)
+    } else {
+      await request.post('/commerce/storefront-bindings', payload)
+    }
+    storefrontDialogVisible.value = false
+    ElMessage.success('小程序发布配置已保存')
+    await loadStorefrontData()
+  } finally {
+    storefrontSaving.value = false
+  }
 }
 
 async function openOrderDetail(row: any) {
@@ -1238,6 +1383,7 @@ onBeforeUnmount(() => {
 .workspace-section { min-width: 0; padding-top: 8px; }
 .section-toolbar, .detail-section-heading, .form-section-heading, .option-group-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .section-toolbar { margin-bottom: 14px; }
+.section-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .section-toolbar h2 { margin: 0; font-size: 19px; }
 .section-toolbar p { margin: 4px 0 0; }
 .muted, .secondary-cell { color: var(--ui-text-secondary); font-size: 12px; }
@@ -1273,6 +1419,8 @@ onBeforeUnmount(() => {
 .selection-range { display: inline-flex; align-items: center; gap: 8px; margin-left: 18px; vertical-align: middle; }
 .selection-range .el-input-number { width: 110px; }
 .form-suffix { margin-left: 8px; color: var(--ui-text-secondary); }
+.form-help { margin-top: 6px; color: var(--ui-text-secondary); font-size: 12px; line-height: 1.5; }
+.select-option-stack { display: flex; flex-direction: column; gap: 2px; line-height: 1.3; }
 .adjustment-context { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; padding: 12px; background: var(--ui-surface-soft); border: 1px solid var(--ui-border); border-radius: var(--ui-radius); }
 @media (max-width: 800px) {
   .commerce-heading { flex-direction: column; }

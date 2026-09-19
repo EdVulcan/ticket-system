@@ -244,8 +244,12 @@ const navGroups = computed<NavGroup[]>(() => {
 
   const distribution: NavItem[] = []
   if ((scenicHistorySupplier || hasCapability('distributor')) && can('distribution.read')) distribution.push({ path: '/distribution', label: '供销合作', icon: Connection })
-  if ((scenicHistorySupplier || hasCapability('distributor')) && can('channels.read')) distribution.push({ path: '/channels', label: '渠道连接', icon: Connection })
   if ((scenicHistorySupplier || hasCapability('travel_agency')) && can('teams.read')) distribution.push({ path: '/teams', label: '旅行社团队', icon: Tickets })
+
+  const channels: NavItem[] = []
+  if ((scenicHistorySupplier || hasCapability('distributor') || configuredBusinessCapabilities.value.size > 0) && can('channels.read')) {
+    channels.push({ path: '/channels', label: '渠道中心', icon: Connection })
+  }
 
   const operations: NavItem[] = []
   if ((scenicSupplier || hasCapability('distributor')) && can('operations.read')) operations.push({ path: '/operations', label: '运营工作台', icon: Operation })
@@ -265,10 +269,10 @@ const navGroups = computed<NavGroup[]>(() => {
   const settings: NavItem[] = []
   if (scenicSupplier && can('onsite.manage')) settings.push({ path: '/staff', label: '员工管理', icon: User })
   if (can('tenant_accounts.manage')) settings.push({ path: '/system-user', label: '管理账号', icon: UserFilled })
-  if ((scenicSupplier || hasCapability('distributor')) && can('payment_config.manage')) settings.push({ path: '/payment-config', label: '支付参数配置', icon: CreditCard })
+  if ((scenicSupplier || hasCapability('distributor') || configuredBusinessCapabilities.value.size > 0) && can('payment_config.manage')) settings.push({ path: '/payment-config', label: '支付参数配置', icon: CreditCard })
   settings.push({ path: '/settings', label: '系统设置', icon: Setting })
 
-  return [overview, { label: '销售中心', items: sales }, { label: '住宿经营', items: accommodation }, { label: '商业经营', items: commerce }, { label: '合作与渠道', items: distribution }, { label: '运营管理', items: operations }, { label: '数据与财务', items: data }, { label: '组织与设置', items: settings }]
+  return [overview, { label: '销售中心', items: sales }, { label: '住宿经营', items: accommodation }, { label: '商业经营', items: commerce }, { label: '合作与渠道', items: distribution }, { label: '渠道中心', items: channels }, { label: '运营管理', items: operations }, { label: '数据与财务', items: data }, { label: '组织与设置', items: settings }]
     .filter(group => group.items.length)
 })
 

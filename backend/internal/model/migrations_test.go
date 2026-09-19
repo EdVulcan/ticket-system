@@ -43,7 +43,9 @@ func TestPostgresMigrationsReachCurrentVersionAndAreIdempotent(t *testing.T) {
 		&TenantBusinessCapability{}, &CommerceProduct{}, &CommerceSKU{}, &CommerceOptionGroup{}, &CommerceOption{},
 		&CommerceFulfillmentLocation{}, &CommerceInventory{}, &CommerceCart{}, &CommerceCartItem{},
 		&CommerceOrder{}, &CommerceOrderItem{}, &RestaurantFulfillment{}, &RetailFulfillment{},
+		&CommercePaymentReconciliationTask{}, &CommercePaymentAttempt{}, &CommerceRefundAttempt{}, &CommercePaymentProviderEvent{},
 		&CommerceAddress{}, &CommerceAfterSaleRequest{}, &CommerceAfterSaleEvent{},
+		&CommerceCustomerSession{}, &CommerceStorefrontBinding{},
 	} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("table for %T is missing", table)

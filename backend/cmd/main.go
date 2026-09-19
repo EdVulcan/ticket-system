@@ -252,15 +252,22 @@ func runCommerceOrderExpiryWorker(ctx context.Context) {
 }
 
 func runCommercePaymentReconciliationWorker(ctx context.Context) {
+	// Keep the legacy reconciliation queue for commercial orders created before
+	// provider-attempt persistence, and run the provider-attempt reconciler for
+	// new WeChat storefront payments/refunds. Both paths converge through the
+	// same CommerceOrderService state transitions.
 	reconciliation := service.NewCommercePaymentReconciliationService(nil)
+	providerReconciliation := &service.CommercePaymentService{}
 	process := func(now time.Time) {
 		if _, err := reconciliation.ProcessTasks(ctx, now, 20); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Log.Error(fmt.Sprintf("commerce payment reconciliation failed: %v", err))
 		}
+		if _, err := providerReconciliation.ReconcileDue(ctx, now, 20); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Log.Error(fmt.Sprintf("commerce provider payment reconciliation failed: %v", err))
+		}
 	}
-	// Recover tasks immediately after startup, then keep the durable queue
-	// observable. A configured payment adapter can be injected by the channel
-	// integration; without one, tasks are explicitly marked manual_review.
+	// Recover both durable queues immediately after startup, then keep them
+	// observable across process restarts.
 	process(time.Now())
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()

@@ -13,6 +13,8 @@ import (
 func resetCommerceCatalogData(t *testing.T) {
 	t.Helper()
 	for _, table := range []interface{}{
+		&model.CommercePaymentProviderEvent{}, &model.CommerceRefundAttempt{}, &model.CommercePaymentAttempt{},
+		&model.CommercePaymentReconciliationTask{},
 		&model.CommerceAfterSaleEvent{}, &model.CommerceAfterSaleRequest{},
 		&model.RestaurantFulfillment{}, &model.RetailFulfillment{},
 		&model.CommerceOrderItem{}, &model.CommerceOrder{}, &model.CommerceCartItem{},

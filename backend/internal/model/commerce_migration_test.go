@@ -22,7 +22,9 @@ func TestCommerceSchema124CreatesIsolatedTablesAndConstraints(t *testing.T) {
 		&CommerceFulfillmentLocation{}, &CommerceInventory{}, &CommerceCart{}, &CommerceCartItem{},
 		&CommerceOrder{}, &CommerceOrderItem{}, &RestaurantFulfillment{}, &RetailFulfillment{},
 		&CommercePaymentReconciliationTask{},
+		&CommercePaymentAttempt{}, &CommerceRefundAttempt{}, &CommercePaymentProviderEvent{},
 		&CommerceAddress{}, &CommerceAfterSaleRequest{}, &CommerceAfterSaleEvent{},
+		&CommerceCustomerSession{}, &CommerceStorefrontBinding{},
 	} {
 		if !db.Migrator().HasTable(table) {
 			t.Fatalf("commercial table for %T is missing", table)
@@ -64,10 +66,14 @@ func TestCommerceSchema124CreatesIsolatedTablesAndConstraints(t *testing.T) {
 		{&CommerceOrder{}, "PaymentReference"},
 		{&CommercePaymentReconciliationTask{}, "ProviderPaidAt"},
 		{&CommercePaymentReconciliationTask{}, "ProviderAmountCents"},
+		{&CommercePaymentReconciliationTask{}, "ProviderReference"},
 		{&CommerceOrderItem{}, "ReservationStatus"},
 		{&CommerceOrderItem{}, "ReleasedAt"},
 		{&CommerceAfterSaleRequest{}, "ProviderRefundReference"},
 		{&CommerceAfterSaleRequest{}, "ProviderRefundAmountCents"},
+		{&CommerceAddress{}, "AddressType"},
+		{&CommerceAddress{}, "CampusName"},
+		{&CommerceAddress{}, "Room"},
 	} {
 		if !db.Migrator().HasColumn(field.model, field.name) {
 			t.Fatalf("commercial column %s for %T is missing", field.name, field.model)

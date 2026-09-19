@@ -16,6 +16,7 @@ import (
 // lifecycle. It never delegates to the scenic ticket order controller.
 type CommerceOrderController struct {
 	Service service.CommerceOrderService
+	Payment service.CommercePaymentService
 }
 
 func (c *CommerceOrderController) Create(ctx *gin.Context) {
@@ -111,6 +112,9 @@ func (c *CommerceOrderController) RequestRefund(ctx *gin.Context) {
 	if err != nil {
 		commerceOrderError(ctx, err)
 		return
+	}
+	if result != nil && result.Request != nil {
+		_, _ = c.Payment.StartWechatRefund(ctx.Request.Context(), result.Request.TenantID, result.Request.ID)
 	}
 	ctx.JSON(http.StatusAccepted, result)
 }

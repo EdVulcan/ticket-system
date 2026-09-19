@@ -42,6 +42,72 @@ func TestRequireAnyTenantCapability(t *testing.T) {
 	assertCapabilityStatus(t, engine, "/without-database", http.StatusForbidden)
 }
 
+func TestRequireConfiguredChannelCapabilityAcceptsCommercialTenants(t *testing.T) {
+	db := testdb.Open(t)
+	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.TenantBusinessCapability{}); err != nil {
+		t.Fatal(err)
+	}
+	previousDB := model.DB
+	model.DB = db
+	t.Cleanup(func() { model.DB = previousDB })
+	if err := db.Create(&[]model.Tenant{
+		{Base: model.Base{ID: 21}, Name: "commercial", SystemCode: "CHANNEL-COMMERCIAL", Status: "active"},
+		{Base: model.Base{ID: 22}, Name: "ticket", SystemCode: "CHANNEL-TICKET", Status: "active"},
+		{Base: model.Base{ID: 23}, Name: "unconfigured", SystemCode: "CHANNEL-NONE", Status: "active"},
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.TenantCapability{TenantID: 22, Capability: "supplier", Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.TenantBusinessCapability{TenantID: 21, BusinessType: "restaurant", Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/commercial", tenantContext(21), RequireConfiguredChannelCapability(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	engine.GET("/ticket", tenantContext(22), RequireConfiguredChannelCapability(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	engine.GET("/none", tenantContext(23), RequireConfiguredChannelCapability(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	assertCapabilityStatus(t, engine, "/commercial", http.StatusNoContent)
+	assertCapabilityStatus(t, engine, "/ticket", http.StatusNoContent)
+	assertCapabilityStatus(t, engine, "/none", http.StatusForbidden)
+}
+
+func TestRequirePaymentConfigCapabilityAcceptsCommercialTenantsWithoutWideningMarketRoutes(t *testing.T) {
+	db := testdb.Open(t)
+	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.TenantBusinessCapability{}); err != nil {
+		t.Fatal(err)
+	}
+	previousDB := model.DB
+	model.DB = db
+	t.Cleanup(func() { model.DB = previousDB })
+	if err := db.Create(&[]model.Tenant{
+		{Base: model.Base{ID: 31}, Name: "commercial", SystemCode: "PAY-COMMERCIAL", Status: "active"},
+		{Base: model.Base{ID: 32}, Name: "ticket", SystemCode: "PAY-TICKET", Status: "active"},
+		{Base: model.Base{ID: 33}, Name: "none", SystemCode: "PAY-NONE", Status: "active"},
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&[]model.TenantCapability{{TenantID: 32, Capability: "supplier", Status: "active"}}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&[]model.TenantBusinessCapability{{TenantID: 31, BusinessType: "retail", Status: "active"}}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/commercial", tenantContext(31), RequirePaymentConfigCapability(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	engine.GET("/ticket", tenantContext(32), RequirePaymentConfigCapability(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	engine.GET("/none", tenantContext(33), RequirePaymentConfigCapability(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
+
+	assertCapabilityStatus(t, engine, "/commercial", http.StatusNoContent)
+	assertCapabilityStatus(t, engine, "/ticket", http.StatusNoContent)
+	assertCapabilityStatus(t, engine, "/none", http.StatusForbidden)
+}
+
 func TestSupplierBusinessTypeSeparatesScenicAndHotelOperations(t *testing.T) {
 	db := testdb.Open(t)
 	if err := db.AutoMigrate(&model.Tenant{}, &model.TenantCapability{}, &model.SupplierBusinessType{}); err != nil {

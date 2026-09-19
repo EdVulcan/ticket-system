@@ -74,6 +74,36 @@ func requireAnyActiveTenantCapability(tx *gorm.DB, tenantID uint, capabilities .
 	return ErrCapabilityInactive
 }
 
+// requireActiveChannelAccountCapability keeps commercial storefront channels
+// on the same channel-account boundary as ticket channels without granting a
+// commercial tenant access to ticket integrations. The account type is an
+// authorization discriminator, not a client-controlled feature flag.
+func requireActiveChannelAccountCapability(tx *gorm.DB, tenantID uint, channelType string) error {
+	if strings.TrimSpace(channelType) == "wechat_miniapp" {
+		if err := RequireActiveTenantBusinessCapability(tx, tenantID, "restaurant"); err == nil {
+			return nil
+		}
+		if err := RequireActiveTenantBusinessCapability(tx, tenantID, "retail"); err == nil {
+			return nil
+		}
+		return ErrCapabilityInactive
+	}
+	return requireAnyActiveTenantCapability(tx, tenantID, "supplier", "distributor")
+}
+
+func requireConfiguredChannelAccountCapability(tx *gorm.DB, tenantID uint, channelType string) error {
+	if strings.TrimSpace(channelType) == "wechat_miniapp" {
+		if err := RequireConfiguredTenantBusinessCapability(tx, tenantID, "restaurant"); err == nil {
+			return nil
+		}
+		if err := RequireConfiguredTenantBusinessCapability(tx, tenantID, "retail"); err == nil {
+			return nil
+		}
+		return ErrCapabilityInactive
+	}
+	return requireAnyActiveTenantCapability(tx, tenantID, "supplier", "distributor")
+}
+
 // requireActiveSupplierBusinessType is the service-layer authorization boundary
 // for fulfillment-specific operations. It deliberately checks both the active
 // supplier market role and the requested business vertical so callers cannot

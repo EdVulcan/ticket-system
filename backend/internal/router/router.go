@@ -54,6 +54,46 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	miniappGroup.POST("/orders/:orderNo/package-bookings/:entitlementNo/cancel", miniappController.CancelPackageBooking)
 	miniappGroup.POST("/promotion", miniappPromotionController.Opportunity)
 	miniappGroup.POST("/order-quote", miniappPromotionController.Quote)
+
+	// Public WeChat commercial storefront routes. These routes use the
+	// storefront's opaque customer session, not JWT tenant middleware. The
+	// service resolves tenant, account, business and fulfillment location from
+	// the session and published binding.
+	commerceStorefrontService := &service.CommerceStorefrontService{
+		LoginAdapter: &service.WechatMiniappHTTPLoginAdapter{},
+	}
+	commercePaymentService := service.CommercePaymentService{Storefront: commerceStorefrontService}
+	commerceStorefrontController := &api.CommerceStorefrontController{Service: *commerceStorefrontService, Payment: commercePaymentService}
+	commerceStorefrontGroup := apiGroup.Group("/storefront/wechat")
+	commerceStorefrontGroup.POST("/session", middleware.MiniappLoginRateLimit(), commerceStorefrontController.Login)
+	commerceStorefrontGroup.GET("/catalog", commerceStorefrontController.Catalog)
+	commerceStorefrontGroup.GET("/cart", commerceStorefrontController.GetCart)
+	commerceStorefrontGroup.POST("/cart/items", commerceStorefrontController.AddCartItem)
+	commerceStorefrontGroup.PATCH("/cart/items/:itemID", commerceStorefrontController.UpdateCartItem)
+	commerceStorefrontGroup.DELETE("/cart/items/:itemID", commerceStorefrontController.RemoveCartItem)
+	commerceStorefrontGroup.POST("/cart/checkout", commerceStorefrontController.Checkout)
+	// Plural cart routes are the stable storefront contract. The singular
+	// aliases above remain for already-built demo clients.
+	commerceStorefrontGroup.POST("/carts", commerceStorefrontController.GetCart)
+	commerceStorefrontGroup.GET("/carts", commerceStorefrontController.GetCart)
+	commerceStorefrontGroup.GET("/carts/:cartID", commerceStorefrontController.GetCart)
+	commerceStorefrontGroup.POST("/carts/:cartID/items", commerceStorefrontController.AddCartItem)
+	commerceStorefrontGroup.PATCH("/carts/:cartID/items/:itemID", commerceStorefrontController.UpdateCartItem)
+	commerceStorefrontGroup.DELETE("/carts/:cartID/items/:itemID", commerceStorefrontController.RemoveCartItem)
+	commerceStorefrontGroup.POST("/carts/:cartID/checkout", commerceStorefrontController.Checkout)
+	commerceStorefrontGroup.GET("/orders", commerceStorefrontController.ListOrders)
+	commerceStorefrontGroup.GET("/orders/:orderNo", commerceStorefrontController.GetOrder)
+	commerceStorefrontGroup.POST("/orders/:orderNo/refund-requests", commerceStorefrontController.RequestRefund)
+	commerceStorefrontGroup.POST("/orders/:orderNo/payments", commerceStorefrontController.CreatePayment)
+	commerceStorefrontGroup.GET("/orders/:orderNo/payment", commerceStorefrontController.QueryPayment)
+	commerceStorefrontGroup.GET("/addresses", commerceStorefrontController.ListAddresses)
+	commerceStorefrontGroup.POST("/addresses", commerceStorefrontController.SaveAddress)
+	commerceStorefrontGroup.PUT("/addresses/:addressID", commerceStorefrontController.SaveAddress)
+	commerceStorefrontGroup.PATCH("/addresses/:addressID", commerceStorefrontController.SaveAddress)
+	commerceStorefrontGroup.DELETE("/addresses/:addressID", commerceStorefrontController.DeleteAddress)
+	commerceStorefrontGroup.POST("/addresses/:addressID/default", commerceStorefrontController.SetDefaultAddress)
+	apiGroup.POST("/commerce/payments/notify/wechat/:tenantID", commerceStorefrontController.WechatPaymentNotify)
+	apiGroup.POST("/commerce/refunds/notify/wechat/:tenantID", commerceStorefrontController.WechatRefundNotify)
 	xiaohongshuWebhookController := api.XiaohongshuWebhookController{}
 	xiaohongshuWebhookGroup := apiGroup.Group("/integrations/xiaohongshu/events")
 	xiaohongshuWebhookGroup.GET("/:appID", xiaohongshuWebhookController.Verify)
@@ -291,7 +331,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	// suspended) vertical so existing orders can be settled and refunded. New
 	// orders require an active capability; all state-changing actions use the
 	// scoped order service and never enter ticket fulfillment.
-	commerceOrderController := &api.CommerceOrderController{Service: service.CommerceOrderService{}}
+	commerceOrderController := &api.CommerceOrderController{Service: service.CommerceOrderService{}, Payment: commercePaymentService}
 	commerceOrderReadGroup := protected.Group("/commerce/orders")
 	commerceOrderReadGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionOrdersRead))
 	{
@@ -324,6 +364,21 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	commerceAfterSaleGroup := protected.Group("/commerce/after-sales")
 	commerceAfterSaleGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"))
 	commerceAfterSaleGroup.POST("/:requestID/complete", middleware.RequireTenantPermission(authz.PermissionAfterSalesWrite), commerceOrderController.CompleteRefund)
+
+	// Tenant operators configure which already-created WeChat channel account
+	// publishes the restaurant/retail storefront and which fulfillment location
+	// receives the order. Secrets remain in the channel-account configuration;
+	// this boundary only stores the scoped binding.
+	commerceStorefrontBindingReadGroup := protected.Group("/commerce/storefront-bindings")
+	commerceStorefrontBindingReadGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionCatalogRead))
+	commerceStorefrontBindingReadGroup.GET("", commerceStorefrontController.ListBindings)
+	commerceStorefrontBindingWriteGroup := protected.Group("/commerce/storefront-bindings")
+	commerceStorefrontBindingWriteGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite))
+	commerceStorefrontBindingWriteGroup.POST("", commerceStorefrontController.SaveBinding)
+	commerceStorefrontBindingWriteGroup.PUT("/:bindingID", commerceStorefrontController.SaveBinding)
+	commerceStorefrontChannelGroup := protected.Group("/commerce/storefront-channels")
+	commerceStorefrontChannelGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionCatalogRead))
+	commerceStorefrontChannelGroup.GET("", commerceStorefrontController.ListChannelAccounts)
 
 	printTemplateController := &api.PrintTemplateController{Service: service.PrintTemplateService{}}
 	printTemplateGroup := protected.Group("/print-templates")
@@ -586,7 +641,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	}
 
 	channelAdminGroup := protected.Group("/channel-accounts")
-	channelAdminGroup.Use(middleware.RequireAnyTenantCapability("supplier", "distributor"))
+	channelAdminGroup.Use(middleware.RequireConfiguredChannelCapability())
 	{
 		channelAdminGroup.GET("", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.List)
 		channelAdminGroup.POST("", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.Create)
@@ -594,6 +649,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		channelAdminGroup.POST("/:id/rotate-secret", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.RotateSecret)
 		channelAdminGroup.PUT("/:id/ctrip-config", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.ConfigureCtrip)
 		channelAdminGroup.PUT("/:id/xiaohongshu-config", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.ConfigureXiaohongshu)
+		channelAdminGroup.PUT("/:id/wechat-miniapp-config", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.ConfigureWechatMiniapp)
 		channelAdminGroup.GET("/:id/xiaohongshu-diagnosis", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.DiagnoseXiaohongshu)
 		channelAdminGroup.GET("/:id/storefront", middleware.RequireTenantPermission(authz.PermissionChannelsRead), channelController.GetXiaohongshuStorefront)
 		channelAdminGroup.PUT("/:id/storefront", middleware.RequireTenantPermission(authz.PermissionChannelsWrite), channelController.SaveXiaohongshuStorefront)
@@ -764,10 +820,17 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		paymentGroup.POST("/refunds/digital", middleware.RequireTenantPermission(authz.PermissionRefundsWrite), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.CreateDigital)
 		paymentGroup.GET("/refund-tasks", middleware.RequireTenantPermission(authz.PermissionRefundsRead), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.ListDigitalTasks)
 		paymentGroup.POST("/refund-tasks/:id/retry", middleware.RequireTenantPermission(authz.PermissionRefundsWrite), middleware.RequireAnyTenantCapability("supplier", "distributor"), refundController.RetryDigitalTask)
-		paymentGroup.GET("/configs", middleware.RequireTenantPermission(authz.PermissionPaymentConfig), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.GetConfigs)
-		paymentGroup.GET("/configs/readiness", middleware.RequireTenantPermission(authz.PermissionPaymentConfig), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.GetReadiness)
-		paymentGroup.POST("/configs", middleware.RequireTenantPermission(authz.PermissionPaymentConfig), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.SaveConfig)
-		paymentGroup.POST("/configs/wechat", middleware.RequireTenantPermission(authz.PermissionPaymentConfig), middleware.RequireAnyTenantCapability("supplier", "distributor"), configController.SaveWechatConfig)
 		paymentGroup.GET("/:id", middleware.RequireTenantPermission(authz.PermissionPaymentsRead), middleware.RequireAnyTenantCapability("supplier", "distributor"), paymentController.Query)
+	}
+	// Payment configuration is shared infrastructure for ticket and commercial
+	// tenants, but the surrounding payment/order/refund APIs remain scoped to
+	// their existing ticket-market capabilities.
+	paymentConfigGroup := protected.Group("/payments")
+	paymentConfigGroup.Use(middleware.RequireTenantPermission(authz.PermissionPaymentConfig), middleware.RequirePaymentConfigCapability())
+	{
+		paymentConfigGroup.GET("/configs", configController.GetConfigs)
+		paymentConfigGroup.GET("/configs/readiness", configController.GetReadiness)
+		paymentConfigGroup.POST("/configs", configController.SaveConfig)
+		paymentConfigGroup.POST("/configs/wechat", configController.SaveWechatConfig)
 	}
 }

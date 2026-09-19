@@ -148,6 +148,7 @@ type CommercePaymentReconciliationTask struct {
 	TenantID            uint       `gorm:"not null;uniqueIndex:idx_commerce_payment_reconciliation_order,priority:1;index:idx_commerce_payment_reconciliation_scope" json:"tenant_id"`
 	OrderID             uint       `gorm:"not null;uniqueIndex:idx_commerce_payment_reconciliation_order,priority:2;index:idx_commerce_payment_reconciliation_scope" json:"order_id"`
 	PaymentReference    string     `gorm:"size:120" json:"payment_reference,omitempty"`
+	ProviderReference   string     `gorm:"size:120" json:"provider_reference,omitempty"`
 	ProviderPaidAt      *time.Time `json:"provider_paid_at,omitempty"`
 	ProviderAmountCents int64      `gorm:"not null;default:0;check:chk_commerce_payment_reconciliation_provider_amount,provider_amount_cents >= 0" json:"provider_amount_cents"`
 	Status              string     `gorm:"size:20;not null;default:'pending';index;check:chk_commerce_payment_reconciliation_status,status IN ('pending','failed','completed','manual_review')" json:"status"`
@@ -157,6 +158,71 @@ type CommercePaymentReconciliationTask struct {
 	LastProviderState   string     `gorm:"size:40" json:"last_provider_state,omitempty"`
 	LastError           string     `gorm:"size:500" json:"last_error,omitempty"`
 	CompletedAt         *time.Time `json:"completed_at,omitempty"`
+}
+
+// CommercePaymentAttempt is the immutable provider-attempt identity for a
+// commercial order. It is deliberately separate from CommerceOrder's final
+// payment projection: a request can time out after the provider accepted it,
+// and a later callback or query must still find the same attempt.
+type CommercePaymentAttempt struct {
+	Base
+	TenantID           uint       `gorm:"not null;uniqueIndex:idx_commerce_payment_attempt_request,priority:1;index:idx_commerce_payment_attempt_scope" json:"tenant_id"`
+	OrderID            uint       `gorm:"not null;index:idx_commerce_payment_attempt_scope" json:"order_id"`
+	ChannelAccountID   uint       `gorm:"not null;index:idx_commerce_payment_attempt_scope" json:"channel_account_id"`
+	Provider           string     `gorm:"size:20;not null;default:'wechat'" json:"provider"`
+	ClientRequestID    string     `gorm:"size:100;not null;uniqueIndex:idx_commerce_payment_attempt_request,priority:2" json:"-"`
+	RequestFingerprint string     `gorm:"size:64;not null" json:"-"`
+	OutTradeNo         string     `gorm:"size:64;not null;uniqueIndex" json:"out_trade_no"`
+	AppID              string     `gorm:"size:120;not null" json:"app_id"`
+	MchID              string     `gorm:"size:100;not null" json:"mch_id"`
+	AmountCents        int64      `gorm:"not null;check:chk_commerce_payment_attempt_amount,amount_cents > 0" json:"amount_cents"`
+	Currency           string     `gorm:"size:8;not null;default:'CNY'" json:"currency"`
+	PayerSubjectHash   string     `gorm:"size:64;not null" json:"-"`
+	PrepayID           string     `gorm:"size:160" json:"-"`
+	ProviderReference  string     `gorm:"size:120" json:"provider_reference,omitempty"`
+	ProviderState      string     `gorm:"size:40" json:"provider_state,omitempty"`
+	Status             string     `gorm:"size:20;not null;default:'pending';index;check:chk_commerce_payment_attempt_status,status IN ('pending','paid','failed','unknown','manual_review')" json:"status"`
+	LastError          string     `gorm:"size:500" json:"last_error,omitempty"`
+	LastQueriedAt      *time.Time `json:"last_queried_at,omitempty"`
+	NextQueryAt        *time.Time `gorm:"index" json:"next_query_at,omitempty"`
+	CompletedAt        *time.Time `json:"completed_at,omitempty"`
+}
+
+// CommerceRefundAttempt tracks the provider refund transaction separately
+// from the customer-facing after-sale request. Provider acceptance is not a
+// local refund success; only a confirmed callback or query may complete it.
+type CommerceRefundAttempt struct {
+	Base
+	TenantID         uint       `gorm:"not null;uniqueIndex:idx_commerce_refund_attempt_request,priority:1;index:idx_commerce_refund_attempt_scope" json:"tenant_id"`
+	RequestID        uint       `gorm:"not null;uniqueIndex:idx_commerce_refund_attempt_request,priority:2;index:idx_commerce_refund_attempt_scope" json:"request_id"`
+	OrderID          uint       `gorm:"not null;index:idx_commerce_refund_attempt_scope" json:"order_id"`
+	Provider         string     `gorm:"size:20;not null;default:'wechat'" json:"provider"`
+	OutRefundNo      string     `gorm:"size:64;not null;uniqueIndex" json:"out_refund_no"`
+	ProviderRefundID string     `gorm:"size:120;uniqueIndex" json:"provider_refund_id,omitempty"`
+	AmountCents      int64      `gorm:"not null;check:chk_commerce_refund_attempt_amount,amount_cents > 0" json:"amount_cents"`
+	Status           string     `gorm:"size:20;not null;default:'processing';index;check:chk_commerce_refund_attempt_status,status IN ('processing','succeeded','failed','unknown','manual_review')" json:"status"`
+	ProviderState    string     `gorm:"size:40" json:"provider_state,omitempty"`
+	LastError        string     `gorm:"size:500" json:"last_error,omitempty"`
+	LastQueriedAt    *time.Time `json:"last_queried_at,omitempty"`
+	NextQueryAt      *time.Time `gorm:"index" json:"next_query_at,omitempty"`
+	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+}
+
+// CommercePaymentProviderEvent is the idempotency inbox for provider
+// notifications. The provider event ID is unique per tenant/provider and the
+// payload is retained for audit and retry diagnostics.
+type CommercePaymentProviderEvent struct {
+	Base
+	TenantID    uint       `gorm:"not null;uniqueIndex:idx_commerce_payment_event_identity,priority:1;index" json:"tenant_id"`
+	Provider    string     `gorm:"size:20;not null;uniqueIndex:idx_commerce_payment_event_identity,priority:2" json:"provider"`
+	EventID     string     `gorm:"size:160;not null;uniqueIndex:idx_commerce_payment_event_identity,priority:3" json:"event_id"`
+	EventType   string     `gorm:"size:80;not null" json:"event_type"`
+	OutTradeNo  string     `gorm:"size:64" json:"out_trade_no,omitempty"`
+	OutRefundNo string     `gorm:"size:64" json:"out_refund_no,omitempty"`
+	PayloadJSON string     `gorm:"type:text;not null" json:"-"`
+	Status      string     `gorm:"size:20;not null;default:'received';index;check:chk_commerce_payment_event_status,status IN ('received','processed','failed')" json:"status"`
+	LastError   string     `gorm:"size:500" json:"last_error,omitempty"`
+	ProcessedAt *time.Time `json:"processed_at,omitempty"`
 }
 
 type CommerceOrderItem struct {
@@ -207,11 +273,16 @@ type CommerceAddress struct {
 	Base
 	TenantID      uint   `gorm:"not null;index:idx_commerce_addresses_customer" json:"tenant_id"`
 	CustomerID    string `gorm:"size:100;not null;index:idx_commerce_addresses_customer" json:"customer_id"`
+	AddressType   string `gorm:"size:20;not null;default:'SHIPPING';index:idx_commerce_addresses_customer;check:chk_commerce_addresses_type,address_type IN ('CAMPUS','SHIPPING')" json:"address_type"`
 	RecipientName string `gorm:"size:80;not null" json:"recipient_name"`
 	Phone         string `gorm:"size:30;not null" json:"phone"`
-	Province      string `gorm:"size:40;not null" json:"province"`
-	City          string `gorm:"size:40;not null" json:"city"`
+	Province      string `gorm:"size:40" json:"province,omitempty"`
+	City          string `gorm:"size:40" json:"city,omitempty"`
 	District      string `gorm:"size:40" json:"district,omitempty"`
+	CampusName    string `gorm:"size:80" json:"campus_name,omitempty"`
+	ZoneName      string `gorm:"size:80" json:"zone_name,omitempty"`
+	Building      string `gorm:"size:80" json:"building,omitempty"`
+	Room          string `gorm:"size:80" json:"room,omitempty"`
 	Detail        string `gorm:"size:255;not null" json:"detail"`
 	IsDefault     bool   `gorm:"not null;default:false" json:"is_default"`
 }

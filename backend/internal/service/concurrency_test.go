@@ -70,6 +70,7 @@ func resetBusinessData(t *testing.T) {
 	t.Helper()
 	err := model.Write(func(tx *gorm.DB) error {
 		for _, table := range []interface{}{
+			&model.CommercePaymentProviderEvent{}, &model.CommerceRefundAttempt{}, &model.CommercePaymentAttempt{}, &model.CommerceAfterSaleEvent{}, &model.CommerceOrderItem{}, &model.RestaurantFulfillment{}, &model.RetailFulfillment{}, &model.CommercePaymentReconciliationTask{}, &model.CommerceAfterSaleRequest{}, &model.CommerceCartItem{}, &model.CommerceCart{}, &model.CommerceInventory{}, &model.CommerceOption{}, &model.CommerceOptionGroup{}, &model.CommerceOrder{}, &model.CommerceAddress{}, &model.CommerceCustomerSession{}, &model.CommerceStorefrontBinding{}, &model.CommerceSKU{}, &model.CommerceProduct{}, &model.CommerceFulfillmentLocation{},
 			&model.ExternalAdmissionBinding{}, &model.ExternalAdmissionCredential{}, &model.OrderItemSupplySnapshot{}, &model.ProductSupplyConfig{}, &model.UpstreamProductMapping{}, &model.UpstreamConnection{},
 			&model.MiniappInstantDiscountGrant{}, &model.MiniappInstantDiscountActivityMapping{}, &model.MiniappInstantDiscountActivity{},
 			&model.XiaohongshuRefundOperation{},

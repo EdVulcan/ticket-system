@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 130
+const CurrentPostgresSchemaVersion = 135
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -73,7 +73,9 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&CommerceFulfillmentLocation{}, &CommerceInventory{}, &CommerceCart{}, &CommerceCartItem{},
 		&CommerceOrder{}, &CommerceOrderItem{}, &RestaurantFulfillment{}, &RetailFulfillment{},
 		&CommercePaymentReconciliationTask{},
+		&CommercePaymentAttempt{}, &CommerceRefundAttempt{}, &CommercePaymentProviderEvent{},
 		&CommerceAddress{}, &CommerceAfterSaleRequest{}, &CommerceAfterSaleEvent{},
+		&CommerceCustomerSession{}, &CommerceStorefrontBinding{},
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
@@ -743,11 +745,135 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateCommerceReliabilityGuards(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateCommerceStorefront(db, previousSchemaVersion); err != nil {
+		return err
+	}
+	if err := migrateCommerceStorefrontAddresses(db, previousSchemaVersion); err != nil {
+		return err
+	}
+	if err := migrateCommercePaymentAttempts(db, previousSchemaVersion); err != nil {
+		return err
+	}
+	if err := migrateCommercePaymentProviderReference(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
 		Name:      "commerce reliability guards",
 		AppliedAt: time.Now(),
 	}).Error
+}
+
+// migrateCommercePaymentAttempts adds immutable provider-attempt identities,
+// refund attempts and the notification inbox used by the commercial payment
+// boundary. Existing orders remain untouched and can continue as unpaid
+// orders until a new attempt is created.
+func migrateCommercePaymentAttempts(db *gorm.DB, previous int) error {
+	if previous >= 135 {
+		return nil
+	}
+	statements := []string{
+		// The referenced IDs are globally primary-keyed, but the composite
+		// tenant predicates below intentionally preserve tenant ownership in the
+		// database constraint as well. PostgreSQL requires a matching unique
+		// parent key before it accepts a composite foreign key.
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_orders_tenant_id
+			ON commerce_orders(tenant_id, id);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_after_sales_tenant_id
+			ON commerce_after_sale_requests(tenant_id, id);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_payment_attempt_request
+			ON commerce_payment_attempts(tenant_id, client_request_id)
+			WHERE deleted_at IS NULL AND client_request_id <> '';`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_payment_attempt_out_trade_no
+			ON commerce_payment_attempts(out_trade_no)
+			WHERE deleted_at IS NULL AND out_trade_no <> '';`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_payment_attempt_due
+			ON commerce_payment_attempts(tenant_id, status, next_query_at)
+			WHERE deleted_at IS NULL AND status IN ('pending','unknown','manual_review');`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_refund_attempt_request
+			ON commerce_refund_attempts(tenant_id, request_id)
+			WHERE deleted_at IS NULL;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_refund_attempt_out_refund_no
+			ON commerce_refund_attempts(out_refund_no)
+			WHERE deleted_at IS NULL AND out_refund_no <> '';`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_refund_attempt_provider_id
+			ON commerce_refund_attempts(provider_refund_id)
+			WHERE deleted_at IS NULL AND provider_refund_id <> '';`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_refund_attempt_due
+			ON commerce_refund_attempts(tenant_id, status, next_query_at)
+			WHERE deleted_at IS NULL AND status IN ('processing','unknown','manual_review');`,
+		`DO $$ BEGIN
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_payment_attempt_order_owner') THEN
+		  ALTER TABLE commerce_payment_attempts
+			ADD CONSTRAINT fk_commerce_payment_attempt_order_owner
+			FOREIGN KEY (tenant_id, order_id) REFERENCES commerce_orders(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_refund_attempt_request_owner') THEN
+		  ALTER TABLE commerce_refund_attempts
+			ADD CONSTRAINT fk_commerce_refund_attempt_request_owner
+			FOREIGN KEY (tenant_id, request_id) REFERENCES commerce_after_sale_requests(tenant_id, id);
+		 END IF;
+		 IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_payment_event_tenant') THEN
+		  ALTER TABLE commerce_payment_provider_events
+			ADD CONSTRAINT fk_commerce_payment_event_tenant
+			FOREIGN KEY (tenant_id) REFERENCES tenants(id);
+		 END IF;
+	END $$;`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return fmt.Errorf("register commerce payment attempt schema: %w", err)
+		}
+	}
+	return nil
+}
+
+func migrateCommercePaymentProviderReference(db *gorm.DB, previous int) error {
+	if previous >= 135 {
+		return nil
+	}
+	if err := db.Exec(`ALTER TABLE commerce_payment_reconciliation_tasks ADD COLUMN IF NOT EXISTS provider_reference varchar(120)`).Error; err != nil {
+		return fmt.Errorf("register commerce provider reference: %w", err)
+	}
+	return nil
+}
+
+// migrateCommerceStorefrontAddresses adds the type-specific fields used by
+// the public campus and shipping address API. Existing commercial address
+// rows remain shipping addresses by default and retain their values.
+func migrateCommerceStorefrontAddresses(db *gorm.DB, previous int) error {
+	if previous >= 132 {
+		return nil
+	}
+	if err := db.Exec(`
+		UPDATE commerce_addresses
+		SET address_type = 'SHIPPING'
+		WHERE address_type IS NULL OR address_type = '';
+	`).Error; err != nil {
+		return fmt.Errorf("backfill commerce address types: %w", err)
+	}
+	return nil
+}
+
+// migrateCommerceStorefront registers the public WeChat storefront session
+// and published-binding facts. AutoMigrate creates the current tables and
+// constraints above; this version marker makes the upgrade explicit and
+// rerunnable for existing PostgreSQL installations.
+func migrateCommerceStorefront(db *gorm.DB, previous int) error {
+	if previous >= 131 {
+		return nil
+	}
+	if err := db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_commerce_customer_sessions_active_expiry
+			ON commerce_customer_sessions (expires_at)
+			WHERE deleted_at IS NULL AND status = 'active';
+		CREATE INDEX IF NOT EXISTS idx_commerce_storefront_bindings_public
+			ON commerce_storefront_bindings (tenant_id, channel_account_id, status)
+			WHERE deleted_at IS NULL AND status = 'active';
+	`).Error; err != nil {
+		return fmt.Errorf("register commerce storefront indexes: %w", err)
+	}
+	return nil
 }
 
 // migrateCommerceReliabilityGuards prevents a payment or refund provider
@@ -1402,6 +1528,7 @@ func applyPostgresIndexes(db *gorm.DB) error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_accounts_code_global ON channel_accounts(code)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_ctrip_app_id ON channel_accounts(type, app_id) WHERE type = 'ctrip' AND app_id != ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_xiaohongshu_app_id ON channel_accounts(type, app_id) WHERE type = 'xiaohongshu' AND app_id != ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_wechat_miniapp_app_id ON channel_accounts(type, app_id) WHERE type = 'wechat_miniapp' AND app_id != ''`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_settlement_statement_fulfillment ON settlement_lines(statement_id, fulfillment_order_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_product_revision_unique ON product_revisions(product_id, version)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_active_serial ON devices(serial_number) WHERE deleted_at IS NULL`,

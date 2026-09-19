@@ -231,6 +231,45 @@ func RequireAnyTenantBusinessCapability(allowed ...string) gin.HandlerFunc {
 	}
 }
 
+// RequirePaymentConfigCapability is intentionally narrower than a generic
+// payment capability check. It grants access to the tenant's own payment
+// configuration only when the tenant has an active ticket-market capability
+// or an active commercial business capability. It does not widen access to
+// ticket orders, refunds, settlement, or hardware routes.
+func RequirePaymentConfigCapability() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := c.GetUint("tenant_id")
+		if c.GetString("scope") != "tenant" || tenantID == 0 || model.DB == nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有支付配置权限"})
+			return
+		}
+		var tenantCount int64
+		if err := model.DB.Model(&model.Tenant{}).Where("id = ? AND status = ?", tenantID, "active").Count(&tenantCount).Error; err != nil || tenantCount != 1 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有支付配置权限"})
+			return
+		}
+		var marketCount int64
+		if err := model.DB.Model(&model.TenantCapability{}).
+			Where("tenant_id = ? AND capability IN ? AND status = ?", tenantID, []string{"supplier", "distributor"}, "active").
+			Where("expires_at IS NULL OR expires_at > ?", time.Now()).Count(&marketCount).Error; err != nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有支付配置权限"})
+			return
+		}
+		var businessCount int64
+		if err := model.DB.Model(&model.TenantBusinessCapability{}).
+			Where("tenant_id = ? AND business_type IN ? AND status = ?", tenantID, []string{"restaurant", "retail"}, "active").
+			Count(&businessCount).Error; err != nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有支付配置权限"})
+			return
+		}
+		if marketCount == 0 && businessCount == 0 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有支付配置权限"})
+			return
+		}
+		c.Next()
+	}
+}
+
 func RequireTenantBusinessCapability(businessType string) gin.HandlerFunc {
 	return RequireAnyTenantBusinessCapability(businessType)
 }
@@ -256,6 +295,45 @@ func RequireConfiguredTenantBusinessCapability(allowed ...string) gin.HandlerFun
 			Count(&count).Error
 		if err != nil || count == 0 {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有此商业能力的历史查询权限"})
+			return
+		}
+		c.Next()
+	}
+}
+
+// RequireConfiguredChannelCapability exposes the shared channel center to
+// either the ticket market roles or the commercial storefront roles. The
+// channel service still performs the account-type check, so this middleware
+// only establishes that the tenant has some configured channel domain; it
+// must not be used as a substitute for type-specific authorization.
+func RequireConfiguredChannelCapability() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		tenantID := c.GetUint("tenant_id")
+		if c.GetString("scope") != "tenant" || tenantID == 0 || model.DB == nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有渠道管理权限"})
+			return
+		}
+		var tenantCount int64
+		if err := model.DB.Model(&model.Tenant{}).Where("id = ? AND status = ?", tenantID, "active").Count(&tenantCount).Error; err != nil || tenantCount != 1 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有渠道管理权限"})
+			return
+		}
+		var marketCount int64
+		if err := model.DB.Model(&model.TenantCapability{}).
+			Where("tenant_id = ? AND capability IN ? AND status IN ?", tenantID, []string{"supplier", "distributor"}, []string{"active", "suspended"}).
+			Where("expires_at IS NULL OR expires_at > ?", time.Now()).Count(&marketCount).Error; err != nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有渠道管理权限"})
+			return
+		}
+		var businessCount int64
+		if err := model.DB.Model(&model.TenantBusinessCapability{}).
+			Where("tenant_id = ? AND business_type IN ? AND status IN ?", tenantID, []string{"restaurant", "retail"}, []string{"active", "suspended"}).
+			Count(&businessCount).Error; err != nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有渠道管理权限"})
+			return
+		}
+		if marketCount == 0 && businessCount == 0 {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "当前商户没有渠道管理权限"})
 			return
 		}
 		c.Next()

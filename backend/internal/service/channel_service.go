@@ -15,6 +15,26 @@ import (
 
 type ChannelService struct{}
 
+// ErrCommercialChannelTicketBoundary prevents a commercial storefront
+// account from being used as a scenic ticket-channel selector. The channel
+// center is shared, but ticket orders, request logs and reconciliation facts
+// remain owned by ticket-capable channels.
+var ErrCommercialChannelTicketBoundary = errors.New("commercial channel cannot access ticket channel operations")
+
+func requireTicketChannelAccount(tx *gorm.DB, tenantID, accountID uint) (*model.ChannelAccount, error) {
+	if tx == nil || tenantID == 0 || accountID == 0 {
+		return nil, errors.New("tenant and channel are required")
+	}
+	var account model.ChannelAccount
+	if err := tx.Where("id = ? AND tenant_id = ?", accountID, tenantID).First(&account).Error; err != nil {
+		return nil, err
+	}
+	if account.Type == "wechat_miniapp" {
+		return nil, ErrCommercialChannelTicketBoundary
+	}
+	return &account, nil
+}
+
 type CtripChannelConfig struct {
 	AESKey string `json:"aes_key"`
 	AESIV  string `json:"aes_iv"`
@@ -81,7 +101,7 @@ func (s *ChannelService) Create(tenantID uint, account *model.ChannelAccount, se
 		account.RateLimitPerMin = 600
 	}
 	if err := model.Write(func(tx *gorm.DB) error {
-		if err := requireAnyActiveTenantCapability(tx, tenantID, "supplier", "distributor"); err != nil {
+		if err := requireActiveChannelAccountCapability(tx, tenantID, account.Type); err != nil {
 			return err
 		}
 		return tx.Create(account).Error
@@ -89,6 +109,47 @@ func (s *ChannelService) Create(tenantID uint, account *model.ChannelAccount, se
 		return "", err
 	}
 	return secret, nil
+}
+
+// CreateWechatMiniapp creates a commercial storefront channel account. It
+// deliberately does not reuse the generic channel secret path: AppSecret is
+// an app credential, while the account code remains the signed channel
+// identity used by the public storefront binding.
+func (s *ChannelService) CreateWechatMiniapp(tenantID uint, account *model.ChannelAccount, appID, appSecret string) error {
+	appID, appSecret = strings.TrimSpace(appID), strings.TrimSpace(appSecret)
+	if tenantID == 0 || account == nil || strings.TrimSpace(account.Code) == "" || appID == "" || appSecret == "" {
+		return errors.New("渠道编码、微信小程序 AppID 和 AppSecret 必填")
+	}
+	secretCiphertext, err := utils.EncryptAES(appSecret)
+	if err != nil {
+		return err
+	}
+	account.Base = model.Base{}
+	account.TenantID = tenantID
+	account.Type = "wechat_miniapp"
+	account.AppID = appID
+	account.Status = normalizeChannelStatus(account.Status)
+	account.Environment = channelEnvironment(account.Status)
+	account.SecretCiphertext = secretCiphertext
+	account.VerifyKeyCiphertext = ""
+	account.ProtocolConfigCiphertext = ""
+	account.SignAlgorithm = "access-token"
+	if account.RateLimitPerMin <= 0 {
+		account.RateLimitPerMin = 600
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveChannelAccountCapability(tx, tenantID, account.Type); err != nil {
+			return err
+		}
+		var duplicate int64
+		if err := tx.Model(&model.ChannelAccount{}).Where("type = ? AND app_id = ?", account.Type, appID).Count(&duplicate).Error; err != nil {
+			return err
+		}
+		if duplicate > 0 {
+			return errors.New("该微信小程序 AppID 已被配置")
+		}
+		return tx.Create(account).Error
+	})
 }
 
 func (s *ChannelService) CreateCtrip(tenantID uint, account *model.ChannelAccount, accountID, signKey, aesKey, aesIV string) error {
@@ -123,7 +184,7 @@ func (s *ChannelService) CreateCtrip(tenantID uint, account *model.ChannelAccoun
 		account.RateLimitPerMin = 600
 	}
 	return model.Write(func(tx *gorm.DB) error {
-		if err := requireAnyActiveTenantCapability(tx, tenantID, "supplier", "distributor"); err != nil {
+		if err := requireActiveChannelAccountCapability(tx, tenantID, account.Type); err != nil {
 			return err
 		}
 		var duplicate int64
@@ -173,7 +234,7 @@ func (s *ChannelService) createXiaohongshu(tenantID uint, account *model.Channel
 		account.RateLimitPerMin = 600
 	}
 	return model.Write(func(tx *gorm.DB) error {
-		if err := requireAnyActiveTenantCapability(tx, tenantID, "supplier", "distributor"); err != nil {
+		if err := requireActiveChannelAccountCapability(tx, tenantID, account.Type); err != nil {
 			return err
 		}
 		var duplicate int64
@@ -206,18 +267,59 @@ func (s *ChannelService) List(tenantID uint) ([]model.ChannelAccount, error) {
 	if err := model.DB.Where("tenant_id = ?", tenantID).Order("created_at DESC").Find(&accounts).Error; err != nil {
 		return nil, err
 	}
+	visible := make([]model.ChannelAccount, 0, len(accounts))
 	for i := range accounts {
+		if err := requireConfiguredChannelAccountCapability(model.DB, tenantID, accounts[i].Type); err != nil {
+			continue
+		}
 		switch accounts[i].Type {
 		case "ctrip":
 			accounts[i].ProtocolConfigured = accounts[i].AppID != "" && accounts[i].SecretCiphertext != "" && accounts[i].ProtocolConfigCiphertext != ""
 		case "xiaohongshu":
 			accounts[i].ProtocolConfigured = accounts[i].AppID != "" && accounts[i].SecretCiphertext != "" && accounts[i].VerifyKeyCiphertext != "" && accounts[i].ProtocolConfigCiphertext != ""
+		case "wechat_miniapp":
+			accounts[i].ProtocolConfigured = accounts[i].AppID != "" && accounts[i].SecretCiphertext != ""
 		}
 		accounts[i].SecretCiphertext = ""
 		accounts[i].VerifyKeyCiphertext = ""
 		accounts[i].ProtocolConfigCiphertext = ""
+		visible = append(visible, accounts[i])
 	}
-	return accounts, nil
+	return visible, nil
+}
+
+func (s *ChannelService) ConfigureWechatMiniapp(tenantID, id uint, appID, appSecret string) error {
+	appID, appSecret = strings.TrimSpace(appID), strings.TrimSpace(appSecret)
+	if tenantID == 0 || id == 0 || appID == "" || appSecret == "" {
+		return errors.New("微信小程序 AppID 和 AppSecret 必填")
+	}
+	secretCiphertext, err := utils.EncryptAES(appSecret)
+	if err != nil {
+		return err
+	}
+	return model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveChannelAccountCapability(tx, tenantID, "wechat_miniapp"); err != nil {
+			return err
+		}
+		var duplicate int64
+		if err := tx.Model(&model.ChannelAccount{}).Where("type = ? AND app_id = ? AND id != ?", "wechat_miniapp", appID, id).Count(&duplicate).Error; err != nil {
+			return err
+		}
+		if duplicate > 0 {
+			return errors.New("该微信小程序 AppID 已被配置")
+		}
+		result := tx.Model(&model.ChannelAccount{}).Where("id = ? AND tenant_id = ? AND type = ?", id, tenantID, "wechat_miniapp").Updates(map[string]interface{}{
+			"app_id": appID, "secret_ciphertext": secretCiphertext,
+			"sign_algorithm": "access-token", "key_version": gorm.Expr("key_version + 1"),
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
 }
 
 func (s *ChannelService) ConfigureXiaohongshu(tenantID, id uint, appID, appSecret string) error {
@@ -242,6 +344,9 @@ func (s *ChannelService) configureXiaohongshu(tenantID, id uint, appID, appSecre
 		return err
 	}
 	return model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveChannelAccountCapability(tx, tenantID, "xiaohongshu"); err != nil {
+			return err
+		}
 		var duplicate int64
 		if err := tx.Model(&model.ChannelAccount{}).Where("type = ? AND app_id = ? AND id != ?", "xiaohongshu", appID, id).Count(&duplicate).Error; err != nil {
 			return err
@@ -323,6 +428,9 @@ func (s *ChannelService) ConfigureCtrip(tenantID, id uint, accountID, signKey, a
 		return err
 	}
 	return model.Write(func(tx *gorm.DB) error {
+		if err := requireActiveChannelAccountCapability(tx, tenantID, "ctrip"); err != nil {
+			return err
+		}
 		var duplicate int64
 		if err := tx.Model(&model.ChannelAccount{}).Where("type = ? AND app_id = ? AND id != ?", "ctrip", accountID, id).Count(&duplicate).Error; err != nil {
 			return err
@@ -349,6 +457,17 @@ func (s *ChannelService) SetStatus(tenantID, id uint, status string) error {
 		return errors.New("invalid channel status")
 	}
 	return model.Write(func(tx *gorm.DB) error {
+		var account model.ChannelAccount
+		if err := tx.Select("id", "type").Where("id = ? AND tenant_id = ?", id, tenantID).First(&account).Error; err != nil {
+			return err
+		}
+		if status == "disabled" {
+			if err := requireConfiguredChannelAccountCapability(tx, tenantID, account.Type); err != nil {
+				return err
+			}
+		} else if err := requireActiveChannelAccountCapability(tx, tenantID, account.Type); err != nil {
+			return err
+		}
 		updates := map[string]interface{}{"status": status}
 		if status == "active" || status == "sandbox" {
 			updates["environment"] = channelEnvironment(status)
@@ -367,6 +486,9 @@ func (s *ChannelService) SetStatus(tenantID, id uint, status string) error {
 func (s *ChannelService) RotateSecret(tenantID, id uint) (string, error) {
 	var account model.ChannelAccount
 	if err := model.DB.Select("id", "type").Where("id = ? AND tenant_id = ?", id, tenantID).First(&account).Error; err != nil {
+		return "", err
+	}
+	if err := requireConfiguredChannelAccountCapability(model.DB, tenantID, account.Type); err != nil {
 		return "", err
 	}
 	if account.Type == "ctrip" || account.Type == "xiaohongshu" {
@@ -399,6 +521,9 @@ func (s *ChannelService) AddMapping(tenantID uint, mapping *model.ChannelProduct
 		var account model.ChannelAccount
 		if err := tx.Where("id = ? AND tenant_id = ? AND status != ?", mapping.ChannelAccountID, tenantID, "disabled").First(&account).Error; err != nil {
 			return errors.New("channel account not found")
+		}
+		if account.Type == "wechat_miniapp" {
+			return errors.New("微信商业渠道不使用景区票务商品映射，请在商业工作台配置发布绑定")
 		}
 		var product model.Product
 		if err := tx.Where("id = ? AND tenant_id = ?", mapping.ProductID, tenantID).First(&product).Error; err != nil {
@@ -440,6 +565,9 @@ func (s *ChannelService) UpdateMapping(tenantID, accountID, mappingID uint, inpu
 		var account model.ChannelAccount
 		if err := tx.Select("id", "tenant_id", "type").Where("id = ? AND tenant_id = ?", accountID, tenantID).First(&account).Error; err != nil {
 			return errors.New("channel account not found")
+		}
+		if account.Type == "wechat_miniapp" {
+			return errors.New("微信商业渠道不使用景区票务商品映射，请在商业工作台配置发布绑定")
 		}
 		if (account.Type == "ctrip" || account.Type == "xiaohongshu") && input.ChannelSaleCents <= 0 {
 			return errors.New("official channel mapping requires a positive sale price")
@@ -484,9 +612,16 @@ func (s *ChannelService) UpdateMapping(tenantID, accountID, mappingID uint, inpu
 
 func (s *ChannelService) ListMappings(tenantID, accountID uint) ([]model.ChannelProductMapping, error) {
 	var rows []model.ChannelProductMapping
+	if accountID > 0 {
+		if _, err := requireTicketChannelAccount(model.DB, tenantID, accountID); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
 	query := model.DB.Table("channel_product_mappings").Joins("JOIN channel_accounts ON channel_accounts.id = channel_product_mappings.channel_account_id").Where("channel_accounts.tenant_id = ?", tenantID)
 	if accountID > 0 {
 		query = query.Where("channel_product_mappings.channel_account_id = ?", accountID)
+	} else {
+		query = query.Where("channel_accounts.type <> ?", "wechat_miniapp")
 	}
 	return rows, query.Order("channel_product_mappings.created_at DESC").Find(&rows).Error
 }
@@ -536,10 +671,13 @@ func (s *ChannelService) GetByCode(code string) (*model.ChannelAccount, string, 
 	if err := query.First(&account).Error; err != nil {
 		return nil, "", err
 	}
+	if account.Type == "wechat_miniapp" {
+		return nil, "", errors.New("微信商业渠道不支持景区票务渠道接口")
+	}
 	if account.Status == "disabled" {
 		return nil, "", errors.New("channel is disabled")
 	}
-	if err := requireAnyActiveTenantCapability(model.DB, account.TenantID, "supplier", "distributor"); err != nil {
+	if err := requireActiveChannelAccountCapability(model.DB, account.TenantID, account.Type); err != nil {
 		return nil, "", errors.New("channel tenant is unavailable")
 	}
 	secret, err := utils.DecryptAES(account.SecretCiphertext)
@@ -553,6 +691,11 @@ func (s *ChannelService) ListRequests(tenantID, accountID uint, status string, p
 	if tenantID == 0 {
 		return nil, 0, errors.New("tenant is required")
 	}
+	if accountID > 0 {
+		if _, err := requireTicketChannelAccount(model.DB, tenantID, accountID); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, 0, err
+		}
+	}
 	if page < 1 {
 		page = 1
 	}
@@ -561,7 +704,7 @@ func (s *ChannelService) ListRequests(tenantID, accountID uint, status string, p
 	}
 	query := model.DB.Model(&model.ChannelRequest{}).
 		Joins("JOIN channel_accounts ON channel_accounts.id = channel_requests.channel_account_id").
-		Where("channel_accounts.tenant_id = ?", tenantID)
+		Where("channel_accounts.tenant_id = ? AND channel_accounts.type <> ?", tenantID, "wechat_miniapp")
 	if accountID > 0 {
 		query = query.Where("channel_requests.channel_account_id = ?", accountID)
 	}
@@ -582,6 +725,9 @@ func (s *ChannelService) ListRequests(tenantID, accountID uint, status string, p
 func (s *ChannelService) ListOrders(tenantID, accountID uint, search, status string, page, pageSize int) ([]ChannelOrderSummary, int64, error) {
 	if tenantID == 0 || accountID == 0 {
 		return nil, 0, errors.New("tenant and channel are required")
+	}
+	if _, err := requireTicketChannelAccount(model.DB, tenantID, accountID); err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, 0, err
 	}
 	if page < 1 {
 		page = 1
@@ -622,6 +768,9 @@ func (s *ChannelService) GetOrder(tenantID, accountID uint, orderNo string) (*Ch
 	if tenantID == 0 || accountID == 0 || strings.TrimSpace(orderNo) == "" {
 		return nil, errors.New("tenant, channel and order are required")
 	}
+	if _, err := requireTicketChannelAccount(model.DB, tenantID, accountID); err != nil {
+		return nil, err
+	}
 	var order model.Order
 	if err := model.DB.
 		Preload("Items.Tickets").Preload("Items.VisitorRecords").
@@ -657,9 +806,12 @@ func (s *ChannelService) AuthorizeRequestRetry(tenantID, accountID, requestID, a
 		return errors.New("channel request and retry reason are required")
 	}
 	return model.Write(func(tx *gorm.DB) error {
-		var account model.ChannelAccount
-		if err := tx.Where("id = ? AND tenant_id = ?", accountID, tenantID).First(&account).Error; err != nil {
-			return errors.New("channel account not found")
+		account, err := requireTicketChannelAccount(tx, tenantID, accountID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errors.New("channel account not found")
+			}
+			return err
 		}
 		var request model.ChannelRequest
 		if err := tx.Where("id = ? AND channel_account_id = ?", requestID, account.ID).First(&request).Error; err != nil {

@@ -66,7 +66,7 @@ const router = createRouter({
             path: '/channels',
             name: 'channels',
             component: () => import('../views/ChannelView.vue'),
-            meta: { scope: 'tenant', permission: 'channels.read', capabilities: ['supplier', 'distributor'], supplierBusinessType: 'scenic', supplierBusinessTypeAllowSuspended: true, supplierBusinessTypeAlternativeCapabilities: ['distributor'], title: '渠道连接' }
+            meta: { scope: 'tenant', permission: 'channels.read', channelCenter: true, title: '渠道中心' }
         },
         {
             path: '/teams',
@@ -222,7 +222,7 @@ const router = createRouter({
             path: '/payment-config',
             name: 'payment-config',
             component: () => import('../views/PaymentConfigView.vue'),
-            meta: { scope: 'tenant', permission: 'payment_config.manage', capabilities: ['supplier', 'distributor'], supplierBusinessType: 'scenic', supplierBusinessTypeAlternativeCapabilities: ['distributor'], title: '支付参数配置' }
+            meta: { scope: 'tenant', permission: 'payment_config.manage', paymentConfigAccess: true, title: '支付参数配置' }
         },
         {
             path: '/gate-simulator',
@@ -262,10 +262,13 @@ router.beforeEach(async (to, _from, next) => {
         const businessCapability = to.meta.businessCapability as string | undefined
         const businessCapabilities = to.meta.businessCapabilities as string[] | undefined
         const businessCapabilityAllowSuspended = Boolean(to.meta.businessCapabilityAllowSuspended)
+        const paymentConfigAccess = Boolean(to.meta.paymentConfigAccess)
+        const channelCenter = Boolean(to.meta.channelCenter)
         const permission = to.meta.permission as string | undefined
         const permissions = to.meta.permissions as string[] | undefined
         const activeCapabilities = activeCapabilitySet(user)
         const configuredCapabilities = configuredCapabilitySet(user)
+        const activeBusinessCapabilities = activeBusinessCapabilitySet(user)
         const activeSupplierBusinessTypes = activeSupplierBusinessTypeSet(user)
         const configuredSupplierBusinessTypes = configuredSupplierBusinessTypeSet(user)
         const platformOnTenantRoute = user.scope === 'platform' && !requiredScope && to.name !== 'home'
@@ -274,11 +277,17 @@ router.beforeEach(async (to, _from, next) => {
         const allowedCapabilities = capabilityAllowSuspended ? configuredCapabilities : activeCapabilities
         const requestedBusinessCapability = businessCapability || (typeof to.params.businessType === 'string' ? to.params.businessType : undefined)
         const requiredBusinessCapabilities = requestedBusinessCapability ? [requestedBusinessCapability] : businessCapabilities
-        const allowedBusinessCapabilities = businessCapabilityAllowSuspended ? configuredBusinessCapabilitySet(user) : activeBusinessCapabilitySet(user)
+        const allowedBusinessCapabilities = businessCapabilityAllowSuspended ? configuredBusinessCapabilitySet(user) : activeBusinessCapabilities
         const missingBusinessCapability = Boolean(requiredBusinessCapabilities?.length) && !requiredBusinessCapabilities?.some(value => allowedBusinessCapabilities.has(value))
+        const configuredBusinessCapabilities = configuredBusinessCapabilitySet(user)
+        const missingPaymentConfigAccess = paymentConfigAccess && !(
+            activeCapabilities.has('supplier') || activeCapabilities.has('distributor') || activeBusinessCapabilities.has('restaurant') || activeBusinessCapabilities.has('retail')
+        )
+        const hasChannelCenterAccess = configuredCapabilities.has('supplier') || configuredCapabilities.has('distributor') || configuredBusinessCapabilities.has('restaurant') || configuredBusinessCapabilities.has('retail')
+        const missingChannelCenter = channelCenter && !hasChannelCenterAccess
         const missingPermission = permission && !hasPermission(user, permission)
         const missingAnyPermission = permissions && !permissions.some(value => hasPermission(user, value))
-        if (platformOnTenantRoute || (requiredScope && user.scope !== requiredScope) || (roles && !roles.includes(user.role)) || missingPermission || missingAnyPermission || (capability && !allowedCapabilities.has(capability)) || (capabilities && !capabilities.some(value => activeCapabilities.has(value))) || missingSupplierBusinessType || missingBusinessCapability) {
+        if (platformOnTenantRoute || (requiredScope && user.scope !== requiredScope) || (roles && !roles.includes(user.role)) || missingPermission || missingAnyPermission || missingPaymentConfigAccess || (capability && !allowedCapabilities.has(capability)) || (capabilities && !capabilities.some(value => activeCapabilities.has(value))) || missingSupplierBusinessType || missingBusinessCapability || missingChannelCenter) {
             next({ name: 'home' })
             return
         }

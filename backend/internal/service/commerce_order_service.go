@@ -693,7 +693,16 @@ func markCommercePaymentTaskTx(tx *gorm.DB, order *model.CommerceOrder, status, 
 	}
 	if outcome != nil {
 		if reference := strings.TrimSpace(outcome.ProviderReference); reference != "" {
-			updates["payment_reference"] = reference
+			// PaymentReference is the merchant out_trade_no. The provider's
+			// transaction id is a separate fact and must not overwrite it.
+			if strings.TrimSpace(task.PaymentReference) == "" {
+				// Preserve compatibility for pre-attempt rows created by the
+				// original reconciliation model; new attempts always have an
+				// out_trade_no in PaymentReference.
+				updates["payment_reference"] = reference
+			} else {
+				updates["provider_reference"] = reference
+			}
 		}
 		if outcome.ProviderPaidAt != nil {
 			updates["provider_paid_at"] = outcome.ProviderPaidAt
@@ -872,12 +881,27 @@ func normalizeCommercePaymentOutcome(outcome CommercePaymentOutcome) (CommercePa
 	return outcome, normalized, nil
 }
 
-func validateCommercePaymentIdentity(order *model.CommerceOrder, outcome CommercePaymentOutcome) error {
+func validateCommercePaymentIdentity(tx *gorm.DB, order *model.CommerceOrder, outcome CommercePaymentOutcome) error {
 	if order == nil {
 		return ErrCommerceOrderInvalid
 	}
-	if order.PaymentReference != "" && outcome.ProviderReference != "" && order.PaymentReference != outcome.ProviderReference {
-		return fmt.Errorf("%w: provider reference does not match the payment attempt", ErrCommercePaymentInvalid)
+	if tx == nil {
+		tx = model.DB
+	}
+	if outcome.ProviderReference != "" {
+		var attempt model.CommercePaymentAttempt
+		lookup := tx.Where("tenant_id = ? AND order_id = ?", order.TenantID, order.ID).Order("id DESC").First(&attempt).Error
+		if lookup == nil {
+			if attempt.ProviderReference != "" && attempt.ProviderReference != outcome.ProviderReference {
+				return fmt.Errorf("%w: provider reference does not match the payment attempt", ErrCommercePaymentInvalid)
+			}
+		} else if !errors.Is(lookup, gorm.ErrRecordNotFound) {
+			return lookup
+		} else if order.PaymentReference != "" && order.PaymentReference != outcome.ProviderReference {
+			// Compatibility path for orders created before the commercial
+			// payment-attempt table existed.
+			return fmt.Errorf("%w: provider reference does not match the payment attempt", ErrCommercePaymentInvalid)
+		}
 	}
 	if outcome.ProviderAmountCents != 0 && outcome.ProviderAmountCents != order.TotalAmountCents {
 		return fmt.Errorf("%w: provider amount does not match the order amount", ErrCommercePaymentInvalid)
@@ -912,7 +936,7 @@ func (s *CommerceOrderService) ApplyPaymentOutcome(tenantID, orderID uint, raw C
 		if err := RequireConfiguredTenantBusinessCapability(tx, tenantID, order.BusinessType); err != nil {
 			return err
 		}
-		if err := validateCommercePaymentIdentity(&order, outcome); err != nil {
+		if err := validateCommercePaymentIdentity(tx, &order, outcome); err != nil {
 			return err
 		}
 		if order.PaymentStatus == "paid" || order.PaymentStatus == "refunded" {

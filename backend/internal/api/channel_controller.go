@@ -45,6 +45,19 @@ func (c *ChannelController) Create(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if body.Type == "wechat_miniapp" {
+		if err := c.Service.CreateWechatMiniapp(ctx.GetUint("tenant_id"), &body.ChannelAccount, body.AppID, body.Secret); err != nil {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		body.ProtocolConfigured = true
+		body.Secret = ""
+		body.SecretCiphertext = ""
+		body.VerifyKeyCiphertext = ""
+		body.ProtocolConfigCiphertext = ""
+		ctx.JSON(http.StatusCreated, body.ChannelAccount)
+		return
+	}
 	if body.Type == "ctrip" {
 		if err := c.Service.CreateCtrip(ctx.GetUint("tenant_id"), &body.ChannelAccount, body.AppID, body.Secret, body.AESKey, body.AESIV); err != nil {
 			ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -155,6 +168,27 @@ func (c *ChannelController) ConfigureXiaohongshu(ctx *gin.Context) {
 		return
 	}
 	if err := c.Service.ConfigureXiaohongshuIntegration(ctx.GetUint("tenant_id"), uint(id), body.AppID, body.AppSecret, body.MessageToken, body.EncodingAESKey); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"configured": true})
+}
+
+func (c *ChannelController) ConfigureWechatMiniapp(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	var body struct {
+		AppID     string `json:"app_id" binding:"required"`
+		AppSecret string `json:"app_secret" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := c.Service.ConfigureWechatMiniapp(ctx.GetUint("tenant_id"), uint(id), body.AppID, body.AppSecret); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -545,6 +579,9 @@ func (c *ChannelController) ListRequests(ctx *gin.Context) {
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
 	rows, total, err := c.Service.ListRequests(ctx.GetUint("tenant_id"), uint(accountID), ctx.Query("status"), page, pageSize)
 	if err != nil {
+		if channelTicketBoundaryError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -561,6 +598,9 @@ func (c *ChannelController) ListOrders(ctx *gin.Context) {
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
 	rows, total, err := c.Service.ListOrders(ctx.GetUint("tenant_id"), uint(accountID), ctx.Query("search"), ctx.Query("status"), page, pageSize)
 	if err != nil {
+		if channelTicketBoundaryError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -575,6 +615,9 @@ func (c *ChannelController) GetOrder(ctx *gin.Context) {
 	}
 	row, err := c.Service.GetOrder(ctx.GetUint("tenant_id"), uint(accountID), ctx.Param("orderNo"))
 	if err != nil {
+		if channelTicketBoundaryError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusNotFound, gin.H{"error": "channel order not found"})
 		return
 	}
@@ -596,6 +639,9 @@ func (c *ChannelController) AuthorizeRequestRetry(ctx *gin.Context) {
 		return
 	}
 	if err := c.Service.AuthorizeRequestRetry(ctx.GetUint("tenant_id"), uint(accountID), uint(requestID), ctx.GetUint("user_id"), ctx.GetString("role"), body.Reason); err != nil {
+		if channelTicketBoundaryError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
@@ -618,6 +664,9 @@ func (c *ChannelController) ImportBill(ctx *gin.Context) {
 	}
 	report, err := c.Service.ImportBill(ctx.GetUint("tenant_id"), uint(id), body.IdempotencyKey, body.Records)
 	if err != nil {
+		if channelTicketBoundaryError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return
 	}
@@ -634,6 +683,9 @@ func (c *ChannelController) ListReconciliations(ctx *gin.Context) {
 	pageSize, _ := strconv.Atoi(ctx.DefaultQuery("page_size", "20"))
 	rows, total, err := c.Service.ListReconciliations(ctx.GetUint("tenant_id"), uint(id), page, pageSize)
 	if err != nil {
+		if channelTicketBoundaryError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -649,6 +701,9 @@ func (c *ChannelController) GetReconciliation(ctx *gin.Context) {
 	}
 	row, err := c.Service.GetReconciliation(ctx.GetUint("tenant_id"), uint(accountID), uint(reconciliationID))
 	if err != nil {
+		if channelTicketBoundaryError(ctx, err) {
+			return
+		}
 		ctx.JSON(http.StatusNotFound, gin.H{"error": "channel reconciliation not found"})
 		return
 	}
@@ -738,4 +793,12 @@ func (c *ChannelController) Release(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, gin.H{"status": "released"})
+}
+
+func channelTicketBoundaryError(ctx *gin.Context, err error) bool {
+	if !errors.Is(err, service.ErrCommercialChannelTicketBoundary) {
+		return false
+	}
+	ctx.JSON(http.StatusForbidden, gin.H{"error": "商业微信渠道不提供景区票务订单、请求日志或对账接口"})
+	return true
 }
