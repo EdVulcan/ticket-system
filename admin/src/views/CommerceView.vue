@@ -4,23 +4,28 @@
       <div class="page-heading-copy">
         <div class="section-kicker">商业经营</div>
         <h1>{{ currentDomainLabel }}工作台</h1>
-        <p>独立管理商品、库存与履约地点，不影响景区票务产品。</p>
+        <p>{{ domainIntro }}</p>
       </div>
       <div class="page-actions">
         <el-tag :type="isCurrentDomainActive ? 'success' : 'warning'" effect="plain">
           {{ capabilityStatusLabel }}
         </el-tag>
         <el-button :icon="Refresh" :loading="loading" @click="refreshWorkspace">刷新</el-button>
-        <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openProductDialog()">新增商品</el-button>
+        <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openProductDialog()">新增{{ productNoun }}</el-button>
       </div>
     </header>
 
-    <div v-if="configuredDomains.length > 1" class="domain-switcher" aria-label="商业能力">
-      <el-radio-group :model-value="currentDomain" @change="switchDomain">
-        <el-radio-button v-for="domain in configuredDomains" :key="domain" :label="domain">
-          {{ businessTypeLabel(domain) }}
-        </el-radio-button>
-      </el-radio-group>
+    <div v-if="isCurrentDomainConfigured" class="workflow-strip" :class="`workflow-${currentDomain}`">
+      <div class="workflow-copy">
+        <span class="workflow-kicker">{{ currentDomainLabel }}履约流程</span>
+        <strong>{{ workflowTitle }}</strong>
+      </div>
+      <div class="workflow-steps">
+        <template v-for="(step, index) in workflowSteps" :key="step">
+          <span class="workflow-step"><b>{{ index + 1 }}</b>{{ step }}</span>
+          <span v-if="index < workflowSteps.length - 1" class="workflow-arrow" aria-hidden="true">›</span>
+        </template>
+      </div>
     </div>
 
     <el-alert
@@ -41,14 +46,14 @@
 
     <div v-if="isCurrentDomainConfigured" class="commerce-workspace">
       <el-tabs v-model="activeTab" class="workspace-tabs" @tab-change="handleTabChange">
-        <el-tab-pane label="商品与 SKU" name="products">
+        <el-tab-pane :label="productTabLabel" name="products">
           <section class="workspace-section">
             <div class="section-toolbar">
               <div>
-                <h2>商品目录</h2>
-                <p class="muted">{{ products.length }} 个{{ currentDomainLabel }}商品</p>
+                <h2>{{ productCatalogLabel }}</h2>
+                <p class="muted">{{ products.length }} 个{{ productNoun }}</p>
               </div>
-              <el-button v-if="canWrite" type="primary" plain :icon="Plus" @click="openProductDialog()">新增商品</el-button>
+              <el-button v-if="canWrite" type="primary" plain :icon="Plus" @click="openProductDialog()">新增{{ productNoun }}</el-button>
             </div>
 
             <div class="filter-toolbar commerce-filter-bar">
@@ -56,7 +61,7 @@
                 v-model="productSearch"
                 class="commerce-search"
                 clearable
-                placeholder="搜索商品名称或副标题"
+                :placeholder="productSearchPlaceholder"
                 :prefix-icon="Search"
                 @keyup.enter="loadProducts"
                 @clear="loadProducts"
@@ -71,7 +76,7 @@
             </div>
 
             <el-table v-loading="loading" :data="products" class="commerce-table" border stripe>
-              <el-table-column label="商品" min-width="240">
+              <el-table-column :label="productNoun" min-width="240">
                 <template #default="{ row }">
                   <div class="primary-cell">{{ row.name }}</div>
                   <div v-if="row.short_title" class="secondary-cell">{{ row.short_title }}</div>
@@ -80,9 +85,9 @@
               <el-table-column prop="category_name" label="分类" min-width="120">
                 <template #default="{ row }">{{ row.category_name || '未分类' }}</template>
               </el-table-column>
-              <el-table-column label="SKU" min-width="210">
+              <el-table-column :label="skuColumnLabel" min-width="210">
                 <template #default="{ row }">
-                  <div>{{ (row.skus || []).length }} 个 SKU</div>
+                  <div>{{ (row.skus || []).length }} {{ skuCountNoun }}</div>
                   <div class="secondary-cell">{{ priceSummary(row) }}</div>
                 </template>
               </el-table-column>
@@ -93,25 +98,25 @@
               </el-table-column>
               <el-table-column label="操作" width="250" fixed="right" align="right">
                 <template #default="{ row }">
-                  <el-button link type="primary" @click="openProductDetail(row)">管理 SKU / 规格</el-button>
+                  <el-button link type="primary" @click="openProductDetail(row)">{{ detailActionLabel }}</el-button>
                   <el-button v-if="canWrite" link :type="row.status === 'online' ? 'danger' : 'success'" @click="toggleProductStatus(row)">
                     {{ row.status === 'online' ? '下架' : '上架' }}
                   </el-button>
                 </template>
               </el-table-column>
-              <template #empty><el-empty description="暂无商品" :image-size="72" /></template>
+              <template #empty><el-empty :description="`暂无${productNoun}`" :image-size="72" /></template>
             </el-table>
           </section>
         </el-tab-pane>
 
-        <el-tab-pane label="履约地点" name="locations">
+        <el-tab-pane :label="locationTabLabel" name="locations">
           <section class="workspace-section">
             <div class="section-toolbar">
               <div>
-                <h2>履约地点</h2>
-                <p class="muted">{{ locations.length }} 个{{ currentDomainLabel }}地点</p>
+                <h2>{{ locationTabLabel }}</h2>
+                <p class="muted">{{ locations.length }} 个{{ locationNoun }}</p>
               </div>
-              <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openLocationDialog()">新增地点</el-button>
+              <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openLocationDialog()">新增{{ locationNoun }}</el-button>
             </div>
             <el-table v-loading="loading" :data="locations" class="commerce-table" border>
               <el-table-column prop="name" label="名称" min-width="240" />
@@ -131,7 +136,7 @@
                   <span v-else class="secondary-cell">只读</span>
                 </template>
               </el-table-column>
-              <template #empty><el-empty description="暂无履约地点" :image-size="72" /></template>
+              <template #empty><el-empty :description="`暂无${locationNoun}`" :image-size="72" /></template>
             </el-table>
           </section>
         </el-tab-pane>
@@ -141,18 +146,18 @@
             <div class="section-toolbar">
               <div>
                 <h2>库存台账</h2>
-                <p class="muted">按 SKU 与履约地点查看库存事实</p>
+                <p class="muted">{{ inventoryDescription }}</p>
               </div>
               <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openInventoryDialog()">设置库存</el-button>
             </div>
             <el-table v-loading="loading" :data="inventoryRows" class="commerce-table" border>
-              <el-table-column label="SKU" min-width="250">
+              <el-table-column :label="skuColumnLabel" min-width="250">
                 <template #default="{ row }">
                   <div class="primary-cell">{{ skuDisplayName(row.sku_id) }}</div>
                   <div class="secondary-cell">{{ skuDisplayCode(row.sku_id) }}</div>
                 </template>
               </el-table-column>
-              <el-table-column label="履约地点" min-width="180">
+              <el-table-column :label="locationNoun" min-width="180">
                 <template #default="{ row }">{{ locationDisplayName(row.location_id) }}</template>
               </el-table-column>
               <el-table-column prop="available_qty" label="可用" width="100" align="right" />
@@ -172,12 +177,12 @@
           </section>
         </el-tab-pane>
 
-        <el-tab-pane v-if="canOrdersRead" label="订单" name="orders">
+        <el-tab-pane v-if="canOrdersRead" :label="orderTabLabel" name="orders">
           <section class="workspace-section">
             <div class="section-toolbar">
               <div>
                 <h2>订单管理</h2>
-                <p class="muted">查看{{ currentDomainLabel }}订单，处理售后与履约状态</p>
+                <p class="muted">{{ orderDescription }}</p>
               </div>
               <el-button :icon="Refresh" :loading="orderLoading" @click="loadOrders">刷新</el-button>
             </div>
@@ -212,7 +217,7 @@
                   <div class="secondary-cell">{{ formatDate(row.created_at) }}</div>
                 </template>
               </el-table-column>
-              <el-table-column label="商品" min-width="240">
+              <el-table-column :label="productNoun" min-width="240">
                 <template #default="{ row }">
                   <div v-for="item in row.items || []" :key="item.id" class="order-item-line">
                     <span>{{ item.product_name }}</span><span class="secondary-cell">× {{ item.quantity }}</span>
@@ -231,10 +236,10 @@
                   <el-button link type="primary" @click="openOrderDetail(row)">详情</el-button>
                   <el-button v-if="canRequestRefund(row)" link type="warning" :loading="orderActionID === row.id" @click="requestOrderRefund(row)">申请退款</el-button>
                   <el-tag v-if="orderRefundRequest(row)" type="warning" effect="plain">等待支付渠道确认</el-tag>
-                  <el-button v-if="canAdvanceFulfillment(row)" link type="primary" :loading="orderActionID === row.id" @click="advanceFulfillment(row)">推进履约</el-button>
+                  <el-button v-if="canAdvanceFulfillment(row)" link type="primary" :loading="orderActionID === row.id" @click="advanceFulfillment(row)">{{ advanceFulfillmentLabel(row) }}</el-button>
                 </template>
               </el-table-column>
-              <template #empty><el-empty description="暂无商业订单" :image-size="72" /></template>
+              <template #empty><el-empty :description="`暂无${productNoun}订单`" :image-size="72" /></template>
             </el-table>
           </section>
         </el-tab-pane>
@@ -244,7 +249,7 @@
             <div class="section-toolbar">
               <div>
                 <h2>小程序发布配置</h2>
-                <p class="muted">将当前{{ currentDomainLabel }}业务绑定到一个已配置的微信小程序账号和履约地点。</p>
+                <p class="muted">将当前{{ currentDomainLabel }}业务绑定到一个已配置的微信小程序账号和{{ locationNoun }}。</p>
               </div>
               <div class="section-actions">
                 <el-button :icon="Refresh" :loading="storefrontLoading" @click="loadStorefrontData">刷新</el-button>
@@ -254,7 +259,7 @@
             <el-alert
               type="info"
               :closable="false"
-              title="AppSecret 等密钥由渠道账号维护，此处只选择账号和履约地点。停用配置会阻止新用户进入交易，不会删除历史订单。"
+              :title="storefrontHelpText"
               class="capability-alert"
             />
             <el-table v-loading="storefrontLoading" :data="currentStorefrontBindings" class="commerce-table" border stripe>
@@ -270,7 +275,7 @@
               <el-table-column label="凭据" width="110" align="center">
                 <template #default="{ row }"><el-tag :type="row.credentials_ready ? 'success' : 'warning'" effect="plain">{{ row.credentials_ready ? '已配置' : '待配置' }}</el-tag></template>
               </el-table-column>
-              <el-table-column label="履约地点" min-width="170">
+              <el-table-column :label="locationNoun" min-width="170">
                 <template #default="{ row }">{{ row.location_name }}</template>
               </el-table-column>
               <el-table-column label="状态" width="100" align="center">
@@ -290,7 +295,7 @@
 
     <el-dialog
       v-model="productDialogVisible"
-      :title="`新增${currentDomainLabel}商品`"
+      :title="`新增${productNoun}`"
       width="min(900px, calc(100vw - 32px))"
       top="5vh"
       :close-on-click-modal="false"
@@ -298,14 +303,14 @@
     >
       <el-form :model="productForm" label-position="top" class="commerce-form">
         <div class="form-grid">
-          <el-form-item label="商品名称" required>
-            <el-input v-model="productForm.name" maxlength="160" placeholder="请输入商品名称" />
+          <el-form-item :label="`${productNoun}名称`" required>
+            <el-input v-model="productForm.name" maxlength="160" :placeholder="`请输入${productNoun}名称`" />
           </el-form-item>
-          <el-form-item label="分类">
-            <el-input v-model="productForm.category_name" maxlength="80" placeholder="例如：套餐、饮品、日用品" />
+          <el-form-item :label="categoryLabel">
+            <el-input v-model="productForm.category_name" maxlength="80" :placeholder="categoryPlaceholder" />
           </el-form-item>
-          <el-form-item label="副标题">
-            <el-input v-model="productForm.short_title" maxlength="80" placeholder="可选" />
+          <el-form-item :label="shortTitleLabel">
+            <el-input v-model="productForm.short_title" maxlength="80" :placeholder="shortTitlePlaceholder" />
           </el-form-item>
           <el-form-item label="初始状态">
             <el-select v-model="productForm.status" class="full-width">
@@ -315,18 +320,18 @@
             </el-select>
           </el-form-item>
         </div>
-        <el-form-item label="商品描述">
-          <el-input v-model="productForm.description" type="textarea" :rows="3" maxlength="2000" show-word-limit placeholder="可选" />
+        <el-form-item :label="`${productNoun}介绍`">
+          <el-input v-model="productForm.description" type="textarea" :rows="3" maxlength="2000" :placeholder="productDescriptionPlaceholder" />
         </el-form-item>
 
         <div class="form-section-heading">
-          <div><strong>初始 SKU</strong><span>至少添加一个 SKU</span></div>
-          <el-button plain type="primary" :icon="Plus" @click="addProductSku">新增 SKU</el-button>
+          <div><strong>{{ initialSkuLabel }}</strong><span>{{ initialSkuHint }}</span></div>
+          <el-button plain type="primary" :icon="Plus" @click="addProductSku">{{ addSkuLabel }}</el-button>
         </div>
         <div class="sku-form-list">
           <div v-for="(sku, index) in productForm.skus" :key="sku.key" class="sku-form-row">
-            <el-input v-model="sku.sku_code" class="sku-code-input" maxlength="80" placeholder="SKU 编码" />
-            <el-input v-model="sku.name" class="sku-name-input" maxlength="160" placeholder="SKU 名称" />
+            <el-input v-model="sku.sku_code" class="sku-code-input" maxlength="80" :placeholder="skuCodePlaceholder" />
+            <el-input v-model="sku.name" class="sku-name-input" maxlength="160" :placeholder="skuNamePlaceholder" />
             <el-input-number v-model="sku.original_price" class="sku-price-input" :min="0" :precision="2" :controls="false" placeholder="原价" />
             <el-input-number v-model="sku.price" class="sku-price-input" :min="0" :precision="2" :controls="false" placeholder="售价" />
             <el-button
@@ -343,11 +348,11 @@
       </el-form>
       <template #footer>
         <el-button @click="productDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveProduct">保存商品</el-button>
+        <el-button type="primary" :loading="saving" @click="saveProduct">保存{{ productNoun }}</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="productDetailVisible" title="商品详情" width="min(980px, calc(100vw - 32px))" top="4vh" destroy-on-close>
+    <el-dialog v-model="productDetailVisible" :title="`${productNoun}详情`" width="min(980px, calc(100vw - 32px))" top="4vh" destroy-on-close>
       <div v-if="detailProduct" v-loading="detailLoading" class="detail-workspace">
         <div class="detail-header">
           <div>
@@ -359,8 +364,8 @@
 
         <section class="detail-section">
           <div class="detail-section-heading">
-            <div><h3>SKU</h3><span>{{ (detailProduct.skus || []).length }} 个</span></div>
-            <el-button v-if="canWrite" plain type="primary" :icon="Plus" @click="openSkuDialog()">新增 SKU</el-button>
+            <div><h3>{{ skuDetailLabel }}</h3><span>{{ (detailProduct.skus || []).length }} 个</span></div>
+            <el-button v-if="canWrite" plain type="primary" :icon="Plus" @click="openSkuDialog()">{{ addSkuLabel }}</el-button>
           </div>
           <el-table :data="detailProduct.skus || []" size="small" border>
             <el-table-column prop="sku_code" label="编码" min-width="150" />
@@ -379,14 +384,14 @@
 
         <section class="detail-section">
           <div class="detail-section-heading">
-            <div><h3>规格组</h3><span>{{ optionGroups.length }} 个</span></div>
-            <el-button v-if="canWrite" plain type="primary" :icon="Plus" @click="openOptionGroupDialog">新增规格组</el-button>
+            <div><h3>{{ optionGroupNoun }}</h3><span>{{ optionGroups.length }} 个</span></div>
+            <el-button v-if="canWrite" plain type="primary" :icon="Plus" @click="openOptionGroupDialog">新增{{ optionGroupNoun }}</el-button>
           </div>
           <div v-if="optionGroups.length" class="option-group-list">
             <div v-for="group in optionGroups" :key="group.id" class="option-group-row">
               <div class="option-group-heading">
                 <div><strong>{{ group.name }}</strong><span>{{ group.required ? '必选' : '可选' }} · {{ group.min_selections }}-{{ group.max_selections }} 项</span></div>
-                <el-button v-if="canWrite" link type="primary" :icon="Plus" @click="openOptionDialog(group)">新增规格</el-button>
+                <el-button v-if="canWrite" link type="primary" :icon="Plus" @click="openOptionDialog(group)">新增{{ optionNoun }}</el-button>
               </div>
               <div v-if="group.options?.length" class="option-list">
                 <div v-for="option in group.options" :key="option.id" class="option-row">
@@ -404,58 +409,58 @@
       <template #footer><el-button @click="productDetailVisible = false">关闭</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="skuDialogVisible" :title="skuForm.id ? '编辑 SKU' : '新增 SKU'" width="min(620px, calc(100vw - 32px))" destroy-on-close>
+    <el-dialog v-model="skuDialogVisible" :title="skuForm.id ? `编辑${skuNoun}` : `新增${skuNoun}`" width="min(620px, calc(100vw - 32px))" destroy-on-close>
       <el-form :model="skuForm" label-position="top" class="commerce-form">
         <div class="form-grid">
-          <el-form-item label="SKU 编码" required><el-input v-model="skuForm.sku_code" maxlength="80" /></el-form-item>
-          <el-form-item label="SKU 名称" required><el-input v-model="skuForm.name" maxlength="160" /></el-form-item>
+          <el-form-item :label="`${skuNoun}编码`" required><el-input v-model="skuForm.sku_code" maxlength="80" /></el-form-item>
+          <el-form-item :label="`${skuNoun}名称`" required><el-input v-model="skuForm.name" maxlength="160" /></el-form-item>
           <el-form-item label="原价" required><el-input-number v-model="skuForm.original_price" class="full-width" :min="0" :precision="2" :controls="false" /></el-form-item>
           <el-form-item label="售价" required><el-input-number v-model="skuForm.price" class="full-width" :min="0" :precision="2" :controls="false" /></el-form-item>
           <el-form-item label="状态"><el-select v-model="skuForm.status" class="full-width"><el-option label="启用" value="active" /><el-option label="停用" value="inactive" /></el-select></el-form-item>
         </div>
-        <el-form-item label="属性 JSON"><el-input v-model="skuForm.attributes" type="textarea" :rows="3" placeholder="可选，例如：{&quot;size&quot;:&quot;大杯&quot;}" /></el-form-item>
+        <el-form-item :label="isRestaurant ? '规格属性 JSON' : 'SKU 属性 JSON'"><el-input v-model="skuForm.attributes" type="textarea" :rows="3" :placeholder="skuAttributesPlaceholder" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="skuDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveSku">保存 SKU</el-button></template>
+      <template #footer><el-button @click="skuDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveSku">保存{{ skuNoun }}</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="optionGroupDialogVisible" title="新增规格组" width="min(520px, calc(100vw - 32px))" destroy-on-close>
+    <el-dialog v-model="optionGroupDialogVisible" :title="`新增${optionGroupNoun}`" width="min(520px, calc(100vw - 32px))" destroy-on-close>
       <el-form :model="optionGroupForm" label-position="top" class="commerce-form">
-        <el-form-item label="规格组名称" required><el-input v-model="optionGroupForm.name" maxlength="80" placeholder="例如：口味、尺寸、颜色" /></el-form-item>
+        <el-form-item :label="`${optionGroupNoun}名称`" required><el-input v-model="optionGroupForm.name" maxlength="80" :placeholder="optionGroupPlaceholder" /></el-form-item>
         <el-form-item label="选择规则">
           <el-checkbox v-model="optionGroupForm.required">必选</el-checkbox>
           <div class="selection-range"><el-input-number v-model="optionGroupForm.min_selections" :min="0" :max="99" :controls="false" /><span>至</span><el-input-number v-model="optionGroupForm.max_selections" :min="0" :max="99" :controls="false" /></div>
         </el-form-item>
       </el-form>
-      <template #footer><el-button @click="optionGroupDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveOptionGroup">保存规格组</el-button></template>
+      <template #footer><el-button @click="optionGroupDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveOptionGroup">保存{{ optionGroupNoun }}</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="optionDialogVisible" title="新增规格" width="min(520px, calc(100vw - 32px))" destroy-on-close>
+    <el-dialog v-model="optionDialogVisible" :title="`新增${optionNoun}`" width="min(520px, calc(100vw - 32px))" destroy-on-close>
       <el-form :model="optionForm" label-position="top" class="commerce-form">
-        <el-form-item label="规格名称" required><el-input v-model="optionForm.name" maxlength="80" placeholder="例如：微辣、加冰、黑色" /></el-form-item>
+        <el-form-item :label="`${optionNoun}名称`" required><el-input v-model="optionForm.name" maxlength="80" :placeholder="optionPlaceholder" /></el-form-item>
         <el-form-item label="价格调整"><el-input-number v-model="optionForm.price_delta" :precision="2" :controls="false" /><span class="form-suffix">元</span></el-form-item>
         <el-form-item label="状态"><el-select v-model="optionForm.status" class="full-width"><el-option label="启用" value="active" /><el-option label="停用" value="inactive" /></el-select></el-form-item>
       </el-form>
-      <template #footer><el-button @click="optionDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveOption">保存规格</el-button></template>
+      <template #footer><el-button @click="optionDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveOption">保存{{ optionNoun }}</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="locationDialogVisible" title="新增履约地点" width="min(520px, calc(100vw - 32px))" destroy-on-close>
+    <el-dialog v-model="locationDialogVisible" :title="`新增${locationNoun}`" width="min(520px, calc(100vw - 32px))" destroy-on-close>
       <el-form :model="locationForm" label-position="top" class="commerce-form">
-        <el-form-item label="地点名称" required><el-input v-model="locationForm.name" maxlength="120" placeholder="例如：景区东门取货点" /></el-form-item>
-        <el-form-item label="地点类型"><el-select v-model="locationForm.location_type" class="full-width"><el-option label="门店" value="store" /><el-option label="仓库" value="warehouse" /><el-option label="自取点" value="pickup" /></el-select></el-form-item>
+        <el-form-item :label="`${locationNoun}名称`" required><el-input v-model="locationForm.name" maxlength="120" :placeholder="locationPlaceholder" /></el-form-item>
+        <el-form-item label="地点类型"><el-select v-model="locationForm.location_type" class="full-width"><el-option v-for="option in locationTypeOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select></el-form-item>
         <el-form-item label="状态"><el-select v-model="locationForm.status" class="full-width"><el-option label="启用" value="active" /><el-option label="停用" value="inactive" /></el-select></el-form-item>
       </el-form>
-      <template #footer><el-button @click="locationDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveLocation">保存地点</el-button></template>
+      <template #footer><el-button @click="locationDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveLocation">保存{{ locationNoun }}</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="inventoryDialogVisible" :title="inventoryForm.id ? '设置库存' : '设置库存'" width="min(560px, calc(100vw - 32px))" destroy-on-close>
       <el-form :model="inventoryForm" label-position="top" class="commerce-form">
-        <el-form-item label="SKU" required>
+        <el-form-item :label="skuNoun" required>
           <el-select v-model="inventoryForm.sku_id" class="full-width" filterable :disabled="Boolean(inventoryForm.id)" placeholder="选择 SKU">
             <el-option v-for="sku in skuOptions" :key="sku.id" :label="`${sku.name} · ${sku.sku_code}`" :value="sku.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="履约地点" required>
-          <el-select v-model="inventoryForm.location_id" class="full-width" filterable :disabled="Boolean(inventoryForm.id)" placeholder="选择履约地点">
+        <el-form-item :label="locationNoun" required>
+          <el-select v-model="inventoryForm.location_id" class="full-width" filterable :disabled="Boolean(inventoryForm.id)" :placeholder="`选择${locationNoun}`">
             <el-option v-for="location in activeLocations" :key="location.id" :label="location.name" :value="location.id" />
           </el-select>
         </el-form-item>
@@ -485,9 +490,9 @@
           <el-descriptions-item label="订单金额">¥{{ money(selectedOrder.total_amount_cents) }}</el-descriptions-item>
           <el-descriptions-item v-if="selectedOrder.shipping_address" label="收货地址" :span="2">{{ selectedOrder.shipping_address }}</el-descriptions-item>
         </el-descriptions>
-        <el-divider content-position="left">商品快照</el-divider>
+        <el-divider content-position="left">{{ productNoun }}快照</el-divider>
         <el-table :data="selectedOrder.items || []" border size="small">
-          <el-table-column prop="product_name" label="商品" min-width="180" />
+          <el-table-column prop="product_name" :label="productNoun" min-width="180" />
           <el-table-column prop="sku_name" label="规格" min-width="150" />
           <el-table-column label="数量" width="80" align="right"><template #default="{ row }">{{ row.quantity }}</template></el-table-column>
           <el-table-column label="单价" width="100" align="right"><template #default="{ row }">¥{{ money(row.unit_price_cents) }}</template></el-table-column>
@@ -525,8 +530,8 @@
           </el-select>
           <div v-if="storefrontChannels.length === 0" class="form-help">当前租户没有可用的微信小程序账号，请先在渠道账号中完成配置。</div>
         </el-form-item>
-        <el-form-item label="履约地点" required>
-          <el-select v-model="storefrontForm.location_id" class="full-width" filterable placeholder="选择接收订单的履约地点">
+        <el-form-item :label="locationNoun" required>
+          <el-select v-model="storefrontForm.location_id" class="full-width" filterable :placeholder="`选择接收订单的${locationNoun}`">
             <el-option v-for="location in activeLocations" :key="location.id" :label="location.name" :value="location.id" />
           </el-select>
         </el-form-item>
@@ -547,7 +552,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Plus, Refresh, Search } from '@element-plus/icons-vue'
 import request from '@/utils/request'
@@ -576,7 +581,6 @@ type ProductSKU = {
 }
 
 const route = useRoute()
-const router = useRouter()
 const user = ref(readStoredUser())
 const loading = ref(false)
 const saving = ref(false)
@@ -651,6 +655,7 @@ const currentDomain = computed<CommerceDomain>(() => {
   if (value === 'retail' || value === 'restaurant') return value
   return configuredDomains.value[0] || 'restaurant'
 })
+const isRestaurant = computed(() => currentDomain.value === 'restaurant')
 const activeDomains = computed(() => activeBusinessCapabilitySet(user.value))
 const isCurrentDomainConfigured = computed(() => configuredDomains.value.includes(currentDomain.value))
 const isCurrentDomainActive = computed(() => activeDomains.value.has(currentDomain.value))
@@ -660,6 +665,55 @@ const canAfterSalesWrite = computed(() => hasPermission(user.value, 'after_sales
 const canOperationsWrite = computed(() => isCurrentDomainActive.value && hasPermission(user.value, 'operations.write'))
 const currentDomainLabel = computed(() => businessTypeLabel(currentDomain.value))
 const capabilityStatusLabel = computed(() => isCurrentDomainActive.value ? '能力正常' : '能力已暂停')
+const domainIntro = computed(() => isRestaurant.value
+  ? '管理菜品、口味规格、门店备餐与配送订单，不影响景区票务产品。'
+  : '管理商品 SKU、仓库库存、发货与物流订单，不影响景区票务产品。')
+const workflowTitle = computed(() => isRestaurant.value
+  ? '从接单到取餐或配送，门店按制作进度推进订单。'
+  : '从备货到收货，按发货与物流节点推进订单。')
+const workflowSteps = computed(() => isRestaurant.value
+  ? ['顾客下单', '门店接单', '制作备餐', '取餐/配送']
+  : ['顾客下单', '仓库备货', '填写物流', '顾客收货'])
+const productNoun = computed(() => isRestaurant.value ? '菜品' : '商品')
+const productTabLabel = computed(() => isRestaurant.value ? '菜品与规格' : '商品与 SKU')
+const productCatalogLabel = computed(() => isRestaurant.value ? '菜品目录' : '商品目录')
+const productSearchPlaceholder = computed(() => isRestaurant.value ? '搜索菜品名称或简称' : '搜索商品名称或副标题')
+const skuNoun = computed(() => isRestaurant.value ? '销售规格' : 'SKU')
+const skuColumnLabel = computed(() => isRestaurant.value ? '规格' : 'SKU')
+const skuCountNoun = computed(() => isRestaurant.value ? '个规格' : '个 SKU')
+const detailActionLabel = computed(() => isRestaurant.value ? '管理规格/选项' : '管理 SKU / 规格')
+const locationNoun = computed(() => isRestaurant.value ? '门店/取餐点' : '仓库/发货点')
+const locationTabLabel = computed(() => isRestaurant.value ? '门店与取餐' : '仓库与发货')
+const locationPlaceholder = computed(() => isRestaurant.value ? '例如：一号门店、北门取餐点' : '例如：主仓库、华南发货点')
+const locationTypeOptions = computed(() => isRestaurant.value
+  ? [{ value: 'store', label: '门店' }, { value: 'pickup', label: '取餐点' }]
+  : [{ value: 'warehouse', label: '仓库' }, { value: 'store', label: '发货点' }])
+const inventoryDescription = computed(() => isRestaurant.value
+  ? '按销售规格与门店查看可用库存，支持备餐点独立调整。'
+  : '按 SKU 与仓库查看可用库存，支持发货前锁定库存。')
+const orderTabLabel = computed(() => isRestaurant.value ? '接单与履约' : '订单与发货')
+const orderDescription = computed(() => isRestaurant.value
+  ? '处理接单、制作、取餐/配送和退款。'
+  : '处理备货、发货、物流跟踪、收货和退款。')
+const storefrontHelpText = computed(() => isRestaurant.value
+  ? 'AppSecret 等密钥由渠道账号维护；这里绑定接收餐饮订单的微信小程序与门店/取餐点。'
+  : 'AppSecret 等密钥由渠道账号维护；这里绑定接收电商订单的微信小程序与仓库/发货点。')
+const categoryLabel = computed(() => isRestaurant.value ? '菜品分类' : '商品分类')
+const categoryPlaceholder = computed(() => isRestaurant.value ? '例如：主食、小吃、饮品' : '例如：日用品、食品、数码')
+const shortTitleLabel = computed(() => isRestaurant.value ? '菜品简称' : '副标题')
+const shortTitlePlaceholder = computed(() => isRestaurant.value ? '用于订单和后厨列表的简短名称' : '用于列表展示的补充说明')
+const productDescriptionPlaceholder = computed(() => isRestaurant.value ? '描述份量、口味或食用提示' : '描述材质、规格、包装或售后提示')
+const initialSkuLabel = computed(() => isRestaurant.value ? '初始销售规格' : '初始 SKU')
+const initialSkuHint = computed(() => isRestaurant.value ? '至少添加一个可售规格，例如大份/小份' : '至少添加一个可售 SKU')
+const addSkuLabel = computed(() => isRestaurant.value ? '新增规格' : '新增 SKU')
+const skuCodePlaceholder = computed(() => isRestaurant.value ? '规格编码' : 'SKU 编码')
+const skuNamePlaceholder = computed(() => isRestaurant.value ? '规格名称，如大份/双人份' : 'SKU 名称，如黑色 M 码')
+const skuDetailLabel = computed(() => isRestaurant.value ? '销售规格' : 'SKU')
+const skuAttributesPlaceholder = computed(() => isRestaurant.value ? '可选，例如：{"份量":"大份","辣度":"微辣"}' : '可选，例如：{"size":"大","color":"黑色"}')
+const optionGroupNoun = computed(() => isRestaurant.value ? '口味/加料组' : '规格组')
+const optionGroupPlaceholder = computed(() => isRestaurant.value ? '例如：口味、辣度、加料' : '例如：尺寸、颜色、包装')
+const optionNoun = computed(() => isRestaurant.value ? '口味/加料' : '规格选项')
+const optionPlaceholder = computed(() => isRestaurant.value ? '例如：微辣、加冰、加蛋' : '例如：黑色、XL、礼盒装')
 const activeLocations = computed(() => locations.value.filter(row => row.status === 'active'))
 const currentStorefrontBindings = computed(() => storefrontBindings.value.filter(row => row.business_type === currentDomain.value))
 const skuOptions = computed(() => products.value.flatMap(product => (product.skus || []).map((sku: any) => ({ ...sku, product_name: product.name }))))
@@ -699,7 +753,10 @@ function productStatusType(value: string) {
 }
 
 function locationTypeLabel(value: string) {
-  return ({ store: '门店', warehouse: '仓库', pickup: '自取点' } as Record<string, string>)[value] || value || '-'
+  const labels = isRestaurant.value
+    ? { store: '门店', warehouse: '备餐仓', pickup: '取餐点' }
+    : { store: '发货点', warehouse: '仓库', pickup: '自提点' }
+  return labels[value as keyof typeof labels] || value || '-'
 }
 
 function locationStatusLabel(value: string) {
@@ -730,12 +787,12 @@ function skuRecord(skuID: number) {
 
 function skuDisplayName(skuID: number) {
   const sku = skuRecord(skuID)
-  return sku ? `${sku.product_name} · ${sku.name}` : '商品已归档'
+  return sku ? `${sku.product_name} · ${sku.name}` : `${productNoun.value}已归档`
 }
 
 function skuDisplayCode(skuID: number) {
   const sku = skuRecord(skuID)
-  return sku?.sku_code || 'SKU'
+  return sku?.sku_code || skuNoun.value
 }
 
 function locationDisplayName(locationID: number) {
@@ -971,6 +1028,14 @@ function nextFulfillmentStatus(row: any) {
   return ({ pending_shipment: 'shipped', shipped: 'in_transit', in_transit: 'delivered', delivered: 'completed' } as Record<string, string>)[current] || ''
 }
 
+function advanceFulfillmentLabel(row: any) {
+  const next = nextFulfillmentStatus(row)
+  if (row?.business_type === 'restaurant') {
+    return ({ accepted: '确认接单', preparing: '开始制作', ready: '备餐完成', delivering: '安排配送', completed: row.restaurant_fulfillment?.method === 'delivery' ? '标记已送达' : '确认取餐' } as Record<string, string>)[next] || '推进履约'
+  }
+  return ({ shipped: '填写发货信息', in_transit: '更新运输状态', delivered: '确认送达', completed: '完成订单' } as Record<string, string>)[next] || '推进订单'
+}
+
 function canRequestRefund(row: any) {
   return canAfterSalesWrite.value && row?.payment_status === 'paid' && row?.refund_status === 'none'
 }
@@ -1013,7 +1078,7 @@ async function advanceFulfillment(row: any) {
     return
   }
   try {
-    await ElMessageBox.confirm(`确认将订单推进为“${fulfillmentStatusLabel(next)}”？`, '推进履约', {
+    await ElMessageBox.confirm(`确认将订单${advanceFulfillmentLabel(row)}？`, row.business_type === 'restaurant' ? '更新餐饮履约' : '更新电商物流', {
       type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消',
     })
     orderActionID.value = row.id
@@ -1047,11 +1112,6 @@ async function submitShipping() {
   }
 }
 
-function switchDomain(value: CommerceDomain) {
-  if (!configuredDomains.value.includes(value)) return
-  void router.push({ name: 'commerce', params: { businessType: value } })
-}
-
 function handleIdentityRefresh(event: Event) {
   user.value = (event as CustomEvent).detail || readStoredUser()
   if (!isCurrentDomainActive.value) {
@@ -1082,15 +1142,15 @@ function removeProductSku(index: number) {
 async function saveProduct() {
   if (!canWrite.value) return
   if (!productForm.name.trim()) {
-    ElMessage.warning('请填写商品名称')
+    ElMessage.warning(`请填写${productNoun.value}名称`)
     return
   }
   if (!productForm.skus.length || productForm.skus.some(sku => !sku.sku_code.trim() || !sku.name.trim())) {
-    ElMessage.warning('请完整填写至少一个 SKU')
+    ElMessage.warning(`请完整填写至少一个${skuNoun.value}`)
     return
   }
   if (productForm.skus.some(sku => Number(sku.price) > Number(sku.original_price))) {
-    ElMessage.warning('SKU 售价不能高于原价')
+    ElMessage.warning(`${skuNoun.value}售价不能高于原价`)
     return
   }
   saving.value = true
@@ -1112,7 +1172,7 @@ async function saveProduct() {
       })),
     })
     productDialogVisible.value = false
-    ElMessage.success('商品已保存')
+    ElMessage.success(`${productNoun.value}已保存`)
     await loadProducts()
   } finally {
     saving.value = false
@@ -1168,11 +1228,11 @@ function openSkuDialog(row?: any) {
 async function saveSku() {
   if (!canWrite.value || !detailProduct.value) return
   if (!skuForm.sku_code.trim() || !skuForm.name.trim()) {
-    ElMessage.warning('请填写 SKU 编码和名称')
+    ElMessage.warning(`请填写${skuNoun.value}编码和名称`)
     return
   }
   if (Number(skuForm.price) > Number(skuForm.original_price)) {
-    ElMessage.warning('SKU 售价不能高于原价')
+    ElMessage.warning(`${skuNoun.value}售价不能高于原价`)
     return
   }
   const payload = {
@@ -1188,7 +1248,7 @@ async function saveSku() {
     if (skuForm.id) await request.put(`/commerce/skus/${skuForm.id}`, payload)
     else await request.post(`/commerce/products/${detailProduct.value.id}/skus`, payload)
     skuDialogVisible.value = false
-    ElMessage.success('SKU 已保存')
+    ElMessage.success(`${skuNoun.value}已保存`)
     await loadProducts()
     syncDetailProduct()
   } finally {
@@ -1204,7 +1264,7 @@ function openOptionGroupDialog() {
 async function saveOptionGroup() {
   if (!canWrite.value || !detailProduct.value) return
   if (!optionGroupForm.name.trim()) {
-    ElMessage.warning('请填写规格组名称')
+    ElMessage.warning(`请填写${optionGroupNoun.value}名称`)
     return
   }
   if (optionGroupForm.max_selections < optionGroupForm.min_selections || (optionGroupForm.required && optionGroupForm.min_selections < 1)) {
@@ -1220,7 +1280,7 @@ async function saveOptionGroup() {
       max_selections: optionGroupForm.max_selections,
     })
     optionGroupDialogVisible.value = false
-    ElMessage.success('规格组已保存')
+    ElMessage.success(`${optionGroupNoun.value}已保存`)
     await openProductDetail(detailProduct.value)
   } finally {
     saving.value = false
@@ -1235,7 +1295,7 @@ function openOptionDialog(group: any) {
 async function saveOption() {
   if (!canWrite.value || !optionForm.group_id) return
   if (!optionForm.name.trim()) {
-    ElMessage.warning('请填写规格名称')
+    ElMessage.warning(`请填写${optionNoun.value}名称`)
     return
   }
   saving.value = true
@@ -1246,7 +1306,7 @@ async function saveOption() {
       status: optionForm.status,
     })
     optionDialogVisible.value = false
-    ElMessage.success('规格已保存')
+    ElMessage.success(`${optionNoun.value}已保存`)
     if (detailProduct.value) await openProductDetail(detailProduct.value)
   } finally {
     saving.value = false
@@ -1254,14 +1314,14 @@ async function saveOption() {
 }
 
 function openLocationDialog() {
-  Object.assign(locationForm, { name: '', location_type: 'store', status: 'active' })
+  Object.assign(locationForm, { name: '', location_type: isRestaurant.value ? 'store' : 'warehouse', status: 'active' })
   locationDialogVisible.value = true
 }
 
 async function saveLocation() {
   if (!canWrite.value) return
   if (!locationForm.name.trim()) {
-    ElMessage.warning('请填写地点名称')
+    ElMessage.warning(`请填写${locationNoun.value}名称`)
     return
   }
   saving.value = true
@@ -1273,7 +1333,7 @@ async function saveLocation() {
       status: locationForm.status,
     })
     locationDialogVisible.value = false
-    ElMessage.success('履约地点已保存')
+    ElMessage.success(`${locationNoun.value}已保存`)
     await loadLocations()
   } finally {
     saving.value = false
@@ -1376,7 +1436,18 @@ onBeforeUnmount(() => {
 .commerce-heading h1 { margin: 4px 0 0; font-size: 26px; line-height: 1.25; }
 .commerce-heading p { margin: 6px 0 0; }
 .page-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
-.domain-switcher { padding: 2px 0; }
+.workflow-strip { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 14px 16px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); }
+.workflow-restaurant { background: #f1f8f4; border-color: #cce8d8; }
+.workflow-retail { background: #f2f6fb; border-color: #cbdcf0; }
+.workflow-copy { display: flex; flex-direction: column; gap: 4px; min-width: 180px; }
+.workflow-kicker { color: var(--ui-text-secondary); font-size: 12px; }
+.workflow-copy strong { color: var(--ui-text); font-size: 14px; }
+.workflow-steps { display: flex; align-items: center; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.workflow-step { display: inline-flex; align-items: center; gap: 6px; color: var(--ui-text); font-size: 13px; white-space: nowrap; }
+.workflow-step b { display: inline-grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; color: #fff; background: var(--ui-primary); font-size: 12px; }
+.workflow-restaurant .workflow-step b { background: #32835b; }
+.workflow-retail .workflow-step b { background: #3e72a8; }
+.workflow-arrow { color: var(--ui-text-secondary); font-size: 20px; line-height: 1; }
 .capability-alert { margin: 0; }
 .commerce-workspace { min-width: 0; }
 .workspace-tabs { min-height: 420px; }
@@ -1425,6 +1496,8 @@ onBeforeUnmount(() => {
 @media (max-width: 800px) {
   .commerce-heading { flex-direction: column; }
   .page-actions { justify-content: flex-start; }
+  .workflow-strip { align-items: flex-start; flex-direction: column; }
+  .workflow-steps { justify-content: flex-start; }
   .form-grid { grid-template-columns: 1fr; }
   .sku-form-row { grid-template-columns: 1fr 1fr 1fr 1fr 36px; }
   .sku-code-input, .sku-name-input { grid-column: span 2; }
