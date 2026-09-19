@@ -494,6 +494,10 @@ func servePublicUploads(engine *gin.Engine, directory string) {
 		logger.Log.Error(fmt.Sprintf("Failed to create public upload directory: %v", err))
 		return
 	}
+	if err := os.MkdirAll(filepath.Join(absDirectory, "commerce-products"), 0750); err != nil {
+		logger.Log.Error(fmt.Sprintf("Failed to create commercial product upload directory: %v", err))
+		return
+	}
 	engine.GET("/api/v1/public/channel-product-images/:tenant/:account/:filename", func(ctx *gin.Context) {
 		if _, err := strconv.ParseUint(ctx.Param("tenant"), 10, 32); err != nil {
 			ctx.Status(http.StatusNotFound)
@@ -516,6 +520,34 @@ func servePublicUploads(engine *gin.Engine, directory string) {
 		}
 		ctx.Header("Cache-Control", "public, max-age=31536000, immutable")
 		ctx.File(filepath.Join(absDirectory, "channel-products", ctx.Param("tenant"), ctx.Param("account"), filename))
+	})
+	engine.GET("/api/v1/public/commerce-product-images/:tenant/:product/:kind/:filename", func(ctx *gin.Context) {
+		if _, err := strconv.ParseUint(ctx.Param("tenant"), 10, 32); err != nil {
+			ctx.Status(http.StatusNotFound)
+			return
+		}
+		if _, err := strconv.ParseUint(ctx.Param("product"), 10, 32); err != nil {
+			ctx.Status(http.StatusNotFound)
+			return
+		}
+		kind := ctx.Param("kind")
+		if kind != "cover" && kind != "detail" {
+			ctx.Status(http.StatusNotFound)
+			return
+		}
+		filename := ctx.Param("filename")
+		extension := strings.ToLower(filepath.Ext(filename))
+		stem := strings.TrimSuffix(filename, extension)
+		if (extension != ".jpg" && extension != ".png") || len(stem) != 32 {
+			ctx.Status(http.StatusNotFound)
+			return
+		}
+		if _, err := hex.DecodeString(stem); err != nil {
+			ctx.Status(http.StatusNotFound)
+			return
+		}
+		ctx.Header("Cache-Control", "public, max-age=31536000, immutable")
+		ctx.File(filepath.Join(absDirectory, "commerce-products", ctx.Param("tenant"), ctx.Param("product"), kind, filename))
 	})
 }
 

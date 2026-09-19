@@ -20,7 +20,8 @@ var (
 // have independent SKU and option semantics and must never enter ticket
 // fulfillment or verification.
 type CommerceCatalogService struct {
-	DB *gorm.DB
+	DB     *gorm.DB
+	Images *CommerceImageStore
 }
 
 func (s *CommerceCatalogService) db() *gorm.DB {
@@ -176,7 +177,7 @@ func (s *CommerceCatalogService) CreateProduct(tenantID uint, input CreateCommer
 				return err
 			}
 		}
-		if err := tx.Preload("SKUs").First(&product, product.ID).Error; err != nil {
+		if err := tx.Preload("SKUs").Preload("Media", "tenant_id = ?", tenantID).First(&product, product.ID).Error; err != nil {
 			return err
 		}
 		result = &product
@@ -225,7 +226,7 @@ func (s *CommerceCatalogService) ListProducts(tenantID uint, domain, status, sea
 			query = query.Where("(name ILIKE ? OR short_title ILIKE ?)", "%"+search+"%", "%"+search+"%")
 		}
 		var products []model.CommerceProduct
-		if err := query.Preload("SKUs").Order("created_at ASC").Find(&products).Error; err != nil {
+		if err := query.Preload("SKUs").Preload("OptionGroups.Options").Preload("Media", "tenant_id = ?", tenantID).Order("created_at ASC").Find(&products).Error; err != nil {
 			return nil, err
 		}
 		if products == nil {
@@ -244,7 +245,7 @@ func (s *CommerceCatalogService) ListProducts(tenantID uint, domain, status, sea
 		query = query.Where("(name ILIKE ? OR short_title ILIKE ?)", "%"+search+"%", "%"+search+"%")
 	}
 	var products []model.CommerceProduct
-	if err := query.Preload("SKUs").Order("created_at ASC").Find(&products).Error; err != nil {
+	if err := query.Preload("SKUs").Preload("OptionGroups.Options").Preload("Media", "tenant_id = ?", tenantID).Order("created_at ASC").Find(&products).Error; err != nil {
 		return nil, err
 	}
 	if products == nil {
@@ -256,7 +257,7 @@ func (s *CommerceCatalogService) ListProducts(tenantID uint, domain, status, sea
 func (s *CommerceCatalogService) GetProduct(tenantID, productID uint) (*model.CommerceProduct, error) {
 	db := s.db()
 	var product model.CommerceProduct
-	if err := db.Where("id = ? AND tenant_id = ?", productID, tenantID).Preload("SKUs").First(&product).Error; err != nil {
+	if err := db.Where("id = ? AND tenant_id = ?", productID, tenantID).Preload("SKUs").Preload("OptionGroups.Options").Preload("Media", "tenant_id = ?", tenantID).First(&product).Error; err != nil {
 		return nil, err
 	}
 	if err := requireActiveCommerceCapability(db, tenantID, product.BusinessType); err != nil {
@@ -291,13 +292,87 @@ func (s *CommerceCatalogService) SetProductStatus(tenantID, productID uint, stat
 		if err := tx.Model(&product).Update("status", status).Error; err != nil {
 			return err
 		}
-		if err := tx.Preload("SKUs").First(&product, product.ID).Error; err != nil {
+		if err := tx.Preload("SKUs").Preload("Media", "tenant_id = ?", tenantID).First(&product, product.ID).Error; err != nil {
 			return err
 		}
 		result = &product
 		return nil
 	})
 	return result, err
+}
+
+// AddProductMedia attaches a server-generated media URL to a commercial
+// product. Cover media is singular; replacing it soft-deletes the previous
+// row so existing order snapshots and audit history remain intact.
+func (s *CommerceCatalogService) AddProductMedia(tenantID, productID uint, kind, imageURL string) (*model.CommerceProductMedia, error) {
+	kind, err := normalizeCommerceMediaKind(kind)
+	if err != nil {
+		return nil, err
+	}
+	imageURL = strings.TrimSpace(imageURL)
+	if imageURL == "" || len(imageURL) > 500 {
+		return nil, fmt.Errorf("%w: image URL is required and bounded", ErrCommerceProductInvalid)
+	}
+	if s == nil || s.Images == nil {
+		return nil, fmt.Errorf("%w: commercial image storage is not configured", ErrCommerceProductInvalid)
+	}
+	if err := s.Images.ValidateOwnedURL(tenantID, productID, kind, imageURL); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCommerceProductInvalid, err)
+	}
+	var result *model.CommerceProductMedia
+	err = s.write(func(tx *gorm.DB) error {
+		var product model.CommerceProduct
+		if err := tx.Where("id = ? AND tenant_id = ?", productID, tenantID).First(&product).Error; err != nil {
+			return err
+		}
+		if err := requireActiveCommerceCapability(tx, tenantID, product.BusinessType); err != nil {
+			return err
+		}
+		if kind == CommerceProductMediaCover {
+			if err := tx.Where("tenant_id = ? AND product_id = ? AND kind = ?", tenantID, productID, kind).Delete(&model.CommerceProductMedia{}).Error; err != nil {
+				return err
+			}
+		}
+		sortOrder := 0
+		if kind == CommerceProductMediaDetail {
+			if err := tx.Model(&model.CommerceProductMedia{}).
+				Where("tenant_id = ? AND product_id = ? AND kind = ?", tenantID, productID, kind).
+				Select("COALESCE(MAX(sort_order), -1)").Scan(&sortOrder).Error; err != nil {
+				return err
+			}
+			sortOrder++
+		}
+		media := model.CommerceProductMedia{TenantID: tenantID, ProductID: productID, Kind: kind, URL: imageURL, SortOrder: sortOrder}
+		if err := tx.Create(&media).Error; err != nil {
+			return err
+		}
+		result = &media
+		return nil
+	})
+	return result, err
+}
+
+func (s *CommerceCatalogService) RemoveProductMedia(tenantID, productID, mediaID uint) error {
+	if productID == 0 || mediaID == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return s.write(func(tx *gorm.DB) error {
+		var product model.CommerceProduct
+		if err := tx.Where("id = ? AND tenant_id = ?", productID, tenantID).First(&product).Error; err != nil {
+			return err
+		}
+		if err := requireActiveCommerceCapability(tx, tenantID, product.BusinessType); err != nil {
+			return err
+		}
+		result := tx.Where("id = ? AND tenant_id = ? AND product_id = ?", mediaID, tenantID, productID).Delete(&model.CommerceProductMedia{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
 }
 
 func (s *CommerceCatalogService) CreateSKU(tenantID, productID uint, input CreateCommerceSKUInput) (*model.CommerceSKU, error) {

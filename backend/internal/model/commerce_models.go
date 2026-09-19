@@ -30,6 +30,19 @@ type CommerceProduct struct {
 	CurrentVersion int                   `gorm:"not null;default:1" json:"current_version"`
 	SKUs           []CommerceSKU         `gorm:"foreignKey:ProductID" json:"skus,omitempty"`
 	OptionGroups   []CommerceOptionGroup `gorm:"foreignKey:ProductID" json:"option_groups,omitempty"`
+	Media          []CommerceProductMedia `gorm:"foreignKey:ProductID" json:"media,omitempty"`
+}
+
+// CommerceProductMedia stores tenant-owned product presentation media. It is
+// intentionally separate from channel merchandising images so a product
+// change never rewrites a channel's submitted asset or approval state.
+type CommerceProductMedia struct {
+	Base
+	TenantID  uint   `gorm:"not null;index:idx_commerce_product_media_scope" json:"tenant_id"`
+	ProductID uint   `gorm:"not null;index:idx_commerce_product_media_scope" json:"product_id"`
+	Kind      string `gorm:"size:20;not null;index:idx_commerce_product_media_scope;check:chk_commerce_product_media_kind,kind IN ('cover','detail')" json:"kind"`
+	URL       string `gorm:"size:500;not null" json:"url"`
+	SortOrder int    `gorm:"not null;default:0" json:"sort_order"`
 }
 
 // CommerceSKU is the price and inventory unit. All monetary values are cents.
@@ -234,6 +247,7 @@ type CommerceOrderItem struct {
 	ProductNameSnapshot    string     `gorm:"size:160;not null" json:"product_name"`
 	SkuNameSnapshot        string     `gorm:"size:160;not null" json:"sku_name"`
 	DescriptionSnapshot    string     `gorm:"type:text" json:"description_snapshot,omitempty"`
+	MediaSnapshotJSON      string     `gorm:"type:text" json:"media_snapshot,omitempty"`
 	OptionsSnapshotJSON    string     `gorm:"type:text" json:"options_snapshot,omitempty"`
 	Quantity               int        `gorm:"not null;check:chk_commerce_order_items_quantity,quantity > 0" json:"quantity"`
 	OriginalUnitPriceCents int64      `gorm:"not null;default:0" json:"original_unit_price_cents"`

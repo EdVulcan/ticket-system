@@ -20,7 +20,7 @@ func TestCommerceSchema124CreatesIsolatedTablesAndConstraints(t *testing.T) {
 	for _, table := range []interface{}{
 		&TenantBusinessCapability{}, &CommerceProduct{}, &CommerceSKU{}, &CommerceOptionGroup{}, &CommerceOption{},
 		&CommerceFulfillmentLocation{}, &CommerceInventory{}, &CommerceCart{}, &CommerceCartItem{},
-		&CommerceOrder{}, &CommerceOrderItem{}, &RestaurantFulfillment{}, &RetailFulfillment{},
+		&CommerceOrder{}, &CommerceOrderItem{}, &RestaurantFulfillment{}, &RetailFulfillment{}, &CommerceProductMedia{},
 		&CommercePaymentReconciliationTask{},
 		&CommercePaymentAttempt{}, &CommerceRefundAttempt{}, &CommercePaymentProviderEvent{},
 		&CommerceAddress{}, &CommerceAfterSaleRequest{}, &CommerceAfterSaleEvent{},
@@ -71,6 +71,7 @@ func TestCommerceSchema124CreatesIsolatedTablesAndConstraints(t *testing.T) {
 		{&CommerceOrderItem{}, "ReleasedAt"},
 		{&CommerceAfterSaleRequest{}, "ProviderRefundReference"},
 		{&CommerceAfterSaleRequest{}, "ProviderRefundAmountCents"},
+		{&CommerceOrderItem{}, "MediaSnapshotJSON"},
 		{&CommerceAddress{}, "AddressType"},
 		{&CommerceAddress{}, "CampusName"},
 		{&CommerceAddress{}, "Room"},

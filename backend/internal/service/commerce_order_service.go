@@ -93,6 +93,36 @@ type CommerceOrderListFilter struct {
 	PageSize          int
 }
 
+type commerceMediaSnapshot struct {
+	Kind      string `json:"kind"`
+	URL       string `json:"url"`
+	SortOrder int    `json:"sort_order"`
+}
+
+// snapshotCommerceProductMedia freezes only presentation facts that were
+// visible at checkout. The catalog may later replace or remove its media;
+// historical commercial orders must continue to render the original assets.
+func snapshotCommerceProductMedia(media []model.CommerceProductMedia) string {
+	if len(media) == 0 {
+		return ""
+	}
+	snapshot := make([]commerceMediaSnapshot, 0, len(media))
+	for _, item := range media {
+		if strings.TrimSpace(item.URL) == "" || (item.Kind != CommerceProductMediaCover && item.Kind != CommerceProductMediaDetail) {
+			continue
+		}
+		snapshot = append(snapshot, commerceMediaSnapshot{Kind: item.Kind, URL: item.URL, SortOrder: item.SortOrder})
+	}
+	if len(snapshot) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(snapshot)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
 type CommerceRefundResult struct {
 	Request *model.CommerceAfterSaleRequest
 	Order   *model.CommerceOrder
@@ -394,7 +424,9 @@ func (s *CommerceOrderService) CreateOrder(tenantID uint, input CreateCommerceOr
 				return fmt.Errorf("%w: sku does not belong to the requested active product", ErrCommerceOrderInvalid)
 			}
 			var product model.CommerceProduct
-			if err := tx.Where("id = ? AND tenant_id = ?", itemInput.ProductID, tenantID).First(&product).Error; err != nil {
+			if err := tx.Where("id = ? AND tenant_id = ?", itemInput.ProductID, tenantID).
+				Preload("Media", "tenant_id = ?", tenantID, func(db *gorm.DB) *gorm.DB { return db.Order("kind ASC, sort_order ASC, id ASC") }).
+				First(&product).Error; err != nil {
 				return err
 			}
 			if product.BusinessType != input.BusinessType || product.Status != "online" {
@@ -449,7 +481,7 @@ func (s *CommerceOrderService) CreateOrder(tenantID uint, input CreateCommerceOr
 			}
 			order.OriginalAmountCents = newOriginalTotal
 			order.TotalAmountCents = newTotal
-			items = append(items, model.CommerceOrderItem{TenantID: tenantID, ProductID: product.ID, SkuID: sku.ID, ProductNameSnapshot: product.Name, SkuNameSnapshot: sku.Name, DescriptionSnapshot: product.Description, OptionsSnapshotJSON: options, Quantity: itemInput.Quantity, OriginalUnitPriceCents: originalUnitPrice, UnitPriceCents: unitPrice, DiscountCents: originalLineAmount - lineAmount, LineAmountCents: lineAmount, ReservationStatus: "reserved"})
+			items = append(items, model.CommerceOrderItem{TenantID: tenantID, ProductID: product.ID, SkuID: sku.ID, ProductNameSnapshot: product.Name, SkuNameSnapshot: sku.Name, DescriptionSnapshot: product.Description, MediaSnapshotJSON: snapshotCommerceProductMedia(product.Media), OptionsSnapshotJSON: options, Quantity: itemInput.Quantity, OriginalUnitPriceCents: originalUnitPrice, UnitPriceCents: unitPrice, DiscountCents: originalLineAmount - lineAmount, LineAmountCents: lineAmount, ReservationStatus: "reserved"})
 		}
 		if order.TotalAmountCents > order.OriginalAmountCents {
 			return fmt.Errorf("%w: sale price exceeds original price", ErrCommerceOrderInvalid)

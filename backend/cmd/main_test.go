@@ -136,3 +136,34 @@ func TestServePublicUploadsExposesOnlyValidatedProductImagePath(t *testing.T) {
 		t.Fatalf("invalid filename status=%d", invalid.Code)
 	}
 }
+
+func TestServePublicUploadsExposesCommerceProductImagePath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	directory := t.TempDir()
+	imageDirectory := filepath.Join(directory, "commerce-products", "3", "5", "detail")
+	if err := os.MkdirAll(imageDirectory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	filename := "fedcba9876543210fedcba9876543210.jpg"
+	if err := os.WriteFile(filepath.Join(imageDirectory, filename), []byte("image"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := gin.New()
+	servePublicUploads(engine, directory)
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/public/commerce-product-images/3/5/detail/"+filename, nil))
+	if response.Code != http.StatusOK || response.Body.String() != "image" {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+	for _, path := range []string{
+		"/api/v1/public/commerce-product-images/3/5/banner/" + filename,
+		"/api/v1/public/commerce-product-images/3/5/detail/not-an-upload.jpg",
+	} {
+		invalid := httptest.NewRecorder()
+		engine.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, path, nil))
+		if invalid.Code != http.StatusNotFound {
+			t.Fatalf("invalid path %s status=%d", path, invalid.Code)
+		}
+	}
+}

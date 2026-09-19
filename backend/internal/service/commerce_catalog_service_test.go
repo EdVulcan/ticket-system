@@ -20,7 +20,7 @@ func resetCommerceCatalogData(t *testing.T) {
 		&model.CommerceOrderItem{}, &model.CommerceOrder{}, &model.CommerceCartItem{},
 		&model.CommerceCart{}, &model.CommerceInventory{}, &model.CommerceAddress{},
 		&model.CommerceOption{}, &model.CommerceOptionGroup{}, &model.CommerceSKU{},
-		&model.CommerceProduct{}, &model.TenantBusinessCapability{},
+		&model.CommerceProductMedia{}, &model.CommerceProduct{}, &model.TenantBusinessCapability{},
 	} {
 		if err := model.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(table).Error; err != nil {
 			t.Fatalf("reset commerce table %T: %v", table, err)
@@ -127,6 +127,94 @@ func TestCommerceCatalogCRUDAndLifecycle(t *testing.T) {
 		SKUCode: "SKU-001", Name: "Duplicate", OriginalPriceCents: 100, PriceCents: 100,
 	}); err == nil {
 		t.Fatalf("duplicate sku err=%v", err)
+	}
+}
+
+func TestCommerceCatalogPreloadsOptionGroupsForStorefront(t *testing.T) {
+	tenantID := newCommerceTenant(t, "restaurant", "active")
+	service := &CommerceCatalogService{}
+	product, err := service.CreateProduct(tenantID, commerceProductInput("Customizable meal"))
+	if err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+	group := model.CommerceOptionGroup{
+		TenantID: tenantID, ProductID: product.ID, Name: "口味", Required: true,
+		MinSelections: 1, MaxSelections: 1,
+	}
+	if err := model.DB.Create(&group).Error; err != nil {
+		t.Fatalf("create option group: %v", err)
+	}
+	option := model.CommerceOption{
+		TenantID: tenantID, OptionGroupID: group.ID, Name: "微辣", PriceDeltaCents: 100, Status: "active",
+	}
+	if err := model.DB.Create(&option).Error; err != nil {
+		t.Fatalf("create option: %v", err)
+	}
+
+	rows, err := service.ListProducts(tenantID, "restaurant", "draft", "customizable")
+	if err != nil || len(rows) != 1 || len(rows[0].OptionGroups) != 1 || len(rows[0].OptionGroups[0].Options) != 1 {
+		t.Fatalf("list did not preload options: rows=%+v err=%v", rows, err)
+	}
+	if rows[0].OptionGroups[0].Options[0].Name != "微辣" {
+		t.Fatalf("unexpected option from list: %+v", rows[0].OptionGroups[0].Options[0])
+	}
+	detail, err := service.GetProduct(tenantID, product.ID)
+	if err != nil || len(detail.OptionGroups) != 1 || len(detail.OptionGroups[0].Options) != 1 {
+		t.Fatalf("detail did not preload options: detail=%+v err=%v", detail, err)
+	}
+}
+
+func TestCommerceCatalogProductMediaLifecycleIsTenantScoped(t *testing.T) {
+	tenantID := newCommerceTenant(t, "restaurant", "active")
+	otherTenant := model.Tenant{Name: "Other media tenant", SystemCode: "COMMERCE-MEDIA-OTHER", SecretKey: "media-secret", Status: "active"}
+	if err := model.DB.Create(&otherTenant).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Create(&model.TenantBusinessCapability{TenantID: otherTenant.ID, BusinessType: "restaurant", Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	store := CommerceImageStore{Directory: t.TempDir(), PublicBaseURL: "https://tickets.example.com"}
+	catalog := &CommerceCatalogService{Images: &store}
+	product, err := catalog.CreateProduct(tenantID, commerceProductInput("Media product"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverURL, err := store.Save(tenantID, product.ID, CommerceProductMediaCover, commercePNG(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cover, err := catalog.AddProductMedia(tenantID, product.ID, CommerceProductMediaCover, coverURL)
+	if err != nil || cover.Kind != CommerceProductMediaCover {
+		t.Fatalf("add cover=%+v err=%v", cover, err)
+	}
+	detailURL, err := store.Save(tenantID, product.ID, CommerceProductMediaDetail, commercePNG(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := catalog.AddProductMedia(tenantID, product.ID, CommerceProductMediaDetail, detailURL)
+	if err != nil || detail.Kind != CommerceProductMediaDetail {
+		t.Fatalf("add detail=%+v err=%v", detail, err)
+	}
+	replacementURL, err := store.Save(tenantID, product.ID, CommerceProductMediaCover, commercePNG(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.AddProductMedia(tenantID, product.ID, CommerceProductMediaCover, replacementURL); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := catalog.ListProducts(tenantID, "restaurant", "", "media")
+	if err != nil || len(rows) != 1 || len(rows[0].Media) != 2 {
+		t.Fatalf("media list=%+v err=%v", rows, err)
+	}
+	if err := catalog.RemoveProductMedia(otherTenant.ID, product.ID, detail.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("cross-tenant media deletion err=%v", err)
+	}
+	if err := catalog.RemoveProductMedia(tenantID, product.ID, detail.ID); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = catalog.ListProducts(tenantID, "restaurant", "", "media")
+	if err != nil || len(rows) != 1 || len(rows[0].Media) != 1 || rows[0].Media[0].Kind != CommerceProductMediaCover {
+		t.Fatalf("media removal list=%+v err=%v", rows, err)
 	}
 }
 

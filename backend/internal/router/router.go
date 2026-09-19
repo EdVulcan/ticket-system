@@ -280,7 +280,12 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	// Commercial catalog is a separate domain from scenic ticket products.
 	// The service re-checks the requested business type so a tenant with only
 	// one enabled vertical cannot use this broad route to access the other.
-	commerceCatalogController := &api.CommerceCatalogController{Service: service.CommerceCatalogService{}}
+	commerceImages := service.CommerceImageStore{
+		Directory:     config.GlobalConfig.Server.UploadDirectory,
+		PublicBaseURL: config.GlobalConfig.Server.PublicBaseURL,
+	}
+	commerceCatalogService := service.CommerceCatalogService{Images: &commerceImages}
+	commerceCatalogController := &api.CommerceCatalogController{Service: commerceCatalogService, Images: commerceImages}
 	commerceOperationsController := &api.CommerceOperationsController{Service: service.CommerceOperationsService{}}
 	commerceCatalogGroup := protected.Group("/commerce/products")
 	commerceCatalogGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"))
@@ -289,6 +294,8 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		commerceCatalogGroup.GET("", middleware.RequireTenantPermission(authz.PermissionCatalogRead), commerceCatalogController.ListProducts)
 		commerceCatalogGroup.GET("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogRead), commerceCatalogController.GetProduct)
 		commerceCatalogGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceCatalogController.SetProductStatus)
+		commerceCatalogGroup.POST("/:id/media", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceCatalogController.UploadProductMedia)
+		commerceCatalogGroup.DELETE("/:id/media/:mediaID", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceCatalogController.DeleteProductMedia)
 		commerceCatalogGroup.POST("/:id/skus", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceCatalogController.CreateSKU)
 		commerceCatalogGroup.GET("/:id/options", middleware.RequireTenantPermission(authz.PermissionCatalogRead), commerceOperationsController.ListOptionGroups)
 		commerceCatalogGroup.POST("/:id/options", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.CreateOptionGroup)

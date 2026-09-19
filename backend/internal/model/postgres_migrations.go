@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 135
+const CurrentPostgresSchemaVersion = 136
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -69,7 +69,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&UpstreamConnection{}, &UpstreamProductMapping{}, &ProductSupplyConfig{},
 		&OrderItemSupplySnapshot{}, &ExternalAdmissionCredential{}, &ExternalAdmissionBinding{},
 		&UpstreamDispatchGate{}, &UpstreamDispatchWaiter{},
-		&TenantBusinessCapability{}, &CommerceProduct{}, &CommerceSKU{}, &CommerceOptionGroup{}, &CommerceOption{},
+		&TenantBusinessCapability{}, &CommerceProduct{}, &CommerceProductMedia{}, &CommerceSKU{}, &CommerceOptionGroup{}, &CommerceOption{},
 		&CommerceFulfillmentLocation{}, &CommerceInventory{}, &CommerceCart{}, &CommerceCartItem{},
 		&CommerceOrder{}, &CommerceOrderItem{}, &RestaurantFulfillment{}, &RetailFulfillment{},
 		&CommercePaymentReconciliationTask{},
@@ -757,9 +757,12 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateCommercePaymentProviderReference(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateCommerceProductMedia(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "commerce reliability guards",
+		Name:      "commerce product media",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -834,6 +837,35 @@ func migrateCommercePaymentProviderReference(db *gorm.DB, previous int) error {
 	}
 	if err := db.Exec(`ALTER TABLE commerce_payment_reconciliation_tasks ADD COLUMN IF NOT EXISTS provider_reference varchar(120)`).Error; err != nil {
 		return fmt.Errorf("register commerce provider reference: %w", err)
+	}
+	return nil
+}
+
+// migrateCommerceProductMedia adds the independent commercial product media
+// table and the order-item media snapshot. Existing products and orders keep
+// empty media values; later edits therefore cannot rewrite historical facts.
+func migrateCommerceProductMedia(db *gorm.DB, previous int) error {
+	if previous >= 136 {
+		return nil
+	}
+	if err := db.Exec(`
+		ALTER TABLE commerce_order_items
+			ADD COLUMN IF NOT EXISTS media_snapshot_json text NOT NULL DEFAULT '';
+		CREATE INDEX IF NOT EXISTS idx_commerce_product_media_scope
+			ON commerce_product_media (tenant_id, product_id, kind, sort_order)
+			WHERE deleted_at IS NULL;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_product_media_cover
+			ON commerce_product_media (tenant_id, product_id)
+			WHERE deleted_at IS NULL AND kind = 'cover';
+		DO $$ BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_commerce_product_media_product_owner') THEN
+				ALTER TABLE commerce_product_media
+					ADD CONSTRAINT fk_commerce_product_media_product_owner
+					FOREIGN KEY (tenant_id, product_id) REFERENCES commerce_products(tenant_id, id);
+			END IF;
+		END $$;
+	`).Error; err != nil {
+		return fmt.Errorf("register commerce product media: %w", err)
 	}
 	return nil
 }

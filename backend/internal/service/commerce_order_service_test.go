@@ -150,6 +150,54 @@ func TestCommerceOrderPaymentAndRefundLifecycle(t *testing.T) {
 	}
 }
 
+func TestCommerceOrderSnapshotsProductMediaAtCreation(t *testing.T) {
+	tenantID, productID, skuID, locationID, now := commerceOrderFixture(t)
+	store := CommerceImageStore{Directory: t.TempDir(), PublicBaseURL: "https://tickets.example.com"}
+	catalog := &CommerceCatalogService{Images: &store}
+	coverURL, err := store.Save(tenantID, productID, CommerceProductMediaCover, commercePNG(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.AddProductMedia(tenantID, productID, CommerceProductMediaCover, coverURL); err != nil {
+		t.Fatal(err)
+	}
+	orderService := &CommerceOrderService{Clock: func() time.Time { return now }}
+	input := commerceOrderInput(productID, skuID, locationID, "media-snapshot", now.Add(15*time.Minute))
+	order, err := orderService.CreateOrder(tenantID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var item model.CommerceOrderItem
+	if err := model.DB.Where("tenant_id = ? AND order_id = ?", tenantID, order.ID).First(&item).Error; err != nil {
+		t.Fatal(err)
+	}
+	if item.MediaSnapshotJSON == "" || !strings.Contains(item.MediaSnapshotJSON, coverURL) {
+		t.Fatalf("media snapshot=%q", item.MediaSnapshotJSON)
+	}
+	snapshot := item.MediaSnapshotJSON
+	newURL, err := store.Save(tenantID, productID, CommerceProductMediaCover, commercePNG(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.AddProductMedia(tenantID, productID, CommerceProductMediaCover, newURL); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := orderService.CreateOrder(tenantID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID != order.ID || retry.Items[0].MediaSnapshotJSON != snapshot {
+		t.Fatalf("idempotent retry rewrote media snapshot: first=%q retry=%q", snapshot, retry.Items[0].MediaSnapshotJSON)
+	}
+	var persisted model.CommerceOrderItem
+	if err := model.DB.Where("id = ?", item.ID).First(&persisted).Error; err != nil {
+		t.Fatal(err)
+	}
+	if persisted.MediaSnapshotJSON != snapshot {
+		t.Fatalf("persisted media snapshot changed: %q", persisted.MediaSnapshotJSON)
+	}
+}
+
 func TestCommerceRefundProviderFactsRejectConflictOnPendingRequest(t *testing.T) {
 	tenantID, productID, skuID, locationID, now := commerceOrderFixture(t)
 	service := &CommerceOrderService{Clock: func() time.Time { return now }}

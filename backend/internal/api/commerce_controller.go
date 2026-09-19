@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 // catalog. It intentionally has no access to the ticket Product controller.
 type CommerceCatalogController struct {
 	Service service.CommerceCatalogService
+	Images  service.CommerceImageStore
 }
 
 // CommerceOperationsController exposes the non-ticket operational pieces of
@@ -103,6 +105,67 @@ func (c *CommerceCatalogController) SetProductStatus(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, product)
+}
+
+// UploadProductMedia accepts only server-managed commercial product images.
+// The product and tenant are resolved from the authenticated route/context;
+// clients cannot attach an arbitrary remote URL or another tenant's asset.
+func (c *CommerceCatalogController) UploadProductMedia(ctx *gin.Context) {
+	productID, err := parseCommerceID(ctx, "id")
+	if err != nil {
+		return
+	}
+	kind := strings.ToLower(strings.TrimSpace(ctx.PostForm("kind")))
+	if kind != service.CommerceProductMediaCover && kind != service.CommerceProductMediaDetail {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "商品图片类型不正确"})
+		return
+	}
+	file, header, err := ctx.Request.FormFile("image")
+	if err != nil || file == nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "请选择商品图片"})
+		return
+	}
+	defer file.Close()
+	if header != nil && header.Size > service.MaxCommerceImageBytes {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "商品图片不能超过 5 MB"})
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(file, service.MaxCommerceImageBytes+1))
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "商品图片读取失败"})
+		return
+	}
+	if len(data) > service.MaxCommerceImageBytes {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "商品图片不能超过 5 MB"})
+		return
+	}
+	imageURL, err := c.Images.Save(ctx.GetUint("tenant_id"), productID, kind, data)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	media, err := c.Service.AddProductMedia(ctx.GetUint("tenant_id"), productID, kind, imageURL)
+	if err != nil {
+		commerceCatalogError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusCreated, media)
+}
+
+func (c *CommerceCatalogController) DeleteProductMedia(ctx *gin.Context) {
+	productID, err := parseCommerceID(ctx, "id")
+	if err != nil {
+		return
+	}
+	mediaID, err := parseCommerceID(ctx, "mediaID")
+	if err != nil {
+		return
+	}
+	if err := c.Service.RemoveProductMedia(ctx.GetUint("tenant_id"), productID, mediaID); err != nil {
+		commerceCatalogError(ctx, err)
+		return
+	}
+	ctx.Status(http.StatusNoContent)
 }
 
 func (c *CommerceCatalogController) CreateSKU(ctx *gin.Context) {

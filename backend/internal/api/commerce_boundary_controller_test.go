@@ -25,6 +25,7 @@ func openCommerceBoundaryControllerDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(
 		&model.Tenant{}, &model.TenantBusinessCapability{},
 		&model.CommerceProduct{}, &model.CommerceSKU{}, &model.CommerceOptionGroup{}, &model.CommerceOption{},
+		&model.CommerceProductMedia{},
 		&model.CommerceFulfillmentLocation{}, &model.CommerceInventory{}, &model.CommerceCart{}, &model.CommerceCartItem{},
 	); err != nil {
 		t.Fatalf("migrate commerce controller tables: %v", err)

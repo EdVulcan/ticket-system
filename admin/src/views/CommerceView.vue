@@ -76,6 +76,19 @@
             </div>
 
             <el-table v-loading="loading" :data="products" class="commerce-table" border stripe>
+              <el-table-column label="图片" width="88" align="center">
+                <template #default="{ row }">
+                  <el-image
+                    v-if="productCover(row)"
+                    :src="productCover(row)"
+                    :preview-src-list="[productCover(row)]"
+                    fit="cover"
+                    class="product-cover-thumb"
+                    preview-teleported
+                  />
+                  <span v-else class="image-placeholder">无图</span>
+                </template>
+              </el-table-column>
               <el-table-column :label="productNoun" min-width="240">
                 <template #default="{ row }">
                   <div class="primary-cell">{{ row.name }}</div>
@@ -364,6 +377,28 @@
 
         <section class="detail-section">
           <div class="detail-section-heading">
+            <div><h3>商品图片</h3><span>封面 1 张，详情图可多张</span></div>
+            <div v-if="canWrite" class="section-actions">
+              <el-upload :auto-upload="false" :show-file-list="false" accept="image/jpeg,image/png" :disabled="mediaUploadingKind !== ''" :on-change="uploadProductCover">
+                <el-button plain type="primary" :icon="UploadFilled" :loading="mediaUploadingKind === 'cover'">{{ productCover(detailProduct) ? '替换封面' : '上传封面' }}</el-button>
+              </el-upload>
+              <el-upload :auto-upload="false" :show-file-list="false" accept="image/jpeg,image/png" :disabled="mediaUploadingKind !== ''" :on-change="uploadProductDetail">
+                <el-button plain :icon="UploadFilled" :loading="mediaUploadingKind === 'detail'">上传详情图</el-button>
+              </el-upload>
+            </div>
+          </div>
+          <div class="product-media-grid">
+            <div v-for="media in detailProduct.media || []" :key="media.id" class="product-media-card">
+              <el-image :src="media.url" :preview-src-list="[media.url]" fit="cover" class="product-media-image" preview-teleported />
+              <div class="product-media-meta"><span>{{ media.kind === 'cover' ? '封面' : `详情图 ${Number(media.sort_order || 0) + 1}` }}</span><el-button v-if="canWrite" link type="danger" :loading="mediaDeletingID === media.id" @click="removeProductMedia(media)">删除</el-button></div>
+            </div>
+            <div v-if="!(detailProduct.media || []).length" class="image-empty">暂无商品图片</div>
+          </div>
+          <p class="form-help">商品图片与小红书渠道图片分开维护。仅支持 JPG、PNG，单张不超过 5 MB；下单后订单会保存当时的图片地址。</p>
+        </section>
+
+        <section class="detail-section">
+          <div class="detail-section-heading">
             <div><h3>{{ skuDetailLabel }}</h3><span>{{ (detailProduct.skus || []).length }} 个</span></div>
             <el-button v-if="canWrite" plain type="primary" :icon="Plus" @click="openSkuDialog()">{{ addSkuLabel }}</el-button>
           </div>
@@ -554,7 +589,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Plus, Refresh, Search } from '@element-plus/icons-vue'
+import { Delete, Plus, Refresh, Search, UploadFilled } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { hasPermission } from '@/utils/permissions'
 import {
@@ -585,6 +620,8 @@ const user = ref(readStoredUser())
 const loading = ref(false)
 const saving = ref(false)
 const detailLoading = ref(false)
+const mediaUploadingKind = ref('')
+const mediaDeletingID = ref(0)
 const loadError = ref('')
 const activeTab = ref('products')
 const productSearch = ref('')
@@ -779,6 +816,10 @@ function priceSummary(product: any) {
   const min = Math.min(...prices)
   const max = Math.max(...prices)
   return min === max ? `售价 ¥${money(min)}` : `售价 ¥${money(min)} - ¥${money(max)}`
+}
+
+function productCover(product: any) {
+  return (product?.media || []).find((media: any) => media.kind === 'cover')?.url || ''
 }
 
 function skuRecord(skuID: number) {
@@ -1196,12 +1237,64 @@ async function openProductDetail(row: any) {
   productDetailVisible.value = true
   detailLoading.value = true
   try {
-    const response = await request.get(`/commerce/products/${row.id}/options`, { skipErrorToast: true } as any)
-    optionGroups.value = response.data?.data || []
+    const [optionsResponse, productResponse] = await Promise.all([
+      request.get(`/commerce/products/${row.id}/options`, { skipErrorToast: true } as any),
+      request.get(`/commerce/products/${row.id}`, { skipErrorToast: true } as any),
+    ])
+    optionGroups.value = optionsResponse.data?.data || []
+    if (productResponse.data) detailProduct.value = productResponse.data
   } catch (error) {
     if (statusCode(error) !== 403) ElMessage.error('规格暂时无法加载')
   } finally {
     detailLoading.value = false
+  }
+}
+
+async function uploadProductMedia(file: any, kind: 'cover' | 'detail') {
+  if (!canWrite.value || !detailProduct.value || !file?.raw) return
+  const raw = file.raw as File
+  if (!['image/jpeg', 'image/png'].includes(raw.type)) {
+    ElMessage.warning('商品图片仅支持 JPG 或 PNG 格式')
+    return
+  }
+  if (raw.size > 5 * 1024 * 1024) {
+    ElMessage.warning('商品图片不能超过 5 MB')
+    return
+  }
+  mediaUploadingKind.value = kind
+  try {
+    const form = new FormData()
+    form.append('kind', kind)
+    form.append('image', raw)
+    await request.post(`/commerce/products/${detailProduct.value.id}/media`, form, { timeout: 30000 })
+    ElMessage.success(kind === 'cover' ? '商品封面已保存' : '商品详情图已添加')
+    await loadProducts()
+    syncDetailProduct()
+  } finally {
+    mediaUploadingKind.value = ''
+  }
+}
+
+function uploadProductCover(file: any) {
+  return uploadProductMedia(file, 'cover')
+}
+
+function uploadProductDetail(file: any) {
+  return uploadProductMedia(file, 'detail')
+}
+
+async function removeProductMedia(media: any) {
+  if (!canWrite.value || !detailProduct.value || !media?.id) return
+  try {
+    await ElMessageBox.confirm('删除后仅影响当前商品展示，不会改写历史订单图片，确认删除？', '删除商品图片', { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' })
+    mediaDeletingID.value = media.id
+    await request.delete(`/commerce/products/${detailProduct.value.id}/media/${media.id}`)
+    ElMessage.success('商品图片已删除')
+    await loadProducts()
+    syncDetailProduct()
+  } catch { /* cancelled or request interceptor already reported the error */ }
+  finally {
+    mediaDeletingID.value = 0
   }
 }
 
@@ -1462,6 +1555,8 @@ onBeforeUnmount(() => {
 .commerce-search { width: min(360px, 100%); }
 .status-filter { width: 150px; }
 .commerce-table { width: 100%; }
+.product-cover-thumb { width: 52px; height: 52px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface-soft); }
+.image-placeholder, .image-empty { color: var(--ui-text-secondary); font-size: 12px; }
 .primary-cell { color: var(--ui-text); font-weight: 650; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 .full-width { width: 100%; }
@@ -1477,6 +1572,10 @@ onBeforeUnmount(() => {
 .detail-header h2 { margin: 0; font-size: 20px; }
 .detail-header p { margin: 6px 0 0; }
 .detail-section { display: flex; flex-direction: column; gap: 12px; }
+.product-media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.product-media-card { min-width: 0; overflow: hidden; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface-soft); }
+.product-media-image { display: block; width: 100%; height: 150px; background: #fff; }
+.product-media-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 9px; font-size: 12px; }
 .detail-section-heading { align-items: center; }
 .detail-section-heading h3 { display: inline; margin: 0; font-size: 16px; }
 .detail-section-heading > div > span { display: inline; margin-left: 8px; }

@@ -23,6 +23,7 @@ func migrateCommerceStorefrontOrderTables(t *testing.T, db *gorm.DB) {
 		&model.ChannelAccount{}, &model.CommerceCustomerSession{}, &model.CommerceStorefrontBinding{}, &model.AuditLog{},
 		&model.CommerceOrder{}, &model.CommerceOrderItem{}, &model.CommerceAfterSaleRequest{}, &model.CommerceAfterSaleEvent{},
 		&model.CommercePaymentReconciliationTask{}, &model.RestaurantFulfillment{}, &model.RetailFulfillment{},
+		&model.CommerceProductMedia{},
 		&model.CommerceAddress{},
 	); err != nil {
 		t.Fatalf("migrate storefront order tables: %v", err)
