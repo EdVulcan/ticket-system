@@ -263,7 +263,11 @@ func (s *CommerceStorefrontService) loadActiveWechatAccount(appID string) (*mode
 	if appID == "" {
 		return nil, fmt.Errorf("%w: app id is required", ErrCommerceStorefrontInvalid)
 	}
-	query := s.db().Where("type = ? AND app_id = ? AND status = ?", "wechat_miniapp", appID, "active")
+	// A sandbox channel is still a deliberately published storefront account:
+	// WeChat test mini programs use the same jscode2session endpoint and need to
+	// exercise the complete SaaS session/binding path. Disabled accounts remain
+	// excluded, and the binding/capability/location checks below still apply.
+	query := s.db().Where("type = ? AND app_id = ? AND status IN ?", "wechat_miniapp", appID, []string{"active", "sandbox"})
 	var count int64
 	if err := query.Model(&model.ChannelAccount{}).Count(&count).Error; err != nil {
 		return nil, err
@@ -346,7 +350,7 @@ func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceSto
 	var location *model.CommerceFulfillmentLocation
 	err = s.db().Transaction(func(tx *gorm.DB) error {
 		var current model.ChannelAccount
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND type = ? AND app_id = ? AND status = ?", account.ID, account.TenantID, "wechat_miniapp", account.AppID, "active").First(&current).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND type = ? AND app_id = ? AND status IN ?", account.ID, account.TenantID, "wechat_miniapp", account.AppID, []string{"active", "sandbox"}).First(&current).Error; err != nil {
 			return ErrCommerceStorefrontUnavailable
 		}
 		var loadErr error
@@ -398,7 +402,7 @@ func (s *CommerceStorefrontService) authenticate(token string) (*commerceStorefr
 		return nil, ErrCommerceStorefrontUnauthenticated
 	}
 	var account model.ChannelAccount
-	if err := s.db().Where("id = ? AND tenant_id = ? AND type = ? AND status = ?", session.ChannelAccountID, session.TenantID, "wechat_miniapp", "active").First(&account).Error; err != nil {
+	if err := s.db().Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", session.ChannelAccountID, session.TenantID, "wechat_miniapp", []string{"active", "sandbox"}).First(&account).Error; err != nil {
 		return nil, ErrCommerceStorefrontUnavailable
 	}
 	binding, location, err := s.loadBinding(s.db(), &account)

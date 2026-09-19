@@ -169,6 +169,23 @@ func TestCommerceStorefrontSessionsBindAccountAndCustomerCart(t *testing.T) {
 	}
 }
 
+func TestCommerceStorefrontSandboxAccountCanLoginAndAuthenticate(t *testing.T) {
+	fixture := newCommerceStorefrontServiceFixture(t)
+	if err := model.DB.Model(&model.ChannelAccount{}).Where("id = ?", fixture.account.ID).
+		Updates(map[string]interface{}{"status": "sandbox", "environment": "sandbox"}).Error; err != nil {
+		t.Fatalf("set storefront account to sandbox: %v", err)
+	}
+
+	login := storefrontLogin(t, fixture.service, fixture.account.AppID, "sandbox-subject")
+	context, err := fixture.service.authenticate(login.Token)
+	if err != nil {
+		t.Fatalf("authenticate sandbox storefront session: %v", err)
+	}
+	if context.Account.Status != "sandbox" || context.Account.Environment != "sandbox" {
+		t.Fatalf("sandbox storefront account lost environment: %+v", context.Account)
+	}
+}
+
 func TestCommerceStorefrontSessionFailsClosedAcrossTenantsAndLifecycle(t *testing.T) {
 	fixture := newCommerceStorefrontServiceFixture(t)
 	foreignTenantID := createCommerceBoundaryTenant(t, "restaurant")
