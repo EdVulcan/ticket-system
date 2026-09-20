@@ -470,7 +470,7 @@
       <el-form :model="optionGroupForm" label-position="top" class="commerce-form">
         <el-form-item :label="`${optionGroupNoun}名称`" required><el-input v-model="optionGroupForm.name" maxlength="80" :placeholder="optionGroupPlaceholder" /></el-form-item>
         <el-form-item label="选择规则">
-          <el-checkbox v-model="optionGroupForm.required">必选</el-checkbox>
+          <el-checkbox v-model="optionGroupForm.required" @change="onOptionGroupRequiredChange">必选</el-checkbox>
           <div class="selection-range"><el-input-number v-model="optionGroupForm.min_selections" :min="0" :max="99" :controls="false" /><span>至</span><el-input-number v-model="optionGroupForm.max_selections" :min="0" :max="99" :controls="false" /></div>
         </el-form-item>
       </el-form>
@@ -1366,6 +1366,10 @@ function openOptionGroupDialog(group?: any) {
     max_selections: Number(group?.max_selections || 1),
   })
   optionGroupDialogVisible.value = true
+}
+
+function onOptionGroupRequiredChange(required: boolean) {
+  optionGroupForm.min_selections = required ? Math.max(1, optionGroupForm.min_selections) : 0
 }
 
 async function saveOptionGroup() {

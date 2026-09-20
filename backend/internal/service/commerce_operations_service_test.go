@@ -116,6 +116,24 @@ func TestCommerceOptionsCanBeEditedAndSoftDeleted(t *testing.T) {
 	if updatedGroup.Name != "辣度" || updatedGroup.Required || updatedGroup.MinSelections != 0 || updatedGroup.MaxSelections != 2 {
 		t.Fatalf("unexpected updated group: %+v", updatedGroup)
 	}
+	updatedGroup, err = ops.UpdateOptionGroup(tenantID, group.ID, UpdateCommerceOptionGroupInput{
+		Name: "辣度", Required: true, MinSelections: 0, MaxSelections: 2,
+	})
+	if err != nil {
+		t.Fatalf("make option group required: %v", err)
+	}
+	if !updatedGroup.Required || updatedGroup.MinSelections != 1 {
+		t.Fatalf("required option group did not enforce one selection: %+v", updatedGroup)
+	}
+	updatedGroup, err = ops.UpdateOptionGroup(tenantID, group.ID, UpdateCommerceOptionGroupInput{
+		Name: "辣度", Required: false, MinSelections: 1, MaxSelections: 2,
+	})
+	if err != nil {
+		t.Fatalf("make option group optional: %v", err)
+	}
+	if updatedGroup.Required || updatedGroup.MinSelections != 0 {
+		t.Fatalf("optional option group retained a mandatory minimum: %+v", updatedGroup)
+	}
 
 	updatedOption, err := ops.UpdateOption(tenantID, group.ID, option.ID, UpdateCommerceOptionInput{
 		Name: "中辣", PriceDeltaCents: 200, Status: "inactive",
@@ -137,8 +155,12 @@ func TestCommerceOptionsCanBeEditedAndSoftDeleted(t *testing.T) {
 	if err := ops.DeleteOptionGroup(tenantID, group.ID); err != nil {
 		t.Fatalf("delete option group: %v", err)
 	}
-	if _, err := ops.ListOptionGroups(tenantID, product.ID); err != nil {
+	groups, err := ops.ListOptionGroups(tenantID, product.ID)
+	if err != nil {
 		t.Fatalf("list option groups after deletion: %v", err)
+	}
+	if len(groups) != 0 {
+		t.Fatalf("deleted option group remained visible: %+v", groups)
 	}
 	var deletedGroup model.CommerceOptionGroup
 	if err := model.DB.Unscoped().Where("id = ? AND tenant_id = ?", group.ID, tenantID).First(&deletedGroup).Error; err != nil {
@@ -146,6 +168,13 @@ func TestCommerceOptionsCanBeEditedAndSoftDeleted(t *testing.T) {
 	}
 	if !deletedGroup.DeletedAt.Valid {
 		t.Fatal("option group was physically retained without a soft-delete timestamp")
+	}
+	var deletedOption model.CommerceOption
+	if err := model.DB.Unscoped().Where("id = ? AND tenant_id = ?", option.ID, tenantID).First(&deletedOption).Error; err != nil {
+		t.Fatalf("load soft-deleted option: %v", err)
+	}
+	if !deletedOption.DeletedAt.Valid {
+		t.Fatal("option was physically retained without a soft-delete timestamp")
 	}
 }
 

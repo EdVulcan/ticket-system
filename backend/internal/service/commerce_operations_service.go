@@ -140,6 +140,8 @@ func normalizeOptionGroupInput(input CreateCommerceOptionGroupInput) (CreateComm
 	}
 	if input.Required && input.MinSelections == 0 {
 		input.MinSelections = 1
+	} else if !input.Required {
+		input.MinSelections = 0
 	}
 	if input.MaxSelections == 0 {
 		input.MaxSelections = 1
