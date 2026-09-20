@@ -67,6 +67,7 @@ func TestCommerceSchema124CreatesIsolatedTablesAndConstraints(t *testing.T) {
 		{&CommercePaymentReconciliationTask{}, "ProviderPaidAt"},
 		{&CommercePaymentReconciliationTask{}, "ProviderAmountCents"},
 		{&CommercePaymentReconciliationTask{}, "ProviderReference"},
+		{&CommercePaymentReconciliationTask{}, "LockedAt"},
 		{&CommerceOrderItem{}, "ReservationStatus"},
 		{&CommerceOrderItem{}, "ReleasedAt"},
 		{&CommerceAfterSaleRequest{}, "ProviderRefundReference"},
@@ -185,6 +186,28 @@ func TestCommerceSchema124CreatesIsolatedTablesAndConstraints(t *testing.T) {
 	}
 	if err := db.Create(&negativeProviderAmount).Error; err == nil {
 		t.Fatal("negative provider refund amount was accepted")
+	}
+}
+
+func TestCommercePaymentReconciliationLockMigrationRepairsMissingColumn(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec("ALTER TABLE commerce_payment_reconciliation_tasks DROP COLUMN IF EXISTS locked_at").Error; err != nil {
+		t.Fatal(err)
+	}
+	if db.Migrator().HasColumn(&CommercePaymentReconciliationTask{}, "LockedAt") {
+		t.Fatal("locked_at column was not removed from migration fixture")
+	}
+	if err := migrateCommercePaymentReconciliationLock(db, 136); err != nil {
+		t.Fatalf("repair missing locked_at column: %v", err)
+	}
+	if !db.Migrator().HasColumn(&CommercePaymentReconciliationTask{}, "LockedAt") {
+		t.Fatal("locked_at column was not restored")
+	}
+	if !db.Migrator().HasIndex(&CommercePaymentReconciliationTask{}, "idx_commerce_payment_reconciliation_claim") {
+		t.Fatal("reconciliation claim index was not restored")
 	}
 }
 

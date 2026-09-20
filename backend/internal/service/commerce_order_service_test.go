@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -520,6 +521,31 @@ func TestCommerceApplyPaymentOutcomePendingCreatesReconciliationTask(t *testing.
 	stock := loadCommerceInventory(t, tenantID, skuID, locationID)
 	if stock.AvailableQty != 18 || stock.ReservedQty != 2 || stock.ReleasedQty != 0 || stock.SoldQty != 0 {
 		t.Fatalf("pending outcome changed stock=%+v", stock)
+	}
+}
+
+func TestCommercePaymentReconciliationClaimsPendingTask(t *testing.T) {
+	tenantID, productID, skuID, locationID, now := commerceOrderFixture(t)
+	orderService := &CommerceOrderService{Clock: func() time.Time { return now }}
+	order, err := orderService.CreateOrder(tenantID, commerceOrderInput(productID, skuID, locationID, "reconciliation-claim", now.Add(time.Minute)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := orderService.MarkPaymentPendingWithReference(tenantID, order.ID, "provider-reconciliation-claim"); err != nil {
+		t.Fatalf("mark payment pending: %v", err)
+	}
+
+	reconciliation := &CommercePaymentReconciliationService{Clock: func() time.Time { return now }}
+	processed, err := reconciliation.ProcessTasks(context.Background(), now, 1)
+	if err != nil {
+		t.Fatalf("process pending reconciliation task: %v", err)
+	}
+	if processed != 1 {
+		t.Fatalf("processed=%d, want 1", processed)
+	}
+	task := loadCommercePaymentTask(t, tenantID, order.ID)
+	if task.Status != "manual_review" || task.LastError == "" {
+		t.Fatalf("reconciliation task=%+v", task)
 	}
 }
 

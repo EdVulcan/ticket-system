@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 136
+const CurrentPostgresSchemaVersion = 137
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -757,12 +757,15 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateCommercePaymentProviderReference(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateCommercePaymentReconciliationLock(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	if err := migrateCommerceProductMedia(db, previousSchemaVersion); err != nil {
 		return err
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "commerce product media",
+		Name:      "commerce payment reconciliation lock",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -837,6 +840,31 @@ func migrateCommercePaymentProviderReference(db *gorm.DB, previous int) error {
 	}
 	if err := db.Exec(`ALTER TABLE commerce_payment_reconciliation_tasks ADD COLUMN IF NOT EXISTS provider_reference varchar(120)`).Error; err != nil {
 		return fmt.Errorf("register commerce provider reference: %w", err)
+	}
+	return nil
+}
+
+// migrateCommercePaymentReconciliationLock adds the lease timestamp used by
+// the restart-safe commercial payment reconciliation worker. The worker
+// already writes and filters this column, so older databases must receive it
+// before the new binary can claim tasks.
+func migrateCommercePaymentReconciliationLock(db *gorm.DB, previous int) error {
+	if previous >= 137 {
+		return nil
+	}
+	if err := db.Exec(`
+		ALTER TABLE commerce_payment_reconciliation_tasks
+			ADD COLUMN IF NOT EXISTS locked_at timestamptz;
+		ALTER TABLE commerce_payment_reconciliation_tasks
+			DROP CONSTRAINT IF EXISTS chk_commerce_payment_reconciliation_status;
+		ALTER TABLE commerce_payment_reconciliation_tasks
+			ADD CONSTRAINT chk_commerce_payment_reconciliation_status
+			CHECK (status IN ('pending', 'processing', 'failed', 'completed', 'manual_review'));
+		CREATE INDEX IF NOT EXISTS idx_commerce_payment_reconciliation_claim
+			ON commerce_payment_reconciliation_tasks (status, locked_at, next_attempt_at)
+			WHERE deleted_at IS NULL AND status IN ('pending', 'processing');
+	`).Error; err != nil {
+		return fmt.Errorf("register commerce payment reconciliation lock: %w", err)
 	}
 	return nil
 }

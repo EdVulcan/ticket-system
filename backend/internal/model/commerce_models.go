@@ -164,9 +164,10 @@ type CommercePaymentReconciliationTask struct {
 	ProviderReference   string     `gorm:"size:120" json:"provider_reference,omitempty"`
 	ProviderPaidAt      *time.Time `json:"provider_paid_at,omitempty"`
 	ProviderAmountCents int64      `gorm:"not null;default:0;check:chk_commerce_payment_reconciliation_provider_amount,provider_amount_cents >= 0" json:"provider_amount_cents"`
-	Status              string     `gorm:"size:20;not null;default:'pending';index;check:chk_commerce_payment_reconciliation_status,status IN ('pending','failed','completed','manual_review')" json:"status"`
+	Status              string     `gorm:"size:20;not null;default:'pending';index;check:chk_commerce_payment_reconciliation_status,status IN ('pending','processing','failed','completed','manual_review')" json:"status"`
 	Attempts            int        `gorm:"not null;default:0;check:chk_commerce_payment_reconciliation_attempts,attempts >= 0" json:"attempts"`
 	NextAttemptAt       *time.Time `json:"next_attempt_at,omitempty"`
+	LockedAt            *time.Time `json:"locked_at,omitempty"`
 	LastAttemptAt       *time.Time `json:"last_attempt_at,omitempty"`
 	LastProviderState   string     `gorm:"size:40" json:"last_provider_state,omitempty"`
 	LastError           string     `gorm:"size:500" json:"last_error,omitempty"`
