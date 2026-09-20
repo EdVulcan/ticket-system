@@ -426,13 +426,21 @@
             <div v-for="group in optionGroups" :key="group.id" class="option-group-row">
               <div class="option-group-heading">
                 <div><strong>{{ group.name }}</strong><span>{{ group.required ? '必选' : '可选' }} · {{ group.min_selections }}-{{ group.max_selections }} 项</span></div>
-                <el-button v-if="canWrite" link type="primary" :icon="Plus" @click="openOptionDialog(group)">新增{{ optionNoun }}</el-button>
+                <div class="option-group-actions">
+                  <el-button v-if="canWrite" link type="primary" :icon="Edit" @click="openOptionGroupDialog(group)">编辑</el-button>
+                  <el-button v-if="canWrite" link type="danger" :icon="Delete" @click="removeOptionGroup(group)">删除</el-button>
+                  <el-button v-if="canWrite" link type="primary" :icon="Plus" @click="openOptionDialog(group)">新增{{ optionNoun }}</el-button>
+                </div>
               </div>
               <div v-if="group.options?.length" class="option-list">
                 <div v-for="option in group.options" :key="option.id" class="option-row">
                   <span>{{ option.name }}</span>
                   <span class="option-price">{{ signedMoney(option.price_delta_cents) }}</span>
                   <el-tag size="small" :type="option.status === 'active' ? 'success' : 'info'" effect="plain">{{ option.status === 'active' ? '启用' : '停用' }}</el-tag>
+                  <div class="option-row-actions">
+                    <el-button v-if="canWrite" link type="primary" :icon="Edit" @click="openOptionDialog(group, option)">编辑</el-button>
+                    <el-button v-if="canWrite" link type="danger" :icon="Delete" @click="removeOption(group, option)">删除</el-button>
+                  </div>
                 </div>
               </div>
               <div v-else class="secondary-cell empty-options">暂无规格</div>
@@ -458,7 +466,7 @@
       <template #footer><el-button @click="skuDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveSku">保存{{ skuNoun }}</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="optionGroupDialogVisible" :title="`新增${optionGroupNoun}`" width="min(520px, calc(100vw - 32px))" destroy-on-close>
+    <el-dialog v-model="optionGroupDialogVisible" :title="optionGroupForm.id ? `编辑${optionGroupNoun}` : `新增${optionGroupNoun}`" width="min(520px, calc(100vw - 32px))" destroy-on-close>
       <el-form :model="optionGroupForm" label-position="top" class="commerce-form">
         <el-form-item :label="`${optionGroupNoun}名称`" required><el-input v-model="optionGroupForm.name" maxlength="80" :placeholder="optionGroupPlaceholder" /></el-form-item>
         <el-form-item label="选择规则">
@@ -469,7 +477,7 @@
       <template #footer><el-button @click="optionGroupDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveOptionGroup">保存{{ optionGroupNoun }}</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="optionDialogVisible" :title="`新增${optionNoun}`" width="min(520px, calc(100vw - 32px))" destroy-on-close>
+    <el-dialog v-model="optionDialogVisible" :title="optionForm.id ? `编辑${optionNoun}` : `新增${optionNoun}`" width="min(520px, calc(100vw - 32px))" destroy-on-close>
       <el-form :model="optionForm" label-position="top" class="commerce-form">
         <el-form-item :label="`${optionNoun}名称`" required><el-input v-model="optionForm.name" maxlength="80" :placeholder="optionPlaceholder" /></el-form-item>
         <el-form-item label="价格调整"><el-input-number v-model="optionForm.price_delta" :precision="2" :controls="false" /><span class="form-suffix">元</span></el-form-item>
@@ -589,7 +597,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Delete, Plus, Refresh, Search, UploadFilled } from '@element-plus/icons-vue'
+import { Delete, Edit, Plus, Refresh, Search, UploadFilled } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { hasPermission } from '@/utils/permissions'
 import {
@@ -676,8 +684,8 @@ const productForm = reactive({
   skus: [] as ProductSKU[],
 })
 const skuForm = reactive<ProductSKU>(newSkuForm())
-const optionGroupForm = reactive({ name: '', required: false, min_selections: 0, max_selections: 1 })
-const optionForm = reactive({ group_id: 0, name: '', price_delta: 0, status: 'active' })
+const optionGroupForm = reactive({ id: 0, name: '', required: false, min_selections: 0, max_selections: 1 })
+const optionForm = reactive({ id: 0, group_id: 0, name: '', price_delta: 0, status: 'active' })
 const locationForm = reactive({ name: '', location_type: 'store', status: 'active' })
 const inventoryForm = reactive({ id: 0, sku_id: 0, location_id: 0, available_qty: 0 })
 const adjustmentForm = reactive({ delta: 0 })
@@ -1349,8 +1357,14 @@ async function saveSku() {
   }
 }
 
-function openOptionGroupDialog() {
-  Object.assign(optionGroupForm, { name: '', required: false, min_selections: 0, max_selections: 1 })
+function openOptionGroupDialog(group?: any) {
+  Object.assign(optionGroupForm, {
+    id: group?.id || 0,
+    name: group?.name || '',
+    required: Boolean(group?.required),
+    min_selections: Number(group?.min_selections || 0),
+    max_selections: Number(group?.max_selections || 1),
+  })
   optionGroupDialogVisible.value = true
 }
 
@@ -1366,22 +1380,30 @@ async function saveOptionGroup() {
   }
   saving.value = true
   try {
-    await request.post(`/commerce/products/${detailProduct.value.id}/options`, {
+    const payload = {
       name: optionGroupForm.name.trim(),
       required: optionGroupForm.required,
       min_selections: optionGroupForm.min_selections,
       max_selections: optionGroupForm.max_selections,
-    })
+    }
+    if (optionGroupForm.id) await request.put(`/commerce/option-groups/${optionGroupForm.id}`, payload)
+    else await request.post(`/commerce/products/${detailProduct.value.id}/options`, payload)
     optionGroupDialogVisible.value = false
-    ElMessage.success(`${optionGroupNoun.value}已保存`)
+    ElMessage.success(`${optionGroupNoun.value}已${optionGroupForm.id ? '更新' : '保存'}`)
     await openProductDetail(detailProduct.value)
   } finally {
     saving.value = false
   }
 }
 
-function openOptionDialog(group: any) {
-  Object.assign(optionForm, { group_id: group.id, name: '', price_delta: 0, status: 'active' })
+function openOptionDialog(group: any, option?: any) {
+  Object.assign(optionForm, {
+    id: option?.id || 0,
+    group_id: group.id,
+    name: option?.name || '',
+    price_delta: Number(option?.price_delta_cents || 0) / 100,
+    status: option?.status || 'active',
+  })
   optionDialogVisible.value = true
 }
 
@@ -1393,15 +1415,49 @@ async function saveOption() {
   }
   saving.value = true
   try {
-    await request.post(`/commerce/option-groups/${optionForm.group_id}/options`, {
+    const payload = {
       name: optionForm.name.trim(),
       price_delta_cents: Math.round(Number(optionForm.price_delta || 0) * 100),
       status: optionForm.status,
-    })
+    }
+    if (optionForm.id) await request.put(`/commerce/option-groups/${optionForm.group_id}/options/${optionForm.id}`, payload)
+    else await request.post(`/commerce/option-groups/${optionForm.group_id}/options`, payload)
     optionDialogVisible.value = false
-    ElMessage.success(`${optionNoun.value}已保存`)
+    ElMessage.success(`${optionNoun.value}已${optionForm.id ? '更新' : '保存'}`)
     if (detailProduct.value) await openProductDetail(detailProduct.value)
   } finally {
+    saving.value = false
+  }
+}
+
+async function removeOptionGroup(group: any) {
+  if (!canWrite.value || !group?.id || !detailProduct.value) return
+  try {
+    await ElMessageBox.confirm(`删除后该${optionGroupNoun.value}及其选项不再用于新订单，历史订单快照不受影响。确认删除？`, `删除${optionGroupNoun.value}`, {
+      type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
+    })
+    saving.value = true
+    await request.delete(`/commerce/option-groups/${group.id}`)
+    ElMessage.success(`${optionGroupNoun.value}已删除`)
+    await openProductDetail(detailProduct.value)
+  } catch { /* cancelled or request interceptor already reported the error */ }
+  finally {
+    saving.value = false
+  }
+}
+
+async function removeOption(group: any, option: any) {
+  if (!canWrite.value || !group?.id || !option?.id || !detailProduct.value) return
+  try {
+    await ElMessageBox.confirm(`删除后该${optionNoun.value}不再用于新订单，历史订单快照不受影响。确认删除？`, `删除${optionNoun.value}`, {
+      type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消',
+    })
+    saving.value = true
+    await request.delete(`/commerce/option-groups/${group.id}/options/${option.id}`)
+    ElMessage.success(`${optionNoun.value}已删除`)
+    await openProductDetail(detailProduct.value)
+  } catch { /* cancelled or request interceptor already reported the error */ }
+  finally {
     saving.value = false
   }
 }
@@ -1582,8 +1638,10 @@ onBeforeUnmount(() => {
 .option-group-list { display: flex; flex-direction: column; gap: 10px; }
 .option-group-row { padding: 14px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); }
 .option-group-heading { align-items: center; }
+.option-group-actions, .option-row-actions { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .option-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--ui-border); }
-.option-row { display: grid; grid-template-columns: 1fr 100px 70px; align-items: center; gap: 8px; font-size: 13px; }
+.option-row { display: grid; grid-template-columns: minmax(0, 1fr) 100px 70px minmax(130px, auto); align-items: center; gap: 8px; font-size: 13px; }
+.option-row-actions { justify-content: flex-end; }
 .option-price { color: var(--ui-text-secondary); text-align: right; }
 .empty-options { padding-top: 12px; }
 .selection-range { display: inline-flex; align-items: center; gap: 8px; margin-left: 18px; vertical-align: middle; }
@@ -1609,6 +1667,8 @@ onBeforeUnmount(() => {
   .sku-code-input, .sku-name-input { grid-column: span 2; }
   .sku-price-input { width: 100%; }
   .selection-range { display: flex; margin: 12px 0 0; }
-  .option-row { grid-template-columns: 1fr 78px 64px; }
+  .option-group-actions { justify-content: flex-end; }
+  .option-row { grid-template-columns: minmax(0, 1fr) 78px 64px; }
+  .option-row-actions { grid-column: 1 / -1; justify-content: flex-start; }
 }
 </style>

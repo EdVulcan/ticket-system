@@ -303,7 +303,11 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	}
 	commerceOptionGroup := protected.Group("/commerce/option-groups")
 	commerceOptionGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"))
+	commerceOptionGroup.PUT("/:groupID", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.UpdateOptionGroup)
+	commerceOptionGroup.DELETE("/:groupID", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.DeleteOptionGroup)
 	commerceOptionGroup.POST("/:groupID/options", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.CreateOption)
+	commerceOptionGroup.PUT("/:groupID/options/:optionID", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.UpdateOption)
+	commerceOptionGroup.DELETE("/:groupID/options/:optionID", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.DeleteOption)
 	commerceSKUGroup := protected.Group("/commerce/skus")
 	commerceSKUGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"))
 	commerceSKUGroup.PUT("/:skuID", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceCatalogController.UpdateSKU)

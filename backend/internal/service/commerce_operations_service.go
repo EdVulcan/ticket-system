@@ -53,7 +53,23 @@ type CreateCommerceOptionGroupInput struct {
 	MaxSelections int    `json:"max_selections"`
 }
 
+// UpdateCommerceOptionGroupInput intentionally mirrors the create payload.
+// Existing orders keep their immutable option snapshots; edits only affect
+// future cart validation and checkout.
+type UpdateCommerceOptionGroupInput struct {
+	Name          string `json:"name"`
+	Required      bool   `json:"required"`
+	MinSelections int    `json:"min_selections"`
+	MaxSelections int    `json:"max_selections"`
+}
+
 type CreateCommerceOptionInput struct {
+	Name            string `json:"name"`
+	PriceDeltaCents int64  `json:"price_delta_cents"`
+	Status          string `json:"status"`
+}
+
+type UpdateCommerceOptionInput struct {
 	Name            string `json:"name"`
 	PriceDeltaCents int64  `json:"price_delta_cents"`
 	Status          string `json:"status"`
@@ -199,6 +215,65 @@ func (s *CommerceOperationsService) CreateOptionGroup(tenantID, productID uint, 
 	return result, err
 }
 
+func (s *CommerceOperationsService) UpdateOptionGroup(tenantID, groupID uint, input UpdateCommerceOptionGroupInput) (*model.CommerceOptionGroup, error) {
+	normalized, err := normalizeOptionGroupInput(CreateCommerceOptionGroupInput{
+		Name: input.Name, Required: input.Required,
+		MinSelections: input.MinSelections, MaxSelections: input.MaxSelections,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var result *model.CommerceOptionGroup
+	err = s.write(func(tx *gorm.DB) error {
+		var group model.CommerceOptionGroup
+		if err := tx.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
+			return err
+		}
+		var product model.CommerceProduct
+		if err := tx.Where("id = ? AND tenant_id = ?", group.ProductID, tenantID).First(&product).Error; err != nil {
+			return err
+		}
+		if err := requireActiveCommerceCapability(tx, tenantID, product.BusinessType); err != nil {
+			return err
+		}
+		if err := tx.Model(&group).Updates(map[string]interface{}{
+			"name": normalized.Name, "required": normalized.Required,
+			"min_selections": normalized.MinSelections, "max_selections": normalized.MaxSelections,
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Preload("Options").First(&group, group.ID).Error; err != nil {
+			return err
+		}
+		result = &group
+		return nil
+	})
+	return result, err
+}
+
+// DeleteOptionGroup is a recoverable removal. Soft-deleting the children in
+// the same transaction prevents orphaned options from becoming selectable,
+// while order snapshots remain query-independent and unchanged.
+func (s *CommerceOperationsService) DeleteOptionGroup(tenantID, groupID uint) error {
+	return s.write(func(tx *gorm.DB) error {
+		var group model.CommerceOptionGroup
+		if err := tx.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
+			return err
+		}
+		var product model.CommerceProduct
+		if err := tx.Where("id = ? AND tenant_id = ?", group.ProductID, tenantID).First(&product).Error; err != nil {
+			return err
+		}
+		if err := requireActiveCommerceCapability(tx, tenantID, product.BusinessType); err != nil {
+			return err
+		}
+		if err := tx.Where("tenant_id = ? AND option_group_id = ?", tenantID, groupID).Delete(&model.CommerceOption{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&group).Error
+	})
+}
+
 func (s *CommerceOperationsService) ListOptionGroups(tenantID, productID uint) ([]model.CommerceOptionGroup, error) {
 	db := s.db()
 	var product model.CommerceProduct
@@ -244,6 +319,62 @@ func (s *CommerceOperationsService) CreateOption(tenantID, groupID uint, input C
 		return nil
 	})
 	return result, err
+}
+
+func (s *CommerceOperationsService) UpdateOption(tenantID, groupID, optionID uint, input UpdateCommerceOptionInput) (*model.CommerceOption, error) {
+	normalized, err := normalizeOptionInput(CreateCommerceOptionInput{
+		Name: input.Name, PriceDeltaCents: input.PriceDeltaCents, Status: input.Status,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var result *model.CommerceOption
+	err = s.write(func(tx *gorm.DB) error {
+		var option model.CommerceOption
+		if err := tx.Where("id = ? AND tenant_id = ? AND option_group_id = ?", optionID, tenantID, groupID).First(&option).Error; err != nil {
+			return err
+		}
+		var group model.CommerceOptionGroup
+		if err := tx.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
+			return err
+		}
+		var product model.CommerceProduct
+		if err := tx.Where("id = ? AND tenant_id = ?", group.ProductID, tenantID).First(&product).Error; err != nil {
+			return err
+		}
+		if err := requireActiveCommerceCapability(tx, tenantID, product.BusinessType); err != nil {
+			return err
+		}
+		if err := tx.Model(&option).Updates(map[string]interface{}{
+			"name": normalized.Name, "price_delta_cents": normalized.PriceDeltaCents, "status": normalized.Status,
+		}).Error; err != nil {
+			return err
+		}
+		result = &option
+		return nil
+	})
+	return result, err
+}
+
+func (s *CommerceOperationsService) DeleteOption(tenantID, groupID, optionID uint) error {
+	return s.write(func(tx *gorm.DB) error {
+		var option model.CommerceOption
+		if err := tx.Where("id = ? AND tenant_id = ? AND option_group_id = ?", optionID, tenantID, groupID).First(&option).Error; err != nil {
+			return err
+		}
+		var group model.CommerceOptionGroup
+		if err := tx.Where("id = ? AND tenant_id = ?", groupID, tenantID).First(&group).Error; err != nil {
+			return err
+		}
+		var product model.CommerceProduct
+		if err := tx.Where("id = ? AND tenant_id = ?", group.ProductID, tenantID).First(&product).Error; err != nil {
+			return err
+		}
+		if err := requireActiveCommerceCapability(tx, tenantID, product.BusinessType); err != nil {
+			return err
+		}
+		return tx.Delete(&option).Error
+	})
 }
 
 func (s *CommerceOperationsService) CreateLocation(tenantID uint, input CreateCommerceLocationInput) (*model.CommerceFulfillmentLocation, error) {

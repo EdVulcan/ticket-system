@@ -235,6 +235,36 @@ func (c *CommerceOperationsController) CreateOptionGroup(ctx *gin.Context) {
 	ctx.JSON(http.StatusCreated, row)
 }
 
+func (c *CommerceOperationsController) UpdateOptionGroup(ctx *gin.Context) {
+	groupID, err := parseCommerceID(ctx, "groupID")
+	if err != nil {
+		return
+	}
+	var input service.UpdateCommerceOptionGroupInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "规格组信息格式不正确"})
+		return
+	}
+	row, err := c.Service.UpdateOptionGroup(ctx.GetUint("tenant_id"), groupID, input)
+	if err != nil {
+		commerceCatalogError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, row)
+}
+
+func (c *CommerceOperationsController) DeleteOptionGroup(ctx *gin.Context) {
+	groupID, err := parseCommerceID(ctx, "groupID")
+	if err != nil {
+		return
+	}
+	if err := c.Service.DeleteOptionGroup(ctx.GetUint("tenant_id"), groupID); err != nil {
+		commerceCatalogError(ctx, err)
+		return
+	}
+	ctx.Status(http.StatusNoContent)
+}
+
 func (c *CommerceOperationsController) CreateOption(ctx *gin.Context) {
 	groupID, err := parseCommerceID(ctx, "groupID")
 	if err != nil {
@@ -251,6 +281,44 @@ func (c *CommerceOperationsController) CreateOption(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusCreated, row)
+}
+
+func (c *CommerceOperationsController) UpdateOption(ctx *gin.Context) {
+	groupID, err := parseCommerceID(ctx, "groupID")
+	if err != nil {
+		return
+	}
+	optionID, err := parseCommerceID(ctx, "optionID")
+	if err != nil {
+		return
+	}
+	var input service.UpdateCommerceOptionInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "规格信息格式不正确"})
+		return
+	}
+	row, err := c.Service.UpdateOption(ctx.GetUint("tenant_id"), groupID, optionID, input)
+	if err != nil {
+		commerceCatalogError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, row)
+}
+
+func (c *CommerceOperationsController) DeleteOption(ctx *gin.Context) {
+	groupID, err := parseCommerceID(ctx, "groupID")
+	if err != nil {
+		return
+	}
+	optionID, err := parseCommerceID(ctx, "optionID")
+	if err != nil {
+		return
+	}
+	if err := c.Service.DeleteOption(ctx.GetUint("tenant_id"), groupID, optionID); err != nil {
+		commerceCatalogError(ctx, err)
+		return
+	}
+	ctx.Status(http.StatusNoContent)
 }
 
 func (c *CommerceOperationsController) ListLocations(ctx *gin.Context) {

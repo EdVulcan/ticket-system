@@ -86,6 +86,99 @@ func TestCommerceOptionsLocationsInventoryAndCart(t *testing.T) {
 	}
 }
 
+func TestCommerceOptionsCanBeEditedAndSoftDeleted(t *testing.T) {
+	tenantID := newCommerceTenant(t, "restaurant", "active")
+	catalog := &CommerceCatalogService{}
+	product, err := catalog.CreateProduct(tenantID, commerceProductInput("Editable meal"))
+	if err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+	ops := &CommerceOperationsService{}
+	group, err := ops.CreateOptionGroup(tenantID, product.ID, CreateCommerceOptionGroupInput{
+		Name: "口味", Required: true, MinSelections: 1, MaxSelections: 1,
+	})
+	if err != nil {
+		t.Fatalf("create option group: %v", err)
+	}
+	option, err := ops.CreateOption(tenantID, group.ID, CreateCommerceOptionInput{
+		Name: "微辣", PriceDeltaCents: 100,
+	})
+	if err != nil {
+		t.Fatalf("create option: %v", err)
+	}
+
+	updatedGroup, err := ops.UpdateOptionGroup(tenantID, group.ID, UpdateCommerceOptionGroupInput{
+		Name: "辣度", Required: false, MinSelections: 0, MaxSelections: 2,
+	})
+	if err != nil {
+		t.Fatalf("update option group: %v", err)
+	}
+	if updatedGroup.Name != "辣度" || updatedGroup.Required || updatedGroup.MinSelections != 0 || updatedGroup.MaxSelections != 2 {
+		t.Fatalf("unexpected updated group: %+v", updatedGroup)
+	}
+
+	updatedOption, err := ops.UpdateOption(tenantID, group.ID, option.ID, UpdateCommerceOptionInput{
+		Name: "中辣", PriceDeltaCents: 200, Status: "inactive",
+	})
+	if err != nil {
+		t.Fatalf("update option: %v", err)
+	}
+	if updatedOption.Name != "中辣" || updatedOption.PriceDeltaCents != 200 || updatedOption.Status != "inactive" {
+		t.Fatalf("unexpected updated option: %+v", updatedOption)
+	}
+
+	if err := ops.DeleteOption(tenantID, group.ID, option.ID); err != nil {
+		t.Fatalf("delete option: %v", err)
+	}
+	if _, err := ops.UpdateOption(tenantID, group.ID, option.ID, UpdateCommerceOptionInput{Name: "再次编辑"}); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("deleted option update error=%v, want record not found", err)
+	}
+
+	if err := ops.DeleteOptionGroup(tenantID, group.ID); err != nil {
+		t.Fatalf("delete option group: %v", err)
+	}
+	if _, err := ops.ListOptionGroups(tenantID, product.ID); err != nil {
+		t.Fatalf("list option groups after deletion: %v", err)
+	}
+	var deletedGroup model.CommerceOptionGroup
+	if err := model.DB.Unscoped().Where("id = ? AND tenant_id = ?", group.ID, tenantID).First(&deletedGroup).Error; err != nil {
+		t.Fatalf("load soft-deleted group: %v", err)
+	}
+	if !deletedGroup.DeletedAt.Valid {
+		t.Fatal("option group was physically retained without a soft-delete timestamp")
+	}
+}
+
+func TestCommerceOptionEditsAndDeletesRemainTenantScoped(t *testing.T) {
+	firstTenant := newCommerceTenant(t, "restaurant", "active")
+	product, err := (&CommerceCatalogService{}).CreateProduct(firstTenant, commerceProductInput("Tenant scoped options"))
+	if err != nil {
+		t.Fatalf("create product: %v", err)
+	}
+	ops := &CommerceOperationsService{}
+	group, err := ops.CreateOptionGroup(firstTenant, product.ID, CreateCommerceOptionGroupInput{Name: "口味"})
+	if err != nil {
+		t.Fatalf("create option group: %v", err)
+	}
+	option, err := ops.CreateOption(firstTenant, group.ID, CreateCommerceOptionInput{Name: "原味"})
+	if err != nil {
+		t.Fatalf("create option: %v", err)
+	}
+	foreignTenant := newCommerceTenant(t, "restaurant", "active")
+	if _, err := ops.UpdateOptionGroup(foreignTenant, group.ID, UpdateCommerceOptionGroupInput{Name: "越权"}); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("foreign group update error=%v, want record not found", err)
+	}
+	if _, err := ops.UpdateOption(foreignTenant, group.ID, option.ID, UpdateCommerceOptionInput{Name: "越权"}); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("foreign option update error=%v, want record not found", err)
+	}
+	if err := ops.DeleteOption(foreignTenant, group.ID, option.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("foreign option delete error=%v, want record not found", err)
+	}
+	if err := ops.DeleteOptionGroup(foreignTenant, group.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("foreign group delete error=%v, want record not found", err)
+	}
+}
+
 func TestCommerceCheckoutCartSerializesDifferentIdempotencyKeys(t *testing.T) {
 	tenantID := newCommerceTenant(t, "restaurant", "active")
 	catalog := &CommerceCatalogService{}
