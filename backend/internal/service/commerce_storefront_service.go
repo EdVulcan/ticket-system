@@ -270,36 +270,36 @@ func (s *CommerceStorefrontService) loadActiveWechatAccount(appID string) (*mode
 	query := s.db().Where("type = ? AND app_id = ? AND status IN ?", "wechat_miniapp", appID, []string{"active", "sandbox"})
 	var count int64
 	if err := query.Model(&model.ChannelAccount{}).Count(&count).Error; err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: channel account lookup failed: %v", ErrCommerceStorefrontUnavailable, err)
 	}
 	if count != 1 {
-		return nil, ErrCommerceStorefrontUnavailable
+		return nil, fmt.Errorf("%w: expected one enabled wechat channel account for app id, found %d", ErrCommerceStorefrontUnavailable, count)
 	}
 	var account model.ChannelAccount
 	if err := query.First(&account).Error; err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: channel account load failed: %v", ErrCommerceStorefrontUnavailable, err)
 	}
 	return &account, nil
 }
 
 func (s *CommerceStorefrontService) loadBinding(tx *gorm.DB, account *model.ChannelAccount) (*model.CommerceStorefrontBinding, *model.CommerceFulfillmentLocation, error) {
 	if account == nil || account.ID == 0 || account.TenantID == 0 {
-		return nil, nil, ErrCommerceStorefrontUnavailable
+		return nil, nil, fmt.Errorf("%w: storefront account identity is incomplete", ErrCommerceStorefrontUnavailable)
 	}
 	var tenant model.Tenant
 	if err := tx.Select("id", "status").Where("id = ? AND status = ?", account.TenantID, "active").First(&tenant).Error; err != nil {
-		return nil, nil, ErrCommerceStorefrontUnavailable
+		return nil, nil, fmt.Errorf("%w: tenant is not active: %v", ErrCommerceStorefrontUnavailable, err)
 	}
 	var binding model.CommerceStorefrontBinding
 	if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND status = ?", account.TenantID, account.ID, "active").First(&binding).Error; err != nil {
-		return nil, nil, ErrCommerceStorefrontUnavailable
+		return nil, nil, fmt.Errorf("%w: active storefront binding is missing: %v", ErrCommerceStorefrontUnavailable, err)
 	}
 	if err := RequireActiveTenantBusinessCapability(tx, account.TenantID, binding.BusinessType); err != nil {
 		return nil, nil, err
 	}
 	var location model.CommerceFulfillmentLocation
 	if err := tx.Where("id = ? AND tenant_id = ? AND business_type = ? AND status = ?", binding.LocationID, account.TenantID, binding.BusinessType, "active").First(&location).Error; err != nil {
-		return nil, nil, ErrCommerceStorefrontUnavailable
+		return nil, nil, fmt.Errorf("%w: active fulfillment location is missing: %v", ErrCommerceStorefrontUnavailable, err)
 	}
 	return &binding, &location, nil
 }
@@ -318,7 +318,10 @@ func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceSto
 	if strings.TrimSpace(account.SecretCiphertext) != "" {
 		secret, err = utils.DecryptAES(account.SecretCiphertext)
 		if err != nil || strings.TrimSpace(secret) == "" {
-			return nil, ErrCommerceStorefrontUnavailable
+			if err == nil {
+				err = errors.New("decrypted app secret is empty")
+			}
+			return nil, fmt.Errorf("%w: app secret decryption failed: %v", ErrCommerceStorefrontUnavailable, err)
 		}
 	}
 	identity, err := s.loginAdapter().ExchangeCode(ctx, WechatMiniappLoginRequest{
@@ -328,7 +331,10 @@ func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceSto
 		if errors.Is(err, ErrCommerceStorefrontUnavailable) {
 			return nil, err
 		}
-		return nil, fmt.Errorf("%w: provider login failed", ErrCommerceStorefrontUnavailable)
+		// Keep the provider's safe error text in the server-side error chain so
+		// the API layer can log the actual rejection/transport cause. The
+		// controller still maps this to the generic 503 response for callers.
+		return nil, fmt.Errorf("%w: provider login failed: %v", ErrCommerceStorefrontUnavailable, err)
 	}
 	subject := strings.TrimSpace(identity.Subject)
 	if subject == "" {
@@ -351,7 +357,7 @@ func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceSto
 	err = s.db().Transaction(func(tx *gorm.DB) error {
 		var current model.ChannelAccount
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND type = ? AND app_id = ? AND status IN ?", account.ID, account.TenantID, "wechat_miniapp", account.AppID, []string{"active", "sandbox"}).First(&current).Error; err != nil {
-			return ErrCommerceStorefrontUnavailable
+			return fmt.Errorf("%w: channel account changed during login: %v", ErrCommerceStorefrontUnavailable, err)
 		}
 		var loadErr error
 		binding, location, loadErr = s.loadBinding(tx, &current)

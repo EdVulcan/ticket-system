@@ -7,8 +7,10 @@ import (
 	"strings"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
+	"ticket-backend/pkg/logger"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -72,6 +74,13 @@ func (c *CommerceStorefrontController) Login(ctx *gin.Context) {
 	}
 	result, err := c.Service.Login(ctx.Request.Context(), input)
 	if err != nil {
+		if logger.Log != nil {
+			logger.Log.Warn("wechat storefront session rejected",
+				zap.String("app_id", strings.TrimSpace(input.AppID)),
+				zap.String("remote_addr", ctx.Request.RemoteAddr),
+				zap.String("error", err.Error()),
+			)
+		}
 		commerceStorefrontError(ctx, err)
 		return
 	}
