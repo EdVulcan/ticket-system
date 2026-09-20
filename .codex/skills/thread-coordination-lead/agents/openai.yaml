@@ -1,0 +1,6 @@
+interface:
+  display_name: "Thread Coordination Lead"
+  short_description: "持续协调参考任务、读取回复并完成代码验收与测试闭环"
+  default_prompt: "Use $thread-coordination-lead to coordinate a companion Codex task until code and tests are complete."
+policy:
+  allow_implicit_invocation: true

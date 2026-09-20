@@ -126,7 +126,7 @@ func TestCommerceStorefrontControllerLoginBearerAndExpiryBoundary(t *testing.T) 
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated storefront cart status=%d body=%s, want 401", response.Code, response.Body.String())
 	}
-	response = invokeCommerceStorefrontController(t, http.MethodGet, "/storefront/wechat/cart", login.Token, nil, nil, fixture.control.GetCart)
+	response = invokeCommerceStorefrontController(t, http.MethodGet, "/storefront/wechat/cart?business_type=restaurant", login.Token, nil, nil, fixture.control.GetCart)
 	if response.Code != http.StatusOK {
 		t.Fatalf("authenticated storefront cart status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -153,6 +153,74 @@ func TestCommerceStorefrontControllerLoginBearerAndExpiryBoundary(t *testing.T) 
 	}
 }
 
+func TestCommerceStorefrontControllerSharedSessionSelectsBusinessPerRequest(t *testing.T) {
+	fixture := newCommerceStorefrontControllerFixture(t)
+	if err := fixture.db.Create(&model.TenantBusinessCapability{
+		TenantID: fixture.tenant.ID, BusinessType: "retail", Status: "active",
+	}).Error; err != nil {
+		t.Fatalf("create retail capability: %v", err)
+	}
+	retailLocation := model.CommerceFulfillmentLocation{
+		TenantID: fixture.tenant.ID, BusinessType: "retail", Name: "Shared storefront warehouse",
+		LocationType: "warehouse", Status: "active",
+	}
+	if err := fixture.db.Create(&retailLocation).Error; err != nil {
+		t.Fatalf("create retail location: %v", err)
+	}
+	if err := fixture.db.Create(&model.CommerceStorefrontBinding{
+		TenantID: fixture.tenant.ID, ChannelAccountID: fixture.account.ID, BusinessType: "retail",
+		LocationID: retailLocation.ID, Status: "active",
+	}).Error; err != nil {
+		t.Fatalf("create retail storefront binding: %v", err)
+	}
+
+	response := invokeCommerceStorefrontController(t, http.MethodPost, "/storefront/wechat/session", "", map[string]interface{}{
+		"app_id": fixture.account.AppID, "code": "shared-session-subject",
+	}, nil, fixture.control.Login)
+	if response.Code != http.StatusOK {
+		t.Fatalf("shared storefront login status=%d body=%s", response.Code, response.Body.String())
+	}
+	var login service.CommerceStorefrontLoginResult
+	if err := json.Unmarshal(response.Body.Bytes(), &login); err != nil {
+		t.Fatalf("decode shared storefront login: %v", err)
+	}
+	if login.Token == "" || len(login.Businesses) != 2 {
+		t.Fatalf("shared storefront login returned %+v, want one token and two businesses", login)
+	}
+
+	response = invokeCommerceStorefrontController(t, http.MethodGet, "/storefront/wechat/cart", login.Token, nil, nil, fixture.control.GetCart)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("omitted business selector status=%d body=%s, want 409", response.Code, response.Body.String())
+	}
+	response = invokeCommerceStorefrontController(t, http.MethodGet, "/storefront/wechat/cart?business_type=restaurant", login.Token, nil, nil, fixture.control.GetCart)
+	if response.Code != http.StatusOK {
+		t.Fatalf("restaurant business selector status=%d body=%s", response.Code, response.Body.String())
+	}
+	var restaurantCart model.CommerceCart
+	if err := json.Unmarshal(response.Body.Bytes(), &restaurantCart); err != nil {
+		t.Fatalf("decode restaurant cart: %v", err)
+	}
+	if restaurantCart.BusinessType != "restaurant" || restaurantCart.LocationID != fixture.location.ID {
+		t.Fatalf("restaurant cart crossed business boundary: %+v", restaurantCart)
+	}
+
+	response = invokeCommerceStorefrontController(t, http.MethodGet, "/storefront/wechat/cart", login.Token, nil, nil, fixture.control.GetCart)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("repeated omitted selector status=%d body=%s, want 409", response.Code, response.Body.String())
+	}
+	response = invokeCommerceStorefrontController(t, http.MethodGet, "/storefront/wechat/cart?business_type=retail", login.Token, nil, nil, fixture.control.GetCart)
+	if response.Code != http.StatusOK {
+		t.Fatalf("retail business selector status=%d body=%s", response.Code, response.Body.String())
+	}
+	var retailCart model.CommerceCart
+	if err := json.Unmarshal(response.Body.Bytes(), &retailCart); err != nil {
+		t.Fatalf("decode retail cart: %v", err)
+	}
+	if retailCart.BusinessType != "retail" || retailCart.LocationID != retailLocation.ID || retailCart.ID == restaurantCart.ID {
+		t.Fatalf("retail cart crossed business boundary: %+v, restaurant=%+v", retailCart, restaurantCart)
+	}
+}
+
 func TestCommerceStorefrontControllerFailsClosedForDisabledAccountAndCapability(t *testing.T) {
 	fixture := newCommerceStorefrontControllerFixture(t)
 	login := loginCommerceStorefrontController(t, fixture, "disabled-account-subject")
@@ -173,8 +241,8 @@ func TestCommerceStorefrontControllerFailsClosedForDisabledAccountAndCapability(
 		t.Fatalf("suspend API storefront capability: %v", err)
 	}
 	response = invokeCommerceStorefrontController(t, http.MethodGet, "/storefront/wechat/cart", login.Token, nil, nil, fixture.control.GetCart)
-	if response.Code != http.StatusForbidden {
-		t.Fatalf("suspended storefront capability status=%d body=%s, want 403", response.Code, response.Body.String())
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("suspended storefront capability status=%d body=%s, want 503", response.Code, response.Body.String())
 	}
 }
 
@@ -351,6 +419,34 @@ func TestCommerceStorefrontAdminBindingControllerUsesTenantScope(t *testing.T) {
 	}
 	if len(channels.Data) != 1 || channels.Data[0].ID != fixture.account.ID || !channels.Data[0].CredentialsReady {
 		t.Fatalf("listed storefront channels=%+v", channels.Data)
+	}
+	if err := fixture.db.Create(&model.TenantBusinessCapability{
+		TenantID: fixture.tenant.ID, BusinessType: "retail", Status: "active",
+	}).Error; err != nil {
+		t.Fatalf("create retail controller capability: %v", err)
+	}
+	retailLocation := model.CommerceFulfillmentLocation{
+		TenantID: fixture.tenant.ID, BusinessType: "retail", Name: "Controller warehouse",
+		LocationType: "warehouse", Status: "active",
+	}
+	if err := fixture.db.Create(&retailLocation).Error; err != nil {
+		t.Fatalf("create retail controller location: %v", err)
+	}
+	response = invokeCommerceController(t, http.MethodPost, "/commerce/storefront-bindings", fixture.tenant.ID, map[string]interface{}{
+		"channel_account_id": fixture.account.ID, "business_type": "retail", "location_id": retailLocation.ID,
+		"status": "active", "reason": "publish retail on shared miniapp",
+	}, nil, fixture.control.SaveBinding)
+	if response.Code != http.StatusOK {
+		t.Fatalf("create same-account retail binding status=%d body=%s", response.Code, response.Body.String())
+	}
+	var secondBinding struct {
+		Data service.CommerceStorefrontBindingView `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &secondBinding); err != nil {
+		t.Fatalf("decode same-account retail binding: %v", err)
+	}
+	if secondBinding.Data.BusinessType != "retail" || secondBinding.Data.ChannelAccountID != fixture.account.ID || secondBinding.Data.LocationID != retailLocation.ID {
+		t.Fatalf("same-account retail binding=%+v", secondBinding.Data)
 	}
 
 	response = invokeCommerceController(t, http.MethodPut, "/commerce/storefront-bindings/"+strconv.FormatUint(uint64(listed.Data[0].ID), 10), fixture.tenant.ID, map[string]interface{}{

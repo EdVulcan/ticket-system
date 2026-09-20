@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 137
+const CurrentPostgresSchemaVersion = 138
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -748,6 +748,9 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateCommerceStorefront(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateCommerceStorefrontMultiDomain(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	if err := migrateCommerceStorefrontAddresses(db, previousSchemaVersion); err != nil {
 		return err
 	}
@@ -765,7 +768,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "commerce payment reconciliation lock",
+		Name:      "commerce storefront multi-domain binding",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -932,6 +935,47 @@ func migrateCommerceStorefront(db *gorm.DB, previous int) error {
 			WHERE deleted_at IS NULL AND status = 'active';
 	`).Error; err != nil {
 		return fmt.Errorf("register commerce storefront indexes: %w", err)
+	}
+	return nil
+}
+
+// migrateCommerceStorefrontMultiDomain lets one WeChat channel account publish
+// both commercial domains for a tenant. The old account-only unique index made
+// the second binding fail even though restaurant and retail have independent
+// catalogs, locations, carts and order state machines. Storefront sessions are
+// account-level identities; a business selector is resolved by the service for
+// each request, so adding or disabling one business never changes the identity
+// or token of another business.
+func migrateCommerceStorefrontMultiDomain(db *gorm.DB, previous int) error {
+	// Version 138 was briefly implemented with a binding-scoped session column.
+	// If that experimental shape was applied before this correction, detect it
+	// and repair it even though the version marker is already present. A final
+	// account-scoped 138 schema has no such column and can skip the DDL.
+	if previous >= 138 && !db.Migrator().HasColumn(&CommerceCustomerSession{}, "storefront_binding_id") {
+		return nil
+	}
+	if err := db.Exec(`
+		DROP INDEX IF EXISTS idx_commerce_storefront_bindings_account;
+		-- AutoMigrate may have created this index from the Go tag before this
+		-- upgrade runs. Drop it first so the partial definition below is always
+		-- the one installed, including on a fresh database.
+		DROP INDEX IF EXISTS idx_commerce_storefront_bindings_account_domain;
+		CREATE UNIQUE INDEX idx_commerce_storefront_bindings_account_domain
+			ON commerce_storefront_bindings (tenant_id, channel_account_id, business_type)
+			WHERE deleted_at IS NULL;
+
+		-- Remove the transient binding-scoped session experiment. Existing
+		-- sessions retain their account identity and status; no token is
+		-- invalidated merely because another business is configured.
+		ALTER TABLE commerce_customer_sessions
+			DROP COLUMN IF EXISTS storefront_binding_id;
+		DROP INDEX IF EXISTS idx_commerce_customer_sessions_binding;
+		DROP INDEX IF EXISTS idx_commerce_customer_sessions_subject;
+		CREATE UNIQUE INDEX idx_commerce_customer_sessions_subject
+			ON commerce_customer_sessions (channel_account_id, subject_hash)
+			WHERE deleted_at IS NULL AND status = 'active';
+	`).Error; err != nil {
+		return fmt.Errorf("register commerce storefront multi-domain binding: %w", err)
 	}
 	return nil
 }

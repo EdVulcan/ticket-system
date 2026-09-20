@@ -169,6 +169,94 @@ func TestCommerceStorefrontSessionsBindAccountAndCustomerCart(t *testing.T) {
 	}
 }
 
+func TestCommerceStorefrontSameAccountUsesOneSessionAcrossIsolatedDomains(t *testing.T) {
+	fixture := newCommerceStorefrontServiceFixture(t)
+	if err := model.DB.Create(&model.TenantBusinessCapability{
+		TenantID: fixture.tenantID, BusinessType: "retail", Status: "active",
+	}).Error; err != nil {
+		t.Fatalf("create retail storefront capability: %v", err)
+	}
+	retailDomain := createCommerceBoundaryDomainFixture(t, fixture.tenantID, "retail")
+	retailBinding := model.CommerceStorefrontBinding{
+		TenantID: fixture.tenantID, ChannelAccountID: fixture.account.ID, BusinessType: "retail",
+		LocationID: retailDomain.location.ID, Status: "active",
+	}
+	if err := model.DB.Create(&retailBinding).Error; err != nil {
+		t.Fatalf("create second storefront binding on same account: %v", err)
+	}
+	if retailBinding.ID == 0 {
+		t.Fatal("second storefront binding did not receive an id")
+	}
+
+	adapterCalls := 0
+	fixture.service.LoginAdapter = WechatMiniappLoginFunc(func(_ context.Context, request WechatMiniappLoginRequest) (WechatMiniappLoginIdentity, error) {
+		adapterCalls++
+		return WechatMiniappLoginIdentity{Subject: request.Code}, nil
+	})
+	login, err := fixture.service.Login(context.Background(), CommerceStorefrontLoginInput{
+		AppID: fixture.account.AppID, Code: "same-subject",
+	})
+	if err != nil {
+		t.Fatalf("shared-account login: %v", err)
+	}
+	if adapterCalls != 1 {
+		t.Fatalf("shared-account login exchanged provider code %d times, want 1", adapterCalls)
+	}
+	if login.BusinessType != "" || login.LocationID != 0 || len(login.Businesses) != 2 {
+		t.Fatalf("shared-account login returned wrong businesses: %+v", login)
+	}
+	if login.Businesses[0].BusinessType != "restaurant" || login.Businesses[0].Location.ID != fixture.domain.location.ID ||
+		login.Businesses[1].BusinessType != "retail" || login.Businesses[1].Location.ID != retailDomain.location.ID {
+		t.Fatalf("shared-account business routes=%+v", login.Businesses)
+	}
+	if _, err := fixture.service.GetCart(login.Token); !errors.Is(err, ErrCommerceStorefrontAmbiguous) {
+		t.Fatalf("multi-domain cart without selector error=%v, want ambiguous", err)
+	}
+	restaurantCart, err := fixture.service.GetCart(login.Token, "restaurant")
+	if err != nil {
+		t.Fatalf("get restaurant cart: %v", err)
+	}
+	retailCart, err := fixture.service.GetCart(login.Token, "retail")
+	if err != nil {
+		t.Fatalf("get retail cart: %v", err)
+	}
+	if restaurantCart.ID == retailCart.ID || restaurantCart.BusinessType != "restaurant" || retailCart.BusinessType != "retail" {
+		t.Fatalf("shared-account carts crossed domains: restaurant=%+v retail=%+v", restaurantCart, retailCart)
+	}
+	if _, err := fixture.service.AddCartItem(login.Token, CommerceStorefrontCartItemInput{
+		ProductID: fixture.domain.product.ID, SKUID: fixture.domain.sku.ID, Quantity: 1,
+	}, "retail"); err == nil {
+		t.Fatal("retail route accepted restaurant product")
+	}
+
+	retry, err := fixture.service.Login(context.Background(), CommerceStorefrontLoginInput{
+		AppID: fixture.account.AppID, Code: "same-subject",
+	})
+	if err != nil {
+		t.Fatalf("repeat shared-account login: %v", err)
+	}
+	if _, err := fixture.service.Authenticate(login.Token); !errors.Is(err, ErrCommerceStorefrontUnauthenticated) {
+		t.Fatalf("old account session error=%v, want revoked", err)
+	}
+	if _, err := fixture.service.GetCart(retry.Token, "retail"); err != nil {
+		t.Fatalf("new account session could not access retail: %v", err)
+	}
+	if err := model.DB.Model(&model.CommerceStorefrontBinding{}).
+		Where("id = ? AND tenant_id = ?", retailBinding.ID, fixture.tenantID).
+		Update("status", "disabled").Error; err != nil {
+		t.Fatalf("disable retail publication: %v", err)
+	}
+	if _, err := fixture.service.Authenticate(retry.Token); err != nil {
+		t.Fatalf("disabling retail invalidated account session: %v", err)
+	}
+	if _, err := fixture.service.GetCart(retry.Token, "restaurant"); err != nil {
+		t.Fatalf("disabling retail blocked restaurant: %v", err)
+	}
+	if _, err := fixture.service.GetCart(retry.Token, "retail"); !errors.Is(err, ErrCommerceStorefrontUnavailable) {
+		t.Fatalf("disabled retail route error=%v, want unavailable", err)
+	}
+}
+
 func TestCommerceStorefrontSandboxAccountCanLoginAndAuthenticate(t *testing.T) {
 	fixture := newCommerceStorefrontServiceFixture(t)
 	if err := model.DB.Model(&model.ChannelAccount{}).Where("id = ?", fixture.account.ID).
@@ -240,8 +328,11 @@ func TestCommerceStorefrontSessionFailsClosedAcrossTenantsAndLifecycle(t *testin
 		Where("tenant_id = ? AND business_type = ?", fixture.tenantID, "restaurant").Update("status", "suspended").Error; err != nil {
 		t.Fatalf("suspend storefront capability: %v", err)
 	}
-	if _, err := fixture.service.Authenticate(disabledLogin.Token); !errors.Is(err, ErrBusinessCapabilityInactive) {
-		t.Fatalf("suspended storefront capability error=%v, want %v", err, ErrBusinessCapabilityInactive)
+	if _, err := fixture.service.Authenticate(disabledLogin.Token); err != nil {
+		t.Fatalf("one suspended business invalidated account session: %v", err)
+	}
+	if _, err := fixture.service.GetCart(disabledLogin.Token, "restaurant"); !errors.Is(err, ErrBusinessCapabilityInactive) && !errors.Is(err, ErrCommerceStorefrontUnavailable) {
+		t.Fatalf("suspended storefront business error=%v, want capability denial", err)
 	}
 }
 
@@ -303,6 +394,43 @@ func TestCommerceStorefrontCheckoutDerivesFactsAndIsIdempotent(t *testing.T) {
 	}
 	if ticketOrders != 0 || tickets != 0 {
 		t.Fatalf("commercial storefront checkout entered ticket domain: ticket_orders=%d tickets=%d", ticketOrders, tickets)
+	}
+}
+
+func TestCommerceStorefrontBindingMoveCannotDriftExistingCart(t *testing.T) {
+	fixture := newCommerceStorefrontServiceFixture(t)
+	login := storefrontLogin(t, fixture.service, fixture.account.AppID, "binding-move-subject")
+	cart, err := fixture.service.AddCartItem(login.Token, CommerceStorefrontCartItemInput{
+		ProductID: fixture.domain.product.ID, SKUID: fixture.domain.sku.ID, Quantity: 1,
+	})
+	if err != nil {
+		t.Fatalf("seed cart before binding move: %v", err)
+	}
+	replacement := model.CommerceFulfillmentLocation{
+		TenantID: fixture.tenantID, BusinessType: "restaurant", Name: "Replacement restaurant",
+		LocationType: "store", Status: "active",
+	}
+	if err := model.DB.Create(&replacement).Error; err != nil {
+		t.Fatalf("create replacement location: %v", err)
+	}
+	if err := model.DB.Model(&model.CommerceStorefrontBinding{}).
+		Where("id = ? AND tenant_id = ?", fixture.binding.ID, fixture.tenantID).
+		Update("location_id", replacement.ID).Error; err != nil {
+		t.Fatalf("move storefront binding: %v", err)
+	}
+	if _, err := fixture.service.CheckoutCartByID(login.Token, cart.ID, CommerceStorefrontCheckoutInput{
+		IdempotencyKey: "binding-move-checkout", ContactName: "Guest", ContactPhone: "13800138000", FulfillmentMethod: "pickup",
+	}, "restaurant"); !errors.Is(err, ErrCommerceStorefrontOwnership) {
+		t.Fatalf("moved binding checkout error=%v, want ownership rejection", err)
+	}
+	var orders int64
+	if err := model.DB.Model(&model.CommerceOrder{}).
+		Where("tenant_id = ? AND customer_id = ?", fixture.tenantID, cart.CustomerID).
+		Count(&orders).Error; err != nil {
+		t.Fatalf("count orders after rejected binding move: %v", err)
+	}
+	if orders != 0 {
+		t.Fatalf("binding move created %d orders from old cart", orders)
 	}
 }
 
@@ -383,6 +511,23 @@ func TestCommerceStorefrontRefundStaysRequestedUntilProviderConfirmation(t *test
 	if _, err := orderService.ConfirmPayment(fixture.tenantID, order.ID); err != nil {
 		t.Fatalf("confirm storefront refund payment: %v", err)
 	}
+	if err := model.DB.Model(&model.CommerceStorefrontBinding{}).
+		Where("id = ? AND tenant_id = ?", fixture.binding.ID, fixture.tenantID).
+		Update("status", "disabled").Error; err != nil {
+		t.Fatalf("disable storefront binding before historical refund: %v", err)
+	}
+	if err := model.DB.Model(&model.TenantBusinessCapability{}).
+		Where("tenant_id = ? AND business_type = ?", fixture.tenantID, "restaurant").
+		Update("status", "suspended").Error; err != nil {
+		t.Fatalf("suspend storefront capability before historical refund: %v", err)
+	}
+	if historical, err := fixture.service.GetOrderByNo(login.Token, order.OrderNo); err != nil || historical.ID != order.ID {
+		t.Fatalf("historical order disappeared after publication stopped: order=%+v err=%v", historical, err)
+	}
+	payment := &CommercePaymentService{DB: model.DB, Storefront: fixture.service, Clock: fixture.service.Now}
+	if status, err := payment.GetPaymentStatus(context.Background(), login.Token, order.OrderNo); err != nil || status.OrderNo != order.OrderNo || status.Status != "paid" {
+		t.Fatalf("historical payment status disappeared after publication stopped: status=%+v err=%v", status, err)
+	}
 
 	var refundInput CommerceStorefrontRefundInput
 	if err := json.Unmarshal([]byte(`{"idempotency_key":"storefront-refund-request","reason":"customer request","amount_cents":1}`), &refundInput); err != nil {
@@ -420,6 +565,7 @@ func TestCommerceStorefrontBindingAdminBoundaryValidatesAccountCapabilityAndLoca
 	if err := model.DB.Create(&model.TenantBusinessCapability{TenantID: fixture.tenantID, BusinessType: "retail", Status: "active"}).Error; err != nil {
 		t.Fatalf("seed second storefront capability: %v", err)
 	}
+	retailDomain := createCommerceBoundaryDomainFixture(t, fixture.tenantID, "retail")
 	if err := model.DB.Model(&model.ChannelAccount{}).Where("id = ?", fixture.account.ID).Update("secret_ciphertext", "encrypted-secret").Error; err != nil {
 		t.Fatalf("seed storefront account credentials: %v", err)
 	}
@@ -444,6 +590,23 @@ func TestCommerceStorefrontBindingAdminBoundaryValidatesAccountCapabilityAndLoca
 	}
 	if audit.ActorUserID != 101 || audit.Reason != "publish campus storefront" {
 		t.Fatalf("storefront binding audit=%+v", audit)
+	}
+
+	second, err := fixture.service.SaveBinding(fixture.tenantID, CommerceStorefrontBindingInput{
+		ChannelAccountID: fixture.account.ID, BusinessType: "retail", LocationID: retailDomain.location.ID,
+		Status: "active", Reason: "publish retail storefront on shared miniapp",
+	}, 101, "admin")
+	if err != nil {
+		t.Fatalf("same account retail binding was rejected: %v", err)
+	}
+	if second.BusinessType != "retail" || second.ChannelAccountID != fixture.account.ID || second.LocationID != retailDomain.location.ID {
+		t.Fatalf("same account retail binding=%+v", second)
+	}
+	if _, err := fixture.service.SaveBinding(fixture.tenantID, CommerceStorefrontBindingInput{
+		ChannelAccountID: fixture.account.ID, BusinessType: "retail", LocationID: retailDomain.location.ID,
+		Status: "active", Reason: "duplicate retail storefront binding",
+	}, 101, "admin"); !errors.Is(err, ErrCommerceStorefrontBindingInvalid) {
+		t.Fatalf("duplicate same-domain binding error=%v, want invalid binding", err)
 	}
 
 	if _, err := fixture.service.SaveBinding(fixture.tenantID, CommerceStorefrontBindingInput{

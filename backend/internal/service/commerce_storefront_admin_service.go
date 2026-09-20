@@ -213,8 +213,8 @@ func (s *CommerceStorefrontService) SaveBinding(tenantID uint, input CommerceSto
 		return nil
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "idx_commerce_storefront_bindings_account") || strings.Contains(err.Error(), "duplicate key") {
-			return nil, fmt.Errorf("%w: channel account already has a storefront binding", ErrCommerceStorefrontBindingInvalid)
+		if strings.Contains(err.Error(), "idx_commerce_storefront_bindings_account_domain") || strings.Contains(err.Error(), "idx_commerce_storefront_bindings_account") || strings.Contains(err.Error(), "duplicate key") {
+			return nil, fmt.Errorf("%w: channel account already has a storefront binding for this business", ErrCommerceStorefrontBindingInvalid)
 		}
 		return nil, err
 	}

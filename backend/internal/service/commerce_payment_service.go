@@ -271,9 +271,6 @@ func (s *CommercePaymentService) CreateWechatPayment(ctx context.Context, token 
 	if err != nil {
 		return nil, err
 	}
-	if storeCtx.Binding.BusinessType != "restaurant" && storeCtx.Binding.BusinessType != "retail" {
-		return nil, ErrCommercePaymentUnavailable
-	}
 	cfg, err := s.loadWechatConfig(storeCtx.Session.TenantID, &storeCtx.Account)
 	if err != nil {
 		return nil, err
@@ -286,7 +283,10 @@ func (s *CommercePaymentService) CreateWechatPayment(ctx context.Context, token 
 	var attempt model.CommercePaymentAttempt
 	var created bool
 	err = s.db().Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND order_no = ? AND customer_id = ? AND channel = ? AND business_type = ? AND location_id = ?", storeCtx.Session.TenantID, input.OrderNo, storeCtx.CustomerID, "wechat_miniapp", storeCtx.Binding.BusinessType, storeCtx.Binding.LocationID).First(&order).Error; err != nil {
+		// Payment follows the immutable order scope. Publishing a business is a
+		// gate for new carts/orders, not a reason to orphan an already-created
+		// customer order when the binding is later disabled or moved.
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND order_no = ? AND customer_id = ? AND channel = ?", storeCtx.Session.TenantID, input.OrderNo, storeCtx.CustomerID, "wechat_miniapp").First(&order).Error; err != nil {
 			return err
 		}
 		fingerprint := commercePaymentFingerprint(&order, &storeCtx.Account, cfg.AppID, cfg.MchID, storeCtx.Session.SubjectHash)
@@ -405,7 +405,7 @@ func (s *CommercePaymentService) GetPaymentStatus(ctx context.Context, token, or
 		return nil, err
 	}
 	var order model.CommerceOrder
-	if err := s.db().Where("tenant_id = ? AND order_no = ? AND customer_id = ? AND channel = ? AND business_type = ? AND location_id = ?", storeCtx.Session.TenantID, strings.TrimSpace(orderNo), storeCtx.CustomerID, "wechat_miniapp", storeCtx.Binding.BusinessType, storeCtx.Binding.LocationID).First(&order).Error; err != nil {
+	if err := s.db().Where("tenant_id = ? AND order_no = ? AND customer_id = ? AND channel = ?", storeCtx.Session.TenantID, strings.TrimSpace(orderNo), storeCtx.CustomerID, "wechat_miniapp").First(&order).Error; err != nil {
 		return nil, err
 	}
 	var attempt model.CommercePaymentAttempt

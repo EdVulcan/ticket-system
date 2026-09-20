@@ -63,6 +63,10 @@ Never claim a model ran unless the agent activity or tool result identifies it. 
 
 ## Agent skills
 
+### Thread coordination
+
+When the user delegates work to another Codex task/thread and asks the lead to keep coordinating until completion, load `.codex/skills/thread-coordination-lead/SKILL.md`. Keep the bidirectional thread loop and `.codex/coordination/active-thread.md` state record until the member's changes and tests are actually accepted.
+
 ### Issue tracker
 
 Use GitHub Issues in `EdVulcan/ticket-system` through `gh`; external writes require task authorization. See `docs/agents/issue-tracker.md`.

@@ -88,7 +88,7 @@ func (c *CommerceStorefrontController) Login(ctx *gin.Context) {
 }
 
 func (c *CommerceStorefrontController) Catalog(ctx *gin.Context) {
-	catalog, err := c.Service.ListCatalog(commerceStorefrontBearerToken(ctx))
+	catalog, err := c.Service.ListCatalog(commerceStorefrontBearerToken(ctx), commerceStorefrontBusinessType(ctx))
 	if err != nil {
 		commerceStorefrontError(ctx, err)
 		return
@@ -106,9 +106,9 @@ func (c *CommerceStorefrontController) GetCart(ctx *gin.Context) {
 		if parseErr != nil {
 			return
 		}
-		cart, err = c.Service.GetCartByID(commerceStorefrontBearerToken(ctx), cartID)
+		cart, err = c.Service.GetCartByID(commerceStorefrontBearerToken(ctx), cartID, commerceStorefrontBusinessType(ctx))
 	} else {
-		cart, err = c.Service.GetCart(commerceStorefrontBearerToken(ctx))
+		cart, err = c.Service.GetCart(commerceStorefrontBearerToken(ctx), commerceStorefrontBusinessType(ctx))
 	}
 	if err != nil {
 		commerceStorefrontError(ctx, err)
@@ -190,9 +190,9 @@ func (c *CommerceStorefrontController) AddCartItem(ctx *gin.Context) {
 		if parseErr != nil {
 			return
 		}
-		cart, err = c.Service.AddCartItemToCart(commerceStorefrontBearerToken(ctx), cartID, input)
+		cart, err = c.Service.AddCartItemToCart(commerceStorefrontBearerToken(ctx), cartID, input, commerceStorefrontBusinessType(ctx))
 	} else {
-		cart, err = c.Service.AddCartItem(commerceStorefrontBearerToken(ctx), input)
+		cart, err = c.Service.AddCartItem(commerceStorefrontBearerToken(ctx), input, commerceStorefrontBusinessType(ctx))
 	}
 	if err != nil {
 		commerceStorefrontError(ctx, err)
@@ -219,9 +219,9 @@ func (c *CommerceStorefrontController) UpdateCartItem(ctx *gin.Context) {
 		if parseErr != nil {
 			return
 		}
-		cart, err = c.Service.UpdateCartItemToCart(commerceStorefrontBearerToken(ctx), cartID, itemID, input.Quantity)
+		cart, err = c.Service.UpdateCartItemToCart(commerceStorefrontBearerToken(ctx), cartID, itemID, input.Quantity, commerceStorefrontBusinessType(ctx))
 	} else {
-		cart, err = c.Service.UpdateCartItem(commerceStorefrontBearerToken(ctx), itemID, input.Quantity)
+		cart, err = c.Service.UpdateCartItem(commerceStorefrontBearerToken(ctx), itemID, input.Quantity, commerceStorefrontBusinessType(ctx))
 	}
 	if err != nil {
 		commerceStorefrontError(ctx, err)
@@ -241,9 +241,9 @@ func (c *CommerceStorefrontController) RemoveCartItem(ctx *gin.Context) {
 		if parseErr != nil {
 			return
 		}
-		removeErr = c.Service.RemoveCartItemFromCart(commerceStorefrontBearerToken(ctx), cartID, itemID)
+		removeErr = c.Service.RemoveCartItemFromCart(commerceStorefrontBearerToken(ctx), cartID, itemID, commerceStorefrontBusinessType(ctx))
 	} else {
-		removeErr = c.Service.RemoveCartItem(commerceStorefrontBearerToken(ctx), itemID)
+		removeErr = c.Service.RemoveCartItem(commerceStorefrontBearerToken(ctx), itemID, commerceStorefrontBusinessType(ctx))
 	}
 	if removeErr != nil {
 		commerceStorefrontError(ctx, removeErr)
@@ -270,9 +270,9 @@ func (c *CommerceStorefrontController) Checkout(ctx *gin.Context) {
 		if parseErr != nil {
 			return
 		}
-		order, err = c.Service.CheckoutCartByID(commerceStorefrontBearerToken(ctx), cartID, input)
+		order, err = c.Service.CheckoutCartByID(commerceStorefrontBearerToken(ctx), cartID, input, commerceStorefrontBusinessType(ctx))
 	} else {
-		order, err = c.Service.Checkout(commerceStorefrontBearerToken(ctx), input)
+		order, err = c.Service.Checkout(commerceStorefrontBearerToken(ctx), input, commerceStorefrontBusinessType(ctx))
 	}
 	if err != nil {
 		commerceStorefrontError(ctx, err)
@@ -284,7 +284,7 @@ func (c *CommerceStorefrontController) Checkout(ctx *gin.Context) {
 func (c *CommerceStorefrontController) ListOrders(ctx *gin.Context) {
 	page := storefrontQueryInt(ctx, "page", 1)
 	pageSize := storefrontQueryInt(ctx, "page_size", 20)
-	result, err := c.Service.ListOrders(commerceStorefrontBearerToken(ctx), page, pageSize)
+	result, err := c.Service.ListOrders(commerceStorefrontBearerToken(ctx), page, pageSize, commerceStorefrontBusinessType(ctx))
 	if err != nil {
 		commerceStorefrontError(ctx, err)
 		return
@@ -388,6 +388,19 @@ func commerceStorefrontBearerToken(ctx *gin.Context) string {
 	return strings.TrimSpace(parts[1])
 }
 
+// commerceStorefrontBusinessType selects the business context for a shared
+// storefront session. It is a routing hint only; the service must verify that
+// the account session is authorized for the selected business and resolve the
+// tenant/location server-side. The query parameter is the public contract;
+// the header is a convenient fallback for clients that centralize request
+// metadata outside the URL.
+func commerceStorefrontBusinessType(ctx *gin.Context) string {
+	if value := strings.TrimSpace(ctx.Query("business_type")); value != "" {
+		return value
+	}
+	return strings.TrimSpace(ctx.GetHeader("X-Commerce-Business-Type"))
+}
+
 func parseStorefrontID(ctx *gin.Context, name string) (uint, error) {
 	return parseStorefrontPathID(ctx, name, "无效的购物车商品编号")
 }
@@ -415,6 +428,8 @@ func commerceStorefrontError(ctx *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrCommerceStorefrontUnauthenticated):
 		status, message = http.StatusUnauthorized, "登录状态已失效，请重新进入小程序"
+	case errors.Is(err, service.ErrCommerceStorefrontAmbiguous):
+		status, message = http.StatusConflict, "该小程序同时发布了多个业务，请指定业务类型"
 	case errors.Is(err, service.ErrCommerceStorefrontUnavailable):
 		status, message = http.StatusServiceUnavailable, "当前小程序暂未开放"
 	case errors.Is(err, service.ErrTenantUnavailable), errors.Is(err, service.ErrCapabilityInactive), errors.Is(err, service.ErrBusinessCapabilityInactive):

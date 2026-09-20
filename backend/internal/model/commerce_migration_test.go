@@ -189,6 +189,160 @@ func TestCommerceSchema124CreatesIsolatedTablesAndConstraints(t *testing.T) {
 	}
 }
 
+func TestCommerceStorefrontMultiDomainMigrationPreservesAccountSessionsAndRebuildsIndexes(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatal(err)
+	}
+
+	singleTenant := Tenant{Name: "Storefront migration single tenant", SystemCode: "STOREFRONT-MIGRATION-SINGLE", SecretKey: "migration-secret", Status: "active"}
+	if err := db.Create(&singleTenant).Error; err != nil {
+		t.Fatalf("create single-binding tenant: %v", err)
+	}
+	dualTenant := Tenant{Name: "Storefront migration dual tenant", SystemCode: "STOREFRONT-MIGRATION-DUAL", SecretKey: "migration-secret", Status: "active"}
+	if err := db.Create(&dualTenant).Error; err != nil {
+		t.Fatalf("create dual-binding tenant: %v", err)
+	}
+	newAccount := func(tenantID uint, code string) ChannelAccount {
+		account := ChannelAccount{TenantID: tenantID, Code: code, Type: "wechat_miniapp", AppID: code + "-app", Status: "active", Environment: "production"}
+		if err := db.Create(&account).Error; err != nil {
+			t.Fatalf("create storefront account %s: %v", code, err)
+		}
+		return account
+	}
+	newLocation := func(tenantID uint, businessType, name string) CommerceFulfillmentLocation {
+		locationType := "store"
+		if businessType == "retail" {
+			locationType = "warehouse"
+		}
+		location := CommerceFulfillmentLocation{TenantID: tenantID, BusinessType: businessType, Name: name, LocationType: locationType, Status: "active"}
+		if err := db.Create(&location).Error; err != nil {
+			t.Fatalf("create storefront location %s: %v", name, err)
+		}
+		return location
+	}
+	if err := db.Create(&TenantBusinessCapability{TenantID: singleTenant.ID, BusinessType: "restaurant", Status: "active"}).Error; err != nil {
+		t.Fatalf("create single capability: %v", err)
+	}
+	if err := db.Create(&TenantBusinessCapability{TenantID: dualTenant.ID, BusinessType: "restaurant", Status: "active"}).Error; err != nil {
+		t.Fatalf("create dual capability: %v", err)
+	}
+	if err := db.Create(&TenantBusinessCapability{TenantID: dualTenant.ID, BusinessType: "retail", Status: "active"}).Error; err != nil {
+		t.Fatalf("create dual retail capability: %v", err)
+	}
+	singleAccount := newAccount(singleTenant.ID, "migration-single")
+	dualAccount := newAccount(dualTenant.ID, "migration-dual")
+	singleLocation := newLocation(singleTenant.ID, "restaurant", "single location")
+	dualLocationA := newLocation(dualTenant.ID, "restaurant", "dual restaurant location")
+	dualLocationB := newLocation(dualTenant.ID, "retail", "dual retail location")
+	singleBinding := CommerceStorefrontBinding{TenantID: singleTenant.ID, ChannelAccountID: singleAccount.ID, BusinessType: "restaurant", LocationID: singleLocation.ID, Status: "active"}
+	if err := db.Create(&singleBinding).Error; err != nil {
+		t.Fatalf("create single binding: %v", err)
+	}
+	dualBindingA := CommerceStorefrontBinding{TenantID: dualTenant.ID, ChannelAccountID: dualAccount.ID, BusinessType: "restaurant", LocationID: dualLocationA.ID, Status: "active"}
+	if err := db.Create(&dualBindingA).Error; err != nil {
+		t.Fatalf("create dual restaurant binding: %v", err)
+	}
+	legacySession := func(tenantID, accountID uint, subject string) CommerceCustomerSession {
+		session := CommerceCustomerSession{
+			TenantID: tenantID, ChannelAccountID: accountID,
+			SubjectHash: subject, TokenHash: subject + "-token", ExpiresAt: time.Now().Add(time.Hour), Status: "active",
+		}
+		if err := db.Create(&session).Error; err != nil {
+			t.Fatalf("create legacy session %s: %v", subject, err)
+		}
+		return session
+	}
+	singleSession := legacySession(singleTenant.ID, singleAccount.ID, "single-subject")
+	dualSession := legacySession(dualTenant.ID, dualAccount.ID, "dual-subject")
+
+	// Recreate the schema shape produced by version 137: no experimental
+	// binding column, account-only binding uniqueness, and a non-partial
+	// account-session uniqueness index. This keeps the test meaningful even
+	// though testdb starts from the current model.
+	if err := db.Exec(`
+		DROP INDEX IF EXISTS idx_commerce_storefront_bindings_account_domain;
+		CREATE UNIQUE INDEX idx_commerce_storefront_bindings_account
+			ON commerce_storefront_bindings (tenant_id, channel_account_id);
+		DROP INDEX IF EXISTS idx_commerce_customer_sessions_subject;
+		CREATE UNIQUE INDEX idx_commerce_customer_sessions_subject
+			ON commerce_customer_sessions (channel_account_id, subject_hash);
+		ALTER TABLE commerce_customer_sessions DROP COLUMN IF EXISTS storefront_binding_id;
+	`).Error; err != nil {
+		t.Fatalf("restore schema-137 storefront shape: %v", err)
+	}
+	if err := migrateCommerceStorefrontMultiDomain(db, CurrentPostgresSchemaVersion-1); err != nil {
+		t.Fatalf("run storefront multi-domain migration: %v", err)
+	}
+	var migratedSingle CommerceCustomerSession
+	if err := db.First(&migratedSingle, singleSession.ID).Error; err != nil {
+		t.Fatalf("load migrated single session: %v", err)
+	}
+	if migratedSingle.Status != "active" || migratedSingle.ChannelAccountID != singleAccount.ID || migratedSingle.SubjectHash != "single-subject" {
+		t.Fatalf("single-binding legacy session=%+v, want account-scoped active session", migratedSingle)
+	}
+	var migratedDual CommerceCustomerSession
+	if err := db.First(&migratedDual, dualSession.ID).Error; err != nil {
+		t.Fatalf("load migrated dual session: %v", err)
+	}
+	if migratedDual.Status != "active" || migratedDual.ChannelAccountID != dualAccount.ID || migratedDual.SubjectHash != "dual-subject" {
+		t.Fatalf("dual-binding legacy session=%+v, want account-scoped active session", migratedDual)
+	}
+	if db.Migrator().HasColumn(&CommerceCustomerSession{}, "storefront_binding_id") {
+		t.Fatal("experimental storefront_binding_id column remains after account-session migration")
+	}
+
+	var bindingIndex, sessionIndex string
+	if err := db.Raw(`SELECT indexdef FROM pg_indexes WHERE schemaname = CURRENT_SCHEMA() AND indexname = 'idx_commerce_storefront_bindings_account_domain'`).Scan(&bindingIndex).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.ToLower(bindingIndex), "deleted_at is null") || !strings.Contains(bindingIndex, "business_type") {
+		t.Fatalf("binding index does not scope soft-deleted rows and business type: %s", bindingIndex)
+	}
+	if err := db.Raw(`SELECT indexdef FROM pg_indexes WHERE schemaname = CURRENT_SCHEMA() AND indexname = 'idx_commerce_customer_sessions_subject'`).Scan(&sessionIndex).Error; err != nil {
+		t.Fatal(err)
+	}
+	lowerSessionIndex := strings.ToLower(sessionIndex)
+	if !strings.Contains(lowerSessionIndex, "channel_account_id") || !strings.Contains(lowerSessionIndex, "subject_hash") || !strings.Contains(lowerSessionIndex, "status") || !strings.Contains(lowerSessionIndex, "active") || strings.Contains(sessionIndex, "storefront_binding_id") {
+		t.Fatalf("session index does not scope active account sessions: %s", sessionIndex)
+	}
+	dualBindingB := CommerceStorefrontBinding{TenantID: dualTenant.ID, ChannelAccountID: dualAccount.ID, BusinessType: "retail", LocationID: dualLocationB.ID, Status: "active"}
+	if err := db.Create(&dualBindingB).Error; err != nil {
+		t.Fatalf("same AppID could not add second business binding after migration: %v", err)
+	}
+
+	// Rerunning the correction against an already repaired 138 database is a
+	// no-op and must not disturb existing sessions.
+	if err := migrateCommerceStorefrontMultiDomain(db, CurrentPostgresSchemaVersion); err != nil {
+		t.Fatalf("rerun storefront multi-domain migration: %v", err)
+	}
+	var rerunSession CommerceCustomerSession
+	if err := db.First(&rerunSession, dualSession.ID).Error; err != nil || rerunSession.Status != "active" {
+		t.Fatalf("rerun changed account session=%+v err=%v", rerunSession, err)
+	}
+
+	// A deployment may have recorded schema 138 while the short-lived
+	// binding-scoped session experiment was still present. The repair path must
+	// inspect the physical column, not only the schema marker, and preserve the
+	// account-scoped session facts while removing that stale shape.
+	if err := db.Exec("ALTER TABLE commerce_customer_sessions ADD COLUMN storefront_binding_id bigint").Error; err != nil {
+		t.Fatalf("add experimental storefront_binding_id column: %v", err)
+	}
+	if !db.Migrator().HasColumn(&CommerceCustomerSession{}, "storefront_binding_id") {
+		t.Fatal("experimental storefront_binding_id column was not added to repair fixture")
+	}
+	if err := migrateCommerceStorefrontMultiDomain(db, CurrentPostgresSchemaVersion); err != nil {
+		t.Fatalf("repair experimental schema-138 storefront shape: %v", err)
+	}
+	if db.Migrator().HasColumn(&CommerceCustomerSession{}, "storefront_binding_id") {
+		t.Fatal("schema-138 repair left experimental storefront_binding_id column")
+	}
+	var repairedSession CommerceCustomerSession
+	if err := db.First(&repairedSession, dualSession.ID).Error; err != nil || repairedSession.Status != "active" || repairedSession.ChannelAccountID != dualAccount.ID {
+		t.Fatalf("schema-138 repair changed account session=%+v err=%v", repairedSession, err)
+	}
+}
+
 func TestCommercePaymentReconciliationLockMigrationRepairsMissingColumn(t *testing.T) {
 	db := testdb.Open(t)
 	if err := runMigrations(db); err != nil {

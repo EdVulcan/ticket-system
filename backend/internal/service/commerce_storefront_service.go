@@ -23,6 +23,7 @@ var (
 	ErrCommerceStorefrontUnavailable     = errors.New("commerce storefront is unavailable")
 	ErrCommerceStorefrontUnauthenticated = errors.New("commerce storefront session is invalid or expired")
 	ErrCommerceStorefrontInvalid         = errors.New("commerce storefront request is invalid")
+	ErrCommerceStorefrontAmbiguous       = errors.New("commerce storefront business type is ambiguous")
 	ErrCommerceStorefrontOwnership       = errors.New("commerce storefront resource is not owned by the customer")
 	ErrCommerceStorefrontAddressInvalid  = errors.New("commerce storefront address is invalid")
 )
@@ -72,13 +73,21 @@ type CommerceStorefrontLoginInput struct {
 	Code  string `json:"code"`
 }
 
+type CommerceStorefrontBusinessView struct {
+	BusinessType string                            `json:"business_type"`
+	Location     model.CommerceFulfillmentLocation `json:"location"`
+}
+
 type CommerceStorefrontLoginResult struct {
-	Token            string    `json:"token"`
-	ExpiresAt        time.Time `json:"expires_at"`
-	TenantID         uint      `json:"tenant_id"`
-	ChannelAccountID uint      `json:"channel_account_id"`
-	BusinessType     string    `json:"business_type"`
-	LocationID       uint      `json:"location_id"`
+	Token            string                           `json:"token"`
+	ExpiresAt        time.Time                        `json:"expires_at"`
+	TenantID         uint                             `json:"tenant_id"`
+	ChannelAccountID uint                             `json:"channel_account_id"`
+	Businesses       []CommerceStorefrontBusinessView `json:"businesses"`
+	// These fields keep single-domain clients compatible. Multi-domain clients
+	// select a business on each business API request instead.
+	BusinessType string `json:"business_type,omitempty"`
+	LocationID   uint   `json:"location_id,omitempty"`
 }
 
 type CommerceStorefrontCatalog struct {
@@ -156,9 +165,9 @@ type CommerceStorefrontOrderPage struct {
 }
 
 // CommerceStorefrontService is the public customer boundary for the
-// independent restaurant/retail domain. Tenant, channel, customer, business
-// and fulfillment-location facts are resolved from the session and binding;
-// callers cannot supply them as authority.
+// independent restaurant/retail domain. The session owns only tenant, channel
+// and customer identity. A business selector on a transaction request is
+// always resolved back to an active server-side binding and location.
 type CommerceStorefrontService struct {
 	DB           *gorm.DB
 	Catalog      CommerceCatalogService
@@ -178,6 +187,11 @@ type commerceStorefrontContext struct {
 	Binding    model.CommerceStorefrontBinding
 	Location   model.CommerceFulfillmentLocation
 	CustomerID string
+}
+
+type commerceStorefrontBusiness struct {
+	Binding  model.CommerceStorefrontBinding
+	Location model.CommerceFulfillmentLocation
 }
 
 func (s *CommerceStorefrontService) db() *gorm.DB {
@@ -282,26 +296,71 @@ func (s *CommerceStorefrontService) loadActiveWechatAccount(appID string) (*mode
 	return &account, nil
 }
 
-func (s *CommerceStorefrontService) loadBinding(tx *gorm.DB, account *model.ChannelAccount) (*model.CommerceStorefrontBinding, *model.CommerceFulfillmentLocation, error) {
+func (s *CommerceStorefrontService) loadBusinesses(tx *gorm.DB, account *model.ChannelAccount, businessType string, lock bool) ([]commerceStorefrontBusiness, error) {
 	if account == nil || account.ID == 0 || account.TenantID == 0 {
-		return nil, nil, fmt.Errorf("%w: storefront account identity is incomplete", ErrCommerceStorefrontUnavailable)
+		return nil, fmt.Errorf("%w: storefront account identity is incomplete", ErrCommerceStorefrontUnavailable)
 	}
 	var tenant model.Tenant
 	if err := tx.Select("id", "status").Where("id = ? AND status = ?", account.TenantID, "active").First(&tenant).Error; err != nil {
-		return nil, nil, fmt.Errorf("%w: tenant is not active: %v", ErrCommerceStorefrontUnavailable, err)
+		return nil, fmt.Errorf("%w: tenant is not active: %v", ErrCommerceStorefrontUnavailable, err)
 	}
-	var binding model.CommerceStorefrontBinding
-	if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND status = ?", account.TenantID, account.ID, "active").First(&binding).Error; err != nil {
-		return nil, nil, fmt.Errorf("%w: active storefront binding is missing: %v", ErrCommerceStorefrontUnavailable, err)
+	var bindings []model.CommerceStorefrontBinding
+	query := tx.Where("tenant_id = ? AND channel_account_id = ? AND status = ?", account.TenantID, account.ID, "active")
+	businessType = strings.TrimSpace(businessType)
+	if businessType != "" {
+		if !validTenantBusinessType(businessType) {
+			return nil, fmt.Errorf("%w: unsupported business type", ErrCommerceStorefrontInvalid)
+		}
+		query = query.Where("business_type = ?", businessType)
 	}
-	if err := RequireActiveTenantBusinessCapability(tx, account.TenantID, binding.BusinessType); err != nil {
-		return nil, nil, err
+	if lock {
+		query = query.Clauses(clause.Locking{Strength: "SHARE"})
 	}
-	var location model.CommerceFulfillmentLocation
-	if err := tx.Where("id = ? AND tenant_id = ? AND business_type = ? AND status = ?", binding.LocationID, account.TenantID, binding.BusinessType, "active").First(&location).Error; err != nil {
-		return nil, nil, fmt.Errorf("%w: active fulfillment location is missing: %v", ErrCommerceStorefrontUnavailable, err)
+	if err := query.Order("id ASC").Find(&bindings).Error; err != nil {
+		return nil, fmt.Errorf("%w: active storefront binding lookup failed: %v", ErrCommerceStorefrontUnavailable, err)
 	}
-	return &binding, &location, nil
+	if len(bindings) == 0 {
+		return nil, fmt.Errorf("%w: active storefront binding is missing", ErrCommerceStorefrontUnavailable)
+	}
+	result := make([]commerceStorefrontBusiness, 0, len(bindings))
+	for _, binding := range bindings {
+		if err := RequireActiveTenantBusinessCapability(tx, account.TenantID, binding.BusinessType); err != nil {
+			if businessType != "" {
+				return nil, err
+			}
+			if errors.Is(err, ErrBusinessCapabilityInactive) {
+				continue
+			}
+			return nil, err
+		}
+		var location model.CommerceFulfillmentLocation
+		locationQuery := tx.Where("id = ? AND tenant_id = ? AND business_type = ? AND status = ?", binding.LocationID, account.TenantID, binding.BusinessType, "active")
+		if lock {
+			locationQuery = locationQuery.Clauses(clause.Locking{Strength: "SHARE"})
+		}
+		if err := locationQuery.First(&location).Error; err != nil {
+			if businessType != "" {
+				return nil, fmt.Errorf("%w: active fulfillment location is missing: %v", ErrCommerceStorefrontUnavailable, err)
+			}
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				continue
+			}
+			return nil, err
+		}
+		result = append(result, commerceStorefrontBusiness{Binding: binding, Location: location})
+	}
+	if len(result) == 0 {
+		return nil, fmt.Errorf("%w: no enabled storefront business is available", ErrCommerceStorefrontUnavailable)
+	}
+	return result, nil
+}
+
+func storefrontBusinessViews(businesses []commerceStorefrontBusiness) []CommerceStorefrontBusinessView {
+	result := make([]CommerceStorefrontBusinessView, 0, len(businesses))
+	for _, business := range businesses {
+		result = append(result, CommerceStorefrontBusinessView{BusinessType: business.Binding.BusinessType, Location: business.Location})
+	}
+	return result
 }
 
 func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceStorefrontLoginInput) (*CommerceStorefrontLoginResult, error) {
@@ -312,6 +371,11 @@ func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceSto
 	}
 	account, err := s.loadActiveWechatAccount(input.AppID)
 	if err != nil {
+		return nil, err
+	}
+	// Confirm that the account publishes at least one usable business before
+	// consuming the one-time wx.login code.
+	if _, err := s.loadBusinesses(s.db(), account, "", false); err != nil {
 		return nil, err
 	}
 	secret := ""
@@ -352,15 +416,14 @@ func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceSto
 	now := s.now()
 	expiresAt := now.Add(s.sessionTTL())
 
-	var binding *model.CommerceStorefrontBinding
-	var location *model.CommerceFulfillmentLocation
+	var businesses []commerceStorefrontBusiness
 	err = s.db().Transaction(func(tx *gorm.DB) error {
 		var current model.ChannelAccount
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND type = ? AND app_id = ? AND status IN ?", account.ID, account.TenantID, "wechat_miniapp", account.AppID, []string{"active", "sandbox"}).First(&current).Error; err != nil {
 			return fmt.Errorf("%w: channel account changed during login: %v", ErrCommerceStorefrontUnavailable, err)
 		}
 		var loadErr error
-		binding, location, loadErr = s.loadBinding(tx, &current)
+		businesses, loadErr = s.loadBusinesses(tx, &current, "", false)
 		if loadErr != nil {
 			return loadErr
 		}
@@ -378,10 +441,15 @@ func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceSto
 	if err != nil {
 		return nil, err
 	}
-	return &CommerceStorefrontLoginResult{
+	result := &CommerceStorefrontLoginResult{
 		Token: token, ExpiresAt: expiresAt, TenantID: account.TenantID, ChannelAccountID: account.ID,
-		BusinessType: binding.BusinessType, LocationID: location.ID,
-	}, nil
+		Businesses: storefrontBusinessViews(businesses),
+	}
+	if len(businesses) == 1 {
+		result.BusinessType = businesses[0].Binding.BusinessType
+		result.LocationID = businesses[0].Location.ID
+	}
+	return result, nil
 }
 
 // LoginWithCode is a concise alias for adapters and tests that use the
@@ -411,23 +479,47 @@ func (s *CommerceStorefrontService) authenticate(token string) (*commerceStorefr
 	if err := s.db().Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", session.ChannelAccountID, session.TenantID, "wechat_miniapp", []string{"active", "sandbox"}).First(&account).Error; err != nil {
 		return nil, ErrCommerceStorefrontUnavailable
 	}
-	binding, location, err := s.loadBinding(s.db(), &account)
-	if err != nil {
-		return nil, err
+	var tenant model.Tenant
+	if err := s.db().Select("id", "status").Where("id = ? AND status = ?", session.TenantID, "active").First(&tenant).Error; err != nil {
+		return nil, ErrCommerceStorefrontUnavailable
 	}
 	if err := s.db().Model(&session).Where("status = ? AND expires_at > ?", "active", now).Update("last_seen_at", now).Error; err != nil {
 		return nil, err
 	}
 	session.LastSeenAt = &now
 	return &commerceStorefrontContext{
-		Session: session, Account: account, Binding: *binding, Location: *location,
+		Session: session, Account: account,
 		CustomerID: storefrontCustomerID(session.ChannelAccountID, session.SubjectHash),
 	}, nil
 }
 
-// Authenticate validates the opaque bearer token and returns only the bound
-// session record. Account, tenant, capability and binding checks happen before
-// the session is accepted.
+func storefrontBusinessSelector(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(values[0])
+}
+
+func (s *CommerceStorefrontService) resolveBusinessContext(token string, businessTypes ...string) (*commerceStorefrontContext, error) {
+	context, err := s.authenticate(token)
+	if err != nil {
+		return nil, err
+	}
+	businesses, err := s.loadBusinesses(s.db(), &context.Account, storefrontBusinessSelector(businessTypes), false)
+	if err != nil {
+		return nil, err
+	}
+	if len(businesses) != 1 {
+		return nil, fmt.Errorf("%w: select one storefront business", ErrCommerceStorefrontAmbiguous)
+	}
+	context.Binding = businesses[0].Binding
+	context.Location = businesses[0].Location
+	return context, nil
+}
+
+// Authenticate validates the opaque bearer token and returns only the
+// account-level session record. Business capability, publication binding and
+// fulfillment location are resolved separately for new-transaction requests.
 func (s *CommerceStorefrontService) Authenticate(token string) (*model.CommerceCustomerSession, error) {
 	context, err := s.authenticate(token)
 	if err != nil {
@@ -440,8 +532,8 @@ func (s *CommerceStorefrontService) GetSession(token string) (*model.CommerceCus
 	return s.Authenticate(token)
 }
 
-func (s *CommerceStorefrontService) ListCatalog(token string) (*CommerceStorefrontCatalog, error) {
-	context, err := s.authenticate(token)
+func (s *CommerceStorefrontService) ListCatalog(token string, businessTypes ...string) (*CommerceStorefrontCatalog, error) {
+	context, err := s.resolveBusinessContext(token, businessTypes...)
 	if err != nil {
 		return nil, err
 	}
@@ -738,24 +830,24 @@ func (s *CommerceStorefrontService) ownedCart(context *commerceStorefrontContext
 	return cart, nil
 }
 
-func (s *CommerceStorefrontService) GetCart(token string) (*model.CommerceCart, error) {
-	context, err := s.authenticate(token)
+func (s *CommerceStorefrontService) GetCart(token string, businessTypes ...string) (*model.CommerceCart, error) {
+	context, err := s.resolveBusinessContext(token, businessTypes...)
 	if err != nil {
 		return nil, err
 	}
 	return s.currentCart(context)
 }
 
-func (s *CommerceStorefrontService) GetCartByID(token string, cartID uint) (*model.CommerceCart, error) {
-	context, err := s.authenticate(token)
+func (s *CommerceStorefrontService) GetCartByID(token string, cartID uint, businessTypes ...string) (*model.CommerceCart, error) {
+	context, err := s.resolveBusinessContext(token, businessTypes...)
 	if err != nil {
 		return nil, err
 	}
 	return s.ownedCart(context, cartID)
 }
 
-func (s *CommerceStorefrontService) AddCartItem(token string, input CommerceStorefrontCartItemInput) (*model.CommerceCart, error) {
-	context, err := s.authenticate(token)
+func (s *CommerceStorefrontService) AddCartItem(token string, input CommerceStorefrontCartItemInput, businessTypes ...string) (*model.CommerceCart, error) {
+	context, err := s.resolveBusinessContext(token, businessTypes...)
 	if err != nil {
 		return nil, err
 	}
@@ -766,8 +858,8 @@ func (s *CommerceStorefrontService) AddCartItem(token string, input CommerceStor
 	return s.operationsService().AddCartItem(context.Session.TenantID, cart.ID, CommerceCartItemInput{ProductID: input.ProductID, SkuID: input.SKUID, Quantity: input.Quantity, OptionIDs: input.OptionIDs})
 }
 
-func (s *CommerceStorefrontService) AddCartItemToCart(token string, cartID uint, input CommerceStorefrontCartItemInput) (*model.CommerceCart, error) {
-	context, err := s.authenticate(token)
+func (s *CommerceStorefrontService) AddCartItemToCart(token string, cartID uint, input CommerceStorefrontCartItemInput, businessTypes ...string) (*model.CommerceCart, error) {
+	context, err := s.resolveBusinessContext(token, businessTypes...)
 	if err != nil {
 		return nil, err
 	}
@@ -777,8 +869,8 @@ func (s *CommerceStorefrontService) AddCartItemToCart(token string, cartID uint,
 	return s.operationsService().AddCartItem(context.Session.TenantID, cartID, CommerceCartItemInput{ProductID: input.ProductID, SkuID: input.SKUID, Quantity: input.Quantity, OptionIDs: input.OptionIDs})
 }
 
-func (s *CommerceStorefrontService) UpdateCartItem(token string, itemID uint, quantity int) (*model.CommerceCart, error) {
-	context, err := s.authenticate(token)
+func (s *CommerceStorefrontService) UpdateCartItem(token string, itemID uint, quantity int, businessTypes ...string) (*model.CommerceCart, error) {
+	context, err := s.resolveBusinessContext(token, businessTypes...)
 	if err != nil {
 		return nil, err
 	}
@@ -792,8 +884,8 @@ func (s *CommerceStorefrontService) UpdateCartItem(token string, itemID uint, qu
 	return s.operationsService().GetCart(context.Session.TenantID, cart.ID)
 }
 
-func (s *CommerceStorefrontService) UpdateCartItemToCart(token string, cartID, itemID uint, quantity int) (*model.CommerceCart, error) {
-	context, err := s.authenticate(token)
+func (s *CommerceStorefrontService) UpdateCartItemToCart(token string, cartID, itemID uint, quantity int, businessTypes ...string) (*model.CommerceCart, error) {
+	context, err := s.resolveBusinessContext(token, businessTypes...)
 	if err != nil {
 		return nil, err
 	}
@@ -806,8 +898,8 @@ func (s *CommerceStorefrontService) UpdateCartItemToCart(token string, cartID, i
 	return s.operationsService().GetCart(context.Session.TenantID, cartID)
 }
 
-func (s *CommerceStorefrontService) RemoveCartItem(token string, itemID uint) error {
-	context, err := s.authenticate(token)
+func (s *CommerceStorefrontService) RemoveCartItem(token string, itemID uint, businessTypes ...string) error {
+	context, err := s.resolveBusinessContext(token, businessTypes...)
 	if err != nil {
 		return err
 	}
@@ -818,8 +910,8 @@ func (s *CommerceStorefrontService) RemoveCartItem(token string, itemID uint) er
 	return s.operationsService().RemoveCartItem(context.Session.TenantID, cart.ID, itemID)
 }
 
-func (s *CommerceStorefrontService) RemoveCartItemFromCart(token string, cartID, itemID uint) error {
-	context, err := s.authenticate(token)
+func (s *CommerceStorefrontService) RemoveCartItemFromCart(token string, cartID, itemID uint, businessTypes ...string) error {
+	context, err := s.resolveBusinessContext(token, businessTypes...)
 	if err != nil {
 		return err
 	}
@@ -874,8 +966,8 @@ func storefrontOrderMatchesCheckout(tx *gorm.DB, order *model.CommerceOrder, con
 	return input.FulfillmentMethod == "", nil
 }
 
-func (s *CommerceStorefrontService) Checkout(token string, raw CommerceStorefrontCheckoutInput) (*model.CommerceOrder, error) {
-	context, err := s.authenticate(token)
+func (s *CommerceStorefrontService) Checkout(token string, raw CommerceStorefrontCheckoutInput, businessTypes ...string) (*model.CommerceOrder, error) {
+	context, err := s.resolveBusinessContext(token, businessTypes...)
 	if err != nil {
 		return nil, err
 	}
@@ -922,8 +1014,8 @@ func (s *CommerceStorefrontService) Checkout(token string, raw CommerceStorefron
 	return s.checkoutOwnedCart(context, cart.ID, input)
 }
 
-func (s *CommerceStorefrontService) CheckoutCartByID(token string, cartID uint, raw CommerceStorefrontCheckoutInput) (*model.CommerceOrder, error) {
-	context, err := s.authenticate(token)
+func (s *CommerceStorefrontService) CheckoutCartByID(token string, cartID uint, raw CommerceStorefrontCheckoutInput, businessTypes ...string) (*model.CommerceOrder, error) {
+	context, err := s.resolveBusinessContext(token, businessTypes...)
 	if err != nil {
 		return nil, err
 	}
@@ -955,6 +1047,18 @@ func (s *CommerceStorefrontService) checkoutOwnedCart(context *commerceStorefron
 	}
 	var result *model.CommerceOrder
 	err = s.db().Transaction(func(tx *gorm.DB) error {
+		// Re-resolve and lock the current publication route in the checkout
+		// transaction. An administrator changing the binding cannot move an
+		// existing cart to another business or fulfillment location mid-checkout.
+		businesses, err := s.loadBusinesses(tx, &context.Account, context.Binding.BusinessType, true)
+		if err != nil {
+			return err
+		}
+		if len(businesses) != 1 {
+			return ErrCommerceStorefrontAmbiguous
+		}
+		context.Binding = businesses[0].Binding
+		context.Location = businesses[0].Location
 		var locked model.CommerceCart
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", cartID, context.Session.TenantID).Preload("Items").First(&locked).Error; err != nil {
 			return err
@@ -1039,11 +1143,11 @@ func (s *CommerceStorefrontService) checkoutOwnedCart(context *commerceStorefron
 	return result, err
 }
 
-func (s *CommerceStorefrontService) CheckoutCart(token string, input CommerceStorefrontCheckoutInput) (*model.CommerceOrder, error) {
-	return s.Checkout(token, input)
+func (s *CommerceStorefrontService) CheckoutCart(token string, input CommerceStorefrontCheckoutInput, businessTypes ...string) (*model.CommerceOrder, error) {
+	return s.Checkout(token, input, businessTypes...)
 }
 
-func (s *CommerceStorefrontService) ListOrders(token string, page, pageSize int) (*CommerceStorefrontOrderPage, error) {
+func (s *CommerceStorefrontService) ListOrders(token string, page, pageSize int, businessTypes ...string) (*CommerceStorefrontOrderPage, error) {
 	context, err := s.authenticate(token)
 	if err != nil {
 		return nil, err
@@ -1057,7 +1161,14 @@ func (s *CommerceStorefrontService) ListOrders(token string, page, pageSize int)
 	if pageSize > 100 {
 		pageSize = 100
 	}
-	query := s.db().Where("tenant_id = ? AND business_type = ? AND channel = ? AND customer_id = ?", context.Session.TenantID, context.Binding.BusinessType, "wechat_miniapp", context.CustomerID)
+	query := s.db().Where("tenant_id = ? AND channel = ? AND customer_id = ?", context.Session.TenantID, "wechat_miniapp", context.CustomerID)
+	businessType := storefrontBusinessSelector(businessTypes)
+	if businessType != "" {
+		if !validTenantBusinessType(businessType) {
+			return nil, fmt.Errorf("%w: unsupported business type", ErrCommerceStorefrontInvalid)
+		}
+		query = query.Where("business_type = ?", businessType)
+	}
 	var total int64
 	if err := query.Model(&model.CommerceOrder{}).Count(&total).Error; err != nil {
 		return nil, err
@@ -1081,7 +1192,7 @@ func (s *CommerceStorefrontService) GetOrder(token string, orderID uint) (*model
 		return nil, gorm.ErrRecordNotFound
 	}
 	var candidate model.CommerceOrder
-	if err := s.db().Where("id = ? AND tenant_id = ? AND business_type = ? AND channel = ? AND customer_id = ?", orderID, context.Session.TenantID, context.Binding.BusinessType, "wechat_miniapp", context.CustomerID).First(&candidate).Error; err != nil {
+	if err := s.db().Where("id = ? AND tenant_id = ? AND channel = ? AND customer_id = ?", orderID, context.Session.TenantID, "wechat_miniapp", context.CustomerID).First(&candidate).Error; err != nil {
 		return nil, err
 	}
 	return s.ordersService().GetOrder(context.Session.TenantID, candidate.ID)
@@ -1097,7 +1208,7 @@ func (s *CommerceStorefrontService) GetOrderByNo(token, orderNo string) (*model.
 		return nil, gorm.ErrRecordNotFound
 	}
 	var candidate model.CommerceOrder
-	if err := s.db().Where("order_no = ? AND tenant_id = ? AND business_type = ? AND channel = ? AND customer_id = ?", orderNo, context.Session.TenantID, context.Binding.BusinessType, "wechat_miniapp", context.CustomerID).First(&candidate).Error; err != nil {
+	if err := s.db().Where("order_no = ? AND tenant_id = ? AND channel = ? AND customer_id = ?", orderNo, context.Session.TenantID, "wechat_miniapp", context.CustomerID).First(&candidate).Error; err != nil {
 		return nil, err
 	}
 	return s.ordersService().GetOrder(context.Session.TenantID, candidate.ID)

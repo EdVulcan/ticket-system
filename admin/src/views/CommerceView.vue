@@ -733,8 +733,8 @@ const orderDescription = computed(() => isRestaurant.value
   ? '处理接单、制作、取餐/配送和退款。'
   : '处理备货、发货、物流跟踪、收货和退款。')
 const storefrontHelpText = computed(() => isRestaurant.value
-  ? 'AppSecret 等密钥由渠道账号维护；这里绑定接收餐饮订单的微信小程序与门店/取餐点。'
-  : 'AppSecret 等密钥由渠道账号维护；这里绑定接收电商订单的微信小程序与仓库/发货点。')
+  ? '同一个微信小程序账号可同时开放餐饮和电商接口；这里仅配置餐饮业务使用的门店/取餐点，AppSecret 等密钥仍由渠道账号统一维护。'
+  : '同一个微信小程序账号可同时开放餐饮和电商接口；这里仅配置电商业务使用的仓库/发货点，AppSecret 等密钥仍由渠道账号统一维护。')
 const categoryLabel = computed(() => isRestaurant.value ? '菜品分类' : '商品分类')
 const categoryPlaceholder = computed(() => isRestaurant.value ? '例如：主食、小吃、饮品' : '例如：日用品、食品、数码')
 const shortTitleLabel = computed(() => isRestaurant.value ? '菜品简称' : '副标题')

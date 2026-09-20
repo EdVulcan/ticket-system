@@ -57,8 +57,9 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 
 	// Public WeChat commercial storefront routes. These routes use the
 	// storefront's opaque customer session, not JWT tenant middleware. The
-	// service resolves tenant, account, business and fulfillment location from
-	// the session and published binding.
+	// service resolves tenant/account/customer identity from the session. New
+	// transaction requests select a business, which is then validated against
+	// the account's current published binding and fulfillment location.
 	commerceStorefrontService := &service.CommerceStorefrontService{
 		LoginAdapter: &service.WechatMiniappHTTPLoginAdapter{},
 	}

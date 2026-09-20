@@ -4,7 +4,9 @@ import "time"
 
 // CommerceCustomerSession is a bearer session for a commercial storefront
 // customer. It is bound to one tenant and one channel account; it never
-// creates or aliases a tenant user.
+// creates or aliases a tenant user. A single session can access every
+// business domain published by that channel account; each request resolves
+// its business selector against the account's active bindings.
 //
 // The WeChat subject and bearer token are represented by one-way hashes. The
 // raw values are only held by the login adapter for the duration of a request.
@@ -21,13 +23,15 @@ type CommerceCustomerSession struct {
 }
 
 // CommerceStorefrontBinding publishes one commercial business and fulfillment
-// location through a channel account. The account is the integration anchor;
-// this row is configuration only and is never used as a customer identity.
+// location through a channel account. One WeChat account may publish both
+// commercial domains for the same tenant, but only once per domain. The
+// account is the integration anchor; this row is configuration only and is
+// never used as a customer identity.
 type CommerceStorefrontBinding struct {
 	Base
-	TenantID         uint   `gorm:"not null;uniqueIndex:idx_commerce_storefront_bindings_account;index" json:"-"`
-	ChannelAccountID uint   `gorm:"not null;uniqueIndex:idx_commerce_storefront_bindings_account" json:"channel_account_id"`
-	BusinessType     string `gorm:"size:20;not null;check:chk_commerce_storefront_bindings_business_type,business_type IN ('restaurant','retail')" json:"business_type"`
+	TenantID         uint   `gorm:"not null;uniqueIndex:idx_commerce_storefront_bindings_account_domain,priority:1;index" json:"-"`
+	ChannelAccountID uint   `gorm:"not null;uniqueIndex:idx_commerce_storefront_bindings_account_domain,priority:2" json:"channel_account_id"`
+	BusinessType     string `gorm:"size:20;not null;uniqueIndex:idx_commerce_storefront_bindings_account_domain,priority:3;check:chk_commerce_storefront_bindings_business_type,business_type IN ('restaurant','retail')" json:"business_type"`
 	LocationID       uint   `gorm:"not null" json:"location_id"`
 	Status           string `gorm:"size:20;not null;default:'active';index;check:chk_commerce_storefront_bindings_status,status IN ('active','disabled')" json:"status"`
 }
