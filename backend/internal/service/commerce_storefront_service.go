@@ -112,6 +112,16 @@ type CommerceStorefrontCheckoutInput struct {
 	AddressID         uint   `json:"address_id,omitempty"`
 	ShippingAddress   string `json:"shipping_address,omitempty"`
 	FulfillmentMethod string `json:"fulfillment_method,omitempty"`
+	QuoteToken        string `json:"quote_token"`
+	CouponGrantID     uint   `json:"coupon_grant_id,omitempty"`
+}
+
+type CommerceStorefrontQuoteInput struct {
+	AddressID         uint      `json:"address_id,omitempty"`
+	FulfillmentMethod string    `json:"fulfillment_method,omitempty"`
+	ZoneID            uint      `json:"zone_id,omitempty"`
+	SlotID            uint      `json:"slot_id,omitempty"`
+	SlotDate          time.Time `json:"slot_date,omitempty"`
 }
 
 // CommerceStorefrontAddressInput contains only editable customer address
@@ -192,6 +202,18 @@ type commerceStorefrontContext struct {
 type commerceStorefrontBusiness struct {
 	Binding  model.CommerceStorefrontBinding
 	Location model.CommerceFulfillmentLocation
+}
+
+// CommerceStorefrontCustomerScope is the server-derived scope shared by
+// customer-facing commerce APIs. It intentionally omits the provider subject
+// hash; callers only need the stable customer id plus the selected business
+// context to apply tenant and location predicates.
+type CommerceStorefrontCustomerScope struct {
+	TenantID         uint
+	ChannelAccountID uint
+	BusinessType     string
+	LocationID       uint
+	CustomerID       string
 }
 
 func (s *CommerceStorefrontService) db() *gorm.DB {
@@ -517,6 +539,24 @@ func (s *CommerceStorefrontService) resolveBusinessContext(token string, busines
 	return context, nil
 }
 
+// ResolveCustomerScope authenticates the opaque storefront session and
+// resolves an optional business selector against current server-side
+// bindings. It is a read-only boundary for delivery, logistics and promotion
+// APIs; request values are selectors only and never authorization facts.
+func (s *CommerceStorefrontService) ResolveCustomerScope(token string, businessTypes ...string) (*CommerceStorefrontCustomerScope, error) {
+	context, err := s.resolveBusinessContext(token, businessTypes...)
+	if err != nil {
+		return nil, err
+	}
+	return &CommerceStorefrontCustomerScope{
+		TenantID:         context.Session.TenantID,
+		ChannelAccountID: context.Session.ChannelAccountID,
+		BusinessType:     context.Binding.BusinessType,
+		LocationID:       context.Location.ID,
+		CustomerID:       context.CustomerID,
+	}, nil
+}
+
 // Authenticate validates the opaque bearer token and returns only the
 // account-level session record. Business capability, publication binding and
 // fulfillment location are resolved separately for new-transaction requests.
@@ -605,7 +645,7 @@ func normalizeStorefrontAddressInput(input CommerceStorefrontAddressInput) (Comm
 	if input.AddressType == "" {
 		input.AddressType = "SHIPPING"
 	}
-	if input.AddressType != "CAMPUS" && input.AddressType != "SHIPPING" {
+	if input.AddressType != "CAMPUS" && input.AddressType != "SHIPPING" && input.AddressType != "DELIVERY" {
 		return input, fmt.Errorf("%w: unsupported address type", ErrCommerceStorefrontAddressInvalid)
 	}
 	input.RecipientName = strings.TrimSpace(input.RecipientName)
@@ -627,8 +667,8 @@ func normalizeStorefrontAddressInput(input CommerceStorefrontAddressInput) (Comm
 	if input.Detail == "" {
 		return input, fmt.Errorf("%w: address detail is required", ErrCommerceStorefrontAddressInvalid)
 	}
-	if input.AddressType == "SHIPPING" && (input.Province == "" || input.City == "") {
-		return input, fmt.Errorf("%w: shipping province and city are required", ErrCommerceStorefrontAddressInvalid)
+	if (input.AddressType == "SHIPPING" || input.AddressType == "DELIVERY") && (input.Province == "" || input.City == "") {
+		return input, fmt.Errorf("%w: delivery province and city are required", ErrCommerceStorefrontAddressInvalid)
 	}
 	if input.AddressType == "CAMPUS" && (input.CampusName == "" || input.ZoneName == "" || input.Building == "" || input.Room == "") {
 		return input, fmt.Errorf("%w: campus address fields are required", ErrCommerceStorefrontAddressInvalid)
@@ -921,19 +961,166 @@ func (s *CommerceStorefrontService) RemoveCartItemFromCart(token string, cartID,
 	return s.operationsService().RemoveCartItem(context.Session.TenantID, cartID, itemID)
 }
 
+func (s *CommerceStorefrontService) quoteCartSubtotal(tx *gorm.DB, context *commerceStorefrontContext, cart *model.CommerceCart) (int64, error) {
+	if tx == nil || context == nil || cart == nil || cart.Status != "active" || len(cart.Items) == 0 {
+		return 0, fmt.Errorf("%w: cart is empty or no longer active", ErrCommerceStorefrontInvalid)
+	}
+	now := s.now()
+	total := int64(0)
+	for _, item := range cart.Items {
+		if item.Quantity <= 0 {
+			return 0, fmt.Errorf("%w: cart quantity is invalid", ErrCommerceStorefrontInvalid)
+		}
+		var sku model.CommerceSKU
+		if err := tx.Where("id = ? AND tenant_id = ? AND product_id = ? AND status = ?", item.SkuID, context.Session.TenantID, item.ProductID, "active").First(&sku).Error; err != nil {
+			return 0, err
+		}
+		var product model.CommerceProduct
+		if err := tx.Where("id = ? AND tenant_id = ? AND business_type = ? AND status = ?", item.ProductID, context.Session.TenantID, context.Binding.BusinessType, "online").First(&product).Error; err != nil {
+			return 0, err
+		}
+		if product.SaleStartsAt != nil && now.Before(*product.SaleStartsAt) || product.SaleEndsAt != nil && !now.Before(*product.SaleEndsAt) {
+			return 0, fmt.Errorf("%w: product is outside its sale window", ErrCommerceStorefrontInvalid)
+		}
+		_, optionDelta, err := snapshotOrderOptionsTx(tx, context.Session.TenantID, product.ID, CommerceOrderItemInput{
+			ProductID: product.ID, SKUID: sku.ID, Quantity: item.Quantity, OptionsSnapshotJSON: item.OptionsSnapshotJSON,
+		})
+		if err != nil {
+			return 0, err
+		}
+		unitPrice, ok := commerceSafeAddInt64(sku.PriceCents, optionDelta)
+		if !ok || unitPrice < 0 {
+			return 0, fmt.Errorf("%w: cart amount is invalid", ErrCommerceStorefrontInvalid)
+		}
+		line, ok := commerceSafeMulInt64(unitPrice, int64(item.Quantity))
+		if !ok {
+			return 0, fmt.Errorf("%w: cart amount overflow", ErrCommerceStorefrontInvalid)
+		}
+		total, ok = commerceSafeAddInt64(total, line)
+		if !ok {
+			return 0, fmt.Errorf("%w: cart amount overflow", ErrCommerceStorefrontInvalid)
+		}
+	}
+	return total, nil
+}
+
+// CreateCheckoutQuote derives customer, channel, business, location, cart
+// subtotal and address from the authenticated storefront. The public request
+// only selects an already-owned address and merchant-configured zone/slot.
+func (s *CommerceStorefrontService) CreateCheckoutQuote(token string, raw CommerceStorefrontQuoteInput, businessTypes ...string) (*CommerceCheckoutQuoteResult, error) {
+	context, err := s.resolveBusinessContext(token, businessTypes...)
+	if err != nil {
+		return nil, err
+	}
+	method := strings.ToLower(strings.TrimSpace(raw.FulfillmentMethod))
+	if context.Binding.BusinessType == "restaurant" {
+		if method == "" {
+			method = "pickup"
+		}
+		if method != "pickup" && method != "delivery" {
+			return nil, fmt.Errorf("%w: restaurant fulfillment method is invalid", ErrCommerceStorefrontInvalid)
+		}
+	} else {
+		if method != "" && method != "shipping" {
+			return nil, fmt.Errorf("%w: retail fulfillment method is invalid", ErrCommerceStorefrontInvalid)
+		}
+		method = "shipping"
+	}
+	cart, err := s.currentCart(context)
+	if err != nil {
+		return nil, err
+	}
+	subtotal, err := s.quoteCartSubtotal(s.db(), context, cart)
+	if err != nil {
+		return nil, err
+	}
+	address := CommerceDeliveryAddress{}
+	if method != "pickup" {
+		owned, loadErr := s.loadAddressForCheckout(s.db(), context, raw.AddressID)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		if context.Binding.BusinessType == "retail" && owned.AddressType != "SHIPPING" {
+			return nil, fmt.Errorf("%w: retail checkout requires a shipping address", ErrCommerceStorefrontAddressInvalid)
+		}
+		if context.Binding.BusinessType == "restaurant" && owned.AddressType != "DELIVERY" && owned.AddressType != "CAMPUS" {
+			return nil, fmt.Errorf("%w: restaurant delivery requires a delivery address", ErrCommerceStorefrontAddressInvalid)
+		}
+		address = CommerceDeliveryAddress{Province: owned.Province, City: owned.City, District: owned.District, Detail: owned.Detail}
+		if owned.AddressType == "CAMPUS" {
+			if address.Province == "" {
+				address.Province = owned.CampusName
+			}
+			if address.City == "" {
+				address.City = owned.CampusName
+			}
+			if address.District == "" {
+				address.District = owned.ZoneName
+			}
+			address.Detail = strings.TrimSpace(strings.Join([]string{owned.Building, owned.Room, owned.Detail}, " "))
+		}
+	}
+	delivery := CommerceDeliveryService{DB: s.db(), Clock: s.Now}
+	return delivery.CreateQuote(CommerceCheckoutQuoteInput{
+		TenantID: context.Session.TenantID, ChannelAccountID: context.Session.ChannelAccountID,
+		BusinessType: context.Binding.BusinessType, CustomerID: context.CustomerID,
+		LocationID: context.Binding.LocationID, FulfillmentMethod: method, Address: address,
+		ZoneID: raw.ZoneID, SlotID: raw.SlotID, SlotDate: raw.SlotDate,
+		GoodsSubtotalCents: subtotal, ExpiresIn: 10 * time.Minute,
+	})
+}
+
 func normalizeStorefrontCheckout(input CommerceStorefrontCheckoutInput) (CommerceStorefrontCheckoutInput, error) {
 	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
 	input.ContactName = strings.TrimSpace(input.ContactName)
 	input.ContactPhone = strings.TrimSpace(input.ContactPhone)
 	input.ShippingAddress = strings.TrimSpace(input.ShippingAddress)
 	input.FulfillmentMethod = strings.TrimSpace(input.FulfillmentMethod)
+	input.QuoteToken = strings.TrimSpace(input.QuoteToken)
 	if input.FulfillmentMethod != "" {
 		input.FulfillmentMethod = strings.ToLower(input.FulfillmentMethod)
 	}
-	if len([]rune(input.IdempotencyKey)) > 100 || len([]rune(input.ContactName)) > 80 || len([]rune(input.ContactPhone)) > 30 || len([]rune(input.ShippingAddress)) > 2000 || len([]rune(input.FulfillmentMethod)) > 20 {
+	if len([]rune(input.IdempotencyKey)) > 100 || len([]rune(input.ContactName)) > 80 || len([]rune(input.ContactPhone)) > 30 || len([]rune(input.ShippingAddress)) > 2000 || len([]rune(input.FulfillmentMethod)) > 20 || len(input.QuoteToken) > 256 {
 		return input, fmt.Errorf("%w: checkout fields are too long", ErrCommerceStorefrontInvalid)
 	}
 	return input, nil
+}
+
+func storefrontCheckoutSelectionMatches(tx *gorm.DB, order *model.CommerceOrder, input CommerceStorefrontCheckoutInput) (bool, error) {
+	if tx == nil || order == nil || strings.TrimSpace(input.QuoteToken) == "" {
+		return false, nil
+	}
+	sum := sha256.Sum256([]byte(input.QuoteToken))
+	var quote model.CommerceCheckoutQuote
+	if err := tx.Where("token_hash = ? AND tenant_id = ?", hex.EncodeToString(sum[:]), order.TenantID).First(&quote).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if quote.Status != "consumed" || quote.ConsumedOrderID == nil || *quote.ConsumedOrderID != order.ID {
+		return false, nil
+	}
+	var couponCount int64
+	if err := tx.Model(&model.CommerceCouponGrant{}).
+		Where("tenant_id = ? AND (reserved_order_id = ? OR used_order_id = ?)", order.TenantID, order.ID, order.ID).
+		Count(&couponCount).Error; err != nil {
+		return false, err
+	}
+	if input.CouponGrantID == 0 {
+		return couponCount == 0, nil
+	}
+	if couponCount != 1 {
+		return false, nil
+	}
+	var grant model.CommerceCouponGrant
+	if err := tx.Where("id = ? AND tenant_id = ?", input.CouponGrantID, order.TenantID).First(&grant).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return grant.ReservedOrderID == order.ID || grant.UsedOrderID == order.ID, nil
 }
 
 func storefrontOrderMatchesCheckout(tx *gorm.DB, order *model.CommerceOrder, context *commerceStorefrontContext, input CommerceStorefrontCheckoutInput, idempotencyKey string) (bool, error) {
@@ -961,9 +1148,13 @@ func storefrontOrderMatchesCheckout(tx *gorm.DB, order *model.CommerceOrder, con
 		if err := tx.Where("tenant_id = ? AND order_id = ?", order.TenantID, order.ID).First(&fulfillment).Error; err != nil {
 			return false, err
 		}
-		return fulfillment.Method == input.FulfillmentMethod, nil
+		if fulfillment.Method != input.FulfillmentMethod {
+			return false, nil
+		}
+	} else if input.FulfillmentMethod != "" {
+		return false, nil
 	}
-	return input.FulfillmentMethod == "", nil
+	return storefrontCheckoutSelectionMatches(tx, order, input)
 }
 
 func (s *CommerceStorefrontService) Checkout(token string, raw CommerceStorefrontCheckoutInput, businessTypes ...string) (*model.CommerceOrder, error) {
@@ -977,6 +1168,9 @@ func (s *CommerceStorefrontService) Checkout(token string, raw CommerceStorefron
 	}
 	if input.IdempotencyKey == "" {
 		return nil, fmt.Errorf("%w: idempotency key is required", ErrCommerceStorefrontInvalid)
+	}
+	if input.QuoteToken == "" {
+		return nil, fmt.Errorf("%w: checkout quote is required", ErrCommerceStorefrontInvalid)
 	}
 	// Keep the idempotency lookup's interpretation identical to the actual
 	// checkout path. Restaurant pickup is the default when the client omits
@@ -1025,6 +1219,108 @@ func (s *CommerceStorefrontService) CheckoutCartByID(token string, cartID uint, 
 	return s.checkoutOwnedCart(context, cartID, raw)
 }
 
+func (s *CommerceStorefrontService) applyCheckoutQuoteAndCouponTx(tx *gorm.DB, context *commerceStorefrontContext, input CommerceStorefrontCheckoutInput, order *model.CommerceOrder) error {
+	if tx == nil || context == nil || order == nil || order.ID == 0 {
+		return ErrCommerceStorefrontInvalid
+	}
+	method := input.FulfillmentMethod
+	if context.Binding.BusinessType == "retail" {
+		method = "shipping"
+	}
+	delivery := CommerceDeliveryService{DB: tx, Clock: s.Now}
+	quote, err := delivery.ConsumeQuoteTx(tx, CommerceConsumeQuoteInput{
+		RawToken: input.QuoteToken, TenantID: context.Session.TenantID,
+		ChannelAccountID: context.Session.ChannelAccountID, BusinessType: context.Binding.BusinessType,
+		CustomerID: context.CustomerID, LocationID: context.Binding.LocationID,
+		FulfillmentMethod: method, GoodsSubtotalCents: order.TotalAmountCents,
+		AddressSnapshotJSON: order.ShippingAddressJSON, OrderID: order.ID,
+	})
+	if err != nil {
+		return err
+	}
+	feeTotal, ok := commerceSafeAddInt64(quote.PackagingFeeCents, quote.DeliveryFeeCents)
+	if !ok {
+		return fmt.Errorf("%w: checkout fee overflow", ErrCommerceStorefrontInvalid)
+	}
+	feeTotal, ok = commerceSafeAddInt64(feeTotal, quote.ShippingFeeCents)
+	if !ok || quote.DiscountCents != 0 {
+		return fmt.Errorf("%w: checkout quote totals are inconsistent", ErrCommerceQuoteConflict)
+	}
+	quotedTotal, ok := commerceSafeAddInt64(order.TotalAmountCents, feeTotal)
+	if !ok || quotedTotal != quote.TotalCents {
+		return fmt.Errorf("%w: checkout quote amount changed", ErrCommerceQuoteConflict)
+	}
+
+	couponDiscount := int64(0)
+	var grant *model.CommerceCouponGrant
+	if input.CouponGrantID != 0 {
+		promotions := CommercePromotionService{DB: tx, Clock: s.Now}
+		grant, err = promotions.ReserveCouponGrantTx(tx, order.TenantID, order.ID, input.CouponGrantID, context.CustomerID, order.BusinessType, context.Session.ChannelAccountID, order.TotalAmountCents)
+		if err != nil {
+			return err
+		}
+		couponDiscount = grant.DiscountCents
+		if couponDiscount > order.TotalAmountCents {
+			couponDiscount = order.TotalAmountCents
+		}
+	}
+	originalWithFees, ok := commerceSafeAddInt64(order.OriginalAmountCents, feeTotal)
+	if !ok {
+		return fmt.Errorf("%w: checkout amount overflow", ErrCommerceStorefrontInvalid)
+	}
+	totalWithFees, ok := commerceSafeAddInt64(order.TotalAmountCents, feeTotal)
+	if !ok || couponDiscount > totalWithFees {
+		return fmt.Errorf("%w: checkout amount is invalid", ErrCommerceStorefrontInvalid)
+	}
+	finalTotal := totalWithFees - couponDiscount
+	finalDiscount := originalWithFees - finalTotal
+	if finalTotal < 0 || finalDiscount < 0 {
+		return fmt.Errorf("%w: checkout amount is invalid", ErrCommerceStorefrontInvalid)
+	}
+	if finalTotal == 0 {
+		return fmt.Errorf("%w: zero-pay checkout is not supported", ErrCommerceStorefrontInvalid)
+	}
+
+	quoteSnapshot, err := json.Marshal(map[string]interface{}{
+		"quote_id": quote.ID, "config_version": quote.ConfigVersion,
+		"zone_id": quote.ZoneID, "slot_id": quote.SlotID, "slot_date": quote.SlotDate,
+	})
+	if err != nil {
+		return err
+	}
+	adjustments := []model.CommerceOrderAdjustment{}
+	appendFee := func(kind, description string, amount int64) {
+		if amount > 0 {
+			adjustments = append(adjustments, model.CommerceOrderAdjustment{TenantID: order.TenantID, OrderID: order.ID, Kind: kind, AmountCents: amount, Description: description, SnapshotJSON: string(quoteSnapshot)})
+		}
+	}
+	appendFee("packaging_fee", "打包费", quote.PackagingFeeCents)
+	appendFee("delivery_fee", "配送费", quote.DeliveryFeeCents)
+	appendFee("shipping_fee", "运费", quote.ShippingFeeCents)
+	if grant != nil && couponDiscount > 0 {
+		couponSnapshot, marshalErr := json.Marshal(map[string]interface{}{"grant_id": grant.ID, "template_id": grant.TemplateID})
+		if marshalErr != nil {
+			return marshalErr
+		}
+		adjustments = append(adjustments, model.CommerceOrderAdjustment{TenantID: order.TenantID, OrderID: order.ID, Kind: "coupon_discount", AmountCents: couponDiscount, Description: "优惠券抵扣", SnapshotJSON: string(couponSnapshot)})
+	}
+	for index := range adjustments {
+		if err := tx.Create(&adjustments[index]).Error; err != nil {
+			return err
+		}
+	}
+	if err := tx.Model(order).Updates(map[string]interface{}{
+		"original_amount_cents": originalWithFees,
+		"discount_cents":        finalDiscount,
+		"total_amount_cents":    finalTotal,
+	}).Error; err != nil {
+		return err
+	}
+	order.OriginalAmountCents, order.DiscountCents, order.TotalAmountCents = originalWithFees, finalDiscount, finalTotal
+	order.Adjustments = adjustments
+	return nil
+}
+
 func (s *CommerceStorefrontService) checkoutOwnedCart(context *commerceStorefrontContext, cartID uint, raw CommerceStorefrontCheckoutInput) (*model.CommerceOrder, error) {
 	if context == nil || cartID == 0 {
 		return nil, ErrCommerceStorefrontUnauthenticated
@@ -1035,6 +1331,9 @@ func (s *CommerceStorefrontService) checkoutOwnedCart(context *commerceStorefron
 	}
 	if input.IdempotencyKey == "" {
 		return nil, fmt.Errorf("%w: idempotency key is required", ErrCommerceStorefrontInvalid)
+	}
+	if input.QuoteToken == "" {
+		return nil, fmt.Errorf("%w: checkout quote is required", ErrCommerceStorefrontInvalid)
 	}
 	if context.Binding.BusinessType == "restaurant" && input.FulfillmentMethod == "" {
 		input.FulfillmentMethod = "pickup"
@@ -1112,8 +1411,8 @@ func (s *CommerceStorefrontService) checkoutOwnedCart(context *commerceStorefron
 			if context.Binding.BusinessType == "retail" && address.AddressType != "SHIPPING" {
 				return fmt.Errorf("%w: retail checkout requires a shipping address", ErrCommerceStorefrontAddressInvalid)
 			}
-			if context.Binding.BusinessType == "restaurant" && address.AddressType != "CAMPUS" {
-				return fmt.Errorf("%w: restaurant delivery requires a campus address", ErrCommerceStorefrontAddressInvalid)
+			if context.Binding.BusinessType == "restaurant" && address.AddressType != "DELIVERY" && address.AddressType != "CAMPUS" {
+				return fmt.Errorf("%w: restaurant delivery requires a delivery address", ErrCommerceStorefrontAddressInvalid)
 			}
 			snapshot, snapshotErr := storefrontAddressSnapshot(address)
 			if snapshotErr != nil {
@@ -1132,6 +1431,9 @@ func (s *CommerceStorefrontService) checkoutOwnedCart(context *commerceStorefron
 			ShippingAddressJSON: input.ShippingAddress, FulfillmentMethod: input.FulfillmentMethod, Items: items,
 		})
 		if err != nil {
+			return err
+		}
+		if err := s.applyCheckoutQuoteAndCouponTx(tx, context, input, order); err != nil {
 			return err
 		}
 		if err := tx.Model(&locked).Updates(map[string]interface{}{"status": "checked_out", "checked_out_order_id": order.ID}).Error; err != nil {
@@ -1174,13 +1476,61 @@ func (s *CommerceStorefrontService) ListOrders(token string, page, pageSize int,
 		return nil, err
 	}
 	var rows []model.CommerceOrder
-	if err := query.Preload("Items").Preload("AfterSales", "tenant_id = ?", context.Session.TenantID, func(db *gorm.DB) *gorm.DB { return db.Order("created_at DESC") }).Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
+	if err := query.Preload("Items").Preload("Adjustments", "tenant_id = ?", context.Session.TenantID, func(db *gorm.DB) *gorm.DB { return db.Order("id ASC") }).Preload("AfterSales", "tenant_id = ?", context.Session.TenantID, func(db *gorm.DB) *gorm.DB { return db.Order("created_at DESC") }).Preload("RestaurantFulfillment", "tenant_id = ?", context.Session.TenantID).Preload("RetailFulfillment", "tenant_id = ?", context.Session.TenantID).Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	if rows == nil {
 		rows = []model.CommerceOrder{}
 	}
+	for index := range rows {
+		rows[index].AvailableActions = commerceStorefrontAvailableActions(&rows[index])
+	}
 	return &CommerceStorefrontOrderPage{Data: rows, Total: total, Page: page, PageSize: pageSize}, nil
+}
+
+func commerceStorefrontAvailableActions(order *model.CommerceOrder) *model.CommerceOrderAvailableActions {
+	actions := &model.CommerceOrderAvailableActions{}
+	if order == nil {
+		actions.Reason = "订单不存在"
+		return actions
+	}
+	if order.RefundStatus != "none" {
+		actions.Reason = "订单已申请或完成退款"
+		return actions
+	}
+	if order.PaymentStatus == "unpaid" || (order.PaymentStatus == "failed" && order.FulfillmentStatus != "cancelled") {
+		actions.CanCancelOrder = true
+	}
+	if order.PaymentStatus != "paid" {
+		if actions.CanCancelOrder {
+			actions.Reason = "订单尚未支付"
+		} else if order.PaymentStatus == "pending" {
+			actions.Reason = "支付结果正在确认"
+		}
+		return actions
+	}
+	if order.BusinessType == "restaurant" {
+		if order.RestaurantFulfillment != nil && order.RestaurantFulfillment.Status == "pending_acceptance" {
+			actions.CanRefund = true
+		} else {
+			actions.Reason = "商家已接单，暂不可退款"
+		}
+		if order.RestaurantFulfillment != nil && order.RestaurantFulfillment.Method == "delivery" && order.RestaurantFulfillment.Status == "delivering" {
+			actions.CanConfirmReceipt = true
+		}
+	} else if order.BusinessType == "retail" {
+		if order.RetailFulfillment != nil && order.RetailFulfillment.Status == "pending_shipment" {
+			actions.CanRefund = true
+		} else {
+			actions.Reason = "订单已进入发货流程，暂不可退款"
+		}
+		if order.RetailFulfillment != nil && order.RetailFulfillment.Status == "delivered" {
+			actions.CanConfirmReceipt = true
+		}
+	} else {
+		actions.Reason = "订单业务类型不支持退款"
+	}
+	return actions
 }
 
 func (s *CommerceStorefrontService) GetOrder(token string, orderID uint) (*model.CommerceOrder, error) {
@@ -1195,7 +1545,12 @@ func (s *CommerceStorefrontService) GetOrder(token string, orderID uint) (*model
 	if err := s.db().Where("id = ? AND tenant_id = ? AND channel = ? AND customer_id = ?", orderID, context.Session.TenantID, "wechat_miniapp", context.CustomerID).First(&candidate).Error; err != nil {
 		return nil, err
 	}
-	return s.ordersService().GetOrder(context.Session.TenantID, candidate.ID)
+	order, err := s.ordersService().GetOrder(context.Session.TenantID, candidate.ID)
+	if err != nil {
+		return nil, err
+	}
+	order.AvailableActions = commerceStorefrontAvailableActions(order)
+	return order, nil
 }
 
 func (s *CommerceStorefrontService) GetOrderByNo(token, orderNo string) (*model.CommerceOrder, error) {
@@ -1211,7 +1566,51 @@ func (s *CommerceStorefrontService) GetOrderByNo(token, orderNo string) (*model.
 	if err := s.db().Where("order_no = ? AND tenant_id = ? AND channel = ? AND customer_id = ?", orderNo, context.Session.TenantID, "wechat_miniapp", context.CustomerID).First(&candidate).Error; err != nil {
 		return nil, err
 	}
-	return s.ordersService().GetOrder(context.Session.TenantID, candidate.ID)
+	order, err := s.ordersService().GetOrder(context.Session.TenantID, candidate.ID)
+	if err != nil {
+		return nil, err
+	}
+	order.AvailableActions = commerceStorefrontAvailableActions(order)
+	return order, nil
+}
+
+// CancelOrder cancels only the authenticated customer's unpaid order. The
+// order service rechecks payment/reconciliation state under a row lock before
+// releasing any reservation, so a late provider result cannot be mistaken for
+// a harmless unpaid timeout.
+func (s *CommerceStorefrontService) CancelOrder(token, orderNo string) (*model.CommerceOrder, error) {
+	context, err := s.authenticate(token)
+	if err != nil {
+		return nil, err
+	}
+	orderNo = strings.TrimSpace(orderNo)
+	if orderNo == "" {
+		return nil, fmt.Errorf("%w: order number is required", ErrCommerceStorefrontInvalid)
+	}
+	var candidate model.CommerceOrder
+	if err := s.db().Where("order_no = ? AND tenant_id = ? AND channel = ? AND customer_id = ?", orderNo, context.Session.TenantID, "wechat_miniapp", context.CustomerID).First(&candidate).Error; err != nil {
+		return nil, err
+	}
+	return s.ordersService().CancelUnpaidOrder(context.Session.TenantID, candidate.ID)
+}
+
+// ConfirmReceipt lets a customer acknowledge a delivered retail order or a
+// restaurant delivery order. Pickup and merchant-completed orders are kept on
+// their existing merchant workflow.
+func (s *CommerceStorefrontService) ConfirmReceipt(token, orderNo string) (*model.CommerceOrder, error) {
+	context, err := s.authenticate(token)
+	if err != nil {
+		return nil, err
+	}
+	orderNo = strings.TrimSpace(orderNo)
+	if orderNo == "" {
+		return nil, fmt.Errorf("%w: order number is required", ErrCommerceStorefrontInvalid)
+	}
+	var candidate model.CommerceOrder
+	if err := s.db().Where("order_no = ? AND tenant_id = ? AND channel = ? AND customer_id = ?", orderNo, context.Session.TenantID, "wechat_miniapp", context.CustomerID).First(&candidate).Error; err != nil {
+		return nil, err
+	}
+	return s.ordersService().ConfirmReceipt(context.Session.TenantID, candidate.ID)
 }
 
 func (s *CommerceStorefrontService) RequestRefund(token, orderNo string, raw CommerceStorefrontRefundInput) (*CommerceRefundResult, error) {

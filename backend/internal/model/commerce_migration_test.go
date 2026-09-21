@@ -21,6 +21,7 @@ func TestCommerceSchema124CreatesIsolatedTablesAndConstraints(t *testing.T) {
 		&TenantBusinessCapability{}, &CommerceProduct{}, &CommerceSKU{}, &CommerceOptionGroup{}, &CommerceOption{},
 		&CommerceFulfillmentLocation{}, &CommerceInventory{}, &CommerceCart{}, &CommerceCartItem{},
 		&CommerceOrder{}, &CommerceOrderItem{}, &RestaurantFulfillment{}, &RetailFulfillment{}, &CommerceProductMedia{},
+		&CommerceOrderPaidOutbox{}, &CommerceMerchantNotification{},
 		&CommercePaymentReconciliationTask{},
 		&CommercePaymentAttempt{}, &CommerceRefundAttempt{}, &CommercePaymentProviderEvent{},
 		&CommerceAddress{}, &CommerceAfterSaleRequest{}, &CommerceAfterSaleEvent{},
@@ -38,6 +39,8 @@ func TestCommerceSchema124CreatesIsolatedTablesAndConstraints(t *testing.T) {
 		{&CommerceSKU{}, "idx_commerce_skus_tenant_code"},
 		{&CommerceInventory{}, "idx_commerce_inventory_scope"},
 		{&CommerceAfterSaleRequest{}, "idx_commerce_after_sales_idempotency"},
+		{&CommerceOrderPaidOutbox{}, "idx_commerce_paid_outbox_identity"},
+		{&CommerceMerchantNotification{}, "idx_commerce_notification_event"},
 	} {
 		if !db.Migrator().HasIndex(index.model, index.name) {
 			t.Fatalf("commercial index %s is missing", index.name)

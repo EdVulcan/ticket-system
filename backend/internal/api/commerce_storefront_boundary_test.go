@@ -23,8 +23,13 @@ func migrateCommerceStorefrontOrderTables(t *testing.T, db *gorm.DB) {
 		&model.ChannelAccount{}, &model.CommerceCustomerSession{}, &model.CommerceStorefrontBinding{}, &model.AuditLog{},
 		&model.CommerceOrder{}, &model.CommerceOrderItem{}, &model.CommerceAfterSaleRequest{}, &model.CommerceAfterSaleEvent{},
 		&model.CommercePaymentReconciliationTask{}, &model.RestaurantFulfillment{}, &model.RetailFulfillment{},
+		&model.CommerceOrderPaidOutbox{}, &model.CommerceMerchantNotification{},
+		&model.CommerceOrderAdjustment{},
 		&model.CommerceProductMedia{},
 		&model.CommerceAddress{},
+		&model.CommerceLocationServiceConfig{}, &model.CommerceDeliveryZone{}, &model.CommerceDeliverySlot{},
+		&model.CommerceCheckoutQuote{},
+		&model.CommerceCouponTemplate{}, &model.CommerceCouponGrant{},
 	); err != nil {
 		t.Fatalf("migrate storefront order tables: %v", err)
 	}
@@ -39,6 +44,7 @@ type commerceStorefrontControllerFixture struct {
 	setNow   func(time.Time)
 	now      func() time.Time
 	control  *CommerceStorefrontController
+	delivery *CommerceDeliveryController
 }
 
 func newCommerceStorefrontControllerFixture(t *testing.T) commerceStorefrontControllerFixture {
@@ -71,9 +77,17 @@ func newCommerceStorefrontControllerFixture(t *testing.T) commerceStorefrontCont
 		Now:        now,
 		SessionTTL: time.Hour,
 	}
+	fulfillment := &service.CommerceDeliveryService{DB: db, Clock: now}
+	if _, err := fulfillment.UpsertLocationConfig(tenant.ID, location.ID, service.CommerceLocationServiceConfigInput{
+		BusinessType: "restaurant", PickupEnabled: true, DeliveryEnabled: true,
+	}); err != nil {
+		t.Fatalf("configure API storefront fulfillment: %v", err)
+	}
+	control := &CommerceStorefrontController{Service: storefront}
+	delivery := &CommerceDeliveryController{Service: *fulfillment, Storefront: &control.Service}
 	return commerceStorefrontControllerFixture{
 		db: db, tenant: tenant, product: product, location: location, account: account,
-		setNow: setNow, now: now, control: &CommerceStorefrontController{Service: storefront},
+		setNow: setNow, now: now, control: control, delivery: delivery,
 	}
 }
 
@@ -255,11 +269,38 @@ func TestCommerceStorefrontControllerCheckoutAndRefundUseServerFacts(t *testing.
 	if response.Code != http.StatusOK {
 		t.Fatalf("storefront controller add-cart status=%d body=%s", response.Code, response.Body.String())
 	}
+	response = invokeCommerceStorefrontController(t, http.MethodGet, "/storefront/wechat/delivery-options?business_type=restaurant", login.Token, nil, nil, fixture.delivery.StorefrontOptions)
+	if response.Code != http.StatusOK {
+		t.Fatalf("storefront delivery options status=%d body=%s", response.Code, response.Body.String())
+	}
+	var deliveryOptions struct {
+		Config model.CommerceLocationServiceConfig `json:"config"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &deliveryOptions); err != nil {
+		t.Fatalf("decode storefront delivery options: %v", err)
+	}
+	if deliveryOptions.Config.BusinessType != "restaurant" || !deliveryOptions.Config.PickupEnabled {
+		t.Fatalf("storefront delivery options config=%+v", deliveryOptions.Config)
+	}
+	response = invokeCommerceStorefrontController(t, http.MethodPost, "/storefront/wechat/checkout-quotes?business_type=restaurant", login.Token, map[string]interface{}{
+		"fulfillment_method": "pickup",
+	}, nil, fixture.delivery.CreateStorefrontQuote)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("storefront checkout quote status=%d body=%s", response.Code, response.Body.String())
+	}
+	var quote service.CommerceCheckoutQuoteResult
+	if err := json.Unmarshal(response.Body.Bytes(), &quote); err != nil {
+		t.Fatalf("decode storefront checkout quote: %v", err)
+	}
+	if quote.RawToken == "" || quote.Quote.TotalCents != fixture.product.SKUs[0].PriceCents {
+		t.Fatalf("storefront checkout quote=%+v", quote)
+	}
 
 	checkoutBody := map[string]interface{}{
 		"tenant_id": fixture.tenant.ID + 1000, "customer_id": "attacker", "business_type": "retail",
 		"location_id": 999999, "amount_cents": 1, "idempotency_key": "api-storefront-checkout",
 		"contact_name": "Guest", "contact_phone": "13800138000", "fulfillment_method": "pickup",
+		"quote_token": quote.RawToken,
 	}
 	response = invokeCommerceStorefrontController(t, http.MethodPost, "/storefront/wechat/cart/checkout", login.Token, checkoutBody, nil, fixture.control.Checkout)
 	if response.Code != http.StatusCreated {

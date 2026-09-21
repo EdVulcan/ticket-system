@@ -510,6 +510,15 @@ func (s *CommercePaymentService) StartWechatRefund(ctx context.Context, tenantID
 	if err != nil {
 		return nil, err
 	}
+	// Validate the callback address before persisting a provider attempt. If
+	// local deployment configuration is incomplete, no request has reached
+	// WeChat and the durable refund request must remain retryable as requested;
+	// creating a processing attempt here would make recovery query an upstream
+	// refund that was never submitted.
+	notifyURL, err := commercePaymentNotifyURL("refunds", tenantID)
+	if err != nil {
+		return nil, err
+	}
 	var request model.CommerceAfterSaleRequest
 	var order model.CommerceOrder
 	var attempt model.CommerceRefundAttempt
@@ -534,6 +543,9 @@ func (s *CommercePaymentService) StartWechatRefund(ctx context.Context, tenantID
 		if order.PaymentStatus != "paid" || order.RefundStatus != "requested" && order.RefundStatus != "processing" {
 			return fmt.Errorf("%w: order is not refundable in its current state", ErrCommerceRefundInvalid)
 		}
+		if err := requireCommerceRefundableFulfillmentTx(tx, &order); err != nil {
+			return err
+		}
 		outRefundNo := commerceRefundOutNo(s.now(), requestID)
 		attempt = model.CommerceRefundAttempt{TenantID: tenantID, RequestID: requestID, OrderID: order.ID, Provider: "wechat", OutRefundNo: outRefundNo, AmountCents: request.AmountCents, Status: "processing"}
 		if err := tx.Create(&attempt).Error; err != nil {
@@ -557,9 +569,21 @@ func (s *CommercePaymentService) StartWechatRefund(ctx context.Context, tenantID
 	if !created {
 		return view, nil
 	}
-	notifyURL, err := commercePaymentNotifyURL("refunds", tenantID)
-	if err != nil {
-		return nil, err
+	status, providerErr := s.submitWechatRefundAttempt(ctx, cfg, provider, &attempt, &request, &order, notifyURL)
+	if providerErr != nil {
+		return nil, providerErr
+	}
+	view.Status = status
+	return view, nil
+}
+
+// submitWechatRefundAttempt always reuses the persisted out-refund number and
+// immutable refund facts. WeChat requires the same merchant refund number for
+// retrying a failed or interrupted submission, which makes a restart between
+// the local commit and the HTTP response safe to recover without double pay.
+func (s *CommercePaymentService) submitWechatRefundAttempt(ctx context.Context, cfg *model.PaymentConfig, provider CommerceWechatProvider, attempt *model.CommerceRefundAttempt, request *model.CommerceAfterSaleRequest, order *model.CommerceOrder, notifyURL string) (string, error) {
+	if cfg == nil || provider == nil || attempt == nil || request == nil || order == nil {
+		return "", ErrCommerceRefundInvalid
 	}
 	createdRefund, providerErr := provider.CreateRefund(ctx, CommerceWechatRefundRequest{AppID: cfg.AppID, MchID: cfg.MchID, NotifyURL: notifyURL, OutTradeNo: order.PaymentReference, OutRefundNo: attempt.OutRefundNo, Reason: request.Reason, AmountCents: request.AmountCents})
 	if providerErr != nil {
@@ -569,27 +593,28 @@ func (s *CommercePaymentService) StartWechatRefund(ctx context.Context, tenantID
 		}
 		updates := map[string]interface{}{"status": status, "last_error": providerErr.Error(), "provider_state": "create_error", "next_query_at": s.now().Add(15 * time.Second)}
 		if status == "failed" {
-			if err := s.markCommerceRefundFailed(&attempt, "create_error", providerErr.Error()); err != nil {
-				return nil, err
+			if err := s.markCommerceRefundFailed(attempt, "create_error", providerErr.Error()); err != nil {
+				return "", err
 			}
 			updates["next_query_at"] = nil
 			updates["completed_at"] = s.now()
 		}
-		_ = s.db().Model(&attempt).Updates(updates).Error
-		return nil, providerErr
+		_ = s.db().Model(attempt).Updates(updates).Error
+		return status, providerErr
 	}
 	updates := map[string]interface{}{"provider_state": createdRefund.State, "provider_refund_id": createdRefund.ProviderID, "next_query_at": s.now().Add(15 * time.Second), "last_error": ""}
-	if err := s.db().Model(&attempt).Updates(updates).Error; err != nil {
-		return nil, err
+	if err := s.db().Model(attempt).Updates(updates).Error; err != nil {
+		return "", err
 	}
+	status := attempt.Status
 	if strings.EqualFold(createdRefund.State, "success") || strings.EqualFold(createdRefund.State, "succeeded") {
-		if _, err := s.orderService().CompleteRefundAfterProviderConfirmation(tenantID, requestID, createdRefund.ProviderID, createdRefund.ProviderAmount); err != nil {
-			return nil, err
+		if _, err := s.orderService().CompleteRefundAfterProviderConfirmation(attempt.TenantID, request.ID, createdRefund.ProviderID, createdRefund.ProviderAmount); err != nil {
+			return "", err
 		}
-		_ = s.db().Model(&attempt).Updates(map[string]interface{}{"status": "succeeded", "completed_at": s.now(), "next_query_at": nil}).Error
-		view.Status = "succeeded"
+		_ = s.db().Model(attempt).Updates(map[string]interface{}{"status": "succeeded", "completed_at": s.now(), "next_query_at": nil}).Error
+		status = "succeeded"
 	}
-	return view, nil
+	return status, nil
 }
 
 func (s *CommercePaymentService) queryRefundAttempt(ctx context.Context, attempt *model.CommerceRefundAttempt, request *model.CommerceAfterSaleRequest) error {
@@ -600,6 +625,18 @@ func (s *CommercePaymentService) queryRefundAttempt(ctx context.Context, attempt
 	provider, err := s.provider(cfg)
 	if err != nil {
 		return s.rescheduleCommerceRefundAttempt(attempt, err, false)
+	}
+	if strings.TrimSpace(attempt.ProviderState) == "" && attempt.LastQueriedAt == nil {
+		var order model.CommerceOrder
+		if err := s.db().Where("id = ? AND tenant_id = ?", attempt.OrderID, attempt.TenantID).First(&order).Error; err != nil {
+			return s.rescheduleCommerceRefundAttempt(attempt, err, false)
+		}
+		notifyURL, err := commercePaymentNotifyURL("refunds", attempt.TenantID)
+		if err != nil {
+			return s.rescheduleCommerceRefundAttempt(attempt, err, false)
+		}
+		_, err = s.submitWechatRefundAttempt(ctx, cfg, provider, attempt, request, &order, notifyURL)
+		return err
 	}
 	status, err := provider.QueryRefund(ctx, attempt.OutRefundNo)
 	if err != nil {

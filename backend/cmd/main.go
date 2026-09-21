@@ -80,6 +80,9 @@ func main() {
 	commercePaymentReconciliationContext, stopCommercePaymentReconciliation := context.WithCancel(context.Background())
 	defer stopCommercePaymentReconciliation()
 	go runCommercePaymentReconciliationWorker(commercePaymentReconciliationContext)
+	commerceNotificationContext, stopCommerceNotification := context.WithCancel(context.Background())
+	defer stopCommerceNotification()
+	go runCommerceNotificationWorker(commerceNotificationContext)
 
 	paymentReconciliationContext, stopPaymentReconciliation := context.WithCancel(context.Background())
 	defer stopPaymentReconciliation()
@@ -270,6 +273,30 @@ func runCommercePaymentReconciliationWorker(ctx context.Context) {
 	// observable across process restarts.
 	process(time.Now())
 	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			process(now)
+		}
+	}
+}
+
+// runCommerceNotificationWorker projects paid-order outbox rows independently
+// from payment reconciliation. Merchant UIs get a short notification latency
+// without increasing upstream payment-query traffic; durable outbox state still
+// provides startup recovery and idempotent retries.
+func runCommerceNotificationWorker(ctx context.Context) {
+	notifications := &service.CommerceNotificationService{}
+	process := func(now time.Time) {
+		if _, err := notifications.ProjectPending(ctx, 20); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Log.Error(fmt.Sprintf("commerce merchant notification projection failed: %v", err))
+		}
+	}
+	process(time.Now())
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
 		select {

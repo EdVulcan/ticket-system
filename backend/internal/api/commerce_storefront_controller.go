@@ -302,6 +302,24 @@ func (c *CommerceStorefrontController) GetOrder(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, order)
 }
 
+func (c *CommerceStorefrontController) CancelOrder(ctx *gin.Context) {
+	order, err := c.Service.CancelOrder(commerceStorefrontBearerToken(ctx), ctx.Param("orderNo"))
+	if err != nil {
+		commerceStorefrontError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, order)
+}
+
+func (c *CommerceStorefrontController) ConfirmReceipt(ctx *gin.Context) {
+	order, err := c.Service.ConfirmReceipt(commerceStorefrontBearerToken(ctx), ctx.Param("orderNo"))
+	if err != nil {
+		commerceStorefrontError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, order)
+}
+
 func (c *CommerceStorefrontController) RequestRefund(ctx *gin.Context) {
 	var input service.CommerceStorefrontRefundInput
 	if err := ctx.ShouldBindJSON(&input); err != nil {

@@ -80,6 +80,12 @@
               <el-icon class="copy-hint"><CopyDocument /></el-icon>
             </button>
 
+            <CommerceNotificationCenter
+              v-if="showCommerceNotifications"
+              :enabled="showCommerceNotifications"
+              :business-types="commerceNotificationBusinessTypes"
+            />
+
             <el-dropdown data-testid="profile-menu" trigger="click" @command="handleCommand">
               <button class="profile-trigger" type="button">
                 <span class="profile-avatar">{{ userInitial }}</span>
@@ -148,6 +154,7 @@ import {
 import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
 import AIAssistantBubble from '@/components/AIAssistantBubble.vue'
+import CommerceNotificationCenter from '@/components/CommerceNotificationCenter.vue'
 import { hasPermission, tenantRoleLabel } from '@/utils/permissions'
 import {
   activeCapabilitySet,
@@ -175,6 +182,12 @@ const passwordForm = reactive({ currentPassword: '', newPassword: '', confirmPas
 const isLoginPage = computed(() => route.name === 'login' || route.name === 'platform-login' || Boolean(route.meta.standalone))
 const activeCapabilities = computed(() => activeCapabilitySet(user.value))
 const configuredBusinessCapabilities = computed(() => configuredBusinessCapabilitySet(user.value))
+const showCommerceNotifications = computed(() => !isLoginPage.value && !isSuperAdmin.value &&
+  (configuredBusinessCapabilities.value.has('restaurant') || configuredBusinessCapabilities.value.has('retail')) &&
+  can('operations.read') && can('orders.read'))
+const commerceNotificationBusinessTypes = computed(() =>
+  (['restaurant', 'retail'] as const).filter(value => configuredBusinessCapabilities.value.has(value)),
+)
 const configuredCapabilities = computed(() => configuredCapabilitySet(user.value))
 const hasCapability = (value: string) => activeCapabilities.value.has(value)
 const hasAnyCapability = (...values: string[]) => values.some(value => activeCapabilities.value.has(value))

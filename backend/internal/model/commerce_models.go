@@ -18,18 +18,18 @@ type TenantBusinessCapability struct {
 // retail domains. Ticket products remain represented by Product.
 type CommerceProduct struct {
 	Base
-	TenantID       uint                  `gorm:"not null;index:idx_commerce_products_tenant_domain" json:"tenant_id"`
-	BusinessType   string                `gorm:"size:20;not null;index:idx_commerce_products_tenant_domain;check:chk_commerce_products_business_type,business_type IN ('restaurant','retail')" json:"business_type"`
-	Name           string                `gorm:"size:160;not null" json:"name"`
-	ShortTitle     string                `gorm:"size:80" json:"short_title,omitempty"`
-	Description    string                `gorm:"type:text" json:"description,omitempty"`
-	CategoryName   string                `gorm:"size:80;index" json:"category_name,omitempty"`
-	Status         string                `gorm:"size:20;not null;default:'draft';index;check:chk_commerce_products_status,status IN ('draft','online','offline')" json:"status"`
-	SaleStartsAt   *time.Time            `json:"sale_starts_at,omitempty"`
-	SaleEndsAt     *time.Time            `json:"sale_ends_at,omitempty"`
-	CurrentVersion int                   `gorm:"not null;default:1" json:"current_version"`
-	SKUs           []CommerceSKU         `gorm:"foreignKey:ProductID" json:"skus,omitempty"`
-	OptionGroups   []CommerceOptionGroup `gorm:"foreignKey:ProductID" json:"option_groups,omitempty"`
+	TenantID       uint                   `gorm:"not null;index:idx_commerce_products_tenant_domain" json:"tenant_id"`
+	BusinessType   string                 `gorm:"size:20;not null;index:idx_commerce_products_tenant_domain;check:chk_commerce_products_business_type,business_type IN ('restaurant','retail')" json:"business_type"`
+	Name           string                 `gorm:"size:160;not null" json:"name"`
+	ShortTitle     string                 `gorm:"size:80" json:"short_title,omitempty"`
+	Description    string                 `gorm:"type:text" json:"description,omitempty"`
+	CategoryName   string                 `gorm:"size:80;index" json:"category_name,omitempty"`
+	Status         string                 `gorm:"size:20;not null;default:'draft';index;check:chk_commerce_products_status,status IN ('draft','online','offline')" json:"status"`
+	SaleStartsAt   *time.Time             `json:"sale_starts_at,omitempty"`
+	SaleEndsAt     *time.Time             `json:"sale_ends_at,omitempty"`
+	CurrentVersion int                    `gorm:"not null;default:1" json:"current_version"`
+	SKUs           []CommerceSKU          `gorm:"foreignKey:ProductID" json:"skus,omitempty"`
+	OptionGroups   []CommerceOptionGroup  `gorm:"foreignKey:ProductID" json:"option_groups,omitempty"`
 	Media          []CommerceProductMedia `gorm:"foreignKey:ProductID" json:"media,omitempty"`
 }
 
@@ -127,29 +127,76 @@ type CommerceCartItem struct {
 
 type CommerceOrder struct {
 	Base
-	TenantID              uint                       `gorm:"not null;index:idx_commerce_orders_scope;uniqueIndex:idx_commerce_orders_payment_reference,priority:1" json:"tenant_id"`
-	OrderNo               string                     `gorm:"size:50;not null;uniqueIndex" json:"order_no"`
-	IdempotencyKey        string                     `gorm:"size:100;not null;default:''" json:"-"`
-	BusinessType          string                     `gorm:"size:20;not null;index:idx_commerce_orders_scope;check:chk_commerce_orders_business_type,business_type IN ('restaurant','retail')" json:"business_type"`
-	Channel               string                     `gorm:"size:50;not null;default:'direct'" json:"channel"`
-	CustomerID            string                     `gorm:"size:100;index" json:"customer_id"`
-	LocationID            uint                       `gorm:"not null" json:"location_id"`
-	OriginalAmountCents   int64                      `gorm:"not null;default:0;check:chk_commerce_orders_amounts,original_amount_cents >= 0 AND discount_cents >= 0 AND total_amount_cents >= 0" json:"original_amount_cents"`
-	DiscountCents         int64                      `gorm:"not null;default:0" json:"discount_cents"`
-	TotalAmountCents      int64                      `gorm:"not null;default:0" json:"total_amount_cents"`
-	PaymentStatus         string                     `gorm:"size:20;not null;default:'unpaid';index;check:chk_commerce_orders_payment_status,payment_status IN ('unpaid','pending','paid','failed','refunded')" json:"payment_status"`
-	FulfillmentStatus     string                     `gorm:"size:20;not null;default:'pending';index" json:"fulfillment_status"`
-	RefundStatus          string                     `gorm:"size:20;not null;default:'none';index;check:chk_commerce_orders_refund_status,refund_status IN ('none','requested','processing','partial','refunded','rejected')" json:"refund_status"`
-	ExpiresAt             *time.Time                 `json:"expires_at,omitempty"`
-	PaidAt                *time.Time                 `json:"paid_at,omitempty"`
-	PaymentReference      string                     `gorm:"size:120;uniqueIndex:idx_commerce_orders_payment_reference,priority:2" json:"payment_reference,omitempty"`
-	ContactName           string                     `gorm:"size:80" json:"contact_name,omitempty"`
-	ContactPhone          string                     `gorm:"size:30" json:"contact_phone,omitempty"`
-	ShippingAddressJSON   string                     `gorm:"type:text" json:"shipping_address,omitempty"`
-	Items                 []CommerceOrderItem        `gorm:"foreignKey:OrderID" json:"items,omitempty"`
-	AfterSales            []CommerceAfterSaleRequest `gorm:"foreignKey:OrderID" json:"after_sales,omitempty"`
-	RestaurantFulfillment *RestaurantFulfillment     `gorm:"foreignKey:OrderID" json:"restaurant_fulfillment,omitempty"`
-	RetailFulfillment     *RetailFulfillment         `gorm:"foreignKey:OrderID" json:"retail_fulfillment,omitempty"`
+	TenantID              uint                           `gorm:"not null;index:idx_commerce_orders_scope" json:"tenant_id"`
+	OrderNo               string                         `gorm:"size:50;not null;uniqueIndex" json:"order_no"`
+	IdempotencyKey        string                         `gorm:"size:100;not null;default:''" json:"-"`
+	BusinessType          string                         `gorm:"size:20;not null;index:idx_commerce_orders_scope;check:chk_commerce_orders_business_type,business_type IN ('restaurant','retail')" json:"business_type"`
+	Channel               string                         `gorm:"size:50;not null;default:'direct'" json:"channel"`
+	CustomerID            string                         `gorm:"size:100;index" json:"customer_id"`
+	LocationID            uint                           `gorm:"not null" json:"location_id"`
+	OriginalAmountCents   int64                          `gorm:"not null;default:0;check:chk_commerce_orders_amounts,original_amount_cents >= 0 AND discount_cents >= 0 AND total_amount_cents >= 0" json:"original_amount_cents"`
+	DiscountCents         int64                          `gorm:"not null;default:0" json:"discount_cents"`
+	TotalAmountCents      int64                          `gorm:"not null;default:0" json:"total_amount_cents"`
+	PaymentStatus         string                         `gorm:"size:20;not null;default:'unpaid';index;check:chk_commerce_orders_payment_status,payment_status IN ('unpaid','pending','paid','failed','refunded')" json:"payment_status"`
+	FulfillmentStatus     string                         `gorm:"size:20;not null;default:'pending';index" json:"fulfillment_status"`
+	RefundStatus          string                         `gorm:"size:20;not null;default:'none';index;check:chk_commerce_orders_refund_status,refund_status IN ('none','requested','processing','partial','refunded','rejected')" json:"refund_status"`
+	ExpiresAt             *time.Time                     `json:"expires_at,omitempty"`
+	PaidAt                *time.Time                     `json:"paid_at,omitempty"`
+	PaymentReference      string                         `gorm:"size:120" json:"payment_reference,omitempty"`
+	ContactName           string                         `gorm:"size:80" json:"contact_name,omitempty"`
+	ContactPhone          string                         `gorm:"size:30" json:"contact_phone,omitempty"`
+	ShippingAddressJSON   string                         `gorm:"type:text" json:"shipping_address,omitempty"`
+	Items                 []CommerceOrderItem            `gorm:"foreignKey:OrderID" json:"items,omitempty"`
+	Adjustments           []CommerceOrderAdjustment      `gorm:"foreignKey:OrderID" json:"adjustments,omitempty"`
+	AfterSales            []CommerceAfterSaleRequest     `gorm:"foreignKey:OrderID" json:"after_sales,omitempty"`
+	RestaurantFulfillment *RestaurantFulfillment         `gorm:"foreignKey:OrderID" json:"restaurant_fulfillment,omitempty"`
+	RetailFulfillment     *RetailFulfillment             `gorm:"foreignKey:OrderID" json:"retail_fulfillment,omitempty"`
+	AvailableActions      *CommerceOrderAvailableActions `gorm:"-" json:"available_actions,omitempty"`
+}
+
+// CommerceOrderAvailableActions is a server-computed storefront projection.
+// It is deliberately non-persistent; refund authorization remains in the
+// order service and rechecks the state under a row lock.
+type CommerceOrderAvailableActions struct {
+	CanRefund         bool   `json:"can_refund"`
+	CanCancelOrder    bool   `json:"can_cancel_order"`
+	CanConfirmReceipt bool   `json:"can_confirm_receipt"`
+	Reason            string `json:"reason,omitempty"`
+}
+
+// CommerceOrderPaidOutbox records the first effective paid transition. It is
+// written in the same transaction as the order payment transition and then
+// projected into a tenant-scoped merchant notification.
+type CommerceOrderPaidOutbox struct {
+	Base
+	TenantID      uint       `gorm:"not null;uniqueIndex:idx_commerce_paid_outbox_identity,priority:1;index:idx_commerce_paid_outbox_claim" json:"tenant_id"`
+	OrderID       uint       `gorm:"not null;uniqueIndex:idx_commerce_paid_outbox_identity,priority:2;index:idx_commerce_paid_outbox_claim" json:"order_id"`
+	EventType     string     `gorm:"size:40;not null;uniqueIndex:idx_commerce_paid_outbox_identity,priority:3" json:"event_type"`
+	EventKey      string     `gorm:"size:160;not null;uniqueIndex:idx_commerce_paid_outbox_event_key" json:"event_key"`
+	PayloadJSON   string     `gorm:"type:text;not null" json:"-"`
+	Status        string     `gorm:"size:20;not null;default:'pending';index:idx_commerce_paid_outbox_claim;check:chk_commerce_paid_outbox_status,status IN ('pending','processing','processed','failed')" json:"status"`
+	Attempts      int        `gorm:"not null;default:0;check:chk_commerce_paid_outbox_attempts,attempts >= 0" json:"attempts"`
+	NextAttemptAt *time.Time `gorm:"index:idx_commerce_paid_outbox_claim" json:"next_attempt_at,omitempty"`
+	LockedAt      *time.Time `json:"locked_at,omitempty"`
+	ProcessedAt   *time.Time `json:"processed_at,omitempty"`
+	LastError     string     `gorm:"size:500" json:"last_error,omitempty"`
+}
+
+// CommerceMerchantNotification is the durable operator-facing projection of
+// commercial order events. Every row remains tenant/business/location scoped.
+type CommerceMerchantNotification struct {
+	Base
+	TenantID     uint       `gorm:"not null;uniqueIndex:idx_commerce_notification_event,priority:1;index:idx_commerce_notification_scope" json:"tenant_id"`
+	EventKey     string     `gorm:"size:160;not null;uniqueIndex:idx_commerce_notification_event,priority:2" json:"event_key"`
+	EventType    string     `gorm:"size:40;not null;index" json:"event_type"`
+	OrderID      uint       `gorm:"not null;index:idx_commerce_notification_scope" json:"order_id"`
+	OrderNo      string     `gorm:"size:50;not null" json:"order_no"`
+	BusinessType string     `gorm:"size:20;not null;index:idx_commerce_notification_scope;check:chk_commerce_notification_business_type,business_type IN ('restaurant','retail')" json:"business_type"`
+	LocationID   uint       `gorm:"not null;index:idx_commerce_notification_scope" json:"location_id"`
+	Title        string     `gorm:"size:160;not null" json:"title"`
+	Body         string     `gorm:"size:500;not null" json:"body"`
+	Status       string     `gorm:"size:20;not null;default:'unread';index;check:chk_commerce_notification_status,status IN ('unread','read')" json:"status"`
+	ReadAt       *time.Time `json:"read_at,omitempty"`
 }
 
 // CommercePaymentReconciliationTask persists an ambiguous external payment
@@ -288,7 +335,7 @@ type CommerceAddress struct {
 	Base
 	TenantID      uint   `gorm:"not null;index:idx_commerce_addresses_customer" json:"tenant_id"`
 	CustomerID    string `gorm:"size:100;not null;index:idx_commerce_addresses_customer" json:"customer_id"`
-	AddressType   string `gorm:"size:20;not null;default:'SHIPPING';index:idx_commerce_addresses_customer;check:chk_commerce_addresses_type,address_type IN ('CAMPUS','SHIPPING')" json:"address_type"`
+	AddressType   string `gorm:"size:20;not null;default:'SHIPPING';index:idx_commerce_addresses_customer;check:chk_commerce_addresses_type,address_type IN ('CAMPUS','SHIPPING','DELIVERY')" json:"address_type"`
 	RecipientName string `gorm:"size:80;not null" json:"recipient_name"`
 	Phone         string `gorm:"size:30;not null" json:"phone"`
 	Province      string `gorm:"size:40" json:"province,omitempty"`

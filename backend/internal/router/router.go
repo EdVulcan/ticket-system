@@ -65,6 +65,9 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	}
 	commercePaymentService := service.CommercePaymentService{Storefront: commerceStorefrontService}
 	commerceStorefrontController := &api.CommerceStorefrontController{Service: *commerceStorefrontService, Payment: commercePaymentService}
+	commerceDeliveryController := &api.CommerceDeliveryController{Service: service.CommerceDeliveryService{}, Storefront: commerceStorefrontService}
+	commercePromotionController := &api.CommercePromotionController{Promotion: service.CommercePromotionService{}, Storefront: *commerceStorefrontService}
+	commerceLogisticsController := &api.CommerceLogisticsController{Service: service.CommerceLogisticsService{}, Storefront: commerceStorefrontService}
 	commerceStorefrontGroup := apiGroup.Group("/storefront/wechat")
 	commerceStorefrontGroup.POST("/session", middleware.MiniappLoginRateLimit(), commerceStorefrontController.Login)
 	commerceStorefrontGroup.GET("/catalog", commerceStorefrontController.Catalog)
@@ -73,6 +76,13 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	commerceStorefrontGroup.PATCH("/cart/items/:itemID", commerceStorefrontController.UpdateCartItem)
 	commerceStorefrontGroup.DELETE("/cart/items/:itemID", commerceStorefrontController.RemoveCartItem)
 	commerceStorefrontGroup.POST("/cart/checkout", commerceStorefrontController.Checkout)
+	commerceStorefrontGroup.GET("/delivery-options", commerceDeliveryController.StorefrontOptions)
+	commerceStorefrontGroup.POST("/checkout-quotes", commerceDeliveryController.CreateStorefrontQuote)
+	commerceStorefrontGroup.GET("/coupons", commercePromotionController.ListAvailableCoupons)
+	commerceStorefrontGroup.GET("/assist-campaigns", commercePromotionController.ListAvailableAssistCampaigns)
+	commerceStorefrontGroup.POST("/assist-sessions", commercePromotionController.CreateAssistSession)
+	commerceStorefrontGroup.GET("/assist-sessions/:token", commercePromotionController.GetAssistSession)
+	commerceStorefrontGroup.POST("/assist-sessions/:token/help", commercePromotionController.HelpAssist)
 	// Plural cart routes are the stable storefront contract. The singular
 	// aliases above remain for already-built demo clients.
 	commerceStorefrontGroup.POST("/carts", commerceStorefrontController.GetCart)
@@ -84,9 +94,12 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	commerceStorefrontGroup.POST("/carts/:cartID/checkout", commerceStorefrontController.Checkout)
 	commerceStorefrontGroup.GET("/orders", commerceStorefrontController.ListOrders)
 	commerceStorefrontGroup.GET("/orders/:orderNo", commerceStorefrontController.GetOrder)
+	commerceStorefrontGroup.POST("/orders/:orderNo/cancel", commerceStorefrontController.CancelOrder)
+	commerceStorefrontGroup.POST("/orders/:orderNo/confirm-receipt", commerceStorefrontController.ConfirmReceipt)
 	commerceStorefrontGroup.POST("/orders/:orderNo/refund-requests", commerceStorefrontController.RequestRefund)
 	commerceStorefrontGroup.POST("/orders/:orderNo/payments", commerceStorefrontController.CreatePayment)
 	commerceStorefrontGroup.GET("/orders/:orderNo/payment", commerceStorefrontController.QueryPayment)
+	commerceStorefrontGroup.GET("/orders/:orderNo/shipments", commerceLogisticsController.CustomerOrderTimeline)
 	commerceStorefrontGroup.GET("/addresses", commerceStorefrontController.ListAddresses)
 	commerceStorefrontGroup.POST("/addresses", commerceStorefrontController.SaveAddress)
 	commerceStorefrontGroup.PUT("/addresses/:addressID", commerceStorefrontController.SaveAddress)
@@ -349,6 +362,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	{
 		commerceOrderReadGroup.GET("", commerceOrderController.List)
 		commerceOrderReadGroup.GET("/:id", commerceOrderController.Get)
+		commerceOrderReadGroup.GET("/:orderID/shipment", commerceLogisticsController.AdminOrderTimeline)
 	}
 	commerceOrderWriteGroup := protected.Group("/commerce/orders")
 	commerceOrderWriteGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"))
@@ -362,7 +376,10 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	commerceOrderFulfillmentGroup := protected.Group("/commerce/orders")
 	commerceOrderFulfillmentGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"))
 	commerceOrderFulfillmentGroup.POST("/:id/restaurant-fulfillment", middleware.RequireTenantPermission(authz.PermissionOperationsWrite), commerceOrderController.RestaurantFulfillment)
-	commerceOrderFulfillmentGroup.POST("/:id/retail-fulfillment", middleware.RequireTenantPermission(authz.PermissionOperationsWrite), commerceOrderController.RetailFulfillment)
+	// Retail fulfillment is projected exclusively from shipment creation and
+	// append-only logistics events below. Exposing the legacy direct transition
+	// would let an operator bypass the package timeline or complete an order
+	// before the customer confirms receipt.
 	// Payment confirmation is intentionally not exposed through the ordinary
 	// tenant JWT boundary. A real payment adapter must authenticate and verify
 	// its provider callback before invoking CommerceOrderService. Until that
@@ -372,6 +389,60 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	commerceOrderAfterSaleGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"))
 	{
 		commerceOrderAfterSaleGroup.POST("/:id/refund-requests", middleware.RequireTenantPermission(authz.PermissionAfterSalesWrite), commerceOrderController.RequestRefund)
+	}
+	commerceNotificationController := &api.CommerceNotificationController{Service: service.CommerceNotificationService{}}
+	commerceNotificationReadGroup := protected.Group("/commerce/notifications")
+	commerceNotificationReadGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionOperationsRead))
+	{
+		commerceNotificationReadGroup.GET("", commerceNotificationController.List)
+		commerceNotificationReadGroup.GET("/unread-count", commerceNotificationController.UnreadCount)
+	}
+	commerceNotificationWriteGroup := protected.Group("/commerce/notifications")
+	commerceNotificationWriteGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionOperationsRead))
+	{
+		commerceNotificationWriteGroup.POST("/:id/read", commerceNotificationController.MarkRead)
+	}
+	commerceDeliveryReadGroup := protected.Group("/commerce/locations")
+	commerceDeliveryReadGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionCatalogRead))
+	{
+		commerceDeliveryReadGroup.GET("/:locationID/service-config", commerceDeliveryController.GetConfig)
+		commerceDeliveryReadGroup.GET("/:locationID/delivery-zones", commerceDeliveryController.ListZones)
+		commerceDeliveryReadGroup.GET("/:locationID/delivery-slots", commerceDeliveryController.ListSlots)
+	}
+	commerceDeliveryWriteGroup := protected.Group("/commerce/locations")
+	commerceDeliveryWriteGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite))
+	{
+		commerceDeliveryWriteGroup.PUT("/:locationID/service-config", commerceDeliveryController.SaveConfig)
+		commerceDeliveryWriteGroup.POST("/:locationID/delivery-zones", commerceDeliveryController.CreateZone)
+		commerceDeliveryWriteGroup.PUT("/:locationID/delivery-zones/:zoneID", commerceDeliveryController.UpdateZone)
+		commerceDeliveryWriteGroup.POST("/:locationID/delivery-slots", commerceDeliveryController.CreateSlot)
+		commerceDeliveryWriteGroup.PUT("/:locationID/delivery-slots/:slotID", commerceDeliveryController.UpdateSlot)
+	}
+	commercePromotionReadGroup := protected.Group("/commerce/promotions")
+	commercePromotionReadGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionCatalogRead))
+	{
+		commercePromotionReadGroup.GET("/coupon-templates", commercePromotionController.ListCouponTemplates)
+		commercePromotionReadGroup.GET("/assist-campaigns", commercePromotionController.ListAssistCampaigns)
+	}
+	commercePromotionWriteGroup := protected.Group("/commerce/promotions")
+	commercePromotionWriteGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite))
+	{
+		commercePromotionWriteGroup.POST("/coupon-templates", commercePromotionController.CreateCouponTemplate)
+		commercePromotionWriteGroup.PUT("/coupon-templates/:templateID", commercePromotionController.UpdateCouponTemplate)
+		commercePromotionWriteGroup.POST("/assist-campaigns", commercePromotionController.CreateAssistCampaign)
+		commercePromotionWriteGroup.PUT("/assist-campaigns/:campaignID", commercePromotionController.UpdateAssistCampaign)
+	}
+	commerceLogisticsReadGroup := protected.Group("/commerce/shipments")
+	commerceLogisticsReadGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("retail"), middleware.RequireTenantPermission(authz.PermissionOrdersRead))
+	{
+		commerceLogisticsReadGroup.GET("/:shipmentID/timeline", commerceLogisticsController.ShipmentTimeline)
+	}
+	commerceLogisticsWriteGroup := protected.Group("/commerce")
+	commerceLogisticsWriteGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("retail"), middleware.RequireTenantPermission(authz.PermissionOperationsWrite))
+	{
+		commerceLogisticsWriteGroup.POST("/orders/:orderID/shipments", commerceLogisticsController.CreateShipment)
+		commerceLogisticsWriteGroup.PUT("/shipments/:shipmentID", commerceLogisticsController.UpdateShipment)
+		commerceLogisticsWriteGroup.POST("/shipments/:shipmentID/events", commerceLogisticsController.AppendManualEvent)
 	}
 	commerceAfterSaleGroup := protected.Group("/commerce/after-sales")
 	commerceAfterSaleGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"))

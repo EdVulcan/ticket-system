@@ -11,7 +11,6 @@
           {{ capabilityStatusLabel }}
         </el-tag>
         <el-button :icon="Refresh" :loading="loading" @click="refreshWorkspace">刷新</el-button>
-        <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openProductDialog()">新增{{ productNoun }}</el-button>
       </div>
     </header>
 
@@ -200,8 +199,8 @@
               <el-button :icon="Refresh" :loading="orderLoading" @click="loadOrders">刷新</el-button>
             </div>
             <div class="filter-toolbar commerce-filter-bar">
-              <el-input v-model="orderSearch" class="commerce-search" clearable placeholder="搜索订单号、联系人或手机号" :prefix-icon="Search" @keyup.enter="loadOrders" @clear="loadOrders" />
-              <el-select v-model="orderPaymentStatus" class="status-filter" clearable placeholder="支付状态" @change="loadOrders">
+              <el-input v-model="orderSearch" class="commerce-search" clearable placeholder="搜索订单号、联系人或手机号" :prefix-icon="Search" @keyup.enter="applyOrderFilters" @clear="applyOrderFilters" />
+              <el-select v-model="orderPaymentStatus" class="status-filter" clearable placeholder="支付状态" @change="applyOrderFilters">
                 <el-option label="全部支付状态" value="" />
                 <el-option label="待支付" value="unpaid" />
                 <el-option label="支付中" value="pending" />
@@ -209,11 +208,11 @@
                 <el-option label="支付失败" value="failed" />
                 <el-option label="已退款" value="refunded" />
               </el-select>
-              <el-select v-model="orderFulfillmentStatus" class="status-filter" clearable placeholder="履约状态" @change="loadOrders">
+              <el-select v-model="orderFulfillmentStatus" class="status-filter" clearable placeholder="履约状态" @change="applyOrderFilters">
                 <el-option label="全部履约状态" value="" />
                 <el-option v-for="option in fulfillmentStatusOptions" :key="option.value" :label="option.label" :value="option.value" />
               </el-select>
-              <el-select v-model="orderRefundStatus" class="status-filter" clearable placeholder="售后状态" @change="loadOrders">
+              <el-select v-model="orderRefundStatus" class="status-filter" clearable placeholder="售后状态" @change="applyOrderFilters">
                 <el-option label="全部售后状态" value="" />
                 <el-option label="无售后" value="none" />
                 <el-option label="退款申请中" value="requested" />
@@ -229,6 +228,9 @@
                   <div class="primary-cell">{{ row.order_no }}</div>
                   <div class="secondary-cell">{{ formatDate(row.created_at) }}</div>
                 </template>
+              </el-table-column>
+              <el-table-column :label="locationNoun" min-width="170">
+                <template #default="{ row }">{{ orderLocationLabel(row) }}</template>
               </el-table-column>
               <el-table-column :label="productNoun" min-width="240">
                 <template #default="{ row }">
@@ -254,6 +256,25 @@
               </el-table-column>
               <template #empty><el-empty :description="`暂无${productNoun}订单`" :image-size="72" /></template>
             </el-table>
+            <div class="commerce-pagination">
+              <el-pagination
+                v-model:current-page="orderPage"
+                :page-size="orderPageSize"
+                :total="orderTotal"
+                layout="total, prev, pager, next"
+                @current-change="loadOrders"
+              />
+            </div>
+          </section>
+        </el-tab-pane>
+
+        <el-tab-pane v-if="isCurrentDomainActive" label="履约与营销" name="phase-two">
+          <section class="workspace-section">
+            <CommercePhaseTwoPanel
+              :business-type="currentDomain"
+              :active-locations="activeLocations"
+              :can-write="canWrite"
+            />
           </section>
         </el-tab-pane>
 
@@ -531,6 +552,7 @@
           <el-descriptions-item label="履约状态"><el-tag :type="fulfillmentStatusType(selectedOrder.fulfillment_status)" effect="plain">{{ fulfillmentStatusLabel(selectedOrder.fulfillment_status) }}</el-tag></el-descriptions-item>
           <el-descriptions-item label="售后状态"><el-tag :type="refundStatusType(selectedOrder.refund_status)" effect="plain">{{ refundStatusLabel(selectedOrder.refund_status) }}</el-tag></el-descriptions-item>
           <el-descriptions-item label="订单金额">¥{{ money(selectedOrder.total_amount_cents) }}</el-descriptions-item>
+          <el-descriptions-item :label="locationNoun">{{ orderLocationLabel(selectedOrder) }}</el-descriptions-item>
           <el-descriptions-item v-if="selectedOrder.shipping_address" label="收货地址" :span="2">{{ selectedOrder.shipping_address }}</el-descriptions-item>
         </el-descriptions>
         <el-divider content-position="left">{{ productNoun }}快照</el-divider>
@@ -547,6 +569,32 @@
           <div v-if="selectedOrder.restaurant_fulfillment">{{ selectedOrder.restaurant_fulfillment.method === 'delivery' ? '配送' : '自取' }} · {{ fulfillmentStatusLabel(selectedOrder.restaurant_fulfillment.status) }}</div>
           <div v-if="selectedOrder.retail_fulfillment">{{ selectedOrder.retail_fulfillment.carrier || '待填写物流公司' }} · {{ selectedOrder.retail_fulfillment.tracking_no || '待填写运单号' }}</div>
         </div>
+        <div v-if="selectedOrder.business_type === 'retail' && shipmentTimeline" class="order-shipment-timeline">
+          <el-divider content-position="left">物流进度</el-divider>
+          <div class="shipment-summary">
+            <strong>{{ shipmentTimeline.shipment?.carrier_name || shipmentTimeline.shipment?.carrier_code || '人工物流' }}</strong>
+            <span>{{ shipmentTimeline.shipment?.tracking_no || shipmentTimeline.shipment?.shipment_no }}</span>
+          </div>
+          <el-timeline v-if="shipmentTimeline.events?.length">
+            <el-timeline-item
+              v-for="event in shipmentTimeline.events"
+              :key="event.id"
+              :timestamp="formatDate(event.occurred_at)"
+              placement="top"
+            >
+              <strong>{{ shipmentEventLabel(event.status) }}</strong>
+              <div v-if="event.description" class="secondary-cell">{{ event.description }}</div>
+              <div v-if="event.location" class="secondary-cell">{{ event.location }}</div>
+            </el-timeline-item>
+          </el-timeline>
+        </div>
+        <el-alert
+          v-if="selectedOrder.business_type === 'retail' && shipmentTimelineError"
+          type="warning"
+          :closable="false"
+          title="物流信息暂时无法加载，订单详情仍可查看。"
+          class="capability-alert"
+        />
         <div v-if="selectedOrder.after_sales?.length" class="order-after-sale-list">
           <el-divider content-position="left">售后记录</el-divider>
           <div v-for="afterSale in selectedOrder.after_sales" :key="afterSale.id" class="after-sale-row"><span>{{ afterSale.request_no }}</span><el-tag size="small" :type="refundStatusType(afterSale.status)" effect="plain">{{ afterSaleStatusLabel(afterSale.status) }}</el-tag><span class="secondary-cell">¥{{ money(afterSale.amount_cents) }}</span></div>
@@ -600,6 +648,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, Edit, Plus, Refresh, Search, UploadFilled } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { hasPermission } from '@/utils/permissions'
+import CommercePhaseTwoPanel from '@/components/CommercePhaseTwoPanel.vue'
 import {
   activeBusinessCapabilitySet,
   configuredBusinessCapabilitySet,
@@ -644,10 +693,15 @@ const orderSearch = ref('')
 const orderPaymentStatus = ref('')
 const orderFulfillmentStatus = ref('')
 const orderRefundStatus = ref('')
+const orderPage = ref(1)
+const orderPageSize = 20
+const orderTotal = ref(0)
 const orderLoading = ref(false)
 const orderDetailLoading = ref(false)
 const orderDetailVisible = ref(false)
 const selectedOrder = ref<any | null>(null)
+const shipmentTimeline = ref<any | null>(null)
+const shipmentTimelineError = ref('')
 const orderActionID = ref(0)
 const shippingDialogVisible = ref(false)
 const shippingOrder = ref<any | null>(null)
@@ -848,7 +902,14 @@ function locationDisplayName(locationID: number) {
   return locations.value.find(row => Number(row.id) === Number(locationID))?.name || '地点已归档'
 }
 
-function silentConfig(params: Record<string, string>) {
+function orderLocationLabel(order: any) {
+  if (order?.location_name) return order.location_name
+  const locationID = Number(order?.location_id || 0)
+  if (!locationID) return '地点已归档'
+  return locations.value.find(row => Number(row.id) === locationID)?.name || `地点 #${locationID}`
+}
+
+function silentConfig(params: Record<string, string | number>) {
   return { params, skipErrorToast: true } as any
 }
 
@@ -912,6 +973,9 @@ async function loadWorkspace() {
   products.value = []
   locations.value = []
   inventoryRows.value = []
+  orders.value = []
+  orderPage.value = 1
+  orderTotal.value = 0
   loading.value = true
   loadError.value = ''
   await Promise.all([loadProducts(), loadLocations(), loadInventory()])
@@ -954,6 +1018,13 @@ function fulfillmentStatusLabel(value: string) {
   } as Record<string, string>)[value] || value || '-'
 }
 
+function shipmentEventLabel(value: string) {
+  return ({
+    pending_shipment: '待发货', shipped: '已发货', in_transit: '运输中', out_for_delivery: '派送中',
+    delivered: '已送达', exception: '物流异常', cancelled: '已取消',
+  } as Record<string, string>)[value] || value || '-'
+}
+
 function fulfillmentStatusType(value: string) {
   return ({ pending_acceptance: 'warning', pending_shipment: 'warning', accepted: 'primary', preparing: 'primary', ready: 'success', delivering: 'primary', shipped: 'primary', in_transit: 'primary', delivered: 'success', completed: 'success', cancelled: 'danger' } as Record<string, string>)[value] || 'info'
 }
@@ -978,18 +1049,22 @@ function orderRefundRequest(row: any) {
   return (row.after_sales || []).find((request: any) => ['requested', 'approved', 'processing'].includes(request.status))
 }
 
-async function loadOrders() {
+async function loadOrders(searchOverride?: string) {
   if (!isCurrentDomainConfigured.value) return
   orderLoading.value = true
   try {
+    const search = searchOverride === undefined ? orderSearch.value.trim() : searchOverride.trim()
     const response = await request.get('/commerce/orders', silentConfig({
       business_type: currentDomain.value,
-      search: orderSearch.value.trim(),
+      search,
       payment_status: orderPaymentStatus.value,
       fulfillment_status: orderFulfillmentStatus.value,
       refund_status: orderRefundStatus.value,
+      page: orderPage.value,
+      page_size: orderPageSize,
     }))
     orders.value = response.data?.data || []
+    orderTotal.value = Number(response.data?.total || 0)
   } catch (error) {
     if (statusCode(error) !== 403) loadError.value = '订单暂时无法加载'
   } finally {
@@ -997,12 +1072,33 @@ async function loadOrders() {
   }
 }
 
+async function applyRouteOrderIntent() {
+  if (String(route.query.tab || '') !== 'orders') return
+  activeTab.value = 'orders'
+  const orderNo = String(route.query.order || '').trim()
+  if (orderNo) orderSearch.value = orderNo
+  orderPage.value = 1
+  await loadOrders(orderNo || undefined)
+  if (!orderNo) return
+  const row = orders.value.find(item => String(item?.order_no || '').trim() === orderNo)
+  if (row) {
+    await openOrderDetail(row)
+  } else {
+    ElMessage.info('通知关联的订单暂未在当前工作台找到')
+  }
+}
+
+function applyOrderFilters() {
+  orderPage.value = 1
+  void loadOrders()
+}
+
 function resetOrderFilters() {
   orderSearch.value = ''
   orderPaymentStatus.value = ''
   orderFulfillmentStatus.value = ''
   orderRefundStatus.value = ''
-  void loadOrders()
+  applyOrderFilters()
 }
 
 function handleTabChange(name: string | number) {
@@ -1053,11 +1149,24 @@ async function saveStorefrontBinding() {
 async function openOrderDetail(row: any) {
   if (!row?.id) return
   selectedOrder.value = row
+  shipmentTimeline.value = null
+  shipmentTimelineError.value = ''
   orderDetailVisible.value = true
   orderDetailLoading.value = true
   try {
-    const response = await request.get(`/commerce/orders/${row.id}`, { skipErrorToast: true } as any)
-    selectedOrder.value = response.data
+    const [orderResult, shipmentResult] = await Promise.allSettled([
+      request.get(`/commerce/orders/${row.id}`, { skipErrorToast: true } as any),
+      row.business_type === 'retail'
+        ? request.get(`/commerce/orders/${row.id}/shipment`, { skipErrorToast: true } as any)
+        : Promise.resolve(null),
+    ])
+    if (orderResult.status === 'rejected') throw orderResult.reason
+    selectedOrder.value = orderResult.value.data
+    if (shipmentResult.status === 'fulfilled') {
+      shipmentTimeline.value = shipmentResult.value?.data || null
+    } else if (statusCode(shipmentResult.reason) !== 404) {
+      shipmentTimelineError.value = '物流信息暂时无法加载'
+    }
   } catch (error) {
     if (statusCode(error) !== 403) ElMessage.error('订单详情暂时无法加载')
   } finally {
@@ -1074,7 +1183,7 @@ function nextFulfillmentStatus(row: any) {
     if (current === 'ready') return row.restaurant_fulfillment?.method === 'delivery' ? 'delivering' : 'completed'
     return next[current] || ''
   }
-  return ({ pending_shipment: 'shipped', shipped: 'in_transit', in_transit: 'delivered', delivered: 'completed' } as Record<string, string>)[current] || ''
+  return ({ pending_shipment: 'shipped', shipped: 'in_transit', in_transit: 'delivered' } as Record<string, string>)[current] || ''
 }
 
 function advanceFulfillmentLabel(row: any) {
@@ -1082,11 +1191,14 @@ function advanceFulfillmentLabel(row: any) {
   if (row?.business_type === 'restaurant') {
     return ({ accepted: '确认接单', preparing: '开始制作', ready: '备餐完成', delivering: '安排配送', completed: row.restaurant_fulfillment?.method === 'delivery' ? '标记已送达' : '确认取餐' } as Record<string, string>)[next] || '推进履约'
   }
-  return ({ shipped: '填写发货信息', in_transit: '更新运输状态', delivered: '确认送达', completed: '完成订单' } as Record<string, string>)[next] || '推进订单'
+  return ({ shipped: '填写发货信息', in_transit: '更新运输状态', delivered: '确认送达' } as Record<string, string>)[next] || '推进订单'
 }
 
 function canRequestRefund(row: any) {
-  return canAfterSalesWrite.value && row?.payment_status === 'paid' && row?.refund_status === 'none'
+  if (!canAfterSalesWrite.value || row?.payment_status !== 'paid' || row?.refund_status !== 'none') return false
+  if (row?.business_type === 'restaurant') return row?.restaurant_fulfillment?.status === 'pending_acceptance'
+  if (row?.business_type === 'retail') return row?.retail_fulfillment?.status === 'pending_shipment'
+  return false
 }
 
 function canAdvanceFulfillment(row: any) {
@@ -1131,8 +1243,18 @@ async function advanceFulfillment(row: any) {
       type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消',
     })
     orderActionID.value = row.id
-    const endpoint = row.business_type === 'restaurant' ? 'restaurant-fulfillment' : 'retail-fulfillment'
-    await request.post(`/commerce/orders/${row.id}/${endpoint}`, { status: next })
+    if (row.business_type === 'restaurant') {
+      await request.post(`/commerce/orders/${row.id}/restaurant-fulfillment`, { status: next })
+    } else {
+      const timelineResponse = await request.get(`/commerce/orders/${row.id}/shipment`, { skipErrorToast: true } as any)
+      const shipmentID = Number(timelineResponse.data?.shipment?.id || 0)
+      if (!shipmentID) throw new Error('物流包裹不存在')
+      await request.post(`/commerce/shipments/${shipmentID}/events`, {
+        status: next,
+        description: next === 'delivered' ? '商家确认包裹已送达' : '商家更新为运输中',
+        idempotency_key: `admin-logistics-${row.id}-${next}-${Date.now()}`,
+      })
+    }
     ElMessage.success('履约状态已更新')
     await loadOrders()
   } catch { /* cancelled or request interceptor already reported the error */ }
@@ -1151,7 +1273,7 @@ async function submitShipping() {
   }
   orderActionID.value = row.id
   try {
-    await request.post(`/commerce/orders/${row.id}/retail-fulfillment`, { status: 'shipped', carrier, tracking_no: trackingNo })
+    await request.post(`/commerce/orders/${row.id}/shipments`, { carrier_name: carrier, tracking_no: trackingNo })
     shippingDialogVisible.value = false
     shippingOrder.value = null
     ElMessage.success('订单已标记发货')
@@ -1164,6 +1286,7 @@ async function submitShipping() {
 function handleIdentityRefresh(event: Event) {
   user.value = (event as CustomEvent).detail || readStoredUser()
   if (!isCurrentDomainActive.value) {
+    if (activeTab.value === 'phase-two') activeTab.value = 'products'
     productDialogVisible.value = false
     skuDialogVisible.value = false
     optionGroupDialogVisible.value = false
@@ -1561,20 +1684,24 @@ async function saveAdjustment() {
   }
 }
 
-watch(() => route.params.businessType, async () => {
-  activeTab.value = 'products'
-  productSearch.value = ''
-  productStatus.value = ''
-  detailProduct.value = null
-  productDetailVisible.value = false
-  user.value = readStoredUser()
-  await loadWorkspace()
+watch(() => [route.params.businessType, route.query.tab, route.query.order], async ([businessType], [previousBusinessType]) => {
+  if (businessType !== previousBusinessType) {
+    activeTab.value = 'products'
+    productSearch.value = ''
+    productStatus.value = ''
+    detailProduct.value = null
+    productDetailVisible.value = false
+    user.value = readStoredUser()
+    await loadWorkspace()
+  }
+  await applyRouteOrderIntent()
 })
 
 onMounted(async () => {
   window.addEventListener('tenant-identity-refreshed', handleIdentityRefresh)
   user.value = await refreshStoredTenantIdentity()
   await loadWorkspace()
+  await applyRouteOrderIntent()
 })
 
 onBeforeUnmount(() => {
@@ -1584,6 +1711,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .commerce-page { display: flex; flex-direction: column; gap: 16px; }
+.commerce-pagination { display: flex; justify-content: flex-end; margin-top: 16px; }
 .commerce-heading { align-items: flex-start; }
 .section-kicker { color: var(--ui-text-secondary); font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
 .commerce-heading h1 { margin: 4px 0 0; font-size: 26px; line-height: 1.25; }

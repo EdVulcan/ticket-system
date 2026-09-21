@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 
 	"gorm.io/gorm"
@@ -14,6 +15,8 @@ import (
 type commercePaymentTestProvider struct {
 	queryPaymentCalls int
 	queryRefundCalls  int
+	createRefundCalls int
+	lastRefundRequest CommerceWechatRefundRequest
 	payment           CommerceWechatPaymentStatus
 	refund            CommerceWechatRefundStatus
 	paymentErr        error
@@ -29,7 +32,9 @@ func (p *commercePaymentTestProvider) QueryPayment(context.Context, string) (Com
 	return p.payment, p.paymentErr
 }
 
-func (p *commercePaymentTestProvider) CreateRefund(context.Context, CommerceWechatRefundRequest) (CommerceWechatRefundResult, error) {
+func (p *commercePaymentTestProvider) CreateRefund(_ context.Context, request CommerceWechatRefundRequest) (CommerceWechatRefundResult, error) {
+	p.createRefundCalls++
+	p.lastRefundRequest = request
 	return CommerceWechatRefundResult{State: "PROCESSING", ProviderID: "refund-test", ProviderAmount: 0}, nil
 }
 
@@ -212,7 +217,7 @@ func TestCommerceRefundReconcileCompletesExactlyOnce(t *testing.T) {
 		t.Fatalf("create refund request: %v", err)
 	}
 	next := now.Add(-time.Second)
-	attempt := model.CommerceRefundAttempt{TenantID: tenantID, RequestID: request.Request.ID, OrderID: order.ID, Provider: "wechat", OutRefundNo: "CR-TEST-1", AmountCents: paid.TotalAmountCents, Status: "processing", NextQueryAt: &next}
+	attempt := model.CommerceRefundAttempt{TenantID: tenantID, RequestID: request.Request.ID, OrderID: order.ID, Provider: "wechat", OutRefundNo: "CR-TEST-1", AmountCents: paid.TotalAmountCents, Status: "processing", ProviderState: "PROCESSING", NextQueryAt: &next}
 	if err := model.DB.Create(&attempt).Error; err != nil {
 		t.Fatalf("create refund attempt: %v", err)
 	}
@@ -252,7 +257,7 @@ func TestCommerceRefundReconcileConvergesProviderFailure(t *testing.T) {
 		t.Fatalf("create refund request: %v", err)
 	}
 	next := now.Add(-time.Second)
-	attempt := model.CommerceRefundAttempt{TenantID: tenantID, RequestID: request.Request.ID, OrderID: order.ID, Provider: "wechat", OutRefundNo: "CR-TEST-FAILED", AmountCents: paid.TotalAmountCents, Status: "processing", NextQueryAt: &next}
+	attempt := model.CommerceRefundAttempt{TenantID: tenantID, RequestID: request.Request.ID, OrderID: order.ID, Provider: "wechat", OutRefundNo: "CR-TEST-FAILED", AmountCents: paid.TotalAmountCents, Status: "processing", ProviderState: "PROCESSING", NextQueryAt: &next}
 	if err := model.DB.Create(&attempt).Error; err != nil {
 		t.Fatalf("create failed refund attempt: %v", err)
 	}
@@ -308,5 +313,95 @@ func TestCommerceRefundRequestWithoutAttemptIsRecoveredByWorker(t *testing.T) {
 	var attempt model.CommerceRefundAttempt
 	if err := model.DB.Where("tenant_id = ? AND request_id = ?", tenantID, request.Request.ID).First(&attempt).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("unexpected refund attempt after unavailable provider: %+v err=%v", attempt, err)
+	}
+}
+
+func TestCommerceRefundAttemptWithoutProviderResponseIsResubmittedWithSameIdentity(t *testing.T) {
+	tenantID, order, now := createCommercePaymentAttemptFixture(t)
+	orderService := &CommerceOrderService{DB: model.DB, Clock: func() time.Time { return now }}
+	paid, err := orderService.ConfirmPayment(tenantID, order.ID)
+	if err != nil {
+		t.Fatalf("confirm order payment: %v", err)
+	}
+	request, err := orderService.CreateRefundRequest(tenantID, order.ID, "refund-resubmit-1", "customer request")
+	if err != nil {
+		t.Fatalf("create refund request: %v", err)
+	}
+	if err := model.DB.Model(&model.CommerceAfterSaleRequest{}).Where("id = ? AND tenant_id = ?", request.Request.ID, tenantID).Update("status", "processing").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&model.CommerceOrder{}).Where("id = ? AND tenant_id = ?", order.ID, tenantID).Update("refund_status", "processing").Error; err != nil {
+		t.Fatal(err)
+	}
+	attempt := model.CommerceRefundAttempt{
+		TenantID: tenantID, RequestID: request.Request.ID, OrderID: order.ID, Provider: "wechat",
+		OutRefundNo: "CR-RESUBMIT-SAME-ID", AmountCents: paid.TotalAmountCents, Status: "processing",
+	}
+	if err := model.DB.Create(&attempt).Error; err != nil {
+		t.Fatalf("create interrupted refund attempt: %v", err)
+	}
+	previousBaseURL := config.GlobalConfig.Server.PublicBaseURL
+	config.GlobalConfig.Server.PublicBaseURL = "https://merchant.example.test"
+	t.Cleanup(func() { config.GlobalConfig.Server.PublicBaseURL = previousBaseURL })
+	provider := &commercePaymentTestProvider{}
+	payment := &CommercePaymentService{DB: model.DB, Provider: provider, Clock: func() time.Time { return now }}
+	if processed, err := payment.ReconcileDue(context.Background(), now, 20); err != nil || processed != 1 {
+		t.Fatalf("resubmit interrupted refund processed=%d err=%v", processed, err)
+	}
+	if provider.createRefundCalls != 1 || provider.queryRefundCalls != 0 {
+		t.Fatalf("provider calls create=%d query=%d", provider.createRefundCalls, provider.queryRefundCalls)
+	}
+	if provider.lastRefundRequest.OutRefundNo != attempt.OutRefundNo || provider.lastRefundRequest.AmountCents != attempt.AmountCents || provider.lastRefundRequest.OutTradeNo != paid.PaymentReference {
+		t.Fatalf("resubmitted refund identity changed: %+v", provider.lastRefundRequest)
+	}
+	var stored model.CommerceRefundAttempt
+	if err := model.DB.First(&stored, attempt.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.ProviderState != "PROCESSING" || stored.NextQueryAt == nil {
+		t.Fatalf("resubmitted refund was not scheduled for confirmation: %+v", stored)
+	}
+	if processed, err := payment.ReconcileDue(context.Background(), now, 20); err != nil || processed != 0 || provider.createRefundCalls != 1 {
+		t.Fatalf("immediate retry processed=%d creates=%d err=%v", processed, provider.createRefundCalls, err)
+	}
+}
+
+func TestCommerceRefundDoesNotPersistAttemptBeforeCallbackConfigurationIsValid(t *testing.T) {
+	tenantID, order, now := createCommercePaymentAttemptFixture(t)
+	orderService := &CommerceOrderService{DB: model.DB, Clock: func() time.Time { return now }}
+	if _, err := orderService.ConfirmPayment(tenantID, order.ID); err != nil {
+		t.Fatalf("confirm order payment: %v", err)
+	}
+	request, err := orderService.CreateRefundRequest(tenantID, order.ID, "refund-invalid-callback", "customer request")
+	if err != nil {
+		t.Fatalf("create refund request: %v", err)
+	}
+	previousBaseURL := config.GlobalConfig.Server.PublicBaseURL
+	config.GlobalConfig.Server.PublicBaseURL = ""
+	t.Cleanup(func() { config.GlobalConfig.Server.PublicBaseURL = previousBaseURL })
+
+	payment := &CommercePaymentService{DB: model.DB, Provider: &commercePaymentTestProvider{}, Clock: func() time.Time { return now }}
+	if _, err := payment.StartWechatRefund(context.Background(), tenantID, request.Request.ID); err == nil {
+		t.Fatal("refund start accepted an invalid callback configuration")
+	}
+	var attemptCount int64
+	if err := model.DB.Model(&model.CommerceRefundAttempt{}).
+		Where("tenant_id = ? AND request_id = ?", tenantID, request.Request.ID).
+		Count(&attemptCount).Error; err != nil {
+		t.Fatalf("count refund attempts: %v", err)
+	}
+	if attemptCount != 0 {
+		t.Fatalf("invalid callback configuration persisted %d refund attempts", attemptCount)
+	}
+	var persistedRequest model.CommerceAfterSaleRequest
+	if err := model.DB.Where("id = ? AND tenant_id = ?", request.Request.ID, tenantID).First(&persistedRequest).Error; err != nil {
+		t.Fatalf("load refund request: %v", err)
+	}
+	var persistedOrder model.CommerceOrder
+	if err := model.DB.Where("id = ? AND tenant_id = ?", order.ID, tenantID).First(&persistedOrder).Error; err != nil {
+		t.Fatalf("load refund order: %v", err)
+	}
+	if persistedRequest.Status != "requested" || persistedOrder.RefundStatus != "requested" {
+		t.Fatalf("invalid callback configuration changed refund state: request=%q order=%q", persistedRequest.Status, persistedOrder.RefundStatus)
 	}
 }

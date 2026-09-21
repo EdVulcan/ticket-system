@@ -59,10 +59,57 @@ func newCommerceStorefrontServiceFixture(t *testing.T) commerceStorefrontService
 		Now:        func() time.Time { return current },
 		SessionTTL: time.Hour,
 	}
+	delivery := &CommerceDeliveryService{DB: model.DB, Clock: storefront.Now}
+	if _, err := delivery.UpsertLocationConfig(tenantID, domain.location.ID, CommerceLocationServiceConfigInput{
+		BusinessType: "restaurant", PickupEnabled: true, DeliveryEnabled: true,
+		MinGoodsCents: 0, PackagingFeeCents: 0,
+	}); err != nil {
+		t.Fatalf("configure storefront restaurant fulfillment: %v", err)
+	}
 	return commerceStorefrontServiceFixture{
 		tenantID: tenantID, domain: domain, account: account, binding: binding,
 		service: storefront, setNow: setNow,
 	}
+}
+
+func storefrontPickupQuote(t *testing.T, fixture commerceStorefrontServiceFixture, token string) *CommerceCheckoutQuoteResult {
+	t.Helper()
+	quote, err := fixture.service.CreateCheckoutQuote(token, CommerceStorefrontQuoteInput{FulfillmentMethod: "pickup"}, "restaurant")
+	if err != nil {
+		t.Fatalf("create storefront pickup quote: %v", err)
+	}
+	return quote
+}
+
+func storefrontDeliverySetup(t *testing.T, fixture commerceStorefrontServiceFixture) (*model.CommerceDeliveryZone, *model.CommerceDeliverySlot, time.Time) {
+	t.Helper()
+	delivery := &CommerceDeliveryService{DB: model.DB, Clock: fixture.service.Now}
+	zone, err := delivery.CreateZone(fixture.tenantID, fixture.domain.location.ID, "restaurant", CommerceDeliveryZoneInput{
+		Name: "南校区配送区", Province: "南校区", City: "南校区", District: "二食堂", FeeCents: 0,
+	})
+	if err != nil {
+		t.Fatalf("create storefront delivery zone: %v", err)
+	}
+	date := fixture.service.Now().Truncate(24 * time.Hour)
+	slot, err := delivery.CreateSlot(fixture.tenantID, fixture.domain.location.ID, "restaurant", CommerceDeliverySlotInput{
+		ZoneID: &zone.ID, DayOfWeek: int(date.Weekday()), StartMinute: 14 * 60, EndMinute: 15 * 60,
+		OrderCutoffMinutes: 30, Capacity: 0,
+	})
+	if err != nil {
+		t.Fatalf("create storefront delivery slot: %v", err)
+	}
+	return zone, slot, date
+}
+
+func storefrontDeliveryQuote(t *testing.T, fixture commerceStorefrontServiceFixture, token string, addressID, zoneID, slotID uint, date time.Time) *CommerceCheckoutQuoteResult {
+	t.Helper()
+	quote, err := fixture.service.CreateCheckoutQuote(token, CommerceStorefrontQuoteInput{
+		AddressID: addressID, FulfillmentMethod: "delivery", ZoneID: zoneID, SlotID: slotID, SlotDate: date,
+	}, "restaurant")
+	if err != nil {
+		t.Fatalf("create storefront delivery quote: %v", err)
+	}
+	return quote
 }
 
 func TestCommerceStorefrontListChannelAccountsIsTenantScopedAndSecretFree(t *testing.T) {
@@ -353,6 +400,7 @@ func TestCommerceStorefrontCheckoutDerivesFactsAndIsIdempotent(t *testing.T) {
 	if err := json.Unmarshal([]byte(fmt.Sprintf(`{"tenant_id":%d,"customer_id":"attacker","business_type":"retail","location_id":999999,"amount_cents":1,"idempotency_key":"storefront-checkout-1","contact_name":"Guest","contact_phone":"13800138000","fulfillment_method":"pickup"}`, fixture.tenantID)), &input); err != nil {
 		t.Fatalf("decode storefront checkout input: %v", err)
 	}
+	input.QuoteToken = storefrontPickupQuote(t, fixture, login.Token).RawToken
 	order, err := fixture.service.Checkout(login.Token, input)
 	if err != nil {
 		t.Fatalf("storefront checkout: %v", err)
@@ -397,6 +445,117 @@ func TestCommerceStorefrontCheckoutDerivesFactsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestCommerceStorefrontCustomerCancellationAndReceiptConfirmation(t *testing.T) {
+	fixture := newCommerceStorefrontServiceFixture(t)
+	login := storefrontLogin(t, fixture.service, fixture.account.AppID, "customer-actions-subject")
+	if _, err := fixture.service.AddCartItem(login.Token, CommerceStorefrontCartItemInput{
+		ProductID: fixture.domain.product.ID, SKUID: fixture.domain.sku.ID, Quantity: 1,
+	}); err != nil {
+		t.Fatalf("add cancellable storefront item: %v", err)
+	}
+	cancelQuote := storefrontPickupQuote(t, fixture, login.Token)
+	cancellable, err := fixture.service.Checkout(login.Token, CommerceStorefrontCheckoutInput{
+		IdempotencyKey: "customer-cancel-order", ContactName: "Guest", ContactPhone: "13800138000",
+		FulfillmentMethod: "pickup", QuoteToken: cancelQuote.RawToken,
+	})
+	if err != nil {
+		t.Fatalf("create cancellable storefront order: %v", err)
+	}
+	cancelled, err := fixture.service.CancelOrder(login.Token, cancellable.OrderNo)
+	if err != nil {
+		t.Fatalf("cancel unpaid storefront order: %v", err)
+	}
+	if cancelled.PaymentStatus != "failed" || cancelled.FulfillmentStatus != "cancelled" {
+		t.Fatalf("cancelled storefront order=%+v", cancelled)
+	}
+	if retry, retryErr := fixture.service.CancelOrder(login.Token, cancellable.OrderNo); retryErr != nil || retry.ID != cancellable.ID {
+		t.Fatalf("repeat unpaid cancellation order=%+v err=%v", retry, retryErr)
+	}
+	var cancelledQuote model.CommerceCheckoutQuote
+	if err := model.DB.Where("id = ? AND tenant_id = ?", cancelQuote.Quote.ID, fixture.tenantID).First(&cancelledQuote).Error; err != nil {
+		t.Fatalf("load cancelled checkout quote: %v", err)
+	}
+	if cancelledQuote.Status != "cancelled" {
+		t.Fatalf("cancelled order retained delivery capacity: %+v", cancelledQuote)
+	}
+	var cancelledItem model.CommerceOrderItem
+	if err := model.DB.Where("tenant_id = ? AND order_id = ?", fixture.tenantID, cancellable.ID).First(&cancelledItem).Error; err != nil {
+		t.Fatalf("load cancelled order item: %v", err)
+	}
+	if cancelledItem.ReservationStatus != "released" {
+		t.Fatalf("cancelled order retained inventory reservation: %+v", cancelledItem)
+	}
+
+	address, err := fixture.service.SaveAddress(login.Token, CommerceStorefrontAddressInput{
+		AddressType: "DELIVERY", RecipientName: "Guest", Phone: "13800138000",
+		Province: "省", City: "市", District: "区", Detail: "街道 1 号", IsDefault: true,
+	})
+	if err != nil {
+		t.Fatalf("save delivery address: %v", err)
+	}
+	if _, err := fixture.service.AddCartItem(login.Token, CommerceStorefrontCartItemInput{
+		ProductID: fixture.domain.product.ID, SKUID: fixture.domain.sku.ID, Quantity: 1,
+	}); err != nil {
+		t.Fatalf("add delivery storefront item: %v", err)
+	}
+	delivery := &CommerceDeliveryService{DB: model.DB, Clock: fixture.service.Now}
+	zone, err := delivery.CreateZone(fixture.tenantID, fixture.domain.location.ID, "restaurant", CommerceDeliveryZoneInput{
+		Name: "城区配送", Province: "省", City: "市", District: "区", FeeCents: 0,
+	})
+	if err != nil {
+		t.Fatalf("create delivery zone: %v", err)
+	}
+	slotDate := fixture.service.Now().Truncate(24 * time.Hour)
+	slot, err := delivery.CreateSlot(fixture.tenantID, fixture.domain.location.ID, "restaurant", CommerceDeliverySlotInput{
+		ZoneID: &zone.ID, DayOfWeek: int(slotDate.Weekday()), StartMinute: 14 * 60, EndMinute: 15 * 60,
+		OrderCutoffMinutes: 30, Capacity: 0,
+	})
+	if err != nil {
+		t.Fatalf("create delivery slot: %v", err)
+	}
+	deliveryQuote := storefrontDeliveryQuote(t, fixture, login.Token, address.ID, zone.ID, slot.ID, slotDate)
+	delivered, err := fixture.service.Checkout(login.Token, CommerceStorefrontCheckoutInput{
+		IdempotencyKey: "customer-confirm-receipt-order", ContactName: "Guest", ContactPhone: "13800138000",
+		AddressID: address.ID, FulfillmentMethod: "delivery", QuoteToken: deliveryQuote.RawToken,
+	})
+	if err != nil {
+		t.Fatalf("create delivery storefront order: %v", err)
+	}
+	orders := &CommerceOrderService{DB: model.DB, Clock: fixture.service.Now}
+	if _, err := orders.ConfirmPayment(fixture.tenantID, delivered.ID); err != nil {
+		t.Fatalf("confirm delivery payment: %v", err)
+	}
+	if _, err := fixture.service.ConfirmReceipt(login.Token, delivered.OrderNo); !errors.Is(err, ErrCommerceOrderState) {
+		t.Fatalf("premature receipt confirmation error=%v", err)
+	}
+	for _, status := range []string{"accepted", "preparing", "ready", "delivering"} {
+		if _, err := orders.TransitionRestaurantFulfillment(fixture.tenantID, delivered.ID, RestaurantFulfillmentTransitionInput{
+			Status: status, ActorUserID: 101, ActorRole: "admin", Reason: "customer receipt test",
+		}); err != nil {
+			t.Fatalf("transition restaurant delivery to %s: %v", status, err)
+		}
+	}
+	if err := model.DB.Model(&model.CommerceOrder{}).Where("id = ? AND tenant_id = ?", delivered.ID, fixture.tenantID).Update("refund_status", "requested").Error; err != nil {
+		t.Fatalf("lock delivery with refund: %v", err)
+	}
+	if _, err := fixture.service.ConfirmReceipt(login.Token, delivered.OrderNo); !errors.Is(err, ErrCommerceOrderState) {
+		t.Fatalf("refund-locked receipt confirmation error=%v", err)
+	}
+	if err := model.DB.Model(&model.CommerceOrder{}).Where("id = ? AND tenant_id = ?", delivered.ID, fixture.tenantID).Update("refund_status", "rejected").Error; err != nil {
+		t.Fatalf("release delivery refund lock: %v", err)
+	}
+	confirmed, err := fixture.service.ConfirmReceipt(login.Token, delivered.OrderNo)
+	if err != nil {
+		t.Fatalf("confirm delivered storefront order: %v", err)
+	}
+	if confirmed.FulfillmentStatus != "completed" {
+		t.Fatalf("confirmed storefront order=%+v", confirmed)
+	}
+	if retry, retryErr := fixture.service.ConfirmReceipt(login.Token, delivered.OrderNo); retryErr != nil || retry.FulfillmentStatus != "completed" {
+		t.Fatalf("repeat receipt confirmation order=%+v err=%v", retry, retryErr)
+	}
+}
+
 func TestCommerceStorefrontBindingMoveCannotDriftExistingCart(t *testing.T) {
 	fixture := newCommerceStorefrontServiceFixture(t)
 	login := storefrontLogin(t, fixture.service, fixture.account.AppID, "binding-move-subject")
@@ -419,7 +578,7 @@ func TestCommerceStorefrontBindingMoveCannotDriftExistingCart(t *testing.T) {
 		t.Fatalf("move storefront binding: %v", err)
 	}
 	if _, err := fixture.service.CheckoutCartByID(login.Token, cart.ID, CommerceStorefrontCheckoutInput{
-		IdempotencyKey: "binding-move-checkout", ContactName: "Guest", ContactPhone: "13800138000", FulfillmentMethod: "pickup",
+		IdempotencyKey: "binding-move-checkout", ContactName: "Guest", ContactPhone: "13800138000", FulfillmentMethod: "pickup", QuoteToken: "binding-move-quote",
 	}, "restaurant"); !errors.Is(err, ErrCommerceStorefrontOwnership) {
 		t.Fatalf("moved binding checkout error=%v, want ownership rejection", err)
 	}
@@ -468,15 +627,17 @@ func TestCommerceStorefrontAddressesAreSessionScopedAndCheckoutSnapshotsServerAd
 	}); err != nil {
 		t.Fatalf("add address checkout item: %v", err)
 	}
+	zone, slot, slotDate := storefrontDeliverySetup(t, fixture)
+	quote := storefrontDeliveryQuote(t, fixture, login.Token, address.ID, zone.ID, slot.ID, slotDate)
 	if _, err := fixture.service.Checkout(login.Token, CommerceStorefrontCheckoutInput{
 		IdempotencyKey: "address-checkout-missing-address", ContactName: "同学", ContactPhone: "13800138000",
-		ShippingAddress: "forged", FulfillmentMethod: "delivery",
+		ShippingAddress: "forged", FulfillmentMethod: "delivery", QuoteToken: quote.RawToken,
 	}); !errors.Is(err, ErrCommerceStorefrontAddressInvalid) {
 		t.Fatalf("checkout without address error=%v, want address validation", err)
 	}
 	order, err := fixture.service.Checkout(login.Token, CommerceStorefrontCheckoutInput{
 		IdempotencyKey: "address-checkout-1", ContactName: "同学", ContactPhone: "13800138000",
-		AddressID: address.ID, ShippingAddress: "attacker-controlled-address", FulfillmentMethod: "delivery",
+		AddressID: address.ID, ShippingAddress: "attacker-controlled-address", FulfillmentMethod: "delivery", QuoteToken: quote.RawToken,
 	})
 	if err != nil {
 		t.Fatalf("checkout with owned address: %v", err)
@@ -486,7 +647,7 @@ func TestCommerceStorefrontAddressesAreSessionScopedAndCheckoutSnapshotsServerAd
 	}
 	addressRetry, err := fixture.service.Checkout(login.Token, CommerceStorefrontCheckoutInput{
 		IdempotencyKey: "address-checkout-1", ContactName: "同学", ContactPhone: "13800138000",
-		AddressID: address.ID, ShippingAddress: "different-client-text", FulfillmentMethod: "delivery",
+		AddressID: address.ID, ShippingAddress: "different-client-text", FulfillmentMethod: "delivery", QuoteToken: quote.RawToken,
 	})
 	if err != nil || addressRetry.ID != order.ID {
 		t.Fatalf("delivery checkout retry result=%+v err=%v, want original order %d", addressRetry, err, order.ID)
@@ -502,7 +663,7 @@ func TestCommerceStorefrontRefundStaysRequestedUntilProviderConfirmation(t *test
 		t.Fatalf("add storefront refund item: %v", err)
 	}
 	order, err := fixture.service.Checkout(login.Token, CommerceStorefrontCheckoutInput{
-		IdempotencyKey: "storefront-refund-order", ContactName: "Guest", ContactPhone: "13800138000", FulfillmentMethod: "pickup",
+		IdempotencyKey: "storefront-refund-order", ContactName: "Guest", ContactPhone: "13800138000", FulfillmentMethod: "pickup", QuoteToken: storefrontPickupQuote(t, fixture, login.Token).RawToken,
 	})
 	if err != nil {
 		t.Fatalf("create storefront refund order: %v", err)

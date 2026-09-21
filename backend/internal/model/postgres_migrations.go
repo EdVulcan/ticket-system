@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 138
+const CurrentPostgresSchemaVersion = 140
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -75,7 +75,13 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&CommercePaymentReconciliationTask{},
 		&CommercePaymentAttempt{}, &CommerceRefundAttempt{}, &CommercePaymentProviderEvent{},
 		&CommerceAddress{}, &CommerceAfterSaleRequest{}, &CommerceAfterSaleEvent{},
+		&CommerceOrderPaidOutbox{}, &CommerceMerchantNotification{},
 		&CommerceCustomerSession{}, &CommerceStorefrontBinding{},
+		&CommerceLocationServiceConfig{}, &CommerceDeliveryZone{}, &CommerceDeliverySlot{},
+		&CommerceCheckoutQuote{}, &CommerceOrderAdjustment{},
+		&CommerceShipment{}, &CommerceShipmentEvent{},
+		&CommerceCouponTemplate{}, &CommerceCouponGrant{},
+		&CommerceAssistCampaign{}, &CommerceAssistSession{}, &CommerceAssistRecord{},
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
@@ -766,11 +772,346 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateCommerceProductMedia(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateCommerceMerchantNotifications(db, previousSchemaVersion); err != nil {
+		return err
+	}
+	if err := migrateCommercePhaseTwo(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "commerce storefront multi-domain binding",
+		Name:      "commerce phase two delivery logistics promotions",
 		AppliedAt: time.Now(),
 	}).Error
+}
+
+// migrateCommerceMerchantNotifications adds the paid-order outbox and its
+// tenant-scoped notification projection. Existing commercial facts are not
+// backfilled: only future first-paid transitions produce notifications.
+func migrateCommerceMerchantNotifications(db *gorm.DB, previous int) error {
+	if previous >= 139 {
+		return nil
+	}
+	if err := db.Exec(`
+		ALTER TABLE commerce_addresses DROP CONSTRAINT IF EXISTS chk_commerce_addresses_type;
+		ALTER TABLE commerce_addresses ADD CONSTRAINT chk_commerce_addresses_type
+			CHECK (address_type IN ('CAMPUS','SHIPPING','DELIVERY'));
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_paid_outbox_identity
+			ON commerce_order_paid_outboxes (tenant_id, order_id, event_type)
+			WHERE deleted_at IS NULL;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_paid_outbox_event_key
+			ON commerce_order_paid_outboxes (event_key)
+			WHERE deleted_at IS NULL;
+		CREATE INDEX IF NOT EXISTS idx_commerce_paid_outbox_claim
+			ON commerce_order_paid_outboxes (status, next_attempt_at, locked_at, id)
+			WHERE deleted_at IS NULL AND status IN ('pending','processing','failed');
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_notification_event
+			ON commerce_merchant_notifications (tenant_id, event_key)
+			WHERE deleted_at IS NULL;
+		CREATE INDEX IF NOT EXISTS idx_commerce_notification_scope
+			ON commerce_merchant_notifications (tenant_id, business_type, location_id, status, id)
+			WHERE deleted_at IS NULL;
+	`).Error; err != nil {
+		return fmt.Errorf("register commerce merchant notifications: %w", err)
+	}
+	return nil
+}
+
+// migrateCommercePhaseTwo registers the second commercial-domain schema
+// without rewriting any existing order, inventory, payment or ticket facts.
+// AutoMigrate creates the tables and columns for a fresh or 139 database; the
+// explicit DDL below repairs the physical index shape left by early model
+// AutoMigrate runs, especially the soft-delete-safe unique identities.
+type commercePhaseTwoIndexSpec struct {
+	name      string
+	unique    bool
+	fragments []string
+}
+
+type commercePhaseTwoConstraintSpec struct {
+	table string
+	name  string
+	expr  string
+}
+
+func commercePhaseTwoIndexSpecs() []commercePhaseTwoIndexSpec {
+	return []commercePhaseTwoIndexSpec{
+		{name: "idx_commerce_location_service_scope", unique: true},
+		{name: "idx_commerce_delivery_zone_scope"},
+		{name: "idx_commerce_delivery_slot_scope"},
+		{name: "idx_commerce_checkout_quote_scope"},
+		{name: "idx_commerce_checkout_quote_token", unique: true},
+		{name: "idx_commerce_order_adjustment_scope"},
+		{name: "idx_commerce_shipments_tenant_no", unique: true},
+		{name: "idx_commerce_shipments_scope"},
+		{name: "idx_commerce_shipments_tracking", fragments: []string{"tracking_no", "<>"}},
+		{name: "idx_commerce_shipment_events_scope"},
+		{name: "idx_commerce_shipment_provider_event", unique: true, fragments: []string{"provider_event_id", "is not null", "<>"}},
+		{name: "idx_commerce_shipment_event_idempotency", unique: true, fragments: []string{"idempotency_key", "is not null", "<>"}},
+		{name: "idx_commerce_coupon_templates_scope_name", unique: true},
+		{name: "idx_commerce_coupon_templates_scope"},
+		{name: "idx_commerce_coupon_grants_issue", unique: true},
+		{name: "idx_commerce_coupon_grants_scope"},
+		{name: "idx_commerce_coupon_grants_customer"},
+		{name: "idx_commerce_assist_campaigns_scope_name", unique: true},
+		{name: "idx_commerce_assist_campaigns_scope"},
+		{name: "idx_commerce_assist_sessions_idempotency", unique: true},
+		{name: "idx_commerce_assist_sessions_share_token", unique: true},
+		{name: "idx_commerce_assist_sessions_scope"},
+		{name: "idx_commerce_assist_sessions_starter"},
+		{name: "idx_commerce_assist_records_session_helper", unique: true},
+		{name: "idx_commerce_assist_records_scope"},
+	}
+}
+
+func commercePhaseTwoConstraintSpecs() []commercePhaseTwoConstraintSpec {
+	return []commercePhaseTwoConstraintSpec{
+		{table: "commerce_location_service_configs", name: "chk_commerce_location_service_business_type", expr: "business_type IN ('restaurant','retail')"},
+		{table: "commerce_location_service_configs", name: "chk_commerce_location_service_min_goods", expr: "min_goods_cents >= 0"},
+		{table: "commerce_location_service_configs", name: "chk_commerce_location_service_packaging_fee", expr: "packaging_fee_cents >= 0"},
+		{table: "commerce_location_service_configs", name: "chk_commerce_location_service_shipping_fee", expr: "shipping_fee_cents >= 0"},
+		{table: "commerce_location_service_configs", name: "chk_commerce_location_service_free_shipping", expr: "free_shipping_threshold_cents >= 0"},
+		{table: "commerce_location_service_configs", name: "chk_commerce_location_service_estimated", expr: "estimated_minutes >= 0"},
+		{table: "commerce_location_service_configs", name: "chk_commerce_location_service_status", expr: "status IN ('active','inactive')"},
+		{table: "commerce_delivery_zones", name: "chk_commerce_delivery_zone_fee", expr: "fee_cents >= 0"},
+		{table: "commerce_delivery_zones", name: "chk_commerce_delivery_zone_min_goods", expr: "min_goods_cents_override IS NULL OR min_goods_cents_override >= 0"},
+		{table: "commerce_delivery_zones", name: "chk_commerce_delivery_zone_estimated", expr: "estimated_minutes >= 0"},
+		{table: "commerce_delivery_zones", name: "chk_commerce_delivery_zone_status", expr: "status IN ('active','inactive')"},
+		{table: "commerce_delivery_slots", name: "chk_commerce_delivery_slot_weekday", expr: "day_of_week BETWEEN 0 AND 6"},
+		{table: "commerce_delivery_slots", name: "chk_commerce_delivery_slot_start", expr: "start_minute BETWEEN 0 AND 1439"},
+		{table: "commerce_delivery_slots", name: "chk_commerce_delivery_slot_end", expr: "end_minute BETWEEN 1 AND 1440"},
+		{table: "commerce_delivery_slots", name: "chk_commerce_delivery_slot_cutoff", expr: "order_cutoff_minutes BETWEEN 0 AND 1440"},
+		{table: "commerce_delivery_slots", name: "chk_commerce_delivery_slot_capacity", expr: "capacity >= 0"},
+		{table: "commerce_delivery_slots", name: "chk_commerce_delivery_slot_status", expr: "status IN ('active','inactive')"},
+		{table: "commerce_checkout_quotes", name: "chk_commerce_checkout_quote_business_type", expr: "business_type IN ('restaurant','retail')"},
+		{table: "commerce_checkout_quotes", name: "chk_commerce_checkout_quote_method", expr: "fulfillment_method IN ('pickup','delivery','shipping')"},
+		{table: "commerce_checkout_quotes", name: "chk_commerce_checkout_quote_goods", expr: "goods_subtotal_cents >= 0"},
+		{table: "commerce_checkout_quotes", name: "chk_commerce_checkout_quote_packaging", expr: "packaging_fee_cents >= 0"},
+		{table: "commerce_checkout_quotes", name: "chk_commerce_checkout_quote_delivery", expr: "delivery_fee_cents >= 0"},
+		{table: "commerce_checkout_quotes", name: "chk_commerce_checkout_quote_shipping", expr: "shipping_fee_cents >= 0"},
+		{table: "commerce_checkout_quotes", name: "chk_commerce_checkout_quote_discount", expr: "discount_cents >= 0"},
+		{table: "commerce_checkout_quotes", name: "chk_commerce_checkout_quote_total", expr: "total_cents >= 0"},
+		{table: "commerce_checkout_quotes", name: "chk_commerce_checkout_quote_status", expr: "status IN ('active','consumed','expired','cancelled')"},
+		{table: "commerce_order_adjustments", name: "chk_commerce_order_adjustment_kind", expr: "kind IN ('delivery_fee','packaging_fee','shipping_fee','coupon_discount')"},
+		{table: "commerce_order_adjustments", name: "chk_commerce_order_adjustment_amount", expr: "amount_cents >= 0"},
+		{table: "commerce_shipments", name: "chk_commerce_shipments_status", expr: "status IN ('pending_shipment','shipped','in_transit','out_for_delivery','delivered','exception','cancelled')"},
+		{table: "commerce_shipments", name: "chk_commerce_shipments_source", expr: "source IN ('manual','provider')"},
+		{table: "commerce_shipment_events", name: "chk_commerce_shipment_events_source", expr: "source IN ('manual','provider')"},
+		{table: "commerce_shipment_events", name: "chk_commerce_shipment_events_status", expr: "status IN ('pending_shipment','shipped','in_transit','out_for_delivery','delivered','exception','cancelled')"},
+		{table: "commerce_coupon_templates", name: "chk_commerce_coupon_templates_business_type", expr: "business_type IN ('restaurant','retail')"},
+		{table: "commerce_coupon_templates", name: "chk_commerce_coupon_templates_discount", expr: "discount_cents > 0"},
+		{table: "commerce_coupon_templates", name: "chk_commerce_coupon_templates_minimum", expr: "min_goods_subtotal_cents >= 0"},
+		{table: "commerce_coupon_templates", name: "chk_commerce_coupon_templates_valid_days", expr: "valid_days >= 0"},
+		{table: "commerce_coupon_templates", name: "chk_commerce_coupon_templates_status", expr: "status IN ('draft','active','inactive')"},
+		{table: "commerce_coupon_templates", name: "chk_commerce_coupon_templates_issuance_cap", expr: "issuance_cap >= 0"},
+		{table: "commerce_coupon_templates", name: "chk_commerce_coupon_templates_customer_cap", expr: "per_customer_cap > 0"},
+		{table: "commerce_coupon_grants", name: "chk_commerce_coupon_grants_business_type", expr: "business_type IN ('restaurant','retail')"},
+		{table: "commerce_coupon_grants", name: "chk_commerce_coupon_grants_source", expr: "source IN ('manual','assist_starter','assist_helper')"},
+		{table: "commerce_coupon_grants", name: "chk_commerce_coupon_grants_discount", expr: "discount_cents > 0"},
+		{table: "commerce_coupon_grants", name: "chk_commerce_coupon_grants_minimum", expr: "min_goods_subtotal_cents >= 0"},
+		{table: "commerce_coupon_grants", name: "chk_commerce_coupon_grants_status", expr: "status IN ('available','reserved','used','expired','cancelled')"},
+		{table: "commerce_assist_campaigns", name: "chk_commerce_assist_campaigns_business_type", expr: "business_type IN ('restaurant','retail')"},
+		{table: "commerce_assist_campaigns", name: "chk_commerce_assist_campaigns_required_helpers", expr: "required_unique_helpers > 0"},
+		{table: "commerce_assist_campaigns", name: "chk_commerce_assist_campaigns_session_limit", expr: "per_starter_session_limit > 0"},
+		{table: "commerce_assist_campaigns", name: "chk_commerce_assist_campaigns_status", expr: "status IN ('draft','active','inactive')"},
+		{table: "commerce_assist_sessions", name: "chk_commerce_assist_sessions_status", expr: "status IN ('active','succeeded','expired','cancelled')"},
+		{table: "commerce_assist_sessions", name: "chk_commerce_assist_sessions_helper_count", expr: "helper_count >= 0"},
+	}
+}
+
+func commercePhaseTwoSchemaComplete(db *gorm.DB) (bool, error) {
+	if db == nil {
+		return false, fmt.Errorf("database is required")
+	}
+	for _, index := range commercePhaseTwoIndexSpecs() {
+		var definition string
+		if err := db.Raw(`SELECT COALESCE(MAX(indexdef), '') FROM pg_indexes WHERE schemaname = CURRENT_SCHEMA() AND indexname = ?`, index.name).Scan(&definition).Error; err != nil {
+			return false, fmt.Errorf("inspect commerce phase-two index %s: %w", index.name, err)
+		}
+		definition = strings.ToLower(definition)
+		if definition == "" || (index.unique && !strings.Contains(definition, "create unique index")) || !strings.Contains(definition, "deleted_at") || !strings.Contains(definition, "is null") {
+			return false, nil
+		}
+		for _, fragment := range index.fragments {
+			if !strings.Contains(definition, strings.ToLower(fragment)) {
+				return false, nil
+			}
+		}
+	}
+	for _, check := range commercePhaseTwoConstraintSpecs() {
+		var count int64
+		if err := db.Raw(`
+			SELECT COUNT(*)
+			FROM pg_constraint c
+			JOIN pg_class t ON t.oid = c.conrelid
+			JOIN pg_namespace n ON n.oid = t.relnamespace
+			WHERE n.nspname = CURRENT_SCHEMA() AND t.relname = ? AND c.conname = ? AND c.contype = 'c'
+		`, check.table, check.name).Scan(&count).Error; err != nil {
+			return false, fmt.Errorf("inspect commerce phase-two constraint %s: %w", check.name, err)
+		}
+		if count != 1 {
+			return false, nil
+		}
+	}
+	var missingConfigs int64
+	if err := db.Raw(`
+		SELECT COUNT(*)
+		FROM commerce_fulfillment_locations l
+		WHERE l.deleted_at IS NULL
+		  AND l.status = 'active'
+		  AND l.business_type IN ('restaurant', 'retail')
+		  AND NOT EXISTS (
+			SELECT 1 FROM commerce_location_service_configs c
+			WHERE c.tenant_id = l.tenant_id
+			  AND c.location_id = l.id
+			  AND c.business_type = l.business_type
+			  AND c.deleted_at IS NULL
+		  )
+	`).Scan(&missingConfigs).Error; err != nil {
+		return false, fmt.Errorf("inspect commerce phase-two service configuration backfill: %w", err)
+	}
+	return missingConfigs == 0, nil
+}
+
+func migrateCommercePhaseTwo(db *gorm.DB, previous int) error {
+	if previous >= 140 {
+		complete, err := commercePhaseTwoSchemaComplete(db)
+		if err != nil {
+			return fmt.Errorf("inspect commerce phase-two schema: %w", err)
+		}
+		if complete {
+			return nil
+		}
+	}
+	statements := []string{
+		// Named unique indexes generated by the model tags are replaced with
+		// partial versions so soft-deleted history does not block a new fact.
+		`DROP INDEX IF EXISTS idx_commerce_location_service_scope;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_location_service_scope
+			ON commerce_location_service_configs (tenant_id, location_id, business_type)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_delivery_zone_scope
+			ON commerce_delivery_zones (tenant_id, location_id)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_delivery_slot_scope
+			ON commerce_delivery_slots (tenant_id, location_id)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_checkout_quote_scope
+			ON commerce_checkout_quotes (tenant_id, channel_account_id, business_type, customer_hash, location_id)
+			WHERE deleted_at IS NULL;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_checkout_quote_token
+			ON commerce_checkout_quotes (token_hash)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_order_adjustment_scope
+			ON commerce_order_adjustments (tenant_id, order_id)
+			WHERE deleted_at IS NULL;`,
+		`DROP INDEX IF EXISTS idx_commerce_shipments_tenant_no;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_shipments_tenant_no
+			ON commerce_shipments (tenant_id, shipment_no)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_shipments_scope
+			ON commerce_shipments (tenant_id, order_id, location_id)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_shipments_tracking
+			ON commerce_shipments (tracking_no)
+			WHERE deleted_at IS NULL AND tracking_no <> '';`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_shipment_events_scope
+			ON commerce_shipment_events (tenant_id, shipment_id, occurred_at)
+			WHERE deleted_at IS NULL;`,
+		`DROP INDEX IF EXISTS idx_commerce_shipment_provider_event;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_shipment_provider_event
+			ON commerce_shipment_events (tenant_id, shipment_id, source, provider_event_id)
+			WHERE deleted_at IS NULL AND provider_event_id IS NOT NULL AND provider_event_id <> '';`,
+		`DROP INDEX IF EXISTS idx_commerce_shipment_event_idempotency;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_shipment_event_idempotency
+			ON commerce_shipment_events (tenant_id, shipment_id, source, idempotency_key)
+			WHERE deleted_at IS NULL AND idempotency_key IS NOT NULL AND idempotency_key <> '';`,
+		`DROP INDEX IF EXISTS idx_commerce_coupon_templates_scope_name;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_coupon_templates_scope_name
+			ON commerce_coupon_templates (tenant_id, channel_account_id, business_type, name)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_coupon_templates_scope
+			ON commerce_coupon_templates (tenant_id, channel_account_id, business_type)
+			WHERE deleted_at IS NULL;`,
+		`DROP INDEX IF EXISTS idx_commerce_coupon_grants_issue;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_coupon_grants_issue
+			ON commerce_coupon_grants (tenant_id, template_id, source, source_identity, customer_id)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_coupon_grants_scope
+			ON commerce_coupon_grants (tenant_id, channel_account_id, business_type, status, expires_at)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_coupon_grants_customer
+			ON commerce_coupon_grants (tenant_id, customer_id, status, expires_at)
+			WHERE deleted_at IS NULL;`,
+		`DROP INDEX IF EXISTS idx_commerce_assist_campaigns_scope_name;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_assist_campaigns_scope_name
+			ON commerce_assist_campaigns (tenant_id, channel_account_id, business_type, title)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_assist_campaigns_scope
+			ON commerce_assist_campaigns (tenant_id, channel_account_id, business_type, status)
+			WHERE deleted_at IS NULL;`,
+		`DROP INDEX IF EXISTS idx_commerce_assist_sessions_idempotency;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_assist_sessions_idempotency
+			ON commerce_assist_sessions (tenant_id, campaign_id, starter_customer_id, idempotency_key)
+			WHERE deleted_at IS NULL;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_assist_sessions_share_token
+			ON commerce_assist_sessions (share_token_hash)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_assist_sessions_scope
+			ON commerce_assist_sessions (tenant_id, campaign_id, status, expires_at)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_assist_sessions_starter
+			ON commerce_assist_sessions (tenant_id, starter_customer_id, status)
+			WHERE deleted_at IS NULL;`,
+		`DROP INDEX IF EXISTS idx_commerce_assist_records_session_helper;
+		 CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_assist_records_session_helper
+			ON commerce_assist_records (tenant_id, campaign_id, session_id, helper_customer_id)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_assist_records_scope
+			ON commerce_assist_records (tenant_id, campaign_id, session_id)
+			WHERE deleted_at IS NULL;`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return fmt.Errorf("register commerce phase-two indexes: %w", err)
+		}
+	}
+	// Preserve the pre-phase-two checkout behavior for existing active
+	// locations. Restaurant storefronts previously defaulted to pickup, while
+	// retail storefronts used ordinary shipping with no platform fee. New
+	// locations created after this migration still require explicit setup.
+	if err := db.Exec(`
+		INSERT INTO commerce_location_service_configs (
+			created_at, updated_at, tenant_id, location_id, business_type,
+			pickup_enabled, delivery_enabled, shipping_enabled,
+			min_goods_cents, packaging_fee_cents, shipping_fee_cents,
+			free_shipping_threshold_cents, estimated_minutes, status,
+			contact_name, contact_phone, address, config_version
+		)
+		SELECT NOW(), NOW(), l.tenant_id, l.id, l.business_type,
+			(l.business_type = 'restaurant'), FALSE, (l.business_type = 'retail'),
+			0, 0, 0, 0, 0, 'active', '', '', '', 1
+		FROM commerce_fulfillment_locations l
+		WHERE l.deleted_at IS NULL
+		  AND l.status = 'active'
+		  AND l.business_type IN ('restaurant', 'retail')
+		  AND NOT EXISTS (
+			SELECT 1 FROM commerce_location_service_configs c
+			WHERE c.tenant_id = l.tenant_id
+			  AND c.location_id = l.id
+			  AND c.business_type = l.business_type
+			  AND c.deleted_at IS NULL
+		  )
+	`).Error; err != nil {
+		return fmt.Errorf("backfill commerce service configuration: %w", err)
+	}
+	for _, check := range commercePhaseTwoConstraintSpecs() {
+		statement := fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT IF EXISTS %s; ALTER TABLE %s ADD CONSTRAINT %s CHECK (%s)", check.table, check.name, check.table, check.name, check.expr)
+		if err := db.Exec(statement).Error; err != nil {
+			return fmt.Errorf("register commerce phase-two constraint %s: %w", check.name, err)
+		}
+	}
+	return nil
 }
 
 // migrateCommercePaymentAttempts adds immutable provider-attempt identities,
@@ -950,9 +1291,25 @@ func migrateCommerceStorefrontMultiDomain(db *gorm.DB, previous int) error {
 	// Version 138 was briefly implemented with a binding-scoped session column.
 	// If that experimental shape was applied before this correction, detect it
 	// and repair it even though the version marker is already present. A final
-	// account-scoped 138 schema has no such column and can skip the DDL.
+	// account-scoped schema can skip the DDL only after its physical indexes are
+	// also verified; version markers alone are not proof that a partial deploy
+	// completed.
 	if previous >= 138 && !db.Migrator().HasColumn(&CommerceCustomerSession{}, "storefront_binding_id") {
-		return nil
+		var bindingIndex, sessionIndex string
+		if err := db.Raw(`SELECT COALESCE(indexdef, '') FROM pg_indexes WHERE schemaname = CURRENT_SCHEMA() AND indexname = 'idx_commerce_storefront_bindings_account_domain'`).Scan(&bindingIndex).Error; err != nil {
+			return fmt.Errorf("inspect storefront binding index: %w", err)
+		}
+		if err := db.Raw(`SELECT COALESCE(indexdef, '') FROM pg_indexes WHERE schemaname = CURRENT_SCHEMA() AND indexname = 'idx_commerce_customer_sessions_subject'`).Scan(&sessionIndex).Error; err != nil {
+			return fmt.Errorf("inspect storefront session index: %w", err)
+		}
+		bindingDefinition := strings.ToLower(bindingIndex)
+		sessionDefinition := strings.ToLower(sessionIndex)
+		if strings.Contains(bindingDefinition, "business_type") && strings.Contains(bindingDefinition, "deleted_at is null") &&
+			strings.Contains(sessionDefinition, "channel_account_id") && strings.Contains(sessionDefinition, "subject_hash") &&
+			strings.Contains(sessionDefinition, "status") && strings.Contains(sessionDefinition, "active") &&
+			!strings.Contains(sessionDefinition, "storefront_binding_id") {
+			return nil
+		}
 	}
 	if err := db.Exec(`
 		DROP INDEX IF EXISTS idx_commerce_storefront_bindings_account;

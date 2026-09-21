@@ -769,6 +769,84 @@ func TestCommerceRefundRejectsFulfilledRestaurantAndRetailOrders(t *testing.T) {
 	})
 }
 
+func TestCommercePaidFulfillmentCannotBeCancelledDirectly(t *testing.T) {
+	t.Run("restaurant", func(t *testing.T) {
+		tenantID, productID, skuID, locationID, now := commerceOrderFixture(t)
+		service := &CommerceOrderService{Clock: func() time.Time { return now }}
+		order, err := service.CreateOrder(tenantID, commerceOrderInput(productID, skuID, locationID, "cancel-paid-restaurant", now.Add(time.Minute)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.ConfirmPayment(tenantID, order.ID); err != nil {
+			t.Fatal(err)
+		}
+		beforeStock := loadCommerceInventory(t, tenantID, skuID, locationID)
+		var beforeFulfillment model.RestaurantFulfillment
+		if err := model.DB.Where("tenant_id = ? AND order_id = ?", tenantID, order.ID).First(&beforeFulfillment).Error; err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.TransitionRestaurantFulfillment(tenantID, order.ID, RestaurantFulfillmentTransitionInput{Status: "cancelled"}); !errors.Is(err, ErrCommerceOrderState) {
+			t.Fatalf("direct restaurant cancellation error=%v", err)
+		}
+		var persistedOrder model.CommerceOrder
+		if err := model.DB.Where("tenant_id = ? AND id = ?", tenantID, order.ID).First(&persistedOrder).Error; err != nil {
+			t.Fatal(err)
+		}
+		var persistedFulfillment model.RestaurantFulfillment
+		if err := model.DB.Where("tenant_id = ? AND order_id = ?", tenantID, order.ID).First(&persistedFulfillment).Error; err != nil {
+			t.Fatal(err)
+		}
+		persistedStock := loadCommerceInventory(t, tenantID, skuID, locationID)
+		if persistedOrder.PaymentStatus != "paid" || persistedOrder.RefundStatus != "none" || persistedOrder.FulfillmentStatus != beforeFulfillment.Status {
+			t.Fatalf("direct restaurant cancellation changed order=%+v", persistedOrder)
+		}
+		if persistedFulfillment.Status != beforeFulfillment.Status || persistedFulfillment.Status == "cancelled" {
+			t.Fatalf("direct restaurant cancellation changed fulfillment=%+v", persistedFulfillment)
+		}
+		if persistedStock != beforeStock {
+			t.Fatalf("direct restaurant cancellation changed inventory before=%+v after=%+v", beforeStock, persistedStock)
+		}
+	})
+
+	t.Run("retail", func(t *testing.T) {
+		tenantID, productID, skuID, locationID, now := commerceRetailOrderFixture(t)
+		service := &CommerceOrderService{Clock: func() time.Time { return now }}
+		order, err := service.CreateOrder(tenantID, commerceRetailOrderInput(productID, skuID, locationID, "cancel-paid-retail", now.Add(time.Minute)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.ConfirmPayment(tenantID, order.ID); err != nil {
+			t.Fatal(err)
+		}
+		beforeStock := loadCommerceInventory(t, tenantID, skuID, locationID)
+		var beforeFulfillment model.RetailFulfillment
+		if err := model.DB.Where("tenant_id = ? AND order_id = ?", tenantID, order.ID).First(&beforeFulfillment).Error; err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.TransitionRetailFulfillment(tenantID, order.ID, RetailFulfillmentTransitionInput{Status: "cancelled"}); !errors.Is(err, ErrCommerceOrderState) {
+			t.Fatalf("direct retail cancellation error=%v", err)
+		}
+		var persistedOrder model.CommerceOrder
+		if err := model.DB.Where("tenant_id = ? AND id = ?", tenantID, order.ID).First(&persistedOrder).Error; err != nil {
+			t.Fatal(err)
+		}
+		var persistedFulfillment model.RetailFulfillment
+		if err := model.DB.Where("tenant_id = ? AND order_id = ?", tenantID, order.ID).First(&persistedFulfillment).Error; err != nil {
+			t.Fatal(err)
+		}
+		persistedStock := loadCommerceInventory(t, tenantID, skuID, locationID)
+		if persistedOrder.PaymentStatus != "paid" || persistedOrder.RefundStatus != "none" || persistedOrder.FulfillmentStatus != beforeFulfillment.Status {
+			t.Fatalf("direct retail cancellation changed order=%+v", persistedOrder)
+		}
+		if persistedFulfillment.Status != beforeFulfillment.Status || persistedFulfillment.Status == "cancelled" {
+			t.Fatalf("direct retail cancellation changed fulfillment=%+v", persistedFulfillment)
+		}
+		if persistedStock != beforeStock {
+			t.Fatalf("direct retail cancellation changed inventory before=%+v after=%+v", beforeStock, persistedStock)
+		}
+	})
+}
+
 func TestCommerceRefundRequestIdempotencyIsSerialized(t *testing.T) {
 	tenantID, productID, skuID, locationID, now := commerceOrderFixture(t)
 	service := &CommerceOrderService{DB: model.DB, Clock: func() time.Time { return now }}
