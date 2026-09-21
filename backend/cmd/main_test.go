@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
@@ -123,7 +125,7 @@ func TestServePublicUploadsExposesOnlyValidatedProductImagePath(t *testing.T) {
 	}
 
 	engine := gin.New()
-	servePublicUploads(engine, directory)
+	servePublicUploads(engine, directory, nil)
 	response := httptest.NewRecorder()
 	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/public/channel-product-images/3/5/"+filename, nil))
 	if response.Code != http.StatusOK || response.Body.String() != "image" {
@@ -150,7 +152,7 @@ func TestServePublicUploadsExposesCommerceProductImagePath(t *testing.T) {
 	}
 
 	engine := gin.New()
-	servePublicUploads(engine, directory)
+	servePublicUploads(engine, directory, nil)
 	response := httptest.NewRecorder()
 	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/public/commerce-product-images/3/5/detail/"+filename, nil))
 	if response.Code != http.StatusOK || response.Body.String() != "image" {
@@ -162,6 +164,94 @@ func TestServePublicUploadsExposesCommerceProductImagePath(t *testing.T) {
 	} {
 		invalid := httptest.NewRecorder()
 		engine.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, path, nil))
+		if invalid.Code != http.StatusNotFound {
+			t.Fatalf("invalid path %s status=%d", path, invalid.Code)
+		}
+	}
+}
+
+func TestServePublicUploadsExposesCommerceStorefrontContactImagePath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	directory := t.TempDir()
+	filename := "abcdef0123456789abcdef0123456789.png"
+
+	engine := gin.New()
+	db := testdb.Open(t)
+	if err := db.AutoMigrate(&model.Tenant{}, &model.ChannelAccount{}); err != nil {
+		t.Fatal(err)
+	}
+	tenant := model.Tenant{Name: "Contact image tenant", SystemCode: "CONTACT-IMAGE", SecretKey: "contact-secret", Status: "active"}
+	if err := db.Create(&tenant).Error; err != nil {
+		t.Fatal(err)
+	}
+	account := model.ChannelAccount{TenantID: tenant.ID, Code: "contact-account", Type: "wechat_miniapp", Status: "active", Environment: "production"}
+	if err := db.Create(&account).Error; err != nil {
+		t.Fatal(err)
+	}
+	imageDirectory := filepath.Join(directory, "commerce-storefront-contacts", strconv.FormatUint(uint64(tenant.ID), 10), strconv.FormatUint(uint64(account.ID), 10))
+	if err := os.MkdirAll(imageDirectory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(imageDirectory, filename), []byte("contact-image"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	contactURL := "https://tickets.example.com/api/v1/public/commerce-storefront-contact-images/" + strconv.FormatUint(uint64(tenant.ID), 10) + "/" + strconv.FormatUint(uint64(account.ID), 10) + "/" + filename
+	if err := db.Model(&account).Updates(map[string]interface{}{"storefront_contact_status": "active", "storefront_contact_qr_code_url": contactURL}).Error; err != nil {
+		t.Fatal(err)
+	}
+	servePublicUploads(engine, directory, db)
+	response := httptest.NewRecorder()
+	engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, contactURL, nil))
+	if response.Code != http.StatusOK || response.Body.String() != "contact-image" {
+		t.Fatalf("status=%d body=%q", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("contact image Cache-Control=%q", got)
+	}
+	newFilename := "fedcba9876543210fedcba9876543210.jpg"
+	if err := os.WriteFile(filepath.Join(imageDirectory, newFilename), []byte("replacement-contact-image"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	newContactURL := "https://tickets.example.com/api/v1/public/commerce-storefront-contact-images/" + strconv.FormatUint(uint64(tenant.ID), 10) + "/" + strconv.FormatUint(uint64(account.ID), 10) + "/" + newFilename
+	if err := db.Model(&account).Updates(map[string]interface{}{"storefront_contact_qr_code_url": newContactURL}).Error; err != nil {
+		t.Fatal(err)
+	}
+	oldAfterReplacement := httptest.NewRecorder()
+	engine.ServeHTTP(oldAfterReplacement, httptest.NewRequest(http.MethodGet, contactURL, nil))
+	if oldAfterReplacement.Code != http.StatusNotFound {
+		t.Fatalf("old contact image after replacement status=%d", oldAfterReplacement.Code)
+	}
+	newResponse := httptest.NewRecorder()
+	engine.ServeHTTP(newResponse, httptest.NewRequest(http.MethodGet, newContactURL, nil))
+	if newResponse.Code != http.StatusOK || newResponse.Body.String() != "replacement-contact-image" {
+		t.Fatalf("replacement contact image status=%d body=%q", newResponse.Code, newResponse.Body.String())
+	}
+	if err := db.Model(&account).Updates(map[string]interface{}{"storefront_contact_status": "disabled"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	disabled := httptest.NewRecorder()
+	engine.ServeHTTP(disabled, httptest.NewRequest(http.MethodGet, contactURL, nil))
+	if disabled.Code != http.StatusNotFound {
+		t.Fatalf("disabled contact image status=%d", disabled.Code)
+	}
+	if err := db.Model(&account).Updates(map[string]interface{}{"storefront_contact_status": "active", "status": "disabled"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	accountDisabled := httptest.NewRecorder()
+	engine.ServeHTTP(accountDisabled, httptest.NewRequest(http.MethodGet, contactURL, nil))
+	if accountDisabled.Code != http.StatusNotFound {
+		t.Fatalf("disabled channel contact image status=%d", accountDisabled.Code)
+	}
+	for _, path := range []string{
+		"https://tickets.example.com/api/v1/public/commerce-storefront-contact-images/not-a-tenant/9/" + filename,
+		"/api/v1/public/commerce-storefront-contact-images/3/9/not-an-upload.png",
+	} {
+		invalid := httptest.NewRecorder()
+		requestURL := path
+		if !strings.HasPrefix(path, "http") {
+			requestURL = "https://tickets.example.com" + path
+		}
+		engine.ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, requestURL, nil))
 		if invalid.Code != http.StatusNotFound {
 			t.Fatalf("invalid path %s status=%d", path, invalid.Code)
 		}

@@ -38,6 +38,11 @@ type CommerceStorefrontBindingView struct {
 	LocationID       uint   `json:"location_id"`
 	LocationName     string `json:"location_name"`
 	Status           string `json:"status"`
+	ContactType      string `json:"contact_type"`
+	ContactName      string `json:"contact_name"`
+	WechatID         string `json:"wechat_id"`
+	ContactQRCodeURL string `json:"contact_qr_code_url"`
+	ContactStatus    string `json:"contact_status"`
 }
 
 // CommerceStorefrontChannelView is the safe account selector exposed to a
@@ -121,7 +126,10 @@ func (s *CommerceStorefrontService) storefrontBindingView(tx *gorm.DB, binding *
 		Environment:      account.Environment,
 		CredentialsReady: strings.TrimSpace(account.AppID) != "" && strings.TrimSpace(account.SecretCiphertext) != "",
 		BusinessType:     binding.BusinessType, LocationID: location.ID, LocationName: location.Name,
-		Status: binding.Status,
+		Status:      binding.Status,
+		ContactType: account.StorefrontContactType, ContactName: account.StorefrontContactName,
+		WechatID: account.StorefrontWechatID, ContactQRCodeURL: account.StorefrontContactQRCodeURL,
+		ContactStatus: account.StorefrontContactStatus,
 	}, nil
 }
 

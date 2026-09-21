@@ -27,7 +27,16 @@ type ChannelAccount struct {
 	// writable through the dedicated Xiaohongshu storefront endpoint so generic
 	// channel-account create/update bindings cannot inject it.
 	StorefrontImageURL string `gorm:"size:500;not null;default:''" json:"-"`
-	ProtocolConfigured bool   `gorm:"-" json:"protocol_configured"`
+	// Storefront contact details belong to the WeChat channel account rather
+	// than one commercial business binding. A single mini-program can publish
+	// restaurant and retail at the same time, and both surfaces must resolve the
+	// same merchant contact without duplicating customer-service configuration.
+	StorefrontContactType      string `gorm:"size:30;not null;default:'personal_wechat';check:chk_channel_storefront_contact_type,storefront_contact_type IN ('personal_wechat','enterprise_wechat')" json:"-"`
+	StorefrontContactName      string `gorm:"size:80;not null;default:''" json:"-"`
+	StorefrontWechatID         string `gorm:"size:80;not null;default:''" json:"-"`
+	StorefrontContactQRCodeURL string `gorm:"size:500;not null;default:''" json:"-"`
+	StorefrontContactStatus    string `gorm:"size:20;not null;default:'disabled';check:chk_channel_storefront_contact_status,storefront_contact_status IN ('active','disabled')" json:"-"`
+	ProtocolConfigured         bool   `gorm:"-" json:"protocol_configured"`
 }
 
 // ChannelProductMapping maps a channel product identifier to a seller-owned

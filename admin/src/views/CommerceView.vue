@@ -315,8 +315,21 @@
               <el-table-column label="状态" width="100" align="center">
                 <template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">{{ row.status === 'active' ? '启用' : '停用' }}</el-tag></template>
               </el-table-column>
-              <el-table-column label="操作" width="100" fixed="right" align="right">
-                <template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openStorefrontBinding(row)">编辑</el-button><span v-else class="secondary-cell">只读</span></template>
+              <el-table-column label="客户联系" width="120" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="row.contact_status === 'active' && row.contact_qr_code_url ? 'success' : 'info'" effect="plain">
+                    {{ row.contact_status === 'active' && row.contact_qr_code_url ? '已启用' : '未启用' }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="178" fixed="right" align="right">
+                <template #default="{ row }">
+                  <template v-if="canWrite">
+                    <el-button link type="primary" @click="openStorefrontContact(row)">联系设置</el-button>
+                    <el-button link type="primary" @click="openStorefrontBinding(row)">编辑发布</el-button>
+                  </template>
+                  <span v-else class="secondary-cell">只读</span>
+                </template>
               </el-table-column>
               <template #empty><el-empty description="当前业务还没有小程序发布配置" :image-size="72" /></template>
             </el-table>
@@ -638,6 +651,64 @@
       </el-form>
       <template #footer><el-button @click="storefrontDialogVisible = false">取消</el-button><el-button type="primary" :loading="storefrontSaving" @click="saveStorefrontBinding">保存配置</el-button></template>
     </el-dialog>
+
+    <el-dialog v-model="storefrontContactDialogVisible" title="联系商家设置" width="min(620px, calc(100vw - 32px))" destroy-on-close @closed="resetStorefrontContactUpload">
+      <el-alert
+        type="info"
+        :closable="false"
+        title="此设置属于微信小程序账号；同一账号开放的餐饮和电商业务共用，不需要重复配置。"
+        class="capability-alert storefront-contact-alert"
+      />
+      <el-form :model="storefrontContactForm" label-position="top" class="commerce-form">
+        <div class="form-grid">
+          <el-form-item label="联系方式" required>
+            <el-radio-group v-model="storefrontContactForm.contact_type">
+              <el-radio value="personal_wechat">个人微信</el-radio>
+              <el-radio value="enterprise_wechat">企业微信</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="展示状态" required>
+            <el-radio-group v-model="storefrontContactForm.status">
+              <el-radio value="active">启用</el-radio>
+              <el-radio value="disabled">停用</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item label="联系人名称">
+            <el-input v-model="storefrontContactForm.contact_name" maxlength="80" placeholder="例如：门店客服" />
+          </el-form-item>
+          <el-form-item label="微信号">
+            <el-input v-model="storefrontContactForm.wechat_id" maxlength="80" placeholder="用户可一键复制" />
+          </el-form-item>
+        </div>
+        <el-form-item label="微信二维码" :required="storefrontContactForm.status === 'active'">
+          <div class="storefront-contact-upload">
+            <el-image
+              v-if="storefrontContactPreviewURL"
+              :src="storefrontContactPreviewURL"
+              fit="contain"
+              class="storefront-contact-preview"
+              :preview-src-list="[storefrontContactPreviewURL]"
+              preview-teleported
+            />
+            <div v-else class="storefront-contact-placeholder">尚未上传二维码</div>
+            <div class="storefront-contact-upload-actions">
+              <el-upload :auto-upload="false" :show-file-list="false" accept="image/jpeg,image/png" :on-change="selectStorefrontContactImage">
+                <el-button :icon="UploadFilled">{{ storefrontContactPreviewURL ? '更换二维码' : '上传二维码' }}</el-button>
+              </el-upload>
+              <el-button v-if="storefrontContactPreviewURL" type="danger" plain :icon="Delete" @click="clearStorefrontContactImage">移除</el-button>
+              <div class="form-help">仅支持 JPG、PNG，图片不超过 5 MB。启用后用户可在小程序中长按识别。</div>
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item label="操作原因" required>
+          <el-input v-model="storefrontContactForm.reason" type="textarea" :rows="3" maxlength="255" show-word-limit placeholder="例如：启用门店客服微信" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="storefrontContactDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="storefrontContactSaving" @click="saveStorefrontContact">保存设置</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -709,6 +780,11 @@ const shippingForm = reactive({ carrier: '', tracking_no: '' })
 const storefrontLoading = ref(false)
 const storefrontSaving = ref(false)
 const storefrontDialogVisible = ref(false)
+const storefrontContactSaving = ref(false)
+const storefrontContactDialogVisible = ref(false)
+const storefrontContactImage = ref<File | null>(null)
+const storefrontContactPreviewURL = ref('')
+const storefrontContactObjectURL = ref('')
 const storefrontBindings = ref<any[]>([])
 const storefrontChannels = ref<any[]>([])
 const storefrontForm = reactive({
@@ -718,6 +794,17 @@ const storefrontForm = reactive({
   location_id: 0,
   status: 'active',
   reason: '',
+})
+const storefrontContactForm = reactive({
+  channel_account_id: 0,
+  channel_code: '',
+  contact_type: 'personal_wechat',
+  contact_name: '',
+  wechat_id: '',
+  qr_code_url: '',
+  status: 'disabled',
+  reason: '',
+  clear_qr_code: false,
 })
 
 const productDialogVisible = ref(false)
@@ -1143,6 +1230,92 @@ async function saveStorefrontBinding() {
     await loadStorefrontData()
   } finally {
     storefrontSaving.value = false
+  }
+}
+
+function resetStorefrontContactUpload() {
+  if (storefrontContactObjectURL.value) URL.revokeObjectURL(storefrontContactObjectURL.value)
+  storefrontContactObjectURL.value = ''
+  storefrontContactImage.value = null
+}
+
+async function openStorefrontContact(row: any) {
+  if (!row?.channel_account_id) return
+  resetStorefrontContactUpload()
+  storefrontContactSaving.value = true
+  try {
+    const response = await request.get(`/commerce/storefront-channels/${row.channel_account_id}/contact`, { skipErrorToast: true } as any)
+    const contact = response.data?.data || {}
+    Object.assign(storefrontContactForm, {
+      channel_account_id: Number(row.channel_account_id),
+      channel_code: row.channel_code || '',
+      contact_type: contact.contact_type || 'personal_wechat',
+      contact_name: contact.contact_name || '',
+      wechat_id: contact.wechat_id || '',
+      qr_code_url: contact.qr_code_url || '',
+      status: contact.status || 'disabled',
+      reason: '',
+      clear_qr_code: false,
+    })
+    storefrontContactPreviewURL.value = contact.qr_code_url || ''
+    storefrontContactDialogVisible.value = true
+  } catch {
+    ElMessage.error('联系设置暂时无法加载')
+  } finally {
+    storefrontContactSaving.value = false
+  }
+}
+
+function selectStorefrontContactImage(uploadFile: any) {
+  const file = uploadFile?.raw as File | undefined
+  if (!file) return
+  if (!['image/jpeg', 'image/png'].includes(file.type)) {
+    ElMessage.warning('二维码仅支持 JPG 或 PNG 格式')
+    return
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    ElMessage.warning('二维码图片不能超过 5 MB')
+    return
+  }
+  resetStorefrontContactUpload()
+  storefrontContactImage.value = file
+  storefrontContactObjectURL.value = URL.createObjectURL(file)
+  storefrontContactPreviewURL.value = storefrontContactObjectURL.value
+  storefrontContactForm.clear_qr_code = false
+}
+
+function clearStorefrontContactImage() {
+  resetStorefrontContactUpload()
+  storefrontContactPreviewURL.value = ''
+  storefrontContactForm.clear_qr_code = true
+}
+
+async function saveStorefrontContact() {
+  if (!canWrite.value || !storefrontContactForm.channel_account_id) return
+  if (!storefrontContactForm.reason.trim()) {
+    ElMessage.warning('请填写操作原因')
+    return
+  }
+  if (storefrontContactForm.status === 'active' && !storefrontContactPreviewURL.value) {
+    ElMessage.warning('启用联系商家前请上传微信二维码')
+    return
+  }
+  storefrontContactSaving.value = true
+  try {
+    const form = new FormData()
+    form.append('contact_type', storefrontContactForm.contact_type)
+    form.append('contact_name', storefrontContactForm.contact_name.trim())
+    form.append('wechat_id', storefrontContactForm.wechat_id.trim())
+    form.append('status', storefrontContactForm.status)
+    form.append('reason', storefrontContactForm.reason.trim())
+    form.append('clear_qr_code', String(storefrontContactForm.clear_qr_code))
+    if (storefrontContactImage.value) form.append('image', storefrontContactImage.value)
+    await request.put(`/commerce/storefront-channels/${storefrontContactForm.channel_account_id}/contact`, form, { timeout: 30000 })
+    storefrontContactDialogVisible.value = false
+    ElMessage.success('联系商家设置已保存')
+    await loadStorefrontData()
+  } finally {
+    storefrontContactSaving.value = false
   }
 }
 
@@ -1781,6 +1954,12 @@ onBeforeUnmount(() => {
 .form-suffix { margin-left: 8px; color: var(--ui-text-secondary); }
 .form-help { margin-top: 6px; color: var(--ui-text-secondary); font-size: 12px; line-height: 1.5; }
 .select-option-stack { display: flex; flex-direction: column; gap: 2px; line-height: 1.3; }
+.storefront-contact-alert { margin-bottom: 16px; }
+.storefront-contact-upload { display: flex; align-items: center; gap: 18px; width: 100%; }
+.storefront-contact-preview, .storefront-contact-placeholder { box-sizing: border-box; width: 148px; height: 148px; flex: 0 0 148px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface-soft); }
+.storefront-contact-placeholder { display: grid; place-items: center; padding: 16px; color: var(--ui-text-secondary); font-size: 12px; text-align: center; }
+.storefront-contact-upload-actions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.storefront-contact-upload-actions .form-help { width: 100%; margin-top: 0; }
 .adjustment-context { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; padding: 12px; background: var(--ui-surface-soft); border: 1px solid var(--ui-border); border-radius: var(--ui-radius); }
 @media (max-width: 800px) {
   .commerce-heading { flex-direction: column; }
@@ -1802,5 +1981,7 @@ onBeforeUnmount(() => {
   .option-group-actions { justify-content: flex-end; }
   .option-row { grid-template-columns: minmax(0, 1fr) 78px 64px; }
   .option-row-actions { grid-column: 1 / -1; justify-content: flex-start; }
+  .storefront-contact-upload { align-items: flex-start; flex-direction: column; }
+  .storefront-contact-preview, .storefront-contact-placeholder { width: min(100%, 220px); height: auto; aspect-ratio: 1; flex-basis: auto; }
 }
 </style>

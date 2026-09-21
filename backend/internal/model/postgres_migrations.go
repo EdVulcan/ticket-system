@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 140
+const CurrentPostgresSchemaVersion = 141
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -778,11 +778,61 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateCommercePhaseTwo(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateCommerceStorefrontContact(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "commerce phase two delivery logistics promotions",
+		Name:      "commerce storefront contact configuration",
 		AppliedAt: time.Now(),
 	}).Error
+}
+
+// migrateCommerceStorefrontContact keeps one customer-facing contact per
+// WeChat channel account. Existing accounts remain disabled until a tenant
+// operator uploads a managed QR image and explicitly enables the contact.
+func migrateCommerceStorefrontContact(db *gorm.DB, previous int) error {
+	if previous >= 141 {
+		return nil
+	}
+	if err := db.Exec(`
+		UPDATE channel_accounts
+		SET storefront_contact_type = 'personal_wechat'
+		WHERE storefront_contact_type IS NULL OR storefront_contact_type NOT IN ('personal_wechat','enterprise_wechat');
+		UPDATE channel_accounts
+		SET storefront_contact_name = ''
+		WHERE storefront_contact_name IS NULL;
+		UPDATE channel_accounts
+		SET storefront_wechat_id = ''
+		WHERE storefront_wechat_id IS NULL;
+		UPDATE channel_accounts
+		SET storefront_contact_qr_code_url = ''
+		WHERE storefront_contact_qr_code_url IS NULL;
+		UPDATE channel_accounts
+		SET storefront_contact_status = 'disabled'
+		WHERE storefront_contact_status IS NULL OR storefront_contact_status NOT IN ('active','disabled');
+
+		ALTER TABLE channel_accounts ALTER COLUMN storefront_contact_type SET DEFAULT 'personal_wechat';
+		ALTER TABLE channel_accounts ALTER COLUMN storefront_contact_type SET NOT NULL;
+		ALTER TABLE channel_accounts ALTER COLUMN storefront_contact_name SET DEFAULT '';
+		ALTER TABLE channel_accounts ALTER COLUMN storefront_contact_name SET NOT NULL;
+		ALTER TABLE channel_accounts ALTER COLUMN storefront_wechat_id SET DEFAULT '';
+		ALTER TABLE channel_accounts ALTER COLUMN storefront_wechat_id SET NOT NULL;
+		ALTER TABLE channel_accounts ALTER COLUMN storefront_contact_qr_code_url SET DEFAULT '';
+		ALTER TABLE channel_accounts ALTER COLUMN storefront_contact_qr_code_url SET NOT NULL;
+		ALTER TABLE channel_accounts ALTER COLUMN storefront_contact_status SET DEFAULT 'disabled';
+		ALTER TABLE channel_accounts ALTER COLUMN storefront_contact_status SET NOT NULL;
+
+		ALTER TABLE channel_accounts DROP CONSTRAINT IF EXISTS chk_channel_storefront_contact_type;
+		ALTER TABLE channel_accounts ADD CONSTRAINT chk_channel_storefront_contact_type
+			CHECK (storefront_contact_type IN ('personal_wechat','enterprise_wechat'));
+		ALTER TABLE channel_accounts DROP CONSTRAINT IF EXISTS chk_channel_storefront_contact_status;
+		ALTER TABLE channel_accounts ADD CONSTRAINT chk_channel_storefront_contact_status
+			CHECK (storefront_contact_status IN ('active','disabled'));
+	`).Error; err != nil {
+		return fmt.Errorf("register commerce storefront contact configuration: %w", err)
+	}
+	return nil
 }
 
 // migrateCommerceMerchantNotifications adds the paid-order outbox and its

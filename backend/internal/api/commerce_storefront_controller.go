@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -66,6 +67,64 @@ func (c *CommerceStorefrontController) SaveBinding(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"data": row})
 }
 
+func (c *CommerceStorefrontController) GetChannelContact(ctx *gin.Context) {
+	channelID, err := parseStorefrontPathID(ctx, "channelID", "无效的微信小程序账号编号")
+	if err != nil {
+		return
+	}
+	row, err := c.Service.GetChannelContact(ctx.GetUint("tenant_id"), channelID)
+	if err != nil {
+		commerceStorefrontAdminError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": row})
+}
+
+// SaveChannelContact accepts the contact metadata and optional QR image in one
+// multipart request. The tenant and channel account are resolved server-side;
+// a client cannot attach another tenant's managed image URL.
+func (c *CommerceStorefrontController) SaveChannelContact(ctx *gin.Context) {
+	channelID, err := parseStorefrontPathID(ctx, "channelID", "无效的微信小程序账号编号")
+	if err != nil {
+		return
+	}
+	if err := ctx.Request.ParseMultipartForm(service.MaxCommerceStorefrontContactImageBytes + (1 << 20)); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "联系设置格式不正确"})
+		return
+	}
+	input := service.CommerceStorefrontContactInput{
+		ContactType: ctx.PostForm("contact_type"),
+		ContactName: ctx.PostForm("contact_name"),
+		WechatID:    ctx.PostForm("wechat_id"),
+		Status:      ctx.PostForm("status"),
+		Reason:      ctx.PostForm("reason"),
+		ClearQRCode: strings.EqualFold(strings.TrimSpace(ctx.PostForm("clear_qr_code")), "true"),
+	}
+	var imageData []byte
+	file, header, fileErr := ctx.Request.FormFile("image")
+	if fileErr == nil && file != nil {
+		defer file.Close()
+		if header != nil && header.Size > service.MaxCommerceStorefrontContactImageBytes {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "联系二维码不能超过 5 MB"})
+			return
+		}
+		imageData, err = io.ReadAll(io.LimitReader(file, service.MaxCommerceStorefrontContactImageBytes+1))
+		if err != nil || len(imageData) > service.MaxCommerceStorefrontContactImageBytes {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "联系二维码读取失败或文件过大"})
+			return
+		}
+	} else if fileErr != nil && !errors.Is(fileErr, http.ErrMissingFile) {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "联系二维码读取失败"})
+		return
+	}
+	row, err := c.Service.SaveChannelContact(ctx.GetUint("tenant_id"), channelID, input, imageData, ctx.GetUint("user_id"), ctx.GetString("role"))
+	if err != nil {
+		commerceStorefrontAdminError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": row})
+}
+
 func (c *CommerceStorefrontController) Login(ctx *gin.Context) {
 	var input service.CommerceStorefrontLoginInput
 	if err := ctx.ShouldBindJSON(&input); err != nil {
@@ -94,6 +153,15 @@ func (c *CommerceStorefrontController) Catalog(ctx *gin.Context) {
 		return
 	}
 	ctx.JSON(http.StatusOK, catalog)
+}
+
+func (c *CommerceStorefrontController) Contact(ctx *gin.Context) {
+	contact, err := c.Service.GetContact(commerceStorefrontBearerToken(ctx))
+	if err != nil {
+		commerceStorefrontError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, contact)
 }
 
 func (c *CommerceStorefrontController) GetCart(ctx *gin.Context) {
@@ -478,6 +546,8 @@ func commerceStorefrontAdminError(ctx *gin.Context, err error) {
 		status, message = http.StatusForbidden, "当前商户未启用该商业能力"
 	case errors.Is(err, service.ErrCommerceStorefrontBindingInvalid), errors.Is(err, service.ErrCommerceStorefrontBindingAccount):
 		status, message = http.StatusBadRequest, "小程序渠道账号、业务能力或履约地点配置不正确"
+	case errors.Is(err, service.ErrCommerceStorefrontContactInvalid):
+		status, message = http.StatusBadRequest, "联系商家设置不正确，请检查二维码、联系方式和操作原因"
 	}
 	ctx.JSON(status, gin.H{"error": message})
 }

@@ -136,7 +136,7 @@ func main() {
 			"message": "pong",
 		})
 	})
-	servePublicUploads(r, config.GlobalConfig.Server.UploadDirectory)
+	servePublicUploads(r, config.GlobalConfig.Server.UploadDirectory, model.DB)
 	serveAdminUI(r, config.GlobalConfig.Server.AdminStaticDir)
 
 	host := strings.TrimSpace(config.GlobalConfig.Server.Host)
@@ -508,7 +508,7 @@ func runUpstreamSupplyWorker(ctx context.Context) {
 	}
 }
 
-func servePublicUploads(engine *gin.Engine, directory string) {
+func servePublicUploads(engine *gin.Engine, directory string, contactDB *gorm.DB) {
 	if strings.TrimSpace(directory) == "" {
 		return
 	}
@@ -523,6 +523,10 @@ func servePublicUploads(engine *gin.Engine, directory string) {
 	}
 	if err := os.MkdirAll(filepath.Join(absDirectory, "commerce-products"), 0750); err != nil {
 		logger.Log.Error(fmt.Sprintf("Failed to create commercial product upload directory: %v", err))
+		return
+	}
+	if err := os.MkdirAll(filepath.Join(absDirectory, "commerce-storefront-contacts"), 0750); err != nil {
+		logger.Log.Error(fmt.Sprintf("Failed to create commercial storefront contact upload directory: %v", err))
 		return
 	}
 	engine.GET("/api/v1/public/channel-product-images/:tenant/:account/:filename", func(ctx *gin.Context) {
@@ -576,6 +580,85 @@ func servePublicUploads(engine *gin.Engine, directory string) {
 		ctx.Header("Cache-Control", "public, max-age=31536000, immutable")
 		ctx.File(filepath.Join(absDirectory, "commerce-products", ctx.Param("tenant"), ctx.Param("product"), kind, filename))
 	})
+	engine.GET("/api/v1/public/commerce-storefront-contact-images/:tenant/:account/:filename", func(ctx *gin.Context) {
+		tenantID, err := strconv.ParseUint(ctx.Param("tenant"), 10, 32)
+		if err != nil || tenantID == 0 {
+			ctx.Status(http.StatusNotFound)
+			return
+		}
+		accountID, err := strconv.ParseUint(ctx.Param("account"), 10, 32)
+		if err != nil || accountID == 0 {
+			ctx.Status(http.StatusNotFound)
+			return
+		}
+		filename := ctx.Param("filename")
+		extension := strings.ToLower(filepath.Ext(filename))
+		stem := strings.TrimSuffix(filename, extension)
+		if (extension != ".jpg" && extension != ".png") || len(stem) != 32 {
+			ctx.Status(http.StatusNotFound)
+			return
+		}
+		if _, err := hex.DecodeString(stem); err != nil {
+			ctx.Status(http.StatusNotFound)
+			return
+		}
+		if !isCurrentCommerceStorefrontContactImage(contactDB, uint(tenantID), uint(accountID), publicRequestURL(ctx)) {
+			ctx.Status(http.StatusNotFound)
+			return
+		}
+		// Contact configuration can be disabled or replaced at any time. Do not
+		// let a browser or CDN retain the old QR code for a year.
+		ctx.Header("Cache-Control", "no-store")
+		ctx.File(filepath.Join(absDirectory, "commerce-storefront-contacts", ctx.Param("tenant"), ctx.Param("account"), filename))
+	})
+}
+
+func publicRequestURL(ctx *gin.Context) string {
+	if ctx == nil || ctx.Request == nil {
+		return ""
+	}
+	request := ctx.Request
+	host := strings.TrimSpace(request.Host)
+	if host == "" && request.URL != nil {
+		host = strings.TrimSpace(request.URL.Host)
+	}
+	if host == "" || request.URL == nil {
+		return ""
+	}
+	scheme := "http"
+	if request.TLS != nil {
+		scheme = "https"
+	}
+	if forwarded := strings.TrimSpace(strings.Split(request.Header.Get("X-Forwarded-Proto"), ",")[0]); forwarded == "http" || forwarded == "https" {
+		scheme = forwarded
+	}
+	path := request.URL.EscapedPath()
+	if path == "" {
+		path = "/"
+	}
+	if request.URL.RawQuery != "" {
+		path += "?" + request.URL.RawQuery
+	}
+	return scheme + "://" + host + path
+}
+
+func isCurrentCommerceStorefrontContactImage(db *gorm.DB, tenantID, accountID uint, requestedURL string) bool {
+	if db == nil || tenantID == 0 || accountID == 0 || strings.TrimSpace(requestedURL) == "" {
+		return false
+	}
+	var tenant model.Tenant
+	if err := db.Select("id").Where("id = ? AND status = ?", tenantID, "active").First(&tenant).Error; err != nil {
+		return false
+	}
+	var account model.ChannelAccount
+	if err := db.Select("id", "tenant_id", "type", "status", "storefront_contact_status", "storefront_contact_qr_code_url").
+		Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", accountID, tenantID, "wechat_miniapp", []string{"active", "sandbox"}).
+		First(&account).Error; err != nil {
+		return false
+	}
+	return account.StorefrontContactStatus == "active" &&
+		strings.TrimSpace(account.StorefrontContactQRCodeURL) != "" &&
+		account.StorefrontContactQRCodeURL == requestedURL
 }
 
 func serveAdminUI(engine *gin.Engine, directory string) {

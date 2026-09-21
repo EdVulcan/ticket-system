@@ -179,11 +179,12 @@ type CommerceStorefrontOrderPage struct {
 // and customer identity. A business selector on a transaction request is
 // always resolved back to an active server-side binding and location.
 type CommerceStorefrontService struct {
-	DB           *gorm.DB
-	Catalog      CommerceCatalogService
-	Operations   CommerceOperationsService
-	Orders       CommerceOrderService
-	LoginAdapter WechatMiniappLoginAdapter
+	DB            *gorm.DB
+	Catalog       CommerceCatalogService
+	Operations    CommerceOperationsService
+	Orders        CommerceOrderService
+	ContactImages *CommerceStorefrontContactImageStore
+	LoginAdapter  WechatMiniappLoginAdapter
 	// WechatLoginAdapter is an alias field for dependency injection in callers
 	// that use the shorter name. LoginAdapter takes precedence when both exist.
 	WechatLoginAdapter WechatMiniappLoginAdapter

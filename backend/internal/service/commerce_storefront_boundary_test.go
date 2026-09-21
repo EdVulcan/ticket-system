@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +145,122 @@ func TestCommerceStorefrontListChannelAccountsIsTenantScopedAndSecretFree(t *tes
 	}
 	if strings.Contains(string(encoded), "encrypted-secret") || strings.Contains(string(encoded), "secret_ciphertext") {
 		t.Fatalf("storefront channel view exposed secret material: %s", encoded)
+	}
+}
+
+func TestCommerceStorefrontContactIsAccountScopedAndPublicOnlyWhenActive(t *testing.T) {
+	fixture := newCommerceStorefrontServiceFixture(t)
+	imageStore := &CommerceStorefrontContactImageStore{Directory: t.TempDir(), PublicBaseURL: "https://tickets.example.com"}
+	fixture.service.ContactImages = imageStore
+
+	if _, err := fixture.service.SaveChannelContact(fixture.tenantID, fixture.account.ID, CommerceStorefrontContactInput{
+		ContactType: "enterprise_wechat", ContactName: "门店客服", WechatID: "shop-service",
+		Status: "active", Reason: "enable customer contact",
+	}, nil, 7, "admin"); !errors.Is(err, ErrCommerceStorefrontContactInvalid) {
+		t.Fatalf("active contact without QR error=%v", err)
+	}
+
+	saved, err := fixture.service.SaveChannelContact(fixture.tenantID, fixture.account.ID, CommerceStorefrontContactInput{
+		ContactType: "enterprise_wechat", ContactName: "门店客服", WechatID: "shop-service",
+		Status: "active", Reason: "enable customer contact",
+	}, commercePNG(t), 7, "admin")
+	if err != nil {
+		t.Fatalf("save storefront contact: %v", err)
+	}
+	if !saved.Available || saved.ContactType != "enterprise_wechat" || saved.WechatID != "shop-service" || saved.QRCodeURL == "" {
+		t.Fatalf("saved contact=%+v", saved)
+	}
+
+	login := storefrontLogin(t, fixture.service, fixture.account.AppID, "contact-customer")
+	public, err := fixture.service.GetContact(login.Token)
+	if err != nil {
+		t.Fatalf("get public contact: %v", err)
+	}
+	if !public.Available || public.ChannelAccountID != fixture.account.ID || public.QRCodeURL != saved.QRCodeURL {
+		t.Fatalf("public contact=%+v", public)
+	}
+
+	foreignTenant := model.Tenant{Name: "Foreign contact tenant", SystemCode: "FOREIGN-CONTACT", SecretKey: "foreign-contact-secret", Status: "active"}
+	if err := model.DB.Create(&foreignTenant).Error; err != nil {
+		t.Fatalf("create foreign contact tenant: %v", err)
+	}
+	foreignTenantID := foreignTenant.ID
+	if _, err := fixture.service.GetChannelContact(foreignTenantID, fixture.account.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("cross-tenant contact read error=%v", err)
+	}
+
+	disabled, err := fixture.service.SaveChannelContact(fixture.tenantID, fixture.account.ID, CommerceStorefrontContactInput{
+		ContactType: "enterprise_wechat", ContactName: "门店客服", WechatID: "shop-service",
+		Status: "disabled", Reason: "pause customer contact",
+	}, nil, 7, "admin")
+	if err != nil || disabled.Available {
+		t.Fatalf("disable storefront contact=%+v err=%v", disabled, err)
+	}
+	public, err = fixture.service.GetContact(login.Token)
+	if err != nil {
+		t.Fatalf("get disabled public contact: %v", err)
+	}
+	if public.Available || public.QRCodeURL != "" || public.WechatID != "" || public.ContactName != "" {
+		t.Fatalf("disabled public contact leaked details: %+v", public)
+	}
+}
+
+func TestCommerceStorefrontContactPublicProjectionFailsClosedForMissingOrUnmanagedImage(t *testing.T) {
+	fixture := newCommerceStorefrontServiceFixture(t)
+	imageStore := &CommerceStorefrontContactImageStore{Directory: t.TempDir(), PublicBaseURL: "https://tickets.example.com"}
+	fixture.service.ContactImages = imageStore
+	saved, err := fixture.service.SaveChannelContact(fixture.tenantID, fixture.account.ID, CommerceStorefrontContactInput{
+		ContactType: "personal_wechat", ContactName: "商家客服", WechatID: "merchant-service",
+		Status: "active", Reason: "configure customer contact",
+	}, commercePNG(t), 7, "admin")
+	if err != nil {
+		t.Fatalf("save storefront contact: %v", err)
+	}
+	login := storefrontLogin(t, fixture.service, fixture.account.AppID, "missing-contact-image-customer")
+	imagePath, err := imageStore.ownedPath(fixture.tenantID, fixture.account.ID, saved.QRCodeURL)
+	if err != nil {
+		t.Fatalf("resolve managed contact image: %v", err)
+	}
+	if err := os.Remove(imagePath); err != nil {
+		t.Fatalf("remove managed contact image: %v", err)
+	}
+	public, err := fixture.service.GetContact(login.Token)
+	if err != nil {
+		t.Fatalf("get contact after image removal: %v", err)
+	}
+	if public.Available || public.QRCodeURL != "" || public.ContactName != "" || public.WechatID != "" {
+		t.Fatalf("missing contact image leaked public configuration: %+v", public)
+	}
+
+	if err := model.DB.Model(&model.ChannelAccount{}).Where("id = ?", fixture.account.ID).
+		Updates(map[string]interface{}{"storefront_contact_qr_code_url": "https://external.example/contact.png"}).Error; err != nil {
+		t.Fatalf("seed unmanaged contact URL: %v", err)
+	}
+	public, err = fixture.service.GetContact(login.Token)
+	if err != nil {
+		t.Fatalf("get contact with unmanaged URL: %v", err)
+	}
+	if public.Available || public.QRCodeURL != "" || public.ContactName != "" || public.WechatID != "" {
+		t.Fatalf("unmanaged contact URL leaked public configuration: %+v", public)
+	}
+}
+
+func TestCommerceStorefrontContactSaveRejectsExistingQRCodeWithoutImageStore(t *testing.T) {
+	fixture := newCommerceStorefrontServiceFixture(t)
+	if err := model.DB.Model(&model.ChannelAccount{}).Where("id = ?", fixture.account.ID).Updates(map[string]interface{}{
+		"storefront_contact_status":      "active",
+		"storefront_contact_qr_code_url": "https://tickets.example.com/api/v1/public/commerce-storefront-contact-images/1/1/legacy.png",
+		"storefront_contact_name":        "历史客服",
+		"storefront_contact_type":        "personal_wechat",
+		"storefront_wechat_id":           "legacy-service",
+	}).Error; err != nil {
+		t.Fatalf("seed legacy contact configuration: %v", err)
+	}
+	if _, err := fixture.service.SaveChannelContact(fixture.tenantID, fixture.account.ID, CommerceStorefrontContactInput{
+		ContactType: "personal_wechat", ContactName: "历史客服", WechatID: "legacy-service",
+		Status: "disabled", Reason: "disable invalid legacy contact",
+	}, nil, 7, "admin"); !errors.Is(err, ErrCommerceStorefrontContactInvalid) {
+		t.Fatalf("save accepted existing QR code without image store: %v", err)
 	}
 }
 

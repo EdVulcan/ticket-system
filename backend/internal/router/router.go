@@ -62,6 +62,10 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	// the account's current published binding and fulfillment location.
 	commerceStorefrontService := &service.CommerceStorefrontService{
 		LoginAdapter: &service.WechatMiniappHTTPLoginAdapter{},
+		ContactImages: &service.CommerceStorefrontContactImageStore{
+			Directory:     config.GlobalConfig.Server.UploadDirectory,
+			PublicBaseURL: config.GlobalConfig.Server.PublicBaseURL,
+		},
 	}
 	commercePaymentService := service.CommercePaymentService{Storefront: commerceStorefrontService}
 	commerceStorefrontController := &api.CommerceStorefrontController{Service: *commerceStorefrontService, Payment: commercePaymentService}
@@ -71,6 +75,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	commerceStorefrontGroup := apiGroup.Group("/storefront/wechat")
 	commerceStorefrontGroup.POST("/session", middleware.MiniappLoginRateLimit(), commerceStorefrontController.Login)
 	commerceStorefrontGroup.GET("/catalog", commerceStorefrontController.Catalog)
+	commerceStorefrontGroup.GET("/contact", commerceStorefrontController.Contact)
 	commerceStorefrontGroup.GET("/cart", commerceStorefrontController.GetCart)
 	commerceStorefrontGroup.POST("/cart/items", commerceStorefrontController.AddCartItem)
 	commerceStorefrontGroup.PATCH("/cart/items/:itemID", commerceStorefrontController.UpdateCartItem)
@@ -462,6 +467,10 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	commerceStorefrontChannelGroup := protected.Group("/commerce/storefront-channels")
 	commerceStorefrontChannelGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionCatalogRead))
 	commerceStorefrontChannelGroup.GET("", commerceStorefrontController.ListChannelAccounts)
+	commerceStorefrontChannelGroup.GET("/:channelID/contact", commerceStorefrontController.GetChannelContact)
+	commerceStorefrontChannelWriteGroup := protected.Group("/commerce/storefront-channels")
+	commerceStorefrontChannelWriteGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite))
+	commerceStorefrontChannelWriteGroup.PUT("/:channelID/contact", commerceStorefrontController.SaveChannelContact)
 
 	printTemplateController := &api.PrintTemplateController{Service: service.PrintTemplateService{}}
 	printTemplateGroup := protected.Group("/print-templates")
