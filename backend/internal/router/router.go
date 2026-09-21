@@ -362,7 +362,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	{
 		commerceOrderReadGroup.GET("", commerceOrderController.List)
 		commerceOrderReadGroup.GET("/:id", commerceOrderController.Get)
-		commerceOrderReadGroup.GET("/:orderID/shipment", commerceLogisticsController.AdminOrderTimeline)
+		commerceOrderReadGroup.GET("/:id/shipment", commerceLogisticsController.AdminOrderTimeline)
 	}
 	commerceOrderWriteGroup := protected.Group("/commerce/orders")
 	commerceOrderWriteGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"))
@@ -440,7 +440,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	commerceLogisticsWriteGroup := protected.Group("/commerce")
 	commerceLogisticsWriteGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("retail"), middleware.RequireTenantPermission(authz.PermissionOperationsWrite))
 	{
-		commerceLogisticsWriteGroup.POST("/orders/:orderID/shipments", commerceLogisticsController.CreateShipment)
+		commerceLogisticsWriteGroup.POST("/orders/:id/shipments", commerceLogisticsController.CreateShipment)
 		commerceLogisticsWriteGroup.PUT("/shipments/:shipmentID", commerceLogisticsController.UpdateShipment)
 		commerceLogisticsWriteGroup.POST("/shipments/:shipmentID/events", commerceLogisticsController.AppendManualEvent)
 	}

@@ -22,7 +22,7 @@ type CommerceLogisticsController struct {
 }
 
 func (c *CommerceLogisticsController) CreateShipment(ctx *gin.Context) {
-	orderID, err := parseLogisticsPathID(ctx, "orderID")
+	orderID, err := parseLogisticsPathID(ctx, "id")
 	if err != nil {
 		return
 	}
@@ -107,7 +107,7 @@ func (c *CommerceLogisticsController) ShipmentTimeline(ctx *gin.Context) {
 }
 
 func (c *CommerceLogisticsController) AdminOrderTimeline(ctx *gin.Context) {
-	orderID, err := parseLogisticsPathID(ctx, "orderID")
+	orderID, err := parseLogisticsPathID(ctx, "id")
 	if err != nil {
 		return
 	}

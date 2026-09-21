@@ -69,7 +69,7 @@ func TestCommerceLogisticsControllerAdminIsolationAndManualIdentity(t *testing.T
 		"tenant_id": foreign.ID, "order_id": 999999, "location_id": ownerLocation.ID,
 		"shipment_no": "SHP-OWNER-1", "carrier_code": "carrier", "tracking_no": "TRACK-OWNER-1",
 		"source": "provider", "address_snapshot": `{"detail":"下单地址"}`,
-	}, gin.Params{{Key: "orderID", Value: strconv.FormatUint(uint64(order.ID), 10)}}, controller.CreateShipment)
+	}, gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(order.ID), 10)}}, controller.CreateShipment)
 	if createResponse.Code != http.StatusCreated {
 		t.Fatalf("create shipment status=%d body=%s", createResponse.Code, createResponse.Body.String())
 	}
@@ -84,11 +84,11 @@ func TestCommerceLogisticsControllerAdminIsolationAndManualIdentity(t *testing.T
 	if err := db.Model(&model.CommerceShipmentEvent{}).Where("tenant_id = ? AND shipment_id = ? AND status = ?", owner.ID, shipment.ID, "shipped").Count(&initialEvents).Error; err != nil || initialEvents != 1 {
 		t.Fatalf("atomic shipped event count=%d err=%v, want 1", initialEvents, err)
 	}
-	adminOrderRead := invokeCommerceController(t, http.MethodGet, "/commerce/orders/"+strconv.FormatUint(uint64(order.ID), 10)+"/shipment", owner.ID, nil, gin.Params{{Key: "orderID", Value: strconv.FormatUint(uint64(order.ID), 10)}}, controller.AdminOrderTimeline)
+	adminOrderRead := invokeCommerceController(t, http.MethodGet, "/commerce/orders/"+strconv.FormatUint(uint64(order.ID), 10)+"/shipment", owner.ID, nil, gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(order.ID), 10)}}, controller.AdminOrderTimeline)
 	if adminOrderRead.Code != http.StatusOK {
 		t.Fatalf("admin order timeline status=%d body=%s", adminOrderRead.Code, adminOrderRead.Body.String())
 	}
-	foreignOrderRead := invokeCommerceController(t, http.MethodGet, "/commerce/orders/"+strconv.FormatUint(uint64(order.ID), 10)+"/shipment", foreign.ID, nil, gin.Params{{Key: "orderID", Value: strconv.FormatUint(uint64(order.ID), 10)}}, controller.AdminOrderTimeline)
+	foreignOrderRead := invokeCommerceController(t, http.MethodGet, "/commerce/orders/"+strconv.FormatUint(uint64(order.ID), 10)+"/shipment", foreign.ID, nil, gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(order.ID), 10)}}, controller.AdminOrderTimeline)
 	if foreignOrderRead.Code != http.StatusNotFound {
 		t.Fatalf("cross-tenant order timeline status=%d body=%s, want 404", foreignOrderRead.Code, foreignOrderRead.Body.String())
 	}
@@ -135,7 +135,7 @@ func TestCommerceLogisticsControllerAdminIsolationAndManualIdentity(t *testing.T
 	duplicateResponse := invokeCommerceController(t, http.MethodPost, "/commerce/orders/"+strconv.FormatUint(uint64(secondOrder.ID), 10)+"/shipments", owner.ID, map[string]interface{}{
 		"order_id": secondOrder.ID, "location_id": ownerLocation.ID, "shipment_no": "SHP-OWNER-2",
 		"carrier_code": "carrier-2", "tracking_no": "TRACK-OWNER-1-UPDATED",
-	}, gin.Params{{Key: "orderID", Value: strconv.FormatUint(uint64(secondOrder.ID), 10)}}, controller.CreateShipment)
+	}, gin.Params{{Key: "id", Value: strconv.FormatUint(uint64(secondOrder.ID), 10)}}, controller.CreateShipment)
 	if duplicateResponse.Code != http.StatusConflict {
 		t.Fatalf("duplicate tracking status=%d body=%s, want 409", duplicateResponse.Code, duplicateResponse.Body.String())
 	}
