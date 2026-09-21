@@ -277,8 +277,12 @@ func (s MiniappService) LoginXiaohongshu(ctx context.Context, appID, code string
 			"open_id_ciphertext": openIDCiphertext, "session_key_ciphertext": sessionKeyCiphertext,
 			"session_token_hash": tokenHash, "session_expires_at": expiresAt, "status": "active", "last_login_at": now,
 		}
-		if memberID != nil {
-			updates["member_id"] = *memberID
+		if s.Member != nil {
+			// A failed or deliberately rejected member resolution must remove a
+			// stale association from a previously linked channel customer. Keeping
+			// the old value would let a revoked identity continue attributing new
+			// orders to that member through Authenticate.
+			updates["member_id"] = memberID
 		}
 		return tx.Model(&customer).Updates(updates).Error
 	})

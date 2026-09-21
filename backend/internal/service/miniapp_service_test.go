@@ -119,6 +119,68 @@ func TestXiaohongshuMiniappLoginAndCatalogAreChannelScoped(t *testing.T) {
 	}
 }
 
+func TestXiaohongshuLoginClearsStaleMemberAfterIdentityRevoked(t *testing.T) {
+	resetBusinessData(t)
+	ensureMemberServiceSchema(t)
+	tenantID, _ := seedSellableProduct(t, "unlimited", 0)
+	account := model.ChannelAccount{Code: "xiaohongshu-member-revoked", Status: "sandbox"}
+	if err := (&ChannelService{}).CreateXiaohongshu(tenantID, &account, "miniapp-member-revoked", "app-secret"); err != nil {
+		t.Fatal(err)
+	}
+	memberService, err := NewMemberServiceForTest(model.DB, []byte("member-test-blind-index-key"), func(value string) (string, error) {
+		return "cipher:" + value, nil
+	}, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	member, err := memberService.ResolveSelfHostedIdentity(SelfHostedIdentityInput{
+		TenantID: tenantID, ChannelAccountID: account.ID, Provider: "xiaohongshu_miniapp", Subject: "OPEN-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&model.TenantMemberIdentity{}).Where("tenant_id = ? AND member_id = ?", tenantID, member.ID).Update("status", MemberIdentityRevoked).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	memberID := member.ID
+	openIDCiphertext, err := utils.EncryptAES("OPEN-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionKeyCiphertext, err := utils.EncryptAES("SESSION-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	customer := model.MiniappCustomer{
+		TenantID: tenantID, ChannelAccountID: account.ID, MemberID: &memberID,
+		OpenIDHash: hashMiniappValue("OPEN-1"), OpenIDCiphertext: openIDCiphertext,
+		SessionKeyCiphertext: sessionKeyCiphertext, SessionTokenHash: hashMiniappValue("old-token"),
+		SessionExpiresAt: time.Now().Add(time.Hour), Status: "active", LastLoginAt: time.Now(),
+	}
+	if err := model.DB.Create(&customer).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	server := miniappLoginServer(t)
+	defer server.Close()
+	miniapp := NewMiniappService()
+	miniapp.Member = memberService
+	miniapp.NewXiaohongshuClient = func(appID, secret, environment string) *xiaohongshu.Client {
+		return &xiaohongshu.Client{AppID: appID, Secret: secret, BaseURL: server.URL, HTTP: server.Client()}
+	}
+	if _, err := miniapp.LoginXiaohongshu(context.Background(), "miniapp-member-revoked", "login-code"); err != nil {
+		t.Fatal(err)
+	}
+	var refreshed model.MiniappCustomer
+	if err := model.DB.Where("id = ?", customer.ID).First(&refreshed).Error; err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.MemberID != nil {
+		t.Fatalf("revoked identity retained stale member association: %+v", refreshed.MemberID)
+	}
+}
+
 func TestXiaohongshuMiniappCatalogUsesAccountScopedCategoriesAndOrdering(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, firstProductID := seedSellableProduct(t, "unlimited", 0)
