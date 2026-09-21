@@ -167,9 +167,17 @@ func (a *XiaohongshuPhoneAuthAdapter) futureSkew() time.Duration {
 }
 
 func decryptXiaohongshuPhonePayload(sessionKey, encryptedData, iv string) (string, error) {
-	key := []byte(strings.TrimSpace(sessionKey))
-	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
+	encodedKey := strings.TrimSpace(sessionKey)
+	if encodedKey == "" {
 		return "", ErrXiaohongshuPhoneAuthSessionKey
+	}
+	keys := [][]byte{[]byte(encodedKey)}
+	// The platform's code2session response uses a Base64-encoded AES key,
+	// while older fixtures and compatible environments may expose the raw key.
+	// Try the raw representation first for backward compatibility, then the
+	// decoded bytes without logging or persisting either representation.
+	if decoded, err := base64.StdEncoding.DecodeString(encodedKey); err == nil && len(decoded) > 0 {
+		keys = append(keys, decoded)
 	}
 	ivBytes, err := base64.StdEncoding.DecodeString(strings.TrimSpace(iv))
 	if err != nil || len(ivBytes) != aes.BlockSize {
@@ -178,6 +186,24 @@ func decryptXiaohongshuPhonePayload(sessionKey, encryptedData, iv string) (strin
 	ciphertext, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encryptedData))
 	if err != nil || len(ciphertext) == 0 || len(ciphertext)%aes.BlockSize != 0 {
 		return "", ErrXiaohongshuPhoneAuthPayload
+	}
+	var lastErr error
+	for _, key := range keys {
+		plaintext, decryptErr := decryptXiaohongshuPhoneCiphertext(key, ivBytes, ciphertext)
+		if decryptErr == nil {
+			return plaintext, nil
+		}
+		lastErr = decryptErr
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", ErrXiaohongshuPhoneAuthSessionKey
+}
+
+func decryptXiaohongshuPhoneCiphertext(key, ivBytes, ciphertext []byte) (string, error) {
+	if len(key) != 16 && len(key) != 24 && len(key) != 32 {
+		return "", ErrXiaohongshuPhoneAuthSessionKey
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {

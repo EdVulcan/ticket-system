@@ -42,6 +42,20 @@ func TestXiaohongshuPhoneAuthAdapterVerifiesPlatformPayload(t *testing.T) {
 	}
 }
 
+func TestXiaohongshuPhoneAuthAdapterDecodesBase64SessionKey(t *testing.T) {
+	now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
+	rawKey := []byte("xiaohongshu-key!")
+	encryptedData, iv := encryptXiaohongshuPhoneFixture(t, rawKey, validXiaohongshuPhonePayload(now, "test-app"))
+	encodedKey := base64.StdEncoding.EncodeToString(rawKey)
+	adapter := &XiaohongshuPhoneAuthAdapter{
+		DecryptSessionKey: func(string) (string, error) { return encodedKey, nil },
+		Now:               func() time.Time { return now },
+	}
+	if _, err := adapter.Verify(XiaohongshuPhoneAuthRequest{AppID: "test-app", SessionKeyCiphertext: "stored", EncryptedData: encryptedData, IV: iv}); err != nil {
+		t.Fatalf("verify base64 session key: %v", err)
+	}
+}
+
 func TestXiaohongshuPhoneAuthAdapterRejectsAppIDMismatch(t *testing.T) {
 	now := time.Date(2026, 9, 21, 10, 0, 0, 0, time.UTC)
 	key := []byte("xiaohongshu-key!")
