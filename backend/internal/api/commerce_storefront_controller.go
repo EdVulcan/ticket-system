@@ -146,6 +146,20 @@ func (c *CommerceStorefrontController) Login(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, result)
 }
 
+func (c *CommerceStorefrontController) VerifyPhone(ctx *gin.Context) {
+	var input service.CommerceStorefrontPhoneVerificationInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "手机号授权参数不完整"})
+		return
+	}
+	result, err := c.Service.VerifyPhone(ctx.Request.Context(), commerceStorefrontBearerToken(ctx), input)
+	if err != nil {
+		commerceStorefrontPhoneError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, result)
+}
+
 func (c *CommerceStorefrontController) Catalog(ctx *gin.Context) {
 	catalog, err := c.Service.ListCatalog(commerceStorefrontBearerToken(ctx), commerceStorefrontBusinessType(ctx))
 	if err != nil {
@@ -532,6 +546,24 @@ func commerceStorefrontError(ctx *gin.Context, err error) {
 		status, message = http.StatusBadRequest, "支付凭据或金额校验失败"
 	case errors.Is(err, service.ErrCommercePaymentManualReview):
 		status, message = http.StatusConflict, "支付结果正在核实，请稍后刷新订单"
+	}
+	ctx.JSON(status, gin.H{"error": message})
+}
+
+func commerceStorefrontPhoneError(ctx *gin.Context, err error) {
+	status := http.StatusBadGateway
+	message := "手机号授权暂时失败，请稍后重试"
+	switch {
+	case errors.Is(err, service.ErrCommerceStorefrontUnauthenticated):
+		status, message = http.StatusUnauthorized, "登录状态已失效，请重新进入小程序"
+	case errors.Is(err, service.ErrStorefrontPhoneInvalid), errors.Is(err, service.ErrMemberConsentRequired), errors.Is(err, service.ErrWechatPhoneInvalidRequest):
+		status, message = http.StatusBadRequest, "手机号授权参数不正确"
+	case errors.Is(err, service.ErrStorefrontPhoneUnavailable), errors.Is(err, service.ErrCommerceStorefrontUnavailable):
+		status, message = http.StatusServiceUnavailable, "当前会员服务暂时不可用，请重新进入小程序"
+	case errors.Is(err, service.ErrMemberPhoneConflict):
+		status, message = http.StatusConflict, "该手机号已绑定其他会员，请联系管理员处理"
+	case errors.Is(err, service.ErrWechatPhoneAppIDMismatch), errors.Is(err, service.ErrWechatPhoneOpenIDMismatch), errors.Is(err, service.ErrWechatPhoneMissing), errors.Is(err, service.ErrWechatPhoneMalformed), errors.Is(err, service.ErrWechatPhoneEmptyResponse):
+		status, message = http.StatusBadGateway, "微信手机号授权结果无效，请重新授权"
 	}
 	ctx.JSON(status, gin.H{"error": message})
 }

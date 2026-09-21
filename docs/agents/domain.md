@@ -9,6 +9,7 @@ This repository uses one shared context for backend, admin, POS, miniapp and dev
 3. `docs/current-stage-goal-alignment-audit-2026-07-31.md`, respecting its dated status updates rather than treating historical findings as current facts.
 4. `docs/current-development-roadmap-2026-08-01.md` for current delivery scope and remaining work.
 5. `docs/field-integration-readiness-checklist.md` before real payments, devices, vendor channels or production capacity work.
+6. `docs/tenant-member-center-design.md` before customer identity, member, verified-contact, consent, or cross-channel order-attribution work.
 
 The project skill and baseline govern tenant isolation, ownership, payments, refunds, immutable sale-time rights and settlement. Routing and engineering workflow skills cannot relax them. Use their business vocabulary consistently in hypotheses, tests, issues and implementation.
 

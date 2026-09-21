@@ -8,13 +8,20 @@ import "time"
 // business domain published by that channel account; each request resolves
 // its business selector against the account's active bindings.
 //
-// The WeChat subject and bearer token are represented by one-way hashes. The
-// raw values are only held by the login adapter for the duration of a request.
+// The bearer token and lookup subject are represented by one-way hashes. The
+// app-scoped WeChat openid is additionally encrypted so a phone authorization
+// response can be bound to the same platform user instead of merely to a
+// bearer token. Raw provider values are never returned to the storefront.
 type CommerceCustomerSession struct {
 	Base
-	TenantID         uint       `gorm:"not null;index:idx_commerce_customer_sessions_scope" json:"-"`
-	ChannelAccountID uint       `gorm:"not null;index:idx_commerce_customer_sessions_scope;uniqueIndex:idx_commerce_customer_sessions_subject,priority:1" json:"-"`
+	TenantID         uint `gorm:"not null;index:idx_commerce_customer_sessions_scope" json:"-"`
+	ChannelAccountID uint `gorm:"not null;index:idx_commerce_customer_sessions_scope;uniqueIndex:idx_commerce_customer_sessions_subject,priority:1" json:"-"`
+	// MemberID is a server-resolved, optional tenant customer association. It
+	// is never accepted from storefront requests and is not used as an order
+	// access credential.
+	MemberID         *uint      `gorm:"index" json:"-"`
 	SubjectHash      string     `gorm:"size:64;not null;uniqueIndex:idx_commerce_customer_sessions_subject,priority:2;index" json:"-"`
+	OpenIDCiphertext string     `gorm:"type:text;not null;default:''" json:"-"`
 	TokenHash        string     `gorm:"size:64;not null;uniqueIndex" json:"-"`
 	ExpiresAt        time.Time  `gorm:"not null;index" json:"-"`
 	Status           string     `gorm:"size:20;not null;default:'active';index;check:chk_commerce_customer_sessions_status,status IN ('active','revoked','expired')" json:"-"`

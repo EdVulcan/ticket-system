@@ -57,6 +57,14 @@ const (
 	PermissionHotelReservationsWrite   = "hotel_reservations.write"
 	PermissionHotelReservationsExport  = "hotel_reservations.export"
 	PermissionAgentUse                 = "agent.use"
+	// Membership permissions are intentionally kept out of delegated role
+	// defaults until the member service and its audit boundary are enabled.
+	// Tenant administrators still receive them through IsTenantAdministrator.
+	PermissionMembersRead            = "members.read"
+	PermissionMembersSensitiveRead   = "members.sensitive.read"
+	PermissionMembersStatusWrite     = "members.status.write"
+	PermissionMembersExport          = "members.export"
+	PermissionMembersSecurityResolve = "members.security.resolve"
 )
 
 var rolePermissions = map[string][]string{

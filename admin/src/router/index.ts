@@ -165,6 +165,12 @@ const router = createRouter({
             meta: { scope: 'tenant', permission: 'catalog.read', businessCapabilities: ['restaurant', 'retail'], businessCapabilityAllowSuspended: true, title: '商业工作台' }
         },
         {
+            path: '/members',
+            name: 'members',
+            component: () => import('../views/MemberCenterView.vue'),
+            meta: { scope: 'tenant', permission: 'members.read', title: '客户与会员' }
+        },
+        {
             path: '/login',
             name: 'login',
             component: () => import('../views/LoginView.vue'),

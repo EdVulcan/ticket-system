@@ -12,7 +12,11 @@ Page({
     refreshing: false,
     loadingMore: false,
     loadingStatus: '',
-    error: ''
+    error: '',
+    phoneVerified: false,
+    phoneMasked: '',
+    verifyingPhone: false,
+    phoneError: ''
   },
 
   onLoad() {
@@ -23,6 +27,39 @@ Page({
   onPullDownRefresh() { this.loadOrders(true).finally(() => xhs.stopPullDownRefresh()); },
   onReachBottom() {
     if (!this.data.loading && !this.data.loadingMore && this.data.allOrders.length < this.data.total) this.loadOrders(false);
+  },
+
+  onGetPhoneNumber(event) {
+    const detail = event && event.detail ? event.detail : {};
+    const message = String(detail.errMsg || '');
+    if (message && message.indexOf(':ok') < 0) {
+      this.setData({ phoneError: '未完成手机号授权，可稍后再次绑定。' });
+      return;
+    }
+    const encryptedData = detail.encryptedData || detail.encrypted_data || '';
+    const iv = detail.iv || '';
+    if (!encryptedData || !iv) {
+      this.setData({ phoneError: '没有取得有效的授权凭据，请重新点击绑定。' });
+      return;
+    }
+    if (this.data.verifyingPhone) return;
+    this.setData({ verifyingPhone: true, phoneError: '' });
+    const requestId = `member-phone-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    app.request('/member/verify-phone', {
+      method: 'POST',
+      data: {
+        encryptedData,
+        iv,
+        request_id: requestId,
+        membership_consent_granted: true,
+        membership_policy_version: 'member-phone-v1'
+      }
+    }).then(result => {
+      this.setData({ phoneVerified: Boolean(result && result.verified), phoneMasked: result && result.phone_masked ? result.phone_masked : '', verifyingPhone: false, phoneError: '' });
+      xhs.showToast({ title: '手机号已绑定', icon: 'success' });
+    }).catch(error => {
+      this.setData({ verifyingPhone: false, phoneError: error.message || '手机号授权失败，请稍后重试' });
+    });
   },
 
   loadOrders(reset) {

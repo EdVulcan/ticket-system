@@ -280,6 +280,7 @@ const navGroups = computed<NavGroup[]>(() => {
   if (currentHistoryTenant && can('after_sales.read')) data.push({ path: '/after-sales', label: '售后工作台', icon: Warning })
 
   const settings: NavItem[] = []
+  if (can('members.read')) settings.push({ path: '/members', label: '客户与会员', icon: User })
   if (scenicSupplier && can('onsite.manage')) settings.push({ path: '/staff', label: '员工管理', icon: User })
   if (can('tenant_accounts.manage')) settings.push({ path: '/system-user', label: '管理账号', icon: UserFilled })
   if ((scenicSupplier || hasCapability('distributor') || configuredBusinessCapabilities.value.size > 0) && can('payment_config.manage')) settings.push({ path: '/payment-config', label: '支付参数配置', icon: CreditCard })

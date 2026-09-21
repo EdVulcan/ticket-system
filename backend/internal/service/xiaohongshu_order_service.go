@@ -541,6 +541,7 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 		}
 		order = model.Order{
 			TenantID: customer.TenantID, Channel: "xiaohongshu", ChannelAccountID: account.ID,
+			MemberID:   customer.MemberID,
 			ExternalNo: &externalID, ContactName: input.GuestName, ContactPhone: input.ContactPhone,
 			Items: []model.OrderItem{{ProductID: product.ID, Quantity: input.Quantity, UseDate: useDate}},
 		}

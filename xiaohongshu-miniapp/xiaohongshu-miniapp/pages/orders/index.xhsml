@@ -1,5 +1,13 @@
 <view class="page">
   <view class="header"><text class="title">我的订单</text><text class="subtitle">查看支付结果和电子票码</text></view>
+  <view class="member-banner" xhs:if="{{!phoneVerified}}">
+    <view class="member-copy"><text class="member-title">绑定手机号</text><text class="member-detail">用于统一管理本小程序的订单与会员资料，不用于营销。</text></view>
+    <button class="member-button" open-type="getPhoneNumber" bindgetphonenumber="onGetPhoneNumber" disabled="{{verifyingPhone}}">{{verifyingPhone ? '授权中' : '立即绑定'}}</button>
+  </view>
+  <view class="member-banner member-banner-success" xhs:else>
+    <view class="member-copy"><text class="member-title">手机号已绑定</text><text class="member-detail">{{phoneMasked}}</text></view>
+  </view>
+  <view class="member-error" xhs:if="{{phoneError}}">{{phoneError}}</view>
   <view class="tabs">
     <view class="tab {{activeStatus === 'all' ? 'active' : ''}}" data-status="all" bindtap="selectStatus"><text>全部</text><text class="tab-count" xhs:if="{{statusCounts.all}}">{{statusCounts.all}}</text></view>
     <view class="tab {{activeStatus === 'unpaid' ? 'active' : ''}}" data-status="unpaid" bindtap="selectStatus"><text>待支付</text><text class="tab-count warning" xhs:if="{{statusCounts.unpaid}}">{{statusCounts.unpaid}}</text></view>

@@ -184,8 +184,12 @@ type Product struct {
 // Order 订单
 type Order struct {
 	Base
-	OrderNo     string  `gorm:"size:50;uniqueIndex;not null" json:"order_no"`
-	TenantID    uint    `gorm:"uniqueIndex:idx_order_external,priority:1" json:"tenant_id"`
+	OrderNo  string `gorm:"size:50;uniqueIndex;not null" json:"order_no"`
+	TenantID uint   `gorm:"uniqueIndex:idx_order_external,priority:1" json:"tenant_id"`
+	// MemberID is an optional tenant-owned customer association. It is only
+	// populated for authenticated self-owned storefront orders; legacy and
+	// external-channel orders remain NULL.
+	MemberID    *uint   `gorm:"index" json:"member_id,omitempty"`
 	TotalAmount float64 `gorm:"type:decimal(10,2)" json:"total_amount"`
 	// Promotion values are immutable sale snapshots, never request prices.
 	OriginalAmountCents  int64      `gorm:"not null;default:0" json:"original_amount_cents"`

@@ -127,7 +127,10 @@ type CommerceCartItem struct {
 
 type CommerceOrder struct {
 	Base
-	TenantID              uint                           `gorm:"not null;index:idx_commerce_orders_scope" json:"tenant_id"`
+	TenantID uint `gorm:"not null;index:idx_commerce_orders_scope" json:"tenant_id"`
+	// MemberID is an optional tenant-owned customer association. Existing
+	// CustomerID/session identity remains authoritative for order access.
+	MemberID              *uint                          `gorm:"index" json:"member_id,omitempty"`
 	OrderNo               string                         `gorm:"size:50;not null;uniqueIndex" json:"order_no"`
 	IdempotencyKey        string                         `gorm:"size:100;not null;default:''" json:"-"`
 	BusinessType          string                         `gorm:"size:20;not null;index:idx_commerce_orders_scope;check:chk_commerce_orders_business_type,business_type IN ('restaurant','retail')" json:"business_type"`

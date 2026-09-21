@@ -56,6 +56,38 @@ func (c *MiniappController) LoginXiaohongshu(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, result)
 }
 
+func (c *MiniappController) VerifyPhone(ctx *gin.Context) {
+	var input service.MiniappPhoneVerificationInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "手机号授权参数不完整"})
+		return
+	}
+	result, err := c.Service.VerifyPhone(ctx.Request.Context(), bearerToken(ctx.GetHeader("Authorization")), input)
+	if err != nil {
+		xiaohongshuPhoneError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, result)
+}
+
+func xiaohongshuPhoneError(ctx *gin.Context, err error) {
+	status := http.StatusBadGateway
+	message := "手机号授权暂时失败，请稍后重试"
+	switch {
+	case errors.Is(err, service.ErrMiniappUnauthenticated):
+		status, message = http.StatusUnauthorized, "登录状态已失效，请重新进入小程序"
+	case errors.Is(err, service.ErrStorefrontPhoneInvalid), errors.Is(err, service.ErrMemberConsentRequired):
+		status, message = http.StatusBadRequest, "手机号授权参数不正确"
+	case errors.Is(err, service.ErrStorefrontPhoneUnavailable), errors.Is(err, service.ErrMiniappUnavailable):
+		status, message = http.StatusServiceUnavailable, "当前会员服务暂时不可用，请重新进入小程序"
+	case errors.Is(err, service.ErrMemberPhoneConflict):
+		status, message = http.StatusConflict, "该手机号已绑定其他会员，请联系管理员处理"
+	case errors.Is(err, service.ErrXiaohongshuPhoneAuthAppID), errors.Is(err, service.ErrXiaohongshuPhoneAuthExpired), errors.Is(err, service.ErrXiaohongshuPhoneAuthPayload), errors.Is(err, service.ErrXiaohongshuPhoneAuthPhoneMissing), errors.Is(err, service.ErrXiaohongshuPhoneAuthSessionKey):
+		status, message = http.StatusBadGateway, "小红书手机号授权结果无效，请重新授权"
+	}
+	ctx.JSON(status, gin.H{"error": message})
+}
+
 func xiaohongshuLoginError(platformError *xiaohongshu.APIError) string {
 	if platformError == nil || platformError.Code == 0 {
 		return "小红书平台拒绝登录，请检查小程序配置后重试"

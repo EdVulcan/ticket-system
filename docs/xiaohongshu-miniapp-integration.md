@@ -1,5 +1,12 @@
 # 小红书专业号小程序接入说明
 
+### 2026-09-21 真实手机号授权适配（本地完成，待真机验收）
+
+- 订单页提供原生 `button open-type="getPhoneNumber"`，用户主动同意后由 `bindgetphonenumber` 回调取得 `encryptedData` 和 `iv`；页面调用 `POST /api/v1/storefront/xiaohongshu/member/verify-phone`，只提交加密字段、请求幂等号和会员协议版本，不提交手机号或 `session_key`。
+- 服务端从当前登录的小红书会话加载数据库中的加密 `session_key`，使用渠道账号 AppID 解密并校验 `watermark.appId/appid`、时间窗、国家码和手机号字段。解密失败、过期、跨 AppID 或缺少字段均拒绝；解密证据只能用于当前 bearer 会话。
+- 会员手机号、会员授权和非敏感幂等事件在同一事务写入，营销授权不从会员授权推断。成功响应只返回掩码手机号和会员状态。
+- 真实平台凭据、真机授权弹窗、会员冲突提示和后台列表仍需在小红书开发者工具/真机验收；本地模板测试不能替代平台验收。
+
 ### 2026-09-12 酒景预售券预约自研接入
 
 - 官方预约接口 [发起预约（DC842183）](https://miniapp.xiaohongshu.com/doc/DC842183) 与 [预约单状态同步（DC394388）](https://miniapp.xiaohongshu.com/doc/DC394388) 均使用商家自研小程序的 `/mp` 路径：`POST /api/rmp/mp/deal/pre_sale/book` 和 `POST /api/rmp/mp/deal/pre_sale/sync_status`。请求通过当前销售租户渠道账号的 `app_id/access_token` 鉴权，不要求服务商组件授权；“支持第三方调用”不改变本正式小程序的自研接入方式。

@@ -90,6 +90,13 @@ type CommerceStorefrontLoginResult struct {
 	LocationID   uint   `json:"location_id,omitempty"`
 }
 
+type CommerceStorefrontPhoneVerificationInput struct {
+	Code                     string `json:"code"`
+	RequestID                string `json:"request_id"`
+	MembershipConsentGranted bool   `json:"membership_consent_granted"`
+	MembershipPolicyVersion  string `json:"membership_policy_version"`
+}
+
 type CommerceStorefrontCatalog struct {
 	TenantID         uint                              `json:"tenant_id"`
 	ChannelAccountID uint                              `json:"channel_account_id"`
@@ -179,12 +186,17 @@ type CommerceStorefrontOrderPage struct {
 // and customer identity. A business selector on a transaction request is
 // always resolved back to an active server-side binding and location.
 type CommerceStorefrontService struct {
-	DB            *gorm.DB
-	Catalog       CommerceCatalogService
-	Operations    CommerceOperationsService
-	Orders        CommerceOrderService
+	DB         *gorm.DB
+	Catalog    CommerceCatalogService
+	Operations CommerceOperationsService
+	Orders     CommerceOrderService
+	// Member resolves authenticated self-hosted identities. It is optional so
+	// legacy deployments can keep storefront transactions available while the
+	// additive member schema is being rolled out.
+	Member        *MemberService
 	ContactImages *CommerceStorefrontContactImageStore
 	LoginAdapter  WechatMiniappLoginAdapter
+	PhoneAuth     WechatPhoneAuthAdapter
 	// WechatLoginAdapter is an alias field for dependency injection in callers
 	// that use the shorter name. LoginAdapter takes precedence when both exist.
 	WechatLoginAdapter WechatMiniappLoginAdapter
@@ -198,6 +210,7 @@ type commerceStorefrontContext struct {
 	Binding    model.CommerceStorefrontBinding
 	Location   model.CommerceFulfillmentLocation
 	CustomerID string
+	MemberID   *uint
 }
 
 type commerceStorefrontBusiness struct {
@@ -293,6 +306,13 @@ func (s *CommerceStorefrontService) loginAdapter() WechatMiniappLoginAdapter {
 		return s.WechatLoginAdapter
 	}
 	return unavailableWechatMiniappLoginAdapter{}
+}
+
+func (s *CommerceStorefrontService) phoneAuthAdapter() WechatPhoneAuthAdapter {
+	if s != nil && s.PhoneAuth != nil {
+		return s.PhoneAuth
+	}
+	return &WechatPhoneAuthClient{}
 }
 
 func (s *CommerceStorefrontService) loadActiveWechatAccount(appID string) (*model.ChannelAccount, error) {
@@ -430,6 +450,13 @@ func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceSto
 	if subject == "" {
 		return nil, fmt.Errorf("%w: provider identity is missing", ErrCommerceStorefrontUnavailable)
 	}
+	openIDCiphertext := ""
+	if openID := strings.TrimSpace(identity.OpenID); openID != "" {
+		openIDCiphertext, err = utils.EncryptAES(openID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: provider identity encryption failed", ErrCommerceStorefrontUnavailable)
+		}
+	}
 	subjectHash := storefrontHash(subject)
 	token, err := randomStorefrontToken()
 	if err != nil {
@@ -438,6 +465,14 @@ func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceSto
 	tokenHash := storefrontHash(token)
 	now := s.now()
 	expiresAt := now.Add(s.sessionTTL())
+	var memberID *uint
+	if s.Member != nil {
+		if member, memberErr := s.Member.ResolveSelfHostedIdentity(SelfHostedIdentityInput{
+			TenantID: account.TenantID, ChannelAccountID: account.ID, Provider: "wechat_miniapp", Subject: subject,
+		}); memberErr == nil && member != nil {
+			memberID = &member.ID
+		}
+	}
 
 	var businesses []commerceStorefrontBusiness
 	err = s.db().Transaction(func(tx *gorm.DB) error {
@@ -456,8 +491,8 @@ func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceSto
 			return err
 		}
 		session := model.CommerceCustomerSession{
-			TenantID: current.TenantID, ChannelAccountID: current.ID, SubjectHash: subjectHash,
-			TokenHash: tokenHash, ExpiresAt: expiresAt, Status: "active", LastSeenAt: &now,
+			TenantID: current.TenantID, ChannelAccountID: current.ID, MemberID: memberID, SubjectHash: subjectHash,
+			OpenIDCiphertext: openIDCiphertext, TokenHash: tokenHash, ExpiresAt: expiresAt, Status: "active", LastSeenAt: &now,
 		}
 		return tx.Create(&session).Error
 	})
@@ -479,6 +514,51 @@ func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceSto
 // provider terminology directly.
 func (s *CommerceStorefrontService) LoginWithCode(ctx context.Context, appID, code string) (*CommerceStorefrontLoginResult, error) {
 	return s.Login(ctx, CommerceStorefrontLoginInput{AppID: appID, Code: code})
+}
+
+// VerifyPhone exchanges the one-time getPhoneNumber credential against
+// WeChat, then binds the platform-verified phone to the currently
+// authenticated tenant member. Tenant, channel account, and member identity
+// are all derived from the bearer session.
+func (s *CommerceStorefrontService) VerifyPhone(ctx context.Context, token string, input CommerceStorefrontPhoneVerificationInput) (StorefrontPhoneVerificationResult, error) {
+	input.Code = strings.TrimSpace(input.Code)
+	if input.Code == "" {
+		return StorefrontPhoneVerificationResult{}, ErrStorefrontPhoneInvalid
+	}
+	storefront, err := s.authenticate(token)
+	if err != nil {
+		return StorefrontPhoneVerificationResult{}, err
+	}
+	if storefront.MemberID == nil || *storefront.MemberID == 0 {
+		return StorefrontPhoneVerificationResult{}, ErrStorefrontPhoneUnavailable
+	}
+	if strings.TrimSpace(storefront.Session.OpenIDCiphertext) == "" {
+		// Sessions created before openid binding was introduced cannot prove that
+		// the one-time phone code belongs to this bearer identity. Re-login is
+		// required instead of silently accepting an unbound authorization code.
+		return StorefrontPhoneVerificationResult{}, ErrCommerceStorefrontUnauthenticated
+	}
+	openID, err := utils.DecryptAES(storefront.Session.OpenIDCiphertext)
+	if err != nil || strings.TrimSpace(openID) == "" {
+		return StorefrontPhoneVerificationResult{}, ErrCommerceStorefrontUnauthenticated
+	}
+	secret, err := utils.DecryptAES(storefront.Account.SecretCiphertext)
+	if err != nil || strings.TrimSpace(secret) == "" {
+		return StorefrontPhoneVerificationResult{}, ErrStorefrontPhoneUnavailable
+	}
+	evidence, err := s.phoneAuthAdapter().ExchangePhoneCode(ctx, WechatPhoneAuthRequest{
+		AppID: storefront.Account.AppID, AppSecret: secret, Code: input.Code, OpenID: openID,
+	})
+	if err != nil {
+		return StorefrontPhoneVerificationResult{}, err
+	}
+	phone := evidence.PurePhoneNumber
+	if strings.TrimSpace(phone) == "" {
+		phone = evidence.PhoneNumber
+	}
+	return verifyStorefrontMemberPhone(ctx, s.Member, storefront.Session.TenantID, storefront.Session.ChannelAccountID, *storefront.MemberID, phone, "wechat_phone_authorization", StorefrontPhoneVerificationInput{
+		RequestID: input.RequestID, MembershipConsentGranted: input.MembershipConsentGranted, MembershipPolicyVersion: input.MembershipPolicyVersion,
+	})
 }
 
 func (s *CommerceStorefrontService) authenticate(token string) (*commerceStorefrontContext, error) {
@@ -510,9 +590,25 @@ func (s *CommerceStorefrontService) authenticate(token string) (*commerceStorefr
 		return nil, err
 	}
 	session.LastSeenAt = &now
+	memberID := session.MemberID
+	if memberID != nil && s.Member != nil {
+		// A prior cross-channel merge keeps the session's historical alias for
+		// auditability. Resolve it at the authorization boundary so new orders
+		// use the canonical member without rewriting the session or old orders.
+		if canonical, resolveErr := s.Member.ResolveCanonical(session.TenantID, *memberID); resolveErr == nil && canonical != nil {
+			canonicalID := canonical.ID
+			memberID = &canonicalID
+		} else {
+			// Membership is an additive association. If the optional graph is
+			// temporarily unavailable, preserve the existing storefront flow and
+			// leave this order unassociated rather than guessing ownership.
+			memberID = nil
+		}
+	}
 	return &commerceStorefrontContext{
 		Session: session, Account: account,
 		CustomerID: storefrontCustomerID(session.ChannelAccountID, session.SubjectHash),
+		MemberID:   memberID,
 	}, nil
 }
 
@@ -1427,6 +1523,7 @@ func (s *CommerceStorefrontService) checkoutOwnedCart(context *commerceStorefron
 		}
 		order, err := orders.CreateOrder(context.Session.TenantID, CreateCommerceOrderInput{
 			IdempotencyKey: input.IdempotencyKey, Channel: "wechat_miniapp", CustomerID: context.CustomerID,
+			MemberID:     context.MemberID,
 			BusinessType: context.Binding.BusinessType, LocationID: context.Binding.LocationID,
 			ContactName: input.ContactName, ContactPhone: input.ContactPhone,
 			ShippingAddressJSON: input.ShippingAddress, FulfillmentMethod: input.FulfillmentMethod, Items: items,

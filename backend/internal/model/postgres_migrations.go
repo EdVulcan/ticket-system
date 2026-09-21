@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 141
+const CurrentPostgresSchemaVersion = 143
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -82,6 +82,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&CommerceShipment{}, &CommerceShipmentEvent{},
 		&CommerceCouponTemplate{}, &CommerceCouponGrant{},
 		&CommerceAssistCampaign{}, &CommerceAssistSession{}, &CommerceAssistRecord{},
+		&TenantMember{}, &TenantMemberIdentity{}, &TenantMemberVerifiedContact{}, &TenantMemberConsent{}, &TenantMemberEvent{},
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
@@ -781,9 +782,15 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateCommerceStorefrontContact(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateTenantMemberCenter(db, previousSchemaVersion); err != nil {
+		return err
+	}
+	if err := migrateCommerceStorefrontPhoneBinding(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "commerce storefront contact configuration",
+		Name:      "storefront phone authorization binding",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -831,6 +838,110 @@ func migrateCommerceStorefrontContact(db *gorm.DB, previous int) error {
 			CHECK (storefront_contact_status IN ('active','disabled'));
 	`).Error; err != nil {
 		return fmt.Errorf("register commerce storefront contact configuration: %w", err)
+	}
+	return nil
+}
+
+// migrateTenantMemberCenter adds the tenant-scoped customer/identity layer
+// without changing existing channel customers or historical orders. Member
+// ownership is enforced with composite tenant/member foreign keys so a member
+// reference can never point into another tenant.
+func migrateTenantMemberCenter(db *gorm.DB, previous int) error {
+	if previous >= 142 {
+		return nil
+	}
+	if err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_members_tenant_id
+			ON tenant_members(tenant_id, id);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_tenant_id
+			ON orders(tenant_id, id);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_orders_tenant_id_member
+			ON commerce_orders(tenant_id, id);
+
+		ALTER TABLE tenant_members DROP CONSTRAINT IF EXISTS chk_tenant_members_merged_target;
+		ALTER TABLE tenant_members ADD CONSTRAINT chk_tenant_members_merged_target CHECK (
+			(status = 'merged' AND merged_into_member_id IS NOT NULL)
+			OR (status <> 'merged' AND merged_into_member_id IS NULL)
+		);
+		ALTER TABLE tenant_members DROP CONSTRAINT IF EXISTS chk_tenant_members_not_self_merged;
+		ALTER TABLE tenant_members ADD CONSTRAINT chk_tenant_members_not_self_merged CHECK (
+			merged_into_member_id IS NULL OR merged_into_member_id <> id
+		);
+
+		ALTER TABLE tenant_member_identities DROP CONSTRAINT IF EXISTS chk_tenant_member_identities_link_method;
+		ALTER TABLE tenant_member_identities ADD CONSTRAINT chk_tenant_member_identities_link_method CHECK (
+			link_method IN ('first_login','verified_contact','controlled_recovery')
+		);
+		ALTER TABLE tenant_member_verified_contacts DROP CONSTRAINT IF EXISTS chk_tenant_member_verified_contacts_type;
+		ALTER TABLE tenant_member_verified_contacts ADD CONSTRAINT chk_tenant_member_verified_contacts_type CHECK (
+			contact_type = 'phone'
+		);
+
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_member_verified_contacts_active_value
+			ON tenant_member_verified_contacts(tenant_id, contact_type, value_blind_index)
+			WHERE status = 'active' AND deleted_at IS NULL;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_member_consents_idempotency
+			ON tenant_member_consents(tenant_id, idempotency_key)
+			WHERE idempotency_key <> '' AND deleted_at IS NULL;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_tenant_member_events_idempotency
+			ON tenant_member_events(tenant_id, idempotency_key)
+			WHERE idempotency_key <> '' AND deleted_at IS NULL;
+
+		ALTER TABLE tenant_member_identities
+			DROP CONSTRAINT IF EXISTS fk_tenant_member_identity_owner;
+		ALTER TABLE tenant_member_identities
+			ADD CONSTRAINT fk_tenant_member_identity_owner
+			FOREIGN KEY (tenant_id, member_id) REFERENCES tenant_members(tenant_id, id);
+		ALTER TABLE tenant_member_verified_contacts
+			DROP CONSTRAINT IF EXISTS fk_tenant_member_contact_owner;
+		ALTER TABLE tenant_member_verified_contacts
+			ADD CONSTRAINT fk_tenant_member_contact_owner
+			FOREIGN KEY (tenant_id, member_id) REFERENCES tenant_members(tenant_id, id);
+		ALTER TABLE tenant_member_consents
+			DROP CONSTRAINT IF EXISTS fk_tenant_member_consent_owner;
+		ALTER TABLE tenant_member_consents
+			ADD CONSTRAINT fk_tenant_member_consent_owner
+			FOREIGN KEY (tenant_id, member_id) REFERENCES tenant_members(tenant_id, id);
+		ALTER TABLE tenant_member_events
+			DROP CONSTRAINT IF EXISTS fk_tenant_member_event_owner;
+		ALTER TABLE tenant_member_events
+			ADD CONSTRAINT fk_tenant_member_event_owner
+			FOREIGN KEY (tenant_id, member_id) REFERENCES tenant_members(tenant_id, id);
+		ALTER TABLE tenant_members
+			DROP CONSTRAINT IF EXISTS fk_tenant_member_merged_owner;
+		ALTER TABLE tenant_members
+			ADD CONSTRAINT fk_tenant_member_merged_owner
+			FOREIGN KEY (tenant_id, merged_into_member_id) REFERENCES tenant_members(tenant_id, id);
+
+		ALTER TABLE orders
+			DROP CONSTRAINT IF EXISTS fk_orders_member_owner;
+		ALTER TABLE orders
+			ADD CONSTRAINT fk_orders_member_owner
+			FOREIGN KEY (tenant_id, member_id) REFERENCES tenant_members(tenant_id, id);
+		ALTER TABLE commerce_orders
+			DROP CONSTRAINT IF EXISTS fk_commerce_orders_member_owner;
+		ALTER TABLE commerce_orders
+			ADD CONSTRAINT fk_commerce_orders_member_owner
+			FOREIGN KEY (tenant_id, member_id) REFERENCES tenant_members(tenant_id, id);
+	`).Error; err != nil {
+		return fmt.Errorf("add tenant member center constraints and indexes: %w", err)
+	}
+	return nil
+}
+
+// migrateCommerceStorefrontPhoneBinding makes existing WeChat storefront
+// sessions prove the platform user before accepting a phone authorization
+// code. Existing sessions are intentionally left blank and will require a
+// fresh login; no provider identity is reconstructed from a one-way hash.
+func migrateCommerceStorefrontPhoneBinding(db *gorm.DB, previous int) error {
+	if previous >= 143 {
+		return nil
+	}
+	if err := db.Exec(`
+		ALTER TABLE commerce_customer_sessions
+			ADD COLUMN IF NOT EXISTS open_id_ciphertext TEXT NOT NULL DEFAULT '';
+	`).Error; err != nil {
+		return fmt.Errorf("add storefront phone authorization binding: %w", err)
 	}
 	return nil
 }

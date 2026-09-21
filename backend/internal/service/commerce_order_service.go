@@ -72,8 +72,11 @@ type CreateCommerceOrderInput struct {
 	// Channel is an integration/source fact. It is intentionally excluded from
 	// client JSON so a tenant request cannot impersonate another sales channel;
 	// trusted adapters may still set it when calling the service directly.
-	Channel             string                   `json:"-"`
-	CustomerID          string                   `json:"customer_id"`
+	Channel    string `json:"-"`
+	CustomerID string `json:"customer_id"`
+	// MemberID is resolved by a trusted self-hosted storefront adapter. It is
+	// never accepted as client-controlled order access or tenant authority.
+	MemberID            *uint                    `json:"-"`
 	LocationID          uint                     `json:"location_id"`
 	ContactName         string                   `json:"contact_name"`
 	ContactPhone        string                   `json:"contact_phone"`
@@ -307,7 +310,7 @@ func snapshotOrderOptionsTx(tx *gorm.DB, tenantID, productID uint, item Commerce
 }
 
 func existingOrderMatchesInput(order *model.CommerceOrder, items []model.CommerceOrderItem, input CreateCommerceOrderInput) bool {
-	if order.BusinessType != input.BusinessType || order.Channel != input.Channel || order.CustomerID != input.CustomerID || order.LocationID != input.LocationID || order.ContactName != input.ContactName || order.ContactPhone != input.ContactPhone || order.ShippingAddressJSON != input.ShippingAddressJSON || order.PaymentReference != input.PaymentReference {
+	if order.BusinessType != input.BusinessType || order.Channel != input.Channel || order.CustomerID != input.CustomerID || !sameOptionalUint(order.MemberID, input.MemberID) || order.LocationID != input.LocationID || order.ContactName != input.ContactName || order.ContactPhone != input.ContactPhone || order.ShippingAddressJSON != input.ShippingAddressJSON || order.PaymentReference != input.PaymentReference {
 		return false
 	}
 	if (input.ExpiresAt == nil) != (order.ExpiresAt == nil) || input.ExpiresAt != nil && !input.ExpiresAt.Equal(*order.ExpiresAt) {
@@ -341,6 +344,13 @@ func existingOrderMatchesInput(order *model.CommerceOrder, items []model.Commerc
 	return true
 }
 
+func sameOptionalUint(left, right *uint) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
 func (s *CommerceOrderService) CreateOrder(tenantID uint, input CreateCommerceOrderInput) (*model.CommerceOrder, error) {
 	input, err := normalizeCommerceOrderInput(input)
 	if err != nil {
@@ -360,6 +370,12 @@ func (s *CommerceOrderService) CreateOrder(tenantID uint, input CreateCommerceOr
 		}
 		if err := RequireActiveTenantBusinessCapability(tx, tenantID, input.BusinessType); err != nil {
 			return err
+		}
+		if input.MemberID != nil {
+			var member model.TenantMember
+			if err := tx.Where("tenant_id = ? AND id = ? AND status IN ? AND membership_status IN ?", tenantID, *input.MemberID, []string{model.TenantMemberStatusActive, model.TenantMemberStatusFrozen}, []string{model.TenantMembershipStatusProvisional, model.TenantMembershipStatusActive}).First(&member).Error; err != nil {
+				return fmt.Errorf("%w: member association is invalid", ErrCommerceOrderInvalid)
+			}
 		}
 		now := s.now()
 		var existing model.CommerceOrder
@@ -395,7 +411,7 @@ func (s *CommerceOrderService) CreateOrder(tenantID uint, input CreateCommerceOr
 			return err
 		}
 		order := model.CommerceOrder{
-			TenantID: tenantID, OrderNo: newCommerceOrderNo(now), IdempotencyKey: input.IdempotencyKey, BusinessType: input.BusinessType,
+			TenantID: tenantID, MemberID: input.MemberID, OrderNo: newCommerceOrderNo(now), IdempotencyKey: input.IdempotencyKey, BusinessType: input.BusinessType,
 			Channel: input.Channel, CustomerID: input.CustomerID, LocationID: input.LocationID,
 			PaymentStatus: "unpaid", FulfillmentStatus: func() string {
 				if input.BusinessType == "restaurant" {

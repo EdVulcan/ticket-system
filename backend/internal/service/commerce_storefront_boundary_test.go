@@ -438,6 +438,35 @@ func TestCommerceStorefrontSandboxAccountCanLoginAndAuthenticate(t *testing.T) {
 	}
 }
 
+func TestCommerceStorefrontAuthenticateResolvesMergedMemberAlias(t *testing.T) {
+	fixture := newCommerceStorefrontServiceFixture(t)
+	memberService := newMemberServiceForTest(t)
+	fixture.service.Member = memberService
+	login := storefrontLogin(t, fixture.service, fixture.account.AppID, "merged-session-subject")
+	var session model.CommerceCustomerSession
+	if err := model.DB.Where("token_hash = ?", storefrontHash(login.Token)).First(&session).Error; err != nil {
+		t.Fatal(err)
+	}
+	if session.MemberID == nil {
+		t.Fatal("storefront login did not create a member association")
+	}
+	aliasID := *session.MemberID
+	canonical, err := memberService.ResolveSelfHostedIdentity(SelfHostedIdentityInput{TenantID: fixture.tenantID, ChannelAccountID: fixture.account.ID + 1, Provider: "app", Subject: "canonical-session-subject"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := model.DB.Model(&model.TenantMember{}).Where("tenant_id = ? AND id = ?", fixture.tenantID, aliasID).Updates(map[string]interface{}{"status": MemberStatusMerged, "merged_into_member_id": canonical.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	authenticated, err := fixture.service.authenticate(login.Token)
+	if err != nil {
+		t.Fatalf("authenticate merged session: %v", err)
+	}
+	if authenticated.MemberID == nil || *authenticated.MemberID != canonical.ID {
+		t.Fatalf("member id=%v, want canonical %d", authenticated.MemberID, canonical.ID)
+	}
+}
+
 func TestCommerceStorefrontSessionFailsClosedAcrossTenantsAndLifecycle(t *testing.T) {
 	fixture := newCommerceStorefrontServiceFixture(t)
 	foreignTenantID := createCommerceBoundaryTenant(t, "restaurant")

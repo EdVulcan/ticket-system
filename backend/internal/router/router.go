@@ -41,10 +41,17 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	apiGroup.POST("/auth/staff/login", loginLimit, authController.StaffLogin)
 	apiGroup.POST("/auth/platform/login", loginLimit, authController.PlatformLogin)
 
-	miniappController := &api.MiniappController{Service: service.NewMiniappService()}
-	miniappPromotionController := &api.MiniappPromotionController{Miniapp: service.NewMiniappService(), Promotion: service.MiniappPromotionService{}}
+	var memberService *service.MemberService
+	if model.DB != nil && len(strings.TrimSpace(config.GlobalConfig.Security.EncryptionKey)) >= 16 {
+		memberService, _ = service.NewMemberService(model.DB, []byte(config.GlobalConfig.Security.EncryptionKey))
+	}
+	miniappService := service.NewMiniappService()
+	miniappService.Member = memberService
+	miniappController := &api.MiniappController{Service: miniappService}
+	miniappPromotionController := &api.MiniappPromotionController{Miniapp: miniappService, Promotion: service.MiniappPromotionService{}}
 	miniappGroup := apiGroup.Group("/storefront/xiaohongshu")
 	miniappGroup.POST("/session", middleware.MiniappLoginRateLimit(), miniappController.LoginXiaohongshu)
+	miniappGroup.POST("/member/verify-phone", middleware.MiniappLoginRateLimit(), miniappController.VerifyPhone)
 	miniappGroup.GET("/catalog", miniappController.ListCatalog)
 	miniappGroup.POST("/orders", miniappController.CreateOrder)
 	miniappGroup.GET("/orders", miniappController.ListOrders)
@@ -62,6 +69,10 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	// the account's current published binding and fulfillment location.
 	commerceStorefrontService := &service.CommerceStorefrontService{
 		LoginAdapter: &service.WechatMiniappHTTPLoginAdapter{},
+		PhoneAuth: &service.WechatPhoneAuthClient{
+			AccessTokenCache: &service.WechatMemoryAccessTokenCache{},
+		},
+		Member: memberService,
 		ContactImages: &service.CommerceStorefrontContactImageStore{
 			Directory:     config.GlobalConfig.Server.UploadDirectory,
 			PublicBaseURL: config.GlobalConfig.Server.PublicBaseURL,
@@ -74,6 +85,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	commerceLogisticsController := &api.CommerceLogisticsController{Service: service.CommerceLogisticsService{}, Storefront: commerceStorefrontService}
 	commerceStorefrontGroup := apiGroup.Group("/storefront/wechat")
 	commerceStorefrontGroup.POST("/session", middleware.MiniappLoginRateLimit(), commerceStorefrontController.Login)
+	commerceStorefrontGroup.POST("/member/verify-phone", middleware.MiniappLoginRateLimit(), commerceStorefrontController.VerifyPhone)
 	commerceStorefrontGroup.GET("/catalog", commerceStorefrontController.Catalog)
 	commerceStorefrontGroup.GET("/contact", commerceStorefrontController.Contact)
 	commerceStorefrontGroup.GET("/cart", commerceStorefrontController.GetCart)
@@ -180,6 +192,22 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		userGroup.DELETE("/:id", userController.Delete)
 		userGroup.PUT("/:id/password", userController.ResetPassword)
 		userGroup.PUT("/:id/role", userController.UpdateRole)
+	}
+
+	// Tenant member management is a self-owned customer boundary shared by
+	// authenticated first-party channels. It is deliberately independent of a
+	// scenic/restaurant/retail capability: an existing member remains visible
+	// even when one vertical is suspended. Do not register an endpoint when the
+	// process has no configured encryption key; a half-configured service must
+	// fail closed during bootstrap instead of exposing a route that can never
+	// safely read member contacts.
+	if memberService != nil {
+		memberController := &api.MemberController{Service: api.NewMemberServiceAdapter(memberService)}
+		memberGroup := protected.Group("/members")
+		memberGroup.GET("", middleware.RequireTenantPermission(authz.PermissionMembersRead), memberController.List)
+		memberGroup.GET("/:id", middleware.RequireTenantPermission(authz.PermissionMembersRead), memberController.Get)
+		memberGroup.POST("/:id/freeze", middleware.RequireTenantPermission(authz.PermissionMembersStatusWrite), memberController.Freeze)
+		memberGroup.POST("/:id/unfreeze", middleware.RequireTenantPermission(authz.PermissionMembersStatusWrite), memberController.Unfreeze)
 	}
 
 	// Staff Routes (Employee Management)

@@ -7,8 +7,12 @@ import "time"
 // only hashes are used for lookup and bearer-session authentication.
 type MiniappCustomer struct {
 	Base
-	TenantID             uint       `gorm:"index;not null" json:"-"`
-	ChannelAccountID     uint       `gorm:"uniqueIndex:idx_miniapp_customer_openid,priority:1;index;not null" json:"-"`
+	TenantID         uint `gorm:"index;not null" json:"-"`
+	ChannelAccountID uint `gorm:"uniqueIndex:idx_miniapp_customer_openid,priority:1;index;not null" json:"-"`
+	// MemberID is populated only after the authenticated self-hosted identity
+	// has been resolved by the tenant member service. Existing channel
+	// customer/session fields remain the order-access authority.
+	MemberID             *uint      `gorm:"index" json:"-"`
 	OpenIDHash           string     `gorm:"size:64;uniqueIndex:idx_miniapp_customer_openid,priority:2;not null" json:"-"`
 	OpenIDCiphertext     string     `gorm:"type:text;not null" json:"-"`
 	SessionKeyCiphertext string     `gorm:"type:text;not null" json:"-"`

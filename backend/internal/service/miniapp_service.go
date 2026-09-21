@@ -28,12 +28,25 @@ var (
 type MiniappService struct {
 	NewXiaohongshuClient    func(appID, secret, environment string) *xiaohongshu.Client
 	NewUpstreamRefundClient UpstreamRefundClientFactory
+	Member                  *MemberService
+	PhoneAuth               *XiaohongshuPhoneAuthAdapter
 	Now                     func() time.Time
 }
 
 type MiniappLoginResult struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type MiniappPhoneVerificationInput struct {
+	EncryptedData string `json:"encrypted_data"`
+	// EncryptedDataCompat accepts the platform's camelCase field while the
+	// server still derives identity from the authenticated session.
+	EncryptedDataCompat      string `json:"encryptedData"`
+	IV                       string `json:"iv"`
+	RequestID                string `json:"request_id"`
+	MembershipConsentGranted bool   `json:"membership_consent_granted"`
+	MembershipPolicyVersion  string `json:"membership_policy_version"`
 }
 
 type MiniappCatalogProduct struct {
@@ -187,6 +200,7 @@ type MiniappOrderPage struct {
 func NewMiniappService() MiniappService {
 	return MiniappService{
 		NewXiaohongshuClient: xiaohongshu.NewClient,
+		PhoneAuth:            NewXiaohongshuPhoneAuthAdapter(),
 	}
 }
 
@@ -224,6 +238,14 @@ func (s MiniappService) LoginXiaohongshu(ctx context.Context, appID, code string
 	expiresAt := now.Add(7 * 24 * time.Hour)
 	openIDHash := hashMiniappValue(platformSession.OpenID)
 	tokenHash := hashMiniappValue(token)
+	var memberID *uint
+	if s.Member != nil {
+		if member, memberErr := s.Member.ResolveSelfHostedIdentity(SelfHostedIdentityInput{
+			TenantID: account.TenantID, ChannelAccountID: account.ID, Provider: "xiaohongshu_miniapp", Subject: platformSession.OpenID,
+		}); memberErr == nil && member != nil {
+			memberID = &member.ID
+		}
+	}
 
 	err = model.Write(func(tx *gorm.DB) error {
 		var current model.ChannelAccount
@@ -242,7 +264,7 @@ func (s MiniappService) LoginXiaohongshu(ctx context.Context, appID, code string
 		err := tx.Where("channel_account_id = ? AND open_id_hash = ?", account.ID, openIDHash).First(&customer).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			customer = model.MiniappCustomer{
-				TenantID: account.TenantID, ChannelAccountID: account.ID, OpenIDHash: openIDHash,
+				TenantID: account.TenantID, ChannelAccountID: account.ID, MemberID: memberID, OpenIDHash: openIDHash,
 				OpenIDCiphertext: openIDCiphertext, SessionKeyCiphertext: sessionKeyCiphertext,
 				SessionTokenHash: tokenHash, SessionExpiresAt: expiresAt, Status: "active", LastLoginAt: now,
 			}
@@ -251,10 +273,14 @@ func (s MiniappService) LoginXiaohongshu(ctx context.Context, appID, code string
 		if err != nil {
 			return err
 		}
-		return tx.Model(&customer).Updates(map[string]interface{}{
+		updates := map[string]interface{}{
 			"open_id_ciphertext": openIDCiphertext, "session_key_ciphertext": sessionKeyCiphertext,
 			"session_token_hash": tokenHash, "session_expires_at": expiresAt, "status": "active", "last_login_at": now,
-		}).Error
+		}
+		if memberID != nil {
+			updates["member_id"] = *memberID
+		}
+		return tx.Model(&customer).Updates(updates).Error
 	})
 	if err != nil {
 		return nil, err
@@ -282,7 +308,60 @@ func (s MiniappService) Authenticate(token string) (*model.MiniappCustomer, erro
 	if err := requireAnyActiveTenantCapability(model.DB, customer.TenantID, "supplier", "distributor"); err != nil {
 		return nil, ErrMiniappUnavailable
 	}
+	if customer.MemberID != nil && s.Member != nil {
+		// Keep the stored alias for historical attribution, but use the
+		// canonical member for all new requests after a cross-channel merge.
+		if canonical, resolveErr := s.Member.ResolveCanonical(customer.TenantID, *customer.MemberID); resolveErr == nil && canonical != nil {
+			canonicalID := canonical.ID
+			customer.MemberID = &canonicalID
+		} else {
+			customer.MemberID = nil
+		}
+	}
 	return &customer, nil
+}
+
+// VerifyPhone decrypts the user-triggered Xiaohongshu phone assertion using
+// the session key stored for the authenticated customer, then binds the
+// verified phone to the tenant member resolved by the server.
+func (s MiniappService) VerifyPhone(ctx context.Context, token string, input MiniappPhoneVerificationInput) (StorefrontPhoneVerificationResult, error) {
+	if strings.TrimSpace(input.EncryptedData) == "" {
+		input.EncryptedData = input.EncryptedDataCompat
+	}
+	input.EncryptedData = strings.TrimSpace(input.EncryptedData)
+	input.IV = strings.TrimSpace(input.IV)
+	if input.EncryptedData == "" || input.IV == "" {
+		return StorefrontPhoneVerificationResult{}, ErrStorefrontPhoneInvalid
+	}
+	customer, err := s.Authenticate(token)
+	if err != nil {
+		return StorefrontPhoneVerificationResult{}, err
+	}
+	if customer == nil || customer.ID == 0 || customer.MemberID == nil || *customer.MemberID == 0 {
+		return StorefrontPhoneVerificationResult{}, ErrStorefrontPhoneUnavailable
+	}
+	var account model.ChannelAccount
+	if err := model.DB.Select("id", "app_id").Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", customer.ChannelAccountID, customer.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {
+		return StorefrontPhoneVerificationResult{}, ErrMiniappUnavailable
+	}
+	adapter := s.PhoneAuth
+	if adapter == nil {
+		adapter = NewXiaohongshuPhoneAuthAdapter()
+	}
+	evidence, err := adapter.Verify(XiaohongshuPhoneAuthRequest{
+		AppID: account.AppID, SessionKeyCiphertext: customer.SessionKeyCiphertext,
+		EncryptedData: input.EncryptedData, IV: input.IV,
+	})
+	if err != nil {
+		return StorefrontPhoneVerificationResult{}, err
+	}
+	phone := evidence.PurePhoneNumber
+	if strings.TrimSpace(phone) == "" {
+		phone = evidence.PhoneNumber
+	}
+	return verifyStorefrontMemberPhone(ctx, s.Member, customer.TenantID, customer.ChannelAccountID, *customer.MemberID, phone, "xiaohongshu_phone_authorization", StorefrontPhoneVerificationInput{
+		RequestID: input.RequestID, MembershipConsentGranted: input.MembershipConsentGranted, MembershipPolicyVersion: input.MembershipPolicyVersion,
+	})
 }
 
 func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCatalog, error) {
