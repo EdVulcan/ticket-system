@@ -390,6 +390,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	// orders require an active capability; all state-changing actions use the
 	// scoped order service and never enter ticket fulfillment.
 	commerceOrderController := &api.CommerceOrderController{Service: service.CommerceOrderService{}, Payment: commercePaymentService}
+	commerceStatsController := &api.CommerceStatsController{Service: service.CommerceStatsService{}}
 	commerceOrderReadGroup := protected.Group("/commerce/orders")
 	commerceOrderReadGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionOrdersRead))
 	{
@@ -397,6 +398,9 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		commerceOrderReadGroup.GET("/:id", commerceOrderController.Get)
 		commerceOrderReadGroup.GET("/:id/shipment", commerceLogisticsController.AdminOrderTimeline)
 	}
+	commerceStatsGroup := protected.Group("/commerce/stats")
+	commerceStatsGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionReportsRead))
+	commerceStatsGroup.GET("", commerceStatsController.Get)
 	commerceOrderWriteGroup := protected.Group("/commerce/orders")
 	commerceOrderWriteGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"))
 	commerceOrderWriteGroup.POST("", middleware.RequireTenantPermission(authz.PermissionOrdersWrite), commerceOrderController.Create)

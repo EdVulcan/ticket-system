@@ -32,6 +32,26 @@
                   <el-tag size="small" :type="item.available ? 'success' : 'info'">{{ item.available ? '已具备配置' : '暂不可用' }}</el-tag>
                 </div>
               </div>
+              <div v-if="wechatReadiness" class="callback-addresses">
+                <div class="callback-heading">
+                  <strong>微信支付回调地址</strong>
+                  <span>请在微信支付商户平台分别配置以下地址；地址由系统生成，不能自行修改。</span>
+                </div>
+                <div class="callback-address-list">
+                  <div class="callback-address-item">
+                    <span>票务支付通知</span>
+                    <code :title="wechatReadiness.callback_url">{{ wechatReadiness.callback_url || '系统地址未生成' }}</code>
+                  </div>
+                  <div class="callback-address-item">
+                    <span>商业支付通知</span>
+                    <code :title="wechatReadiness.commerce_payment_callback_url">{{ wechatReadiness.commerce_payment_callback_url || '系统地址未生成' }}</code>
+                  </div>
+                  <div class="callback-address-item">
+                    <span>商业退款通知</span>
+                    <code :title="wechatReadiness.commerce_refund_callback_url">{{ wechatReadiness.commerce_refund_callback_url || '系统地址未生成' }}</code>
+                  </div>
+                </div>
+              </div>
               <el-alert v-if="wechatReadiness?.issues?.length" :title="wechatReadiness.issues.join('；')" type="warning" :closable="false" show-icon />
             </div>
             
@@ -258,6 +278,14 @@ onMounted(() => {
 .capability-copy { min-width: 0; }
 .capability-copy > span { display: block; color: #283445; font-size: 14px; font-weight: 600; line-height: 20px; }
 .capability-copy small { display: block; margin-top: 3px; color: #667085; font-size: 12px; line-height: 17px; }
+.callback-addresses { margin-bottom: 14px; padding: 12px; border: 1px solid #d9e2ec; border-radius: 5px; background: #fff; }
+.callback-heading { display: flex; flex-direction: column; gap: 3px; margin-bottom: 10px; }
+.callback-heading strong { color: #283445; font-size: 13px; line-height: 19px; }
+.callback-heading span { color: #667085; font-size: 12px; line-height: 17px; }
+.callback-address-list { display: grid; gap: 8px; }
+.callback-address-item { display: grid; grid-template-columns: 104px minmax(0, 1fr); align-items: start; gap: 10px; }
+.callback-address-item > span { color: #475467; font-size: 12px; line-height: 20px; }
+.callback-address-item code { min-width: 0; color: #344054; font-size: 12px; line-height: 20px; overflow-wrap: anywhere; word-break: break-word; }
 .credential-upload-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; padding: 14px 16px 0; margin-bottom: 16px; border: 1px solid #e2e7ee; border-radius: 6px; background: #fafbfc; }
 .upload-tip { margin-top: 5px; color: #667085; font-size: 12px; line-height: 18px; }
 :deep(.el-card__body) { padding: 18px 20px 24px; }
@@ -267,6 +295,7 @@ onMounted(() => {
   .page-heading { align-items: flex-start; gap: 12px; }
   .page-heading p { max-width: 250px; }
   .capability-list { grid-template-columns: 1fr; }
+  .callback-address-item { grid-template-columns: 1fr; gap: 1px; }
   .credential-upload-grid { grid-template-columns: 1fr; gap: 0; }
   .readiness-panel { padding: 14px; }
 }

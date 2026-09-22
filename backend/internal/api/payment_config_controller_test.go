@@ -154,3 +154,36 @@ func TestSaveWechatConfigEncryptsUploadedPrivateKey(t *testing.T) {
 		t.Fatalf("config response exposed or failed to mask payment secrets: %s", getResponse.Body.String())
 	}
 }
+
+func TestGetReadinessIncludesCommerceWechatCallbackURLs(t *testing.T) {
+	db := testdb.Open(t)
+	if err := db.AutoMigrate(&model.PaymentConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	model.DB = db
+	oldPublicBaseURL := config.GlobalConfig.Server.PublicBaseURL
+	config.GlobalConfig.Server.PublicBaseURL = "https://tickets.example.com"
+	t.Cleanup(func() {
+		config.GlobalConfig.Server.PublicBaseURL = oldPublicBaseURL
+		model.DB = nil
+	})
+
+	gin.SetMode(gin.TestMode)
+	response := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(response)
+	ctx.Set("tenant_id", uint(17))
+	(&PaymentConfigController{}).GetReadiness(ctx)
+	if response.Code != 200 {
+		t.Fatalf("readiness response=%d body=%s", response.Code, response.Body.String())
+	}
+	body := response.Body.String()
+	for _, expected := range []string{
+		`"callback_url":"https://tickets.example.com/api/v1/payments/notify/wechat/17"`,
+		`"commerce_payment_callback_url":"https://tickets.example.com/api/v1/commerce/payments/notify/wechat/17"`,
+		`"commerce_refund_callback_url":"https://tickets.example.com/api/v1/commerce/refunds/notify/wechat/17"`,
+	} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("readiness response missing %s: %s", expected, body)
+		}
+	}
+}

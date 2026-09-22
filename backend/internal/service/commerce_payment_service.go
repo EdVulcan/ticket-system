@@ -7,9 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
-	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/utils"
 	"time"
@@ -149,15 +147,7 @@ func (s *CommercePaymentService) orderService() *CommerceOrderService {
 }
 
 func commercePaymentNotifyURL(kind string, tenantID uint) (string, error) {
-	baseURL := strings.TrimRight(strings.TrimSpace(config.GlobalConfig.Server.PublicBaseURL), "/")
-	parsed, err := url.Parse(baseURL)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" || strings.Trim(parsed.Path, "/") != "" {
-		return "", fmt.Errorf("系统公网地址未配置为有效的 HTTPS 地址")
-	}
-	if kind != "payments" && kind != "refunds" {
-		return "", fmt.Errorf("unsupported commerce callback kind")
-	}
-	return fmt.Sprintf("%s/api/v1/commerce/%s/notify/wechat/%d", baseURL, kind, tenantID), nil
+	return CommercePaymentNotifyURL(kind, tenantID)
 }
 
 func commercePaymentOutTradeNo(now time.Time) string {

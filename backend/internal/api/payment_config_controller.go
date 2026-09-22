@@ -79,6 +79,18 @@ func (c *PaymentConfigController) GetReadiness(ctx *gin.Context) {
 			return
 		}
 		items[i].CallbackURL = callbackURL
+		if items[i].Provider == "wechat" {
+			items[i].CommercePaymentCallbackURL, err = service.CommercePaymentNotifyURL("payments", tenantID)
+			if err != nil {
+				ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+			items[i].CommerceRefundCallbackURL, err = service.CommercePaymentNotifyURL("refunds", tenantID)
+			if err != nil {
+				ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
+		}
 	}
 	ctx.JSON(http.StatusOK, gin.H{"data": items})
 }

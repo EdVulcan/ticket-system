@@ -278,6 +278,15 @@
           </section>
         </el-tab-pane>
 
+        <el-tab-pane label="经营统计" name="stats">
+          <section class="workspace-section">
+            <CommerceStatsPanel
+              :business-type="currentDomain"
+              :capability-active="isCurrentDomainActive"
+            />
+          </section>
+        </el-tab-pane>
+
         <el-tab-pane label="小程序发布" name="storefront">
           <section class="workspace-section">
             <div class="section-toolbar">
@@ -720,6 +729,7 @@ import { Delete, Edit, Plus, Refresh, Search, UploadFilled } from '@element-plus
 import request from '@/utils/request'
 import { hasPermission } from '@/utils/permissions'
 import CommercePhaseTwoPanel from '@/components/CommercePhaseTwoPanel.vue'
+import CommerceStatsPanel from '@/components/CommerceStatsPanel.vue'
 import {
   activeBusinessCapabilitySet,
   configuredBusinessCapabilitySet,

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 
 	"gorm.io/gorm"
@@ -17,14 +18,34 @@ type PaymentCapabilityReadiness struct {
 }
 
 type PaymentProviderReadiness struct {
-	Provider           string                       `json:"provider"`
-	Name               string                       `json:"name"`
-	Configured         bool                         `json:"configured"`
-	Enabled            bool                         `json:"enabled"`
-	ConfigurationReady bool                         `json:"configuration_ready"`
-	CallbackURL        string                       `json:"callback_url,omitempty"`
-	Issues             []string                     `json:"issues"`
-	Capabilities       []PaymentCapabilityReadiness `json:"capabilities"`
+	Provider           string `json:"provider"`
+	Name               string `json:"name"`
+	Configured         bool   `json:"configured"`
+	Enabled            bool   `json:"enabled"`
+	ConfigurationReady bool   `json:"configuration_ready"`
+	CallbackURL        string `json:"callback_url,omitempty"`
+	// Commerce callbacks are separate from the legacy scenic-ticket payment
+	// callback. They are generated from the system public base URL and are
+	// intentionally not persisted as client-provided configuration.
+	CommercePaymentCallbackURL string                       `json:"commerce_payment_callback_url,omitempty"`
+	CommerceRefundCallbackURL  string                       `json:"commerce_refund_callback_url,omitempty"`
+	Issues                     []string                     `json:"issues"`
+	Capabilities               []PaymentCapabilityReadiness `json:"capabilities"`
+}
+
+// CommercePaymentNotifyURL returns a system-owned callback URL for a
+// commercial WeChat payment or refund notification. Keeping URL construction
+// here avoids the readiness endpoint drifting from the URL sent to WeChat.
+func CommercePaymentNotifyURL(kind string, tenantID uint) (string, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(config.GlobalConfig.Server.PublicBaseURL), "/")
+	parsed, err := url.Parse(baseURL)
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" || strings.Trim(parsed.Path, "/") != "" {
+		return "", fmt.Errorf("系统公网地址未配置为有效的 HTTPS 地址")
+	}
+	if kind != "payments" && kind != "refunds" {
+		return "", fmt.Errorf("unsupported commerce callback kind")
+	}
+	return fmt.Sprintf("%s/api/v1/commerce/%s/notify/wechat/%d", baseURL, kind, tenantID), nil
 }
 
 func PaymentConfigIssues(cfg *model.PaymentConfig, tenantID uint) []string {
