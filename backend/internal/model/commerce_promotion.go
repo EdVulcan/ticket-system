@@ -21,6 +21,19 @@ type CommerceCouponTemplate struct {
 	IssuanceCap           int        `gorm:"not null;default:0;check:chk_commerce_coupon_templates_issuance_cap,issuance_cap >= 0" json:"issuance_cap"`
 	PerCustomerCap        int        `gorm:"not null;default:1;check:chk_commerce_coupon_templates_customer_cap,per_customer_cap > 0" json:"per_customer_cap"`
 	RefundReturnPolicy    string     `gorm:"size:60;not null;default:'unfulfilled_full_refund_if_valid'" json:"refund_return_policy"`
+	BusinessTypes         []string   `gorm:"-" json:"business_types,omitempty"`
+}
+
+// CommerceCouponTemplateBusinessType stores the complete business scope of a
+// coupon template. BusinessType on the template remains the legacy primary
+// value for old callers and database constraints; this table is authoritative
+// for new multi-business templates.
+type CommerceCouponTemplateBusinessType struct {
+	Base
+	TenantID         uint   `gorm:"not null;index:idx_commerce_coupon_template_business_types_scope,priority:1;uniqueIndex:idx_commerce_coupon_template_business_types_unique,priority:1" json:"tenant_id"`
+	ChannelAccountID uint   `gorm:"not null;index:idx_commerce_coupon_template_business_types_scope,priority:2;uniqueIndex:idx_commerce_coupon_template_business_types_unique,priority:2" json:"channel_account_id"`
+	TemplateID       uint   `gorm:"not null;index:idx_commerce_coupon_template_business_types_scope,priority:3;uniqueIndex:idx_commerce_coupon_template_business_types_unique,priority:3" json:"template_id"`
+	BusinessType     string `gorm:"size:20;not null;index:idx_commerce_coupon_template_business_types_scope,priority:4;uniqueIndex:idx_commerce_coupon_template_business_types_unique,priority:4;check:chk_commerce_coupon_template_business_types_type,business_type IN ('restaurant','retail')" json:"business_type"`
 }
 
 // CommerceCouponGrant is a customer-specific coupon entitlement. Reward
@@ -44,6 +57,17 @@ type CommerceCouponGrant struct {
 	UsedOrderID           uint       `gorm:"index" json:"used_order_id,omitempty"`
 	ReservedAt            *time.Time `json:"reserved_at,omitempty"`
 	UsedAt                *time.Time `json:"used_at,omitempty"`
+	BusinessTypes         []string   `gorm:"-" json:"business_types,omitempty"`
+}
+
+// CommerceCouponGrantBusinessType is an immutable scope snapshot copied when
+// a grant is issued. Template edits must never change an existing entitlement.
+type CommerceCouponGrantBusinessType struct {
+	Base
+	TenantID         uint   `gorm:"not null;index:idx_commerce_coupon_grant_business_types_scope,priority:1;uniqueIndex:idx_commerce_coupon_grant_business_types_unique,priority:1" json:"tenant_id"`
+	ChannelAccountID uint   `gorm:"not null;index:idx_commerce_coupon_grant_business_types_scope,priority:2;uniqueIndex:idx_commerce_coupon_grant_business_types_unique,priority:2" json:"channel_account_id"`
+	GrantID          uint   `gorm:"not null;index:idx_commerce_coupon_grant_business_types_scope,priority:3;uniqueIndex:idx_commerce_coupon_grant_business_types_unique,priority:3" json:"grant_id"`
+	BusinessType     string `gorm:"size:20;not null;index:idx_commerce_coupon_grant_business_types_scope,priority:4;uniqueIndex:idx_commerce_coupon_grant_business_types_unique,priority:4;check:chk_commerce_coupon_grant_business_types_type,business_type IN ('restaurant','retail')" json:"business_type"`
 }
 
 // CommerceAssistCampaign controls a share-and-help promotion for one
@@ -62,6 +86,17 @@ type CommerceAssistCampaign struct {
 	StartsAt                time.Time `gorm:"not null;index" json:"starts_at"`
 	EndsAt                  time.Time `gorm:"not null;index" json:"ends_at"`
 	Status                  string    `gorm:"size:20;not null;default:'draft';index;check:chk_commerce_assist_campaigns_status,status IN ('draft','active','inactive')" json:"status"`
+	BusinessTypes           []string  `gorm:"-" json:"business_types,omitempty"`
+}
+
+// CommerceAssistCampaignBusinessType stores the complete business scope of a
+// share-and-help campaign while retaining BusinessType for legacy callers.
+type CommerceAssistCampaignBusinessType struct {
+	Base
+	TenantID         uint   `gorm:"not null;index:idx_commerce_assist_campaign_business_types_scope,priority:1;uniqueIndex:idx_commerce_assist_campaign_business_types_unique,priority:1" json:"tenant_id"`
+	ChannelAccountID uint   `gorm:"not null;index:idx_commerce_assist_campaign_business_types_scope,priority:2;uniqueIndex:idx_commerce_assist_campaign_business_types_unique,priority:2" json:"channel_account_id"`
+	CampaignID       uint   `gorm:"not null;index:idx_commerce_assist_campaign_business_types_scope,priority:3;uniqueIndex:idx_commerce_assist_campaign_business_types_unique,priority:3" json:"campaign_id"`
+	BusinessType     string `gorm:"size:20;not null;index:idx_commerce_assist_campaign_business_types_scope,priority:4;uniqueIndex:idx_commerce_assist_campaign_business_types_unique,priority:4;check:chk_commerce_assist_campaign_business_types_type,business_type IN ('restaurant','retail')" json:"business_type"`
 }
 
 // CommerceAssistSession uses the hash for lookup and keeps the raw share token

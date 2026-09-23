@@ -230,8 +230,8 @@ func (c *CommercePromotionController) storefrontPromotionScope(ctx *gin.Context)
 }
 
 func adminPromotionScope(ctx *gin.Context, channelID uint, businessType string) (service.CommercePromotionScope, bool) {
-	if channelID == 0 || strings.TrimSpace(businessType) == "" {
-		ctx.JSON(http.StatusBadRequest, gin.H{"error": "必须选择微信小程序渠道和业务类型"})
+	if channelID == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "必须选择微信小程序渠道"})
 		return service.CommercePromotionScope{}, false
 	}
 	return service.CommercePromotionScope{TenantID: ctx.GetUint("tenant_id"), ChannelAccountID: channelID, BusinessType: strings.TrimSpace(businessType)}, true
@@ -243,7 +243,7 @@ func adminPromotionScopeQuery(ctx *gin.Context) (service.CommercePromotionScope,
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": "必须选择微信小程序渠道"})
 		return service.CommercePromotionScope{}, false
 	}
-	return adminPromotionScope(ctx, uint(channelID), ctx.Query("business_type"))
+	return adminPromotionScope(ctx, uint(channelID), strings.TrimSpace(ctx.Query("business_type")))
 }
 
 func promotionPathID(ctx *gin.Context, name string) (uint, bool) {

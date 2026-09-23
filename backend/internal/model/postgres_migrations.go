@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 143
+const CurrentPostgresSchemaVersion = 144
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -80,8 +80,8 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&CommerceLocationServiceConfig{}, &CommerceDeliveryZone{}, &CommerceDeliverySlot{},
 		&CommerceCheckoutQuote{}, &CommerceOrderAdjustment{},
 		&CommerceShipment{}, &CommerceShipmentEvent{},
-		&CommerceCouponTemplate{}, &CommerceCouponGrant{},
-		&CommerceAssistCampaign{}, &CommerceAssistSession{}, &CommerceAssistRecord{},
+		&CommerceCouponTemplate{}, &CommerceCouponTemplateBusinessType{}, &CommerceCouponGrant{}, &CommerceCouponGrantBusinessType{},
+		&CommerceAssistCampaign{}, &CommerceAssistCampaignBusinessType{}, &CommerceAssistSession{}, &CommerceAssistRecord{},
 		&TenantMember{}, &TenantMemberIdentity{}, &TenantMemberVerifiedContact{}, &TenantMemberConsent{}, &TenantMemberEvent{},
 	}
 	if err := db.AutoMigrate(models...); err != nil {
@@ -788,11 +788,73 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateCommerceStorefrontPhoneBinding(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateCommercePromotionBusinessTypes(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "storefront phone authorization binding",
+		Name:      "commerce promotion business scopes",
 		AppliedAt: time.Now(),
 	}).Error
+}
+
+// migrateCommercePromotionBusinessTypes adds the normalized business-scope
+// projections used by multi-business promotion templates and campaigns. The
+// legacy business_type columns remain populated as the deterministic primary
+// value for old consumers, while issued grants receive an immutable copy of
+// the template scope.
+func migrateCommercePromotionBusinessTypes(db *gorm.DB, previous int) error {
+	statements := []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_coupon_template_business_types_unique
+			ON commerce_coupon_template_business_types (tenant_id, channel_account_id, template_id, business_type)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_coupon_template_business_types_scope
+			ON commerce_coupon_template_business_types (tenant_id, channel_account_id, template_id, business_type)
+			WHERE deleted_at IS NULL;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_coupon_grant_business_types_unique
+			ON commerce_coupon_grant_business_types (tenant_id, channel_account_id, grant_id, business_type)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_coupon_grant_business_types_scope
+			ON commerce_coupon_grant_business_types (tenant_id, channel_account_id, grant_id, business_type)
+			WHERE deleted_at IS NULL;`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_commerce_assist_campaign_business_types_unique
+			ON commerce_assist_campaign_business_types (tenant_id, channel_account_id, campaign_id, business_type)
+			WHERE deleted_at IS NULL;`,
+		`CREATE INDEX IF NOT EXISTS idx_commerce_assist_campaign_business_types_scope
+			ON commerce_assist_campaign_business_types (tenant_id, channel_account_id, campaign_id, business_type)
+			WHERE deleted_at IS NULL;`,
+		`INSERT INTO commerce_coupon_template_business_types (tenant_id, channel_account_id, template_id, business_type, created_at, updated_at)
+			SELECT tenant_id, channel_account_id, id, business_type, COALESCE(created_at, NOW()), COALESCE(updated_at, NOW())
+			FROM commerce_coupon_templates WHERE deleted_at IS NULL
+			ON CONFLICT (tenant_id, channel_account_id, template_id, business_type) WHERE deleted_at IS NULL DO NOTHING;`,
+		`INSERT INTO commerce_assist_campaign_business_types (tenant_id, channel_account_id, campaign_id, business_type, created_at, updated_at)
+			SELECT tenant_id, channel_account_id, id, business_type, COALESCE(created_at, NOW()), COALESCE(updated_at, NOW())
+			FROM commerce_assist_campaigns WHERE deleted_at IS NULL
+			ON CONFLICT (tenant_id, channel_account_id, campaign_id, business_type) WHERE deleted_at IS NULL DO NOTHING;`,
+		`INSERT INTO commerce_coupon_grant_business_types (tenant_id, channel_account_id, grant_id, business_type, created_at, updated_at)
+			SELECT tenant_id, channel_account_id, id, business_type, COALESCE(created_at, NOW()), COALESCE(updated_at, NOW())
+			FROM commerce_coupon_grants WHERE deleted_at IS NULL
+			ON CONFLICT (tenant_id, channel_account_id, grant_id, business_type) WHERE deleted_at IS NULL DO NOTHING;`,
+	}
+	// AutoMigrate creates the tagged indexes without the soft-delete predicate.
+	// Replace those indexes only while upgrading to this schema; subsequent
+	// startups keep the already-correct indexes and avoid recurring DDL locks.
+	if previous < CurrentPostgresSchemaVersion {
+		statements = append([]string{
+			`DROP INDEX IF EXISTS idx_commerce_coupon_template_business_types_unique;
+			 DROP INDEX IF EXISTS idx_commerce_coupon_template_business_types_scope;`,
+			`DROP INDEX IF EXISTS idx_commerce_coupon_grant_business_types_unique;
+			 DROP INDEX IF EXISTS idx_commerce_coupon_grant_business_types_scope;`,
+			`DROP INDEX IF EXISTS idx_commerce_assist_campaign_business_types_unique;
+			 DROP INDEX IF EXISTS idx_commerce_assist_campaign_business_types_scope;`,
+		}, statements...)
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return fmt.Errorf("migrate commerce promotion business scopes: %w", err)
+		}
+	}
+	return nil
 }
 
 // migrateCommerceStorefrontContact keeps one customer-facing contact per

@@ -16,7 +16,7 @@ func openCommerceStatsDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(
 		&model.Tenant{}, &model.TenantBusinessCapability{}, &model.CommerceOrder{}, &model.CommerceOrderItem{},
 		&model.CommerceAfterSaleRequest{}, &model.RestaurantFulfillment{}, &model.RetailFulfillment{},
-		&model.CommerceAssistCampaign{}, &model.CommerceAssistSession{}, &model.CommerceMerchantNotification{},
+		&model.CommerceAssistCampaign{}, &model.CommerceAssistCampaignBusinessType{}, &model.CommerceAssistSession{}, &model.CommerceMerchantNotification{},
 	); err != nil {
 		t.Fatalf("migrate commerce stats tables: %v", err)
 	}
@@ -72,6 +72,28 @@ func TestCommerceStatsAggregatesFactsWithoutJoinMultiplicationAndIsolatesTenant(
 			t.Fatal(err)
 		}
 	}
+	// The legacy primary business type may differ from an explicitly selected
+	// secondary scope. Statistics must count the session for every normalized
+	// business scope, while retaining tenant and channel ownership.
+	campaign := model.CommerceAssistCampaign{
+		TenantID: owner.ID, ChannelAccountID: 71, BusinessType: "retail", Title: "跨业务统计活动",
+		StarterCouponTemplateID: 1, HelperCouponTemplateID: 2, RequiredUniqueHelpers: 1,
+		PerStarterSessionLimit: 1, StartsAt: created.Add(-time.Hour), EndsAt: created.Add(time.Hour), Status: "active",
+	}
+	if err := db.Create(&campaign).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.CommerceAssistCampaignBusinessType{TenantID: owner.ID, ChannelAccountID: 71, CampaignID: campaign.ID, BusinessType: "restaurant"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	succeededAt := created.Add(30 * time.Minute)
+	if err := db.Create(&model.CommerceAssistSession{
+		TenantID: owner.ID, CampaignID: campaign.ID, StarterCustomerID: "starter", IdempotencyKey: "stats-assist-session",
+		ShareTokenHash: "stats-assist-token", ShareTokenCiphertext: "ciphertext", Status: "succeeded", HelperCount: 1,
+		ExpiresAt: created.Add(time.Hour), SucceededAt: &succeededAt,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
 	foreignOrder := model.CommerceOrder{TenantID: foreign.ID, OrderNo: "STATS-FOREIGN-1", IdempotencyKey: "stats-foreign-key-1", BusinessType: "restaurant", Channel: "direct", CustomerID: "foreign", LocationID: locationID, OriginalAmountCents: 9999, TotalAmountCents: 9999, PaymentStatus: "paid", FulfillmentStatus: "preparing", RefundStatus: "none", Base: model.Base{CreatedAt: created}}
 	if err := db.Create(&foreignOrder).Error; err != nil {
 		t.Fatal(err)
@@ -107,6 +129,9 @@ func TestCommerceStatsAggregatesFactsWithoutJoinMultiplicationAndIsolatesTenant(
 	}
 	if stats.ProductQuantity != 3 {
 		t.Fatalf("product quantity=%d", stats.ProductQuantity)
+	}
+	if stats.AssistSuccessCount != 1 {
+		t.Fatalf("multi-business assist aggregate=%d", stats.AssistSuccessCount)
 	}
 
 	foreignStats, err := (&CommerceStatsService{DB: db}).Get(CommerceStatsQuery{TenantID: foreign.ID, BusinessType: "restaurant", StartAt: &start, EndAt: &end})

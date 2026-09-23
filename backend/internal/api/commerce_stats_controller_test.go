@@ -16,7 +16,7 @@ func openCommerceStatsControllerDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(
 		&model.CommerceOrder{}, &model.CommerceOrderItem{},
 		&model.CommerceAfterSaleRequest{}, &model.RestaurantFulfillment{}, &model.RetailFulfillment{},
-		&model.CommerceAssistCampaign{}, &model.CommerceAssistSession{}, &model.CommerceMerchantNotification{},
+		&model.CommerceAssistCampaign{}, &model.CommerceAssistCampaignBusinessType{}, &model.CommerceAssistSession{}, &model.CommerceMerchantNotification{},
 	); err != nil {
 		t.Fatalf("migrate commerce stats controller tables: %v", err)
 	}

@@ -153,6 +153,12 @@ const router = createRouter({
             meta: { scope: 'tenant', permission: 'operations.read', capabilities: ['supplier', 'distributor'], supplierBusinessType: 'scenic', supplierBusinessTypeAlternativeCapabilities: ['distributor'], title: '运营工作台' }
         },
         {
+            path: '/commerce/marketing',
+            name: 'commerce-marketing',
+            component: () => import('../views/CommerceMarketingView.vue'),
+            meta: { scope: 'tenant', permission: 'catalog.read', businessCapabilities: ['restaurant', 'retail'], businessCapabilityAllowSuspended: true, title: '营销中心' }
+        },
+        {
             path: '/commerce/:businessType',
             name: 'commerce',
             component: () => import('../views/CommerceView.vue'),

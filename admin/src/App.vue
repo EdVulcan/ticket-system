@@ -254,6 +254,9 @@ const navGroups = computed<NavGroup[]>(() => {
   if (configuredBusinessCapabilities.value.has('retail') && can('catalog.read')) {
     commerce.push({ path: '/commerce/retail', label: '电商工作台', icon: ShoppingBag })
   }
+  if (configuredBusinessCapabilities.value.size > 0 && can('catalog.read')) {
+    commerce.push({ path: '/commerce/marketing', label: '营销中心', icon: Operation })
+  }
 
   const distribution: NavItem[] = []
   if ((scenicHistorySupplier || hasCapability('distributor')) && can('distribution.read')) distribution.push({ path: '/distribution', label: '供销合作', icon: Connection })

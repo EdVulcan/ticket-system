@@ -194,6 +194,70 @@ func TestCommercePhaseTwoMigration140RepairsIncompletePhysicalSchema(t *testing.
 	assertPhaseTwoCompatibilityConfig(t, db, tenant.ID, location.ID, "retail")
 }
 
+func TestCommercePromotionScopeMigrationBackfillsLegacyRows(t *testing.T) {
+	db := testdb.Open(t)
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("create schema baseline: %v", err)
+	}
+	tenant := Tenant{Name: "Promotion migration tenant", SystemCode: "PROMOTION-MIGRATION", SecretKey: "promotion-migration-secret", Status: "active"}
+	if err := db.Create(&tenant).Error; err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	account := ChannelAccount{TenantID: tenant.ID, Code: "promotion-migration-wechat", Type: "wechat_miniapp", Status: "active"}
+	if err := db.Create(&account).Error; err != nil {
+		t.Fatalf("create channel account: %v", err)
+	}
+	now := time.Now().UTC()
+	template := CommerceCouponTemplate{
+		TenantID: tenant.ID, ChannelAccountID: account.ID, BusinessType: "retail", Name: "legacy promotion",
+		DiscountCents: 100, ValidDays: 1, Status: "active", PerCustomerCap: 1,
+		RefundReturnPolicy: "unfulfilled_full_refund_if_valid",
+	}
+	if err := db.Create(&template).Error; err != nil {
+		t.Fatalf("create legacy template: %v", err)
+	}
+	grant := CommerceCouponGrant{
+		TenantID: tenant.ID, TemplateID: template.ID, ChannelAccountID: account.ID, BusinessType: "retail",
+		CustomerID: "legacy-customer", Source: "manual", SourceIdentity: "legacy-grant", DiscountCents: 100,
+		Status: "available", ExpiresAt: now.Add(time.Hour), RefundReturnPolicy: "unfulfilled_full_refund_if_valid",
+	}
+	if err := db.Create(&grant).Error; err != nil {
+		t.Fatalf("create legacy grant: %v", err)
+	}
+	campaign := CommerceAssistCampaign{
+		TenantID: tenant.ID, ChannelAccountID: account.ID, BusinessType: "retail", Title: "legacy assist",
+		StarterCouponTemplateID: template.ID, HelperCouponTemplateID: template.ID,
+		RequiredUniqueHelpers: 1, PerStarterSessionLimit: 1, StartsAt: now, EndsAt: now.Add(time.Hour), Status: "active",
+	}
+	if err := db.Create(&campaign).Error; err != nil {
+		t.Fatalf("create legacy campaign: %v", err)
+	}
+	for _, table := range []interface{}{&CommerceCouponTemplateBusinessType{}, &CommerceCouponGrantBusinessType{}, &CommerceAssistCampaignBusinessType{}} {
+		if err := db.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Where("tenant_id = ?", tenant.ID).Delete(table).Error; err != nil {
+			t.Fatalf("remove normalized rows before backfill for %T: %v", table, err)
+		}
+	}
+	if err := migrateCommercePromotionBusinessTypes(db, 143); err != nil {
+		t.Fatalf("backfill normalized promotion scopes: %v", err)
+	}
+	if err := migrateCommercePromotionBusinessTypes(db, 143); err != nil {
+		t.Fatalf("repeat normalized promotion scope migration: %v", err)
+	}
+	var templateScope, grantScope, campaignScope int64
+	if err := db.Model(&CommerceCouponTemplateBusinessType{}).Where("tenant_id = ? AND template_id = ? AND business_type = ?", tenant.ID, template.ID, "retail").Count(&templateScope).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&CommerceCouponGrantBusinessType{}).Where("tenant_id = ? AND grant_id = ? AND business_type = ?", tenant.ID, grant.ID, "retail").Count(&grantScope).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&CommerceAssistCampaignBusinessType{}).Where("tenant_id = ? AND campaign_id = ? AND business_type = ?", tenant.ID, campaign.ID, "retail").Count(&campaignScope).Error; err != nil {
+		t.Fatal(err)
+	}
+	if templateScope != 1 || grantScope != 1 || campaignScope != 1 {
+		t.Fatalf("backfill counts template=%d grant=%d campaign=%d", templateScope, grantScope, campaignScope)
+	}
+}
+
 func assertPhaseTwoCompatibilityConfig(t *testing.T, db *gorm.DB, tenantID, locationID uint, businessType string) {
 	t.Helper()
 	var rows []CommerceLocationServiceConfig
@@ -219,8 +283,11 @@ func phaseTwoTables() []string {
 		"commerce_shipments",
 		"commerce_shipment_events",
 		"commerce_coupon_templates",
+		"commerce_coupon_template_business_types",
 		"commerce_coupon_grants",
+		"commerce_coupon_grant_business_types",
 		"commerce_assist_campaigns",
+		"commerce_assist_campaign_business_types",
 		"commerce_assist_sessions",
 		"commerce_assist_records",
 	}
@@ -240,8 +307,11 @@ func assertPhaseTwoSchema(t *testing.T, db *gorm.DB) {
 		{&CommerceLocationServiceConfig{}, "idx_commerce_location_service_scope"},
 		{&CommerceShipment{}, "idx_commerce_shipments_tenant_no"},
 		{&CommerceCouponTemplate{}, "idx_commerce_coupon_templates_scope_name"},
+		{&CommerceCouponTemplateBusinessType{}, "idx_commerce_coupon_template_business_types_unique"},
 		{&CommerceCouponGrant{}, "idx_commerce_coupon_grants_issue"},
+		{&CommerceCouponGrantBusinessType{}, "idx_commerce_coupon_grant_business_types_unique"},
 		{&CommerceAssistCampaign{}, "idx_commerce_assist_campaigns_scope_name"},
+		{&CommerceAssistCampaignBusinessType{}, "idx_commerce_assist_campaign_business_types_unique"},
 		{&CommerceAssistSession{}, "idx_commerce_assist_sessions_idempotency"},
 		{&CommerceAssistRecord{}, "idx_commerce_assist_records_session_helper"},
 	} {
@@ -254,8 +324,11 @@ func assertPhaseTwoSchema(t *testing.T, db *gorm.DB) {
 		"chk_commerce_delivery_slot_weekday",
 		"chk_commerce_shipments_status",
 		"chk_commerce_coupon_templates_discount",
+		"chk_commerce_coupon_template_business_types_type",
 		"chk_commerce_coupon_grants_status",
+		"chk_commerce_coupon_grant_business_types_type",
 		"chk_commerce_assist_campaigns_status",
+		"chk_commerce_assist_campaign_business_types_type",
 		"chk_commerce_assist_sessions_status",
 	} {
 		var exists bool

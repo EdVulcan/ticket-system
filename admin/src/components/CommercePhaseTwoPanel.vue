@@ -80,27 +80,6 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="营销活动" name="promotions">
-        <div class="panel-heading"><div><h3>优惠券模板</h3><p class="muted">优惠券和分享助力均绑定当前业务及真实微信小程序渠道账号。</p></div><div class="heading-actions"><el-select v-model="promotionChannelID" :disabled="promotionLoading" filterable placeholder="选择微信渠道" @change="loadPromotions"><el-option v-for="channel in channels" :key="channel.id" :label="`${channel.code} · ${channel.app_id || '未填写 AppID'}`" :value="channel.id" /></el-select><el-button :icon="Refresh" :loading="promotionLoading" @click="loadPromotions">刷新</el-button></div></div>
-        <div class="subsection-heading"><div><strong>优惠券模板</strong><span class="muted"> {{ couponTemplates.length }} 个</span></div><el-button v-if="canWrite" type="primary" plain :icon="Plus" @click="openCouponDialog()">新增模板</el-button></div>
-        <el-table :data="couponTemplates" border stripe size="small" class="phase-table">
-          <el-table-column prop="name" label="名称" min-width="180" />
-          <el-table-column label="优惠" width="110" align="right"><template #default="{ row }">减 ¥{{ yuan(row.discount_cents) }}</template></el-table-column>
-          <el-table-column label="门槛" width="110" align="right"><template #default="{ row }">¥{{ yuan(row.min_goods_subtotal_cents) }}</template></el-table-column>
-          <el-table-column label="状态" width="90" align="center"><template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">{{ row.status === 'active' ? '启用' : row.status === 'draft' ? '草稿' : '停用' }}</el-tag></template></el-table-column>
-          <el-table-column label="操作" width="100" fixed="right" align="right"><template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openCouponDialog(row)">编辑</el-button></template></el-table-column>
-          <template #empty><el-empty description="暂无优惠券模板" :image-size="60" /></template>
-        </el-table>
-
-        <div class="subsection-heading campaign-heading"><div><strong>分享助力活动</strong><span class="muted"> {{ campaigns.length }} 个</span></div><el-button v-if="canWrite" type="primary" plain :icon="Plus" :disabled="couponTemplates.length === 0" @click="openCampaignDialog()">新增活动</el-button></div>
-        <el-table :data="campaigns" border stripe size="small" class="phase-table">
-          <el-table-column prop="title" label="活动名称" min-width="200" />
-          <el-table-column label="所需助力" width="100" align="right"><template #default="{ row }">{{ row.required_unique_helpers }}</template></el-table-column>
-          <el-table-column label="状态" width="90" align="center"><template #default="{ row }"><el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">{{ row.status === 'active' ? '启用' : row.status === 'draft' ? '草稿' : '停用' }}</el-tag></template></el-table-column>
-          <el-table-column label="操作" width="100" fixed="right" align="right"><template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openCampaignDialog(row)">编辑</el-button></template></el-table-column>
-          <template #empty><el-empty description="暂无分享助力活动" :image-size="60" /></template>
-        </el-table>
-      </el-tab-pane>
     </el-tabs>
 
     <el-dialog v-model="zoneDialogVisible" :title="zoneForm.id ? '编辑配送区域' : '新增配送区域'" width="min(560px, calc(100vw - 32px))" destroy-on-close>
@@ -113,15 +92,6 @@
       <template #footer><el-button @click="slotDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveSlot">保存时段</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="couponDialogVisible" :title="couponForm.id ? '编辑优惠券模板' : '新增优惠券模板'" width="min(620px, calc(100vw - 32px))" destroy-on-close>
-      <el-form :model="couponForm" label-position="top" class="phase-form"><el-form-item label="微信小程序渠道" required><el-select v-model="couponForm.channel_account_id" class="full-width" filterable :disabled="Boolean(couponForm.id)"><el-option v-for="channel in channels" :key="channel.id" :label="`${channel.code} · ${channel.app_id || '未填写 AppID'}`" :value="channel.id" /></el-select></el-form-item><el-form-item label="模板名称" required><el-input v-model="couponForm.name" maxlength="120" /></el-form-item><div class="phase-grid"><el-form-item label="优惠金额（元）" required><el-input-number v-model="couponForm.discount_yuan" class="full-width" :min="0.01" :precision="2" :controls="false" :disabled="Boolean(couponForm.id)" /></el-form-item><el-form-item label="使用门槛（元）"><el-input-number v-model="couponForm.min_yuan" class="full-width" :min="0" :precision="2" :controls="false" :disabled="Boolean(couponForm.id)" /></el-form-item><el-form-item label="有效天数"><el-input-number v-model="couponForm.valid_days" class="full-width" :min="0" :max="3650" :controls="false" :disabled="Boolean(couponForm.id)" /></el-form-item><el-form-item label="开始时间"><el-date-picker v-model="couponForm.starts_at" type="datetime" class="full-width" /></el-form-item><el-form-item label="结束时间"><el-date-picker v-model="couponForm.ends_at" type="datetime" class="full-width" /></el-form-item><el-form-item label="发放上限（0 为不限）"><el-input-number v-model="couponForm.issuance_cap" class="full-width" :min="0" :controls="false" /></el-form-item><el-form-item label="每人上限"><el-input-number v-model="couponForm.per_customer_cap" class="full-width" :min="1" :controls="false" :disabled="Boolean(couponForm.id)" /></el-form-item><el-form-item label="状态"><el-select v-model="couponForm.status" class="full-width"><el-option label="草稿" value="draft" /><el-option label="启用" value="active" /><el-option label="停用" value="inactive" /></el-select></el-form-item></div></el-form>
-      <template #footer><el-button @click="couponDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveCoupon">保存模板</el-button></template>
-    </el-dialog>
-
-    <el-dialog v-model="campaignDialogVisible" :title="campaignForm.id ? '编辑分享助力活动' : '新增分享助力活动'" width="min(620px, calc(100vw - 32px))" destroy-on-close>
-      <el-form :model="campaignForm" label-position="top" class="phase-form"><el-form-item label="活动名称" required><el-input v-model="campaignForm.title" maxlength="120" /></el-form-item><div class="phase-grid"><el-form-item label="发起人奖励" required><el-select v-model="campaignForm.starter_coupon_template_id" class="full-width" :disabled="Boolean(campaignForm.id)"><el-option v-for="coupon in couponTemplates" :key="coupon.id" :label="coupon.name" :value="coupon.id" /></el-select></el-form-item><el-form-item label="助力人奖励" required><el-select v-model="campaignForm.helper_coupon_template_id" class="full-width" :disabled="Boolean(campaignForm.id)"><el-option v-for="coupon in couponTemplates" :key="coupon.id" :label="coupon.name" :value="coupon.id" /></el-select></el-form-item><el-form-item label="所需独立助力人数"><el-input-number v-model="campaignForm.required_unique_helpers" class="full-width" :min="1" :controls="false" /></el-form-item><el-form-item label="每人可发起次数"><el-input-number v-model="campaignForm.per_starter_session_limit" class="full-width" :min="1" :controls="false" /></el-form-item><el-form-item label="开始时间" required><el-date-picker v-model="campaignForm.starts_at" type="datetime" class="full-width" /></el-form-item><el-form-item label="结束时间" required><el-date-picker v-model="campaignForm.ends_at" type="datetime" class="full-width" /></el-form-item><el-form-item label="状态"><el-select v-model="campaignForm.status" class="full-width"><el-option label="草稿" value="draft" /><el-option label="启用" value="active" /><el-option label="停用" value="inactive" /></el-select></el-form-item></div></el-form>
-      <template #footer><el-button @click="campaignDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveCampaign">保存活动</el-button></template>
-    </el-dialog>
   </section>
 </template>
 
@@ -136,18 +106,12 @@ const props = defineProps<{ businessType: BusinessType; activeLocations: any[]; 
 
 const panelTab = ref('fulfillment')
 const loading = ref(false)
-const promotionLoading = ref(false)
 const saving = ref(false)
 const errorMessage = ref('')
 const fulfillmentRequestID = ref(0)
-const promotionRequestID = ref(0)
 const selectedLocationID = ref<number>(Number(props.activeLocations[0]?.id || 0))
 const zones = ref<any[]>([])
 const slots = ref<any[]>([])
-const channels = ref<any[]>([])
-const promotionChannelID = ref<number>(0)
-const couponTemplates = ref<any[]>([])
-const campaigns = ref<any[]>([])
 const defaultConfig = () => ({ pickup_enabled: false, delivery_enabled: false, shipping_enabled: false, min_goods_cents: 0, packaging_fee_cents: 0, shipping_fee_cents: 0, free_shipping_threshold_cents: 0, estimated_minutes: 0, status: 'active', contact_name: '', contact_phone: '', address: '' })
 const config = reactive<any>(defaultConfig())
 const configThresholdYuan = computed({ get: () => (props.businessType === 'restaurant' ? config.min_goods_cents : config.free_shipping_threshold_cents) / 100, set: value => { if (props.businessType === 'restaurant') config.min_goods_cents = Math.round(Number(value || 0) * 100); else config.free_shipping_threshold_cents = Math.round(Number(value || 0) * 100) } })
@@ -156,12 +120,8 @@ const configShippingYuan = computed({ get: () => config.shipping_fee_cents / 100
 const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
 const zoneDialogVisible = ref(false)
 const slotDialogVisible = ref(false)
-const couponDialogVisible = ref(false)
-const campaignDialogVisible = ref(false)
 const zoneForm = reactive<any>({ id: 0, name: '', province: '', city: '', district: '', fee_yuan: 0, estimated_minutes: 0, status: 'active' })
 const slotForm = reactive<any>({ id: 0, day_of_week: 1, start_time: '09:00', end_time: '18:00', order_cutoff_minutes: 0, capacity: 0, status: 'active' })
-const couponForm = reactive<any>({ id: 0, channel_account_id: 0, name: '', discount_yuan: 1, min_yuan: 0, valid_days: 7, starts_at: null, ends_at: null, issuance_cap: 0, per_customer_cap: 1, status: 'draft' })
-const campaignForm = reactive<any>({ id: 0, title: '', starter_coupon_template_id: 0, helper_coupon_template_id: 0, required_unique_helpers: 1, per_starter_session_limit: 1, starts_at: '', ends_at: '', status: 'draft' })
 
 const activeLocations = computed(() => props.activeLocations)
 function apiError(error: any, fallback: string) { return String(error?.response?.data?.error || error?.response?.data?.message || fallback) }
@@ -172,7 +132,6 @@ function minuteValue(value: string) { const [hour, minute] = String(value || '')
 function weekdayLabel(value: unknown) { return weekdays[Number(value)] || '-' }
 function resetError() { errorMessage.value = '' }
 function clearFulfillmentState() { Object.assign(config, defaultConfig()); zones.value = []; slots.value = [] }
-function clearPromotionState(resetChannel = true) { channels.value = []; if (resetChannel) promotionChannelID.value = 0; couponTemplates.value = []; campaigns.value = [] }
 
 async function loadFulfillment() {
   const requestID = ++fulfillmentRequestID.value
@@ -221,55 +180,10 @@ async function saveSlot() {
   try { const payload = { day_of_week: Number(slotForm.day_of_week), start_minute: start, end_minute: end, order_cutoff_minutes: Number(slotForm.order_cutoff_minutes || 0), capacity: Number(slotForm.capacity || 0), status: slotForm.status }; if (slotForm.id) await request.put(`/commerce/locations/${selectedLocationID.value}/delivery-slots/${slotForm.id}`, payload, params()); else await request.post(`/commerce/locations/${selectedLocationID.value}/delivery-slots`, payload, params()); slotDialogVisible.value = false; ElMessage.success('配送时段已保存'); await loadFulfillment() } catch (error) { errorMessage.value = apiError(error, '配送时段保存失败') } finally { saving.value = false }
 }
 
-async function loadPromotions() {
-  const requestID = ++promotionRequestID.value
-  const businessType = props.businessType
-  clearPromotionState(false)
-  promotionLoading.value = true; resetError()
-  try {
-    const channelsResponse = await request.get('/commerce/storefront-channels', { skipErrorToast: true } as any)
-    if (requestID !== promotionRequestID.value || businessType !== props.businessType) return
-    channels.value = (channelsResponse.data?.data || []).filter((row: any) => row.status !== 'disabled')
-    if (!promotionChannelID.value || !channels.value.some(row => Number(row.id) === promotionChannelID.value)) promotionChannelID.value = Number(channels.value[0]?.id || 0)
-    if (!promotionChannelID.value) { couponTemplates.value = []; campaigns.value = []; return }
-    const listParams = params({ channel_account_id: promotionChannelID.value })
-    const [couponsResponse, campaignsResponse] = await Promise.all([
-      request.get('/commerce/promotions/coupon-templates', listParams),
-      request.get('/commerce/promotions/assist-campaigns', listParams),
-    ])
-    if (requestID !== promotionRequestID.value || businessType !== props.businessType) return
-    couponTemplates.value = couponsResponse.data?.data || []
-    campaigns.value = campaignsResponse.data?.data || []
-  } catch (error) {
-    if (requestID === promotionRequestID.value) { clearPromotionState(false); errorMessage.value = apiError(error, '营销活动暂时无法加载') }
-  } finally {
-    if (requestID === promotionRequestID.value) promotionLoading.value = false
-  }
-}
-function optionalISOString(value: unknown) {
-  if (!value) return null
-  const date = new Date(String(value))
-  return Number.isNaN(date.getTime()) ? value : date.toISOString()
-}
-function openCouponDialog(row?: any) { Object.assign(couponForm, { id: Number(row?.id || 0), channel_account_id: Number(row?.channel_account_id || promotionChannelID.value || channels.value[0]?.id || 0), name: row?.name || '', discount_yuan: Number(row?.discount_cents ?? 100) / 100, min_yuan: Number(row?.min_goods_subtotal_cents ?? 0) / 100, valid_days: Number(row?.valid_days ?? 7), starts_at: row?.starts_at || null, ends_at: row?.ends_at || null, issuance_cap: Number(row?.issuance_cap ?? 0), per_customer_cap: Number(row?.per_customer_cap ?? 1), status: row?.status || 'draft' }); couponDialogVisible.value = true }
-async function saveCoupon() {
-  if (!couponForm.channel_account_id || !couponForm.name.trim()) { ElMessage.warning('请选择渠道账号并填写模板名称'); return }
-  saving.value = true; resetError()
-  try { if (couponForm.id) await request.put(`/commerce/promotions/coupon-templates/${couponForm.id}`, { name: couponForm.name.trim(), starts_at: optionalISOString(couponForm.starts_at), ends_at: optionalISOString(couponForm.ends_at), status: couponForm.status, issuance_cap: Number(couponForm.issuance_cap || 0), per_customer_cap: Number(couponForm.per_customer_cap || 1) }, { params: { channel_account_id: couponForm.channel_account_id, business_type: props.businessType }, skipErrorToast: true } as any); else await request.post('/commerce/promotions/coupon-templates', { channel_account_id: couponForm.channel_account_id, business_type: props.businessType, name: couponForm.name.trim(), discount_cents: Math.round(Number(couponForm.discount_yuan || 0) * 100), min_goods_subtotal_cents: Math.round(Number(couponForm.min_yuan || 0) * 100), valid_days: Number(couponForm.valid_days || 0), starts_at: optionalISOString(couponForm.starts_at), ends_at: optionalISOString(couponForm.ends_at), status: couponForm.status, issuance_cap: Number(couponForm.issuance_cap || 0), per_customer_cap: Number(couponForm.per_customer_cap || 1), refund_return_policy: 'unfulfilled_full_refund_if_valid' }, { skipErrorToast: true } as any); couponDialogVisible.value = false; ElMessage.success('优惠券模板已保存'); await loadPromotions() } catch (error) { errorMessage.value = apiError(error, '优惠券模板保存失败') } finally { saving.value = false }
-}
-function openCampaignDialog(row?: any) { Object.assign(campaignForm, { id: Number(row?.id || 0), title: row?.title || '', starter_coupon_template_id: Number(row?.starter_coupon_template_id || couponTemplates.value[0]?.id || 0), helper_coupon_template_id: Number(row?.helper_coupon_template_id || couponTemplates.value[0]?.id || 0), required_unique_helpers: Number(row?.required_unique_helpers || 1), per_starter_session_limit: Number(row?.per_starter_session_limit || 1), starts_at: row?.starts_at || new Date(), ends_at: row?.ends_at || new Date(Date.now() + 7 * 86400000), status: row?.status || 'draft' }); campaignDialogVisible.value = true }
-async function saveCampaign() {
-  if (!campaignForm.title.trim() || !campaignForm.starter_coupon_template_id || !campaignForm.helper_coupon_template_id) { ElMessage.warning('请完整填写活动和奖励模板'); return }
-  saving.value = true; resetError()
-  try { const payload = { title: campaignForm.title.trim(), required_unique_helpers: Number(campaignForm.required_unique_helpers || 1), per_starter_session_limit: Number(campaignForm.per_starter_session_limit || 1), starts_at: new Date(campaignForm.starts_at).toISOString(), ends_at: new Date(campaignForm.ends_at).toISOString(), status: campaignForm.status }; if (campaignForm.id) await request.put(`/commerce/promotions/assist-campaigns/${campaignForm.id}`, payload, { params: { channel_account_id: promotionChannelID.value, business_type: props.businessType }, skipErrorToast: true } as any); else await request.post('/commerce/promotions/assist-campaigns', { ...payload, channel_account_id: promotionChannelID.value, business_type: props.businessType, starter_coupon_template_id: campaignForm.starter_coupon_template_id, helper_coupon_template_id: campaignForm.helper_coupon_template_id }, { skipErrorToast: true } as any); campaignDialogVisible.value = false; ElMessage.success('助力活动已保存'); await loadPromotions() } catch (error) { errorMessage.value = apiError(error, '助力活动保存失败') } finally { saving.value = false }
-}
-
 watch(() => props.businessType, () => {
   selectedLocationID.value = 0
   clearFulfillmentState()
-  clearPromotionState()
   resetError()
-  if (panelTab.value === 'promotions') void loadPromotions()
 })
 watch(() => props.activeLocations, value => {
   const selected = Number(value.find(location => Number(location.id) === selectedLocationID.value)?.id || value[0]?.id || 0)
@@ -277,10 +191,6 @@ watch(() => props.activeLocations, value => {
 }, { deep: true })
 watch(selectedLocationID, (value, previous) => {
   if (value !== previous && panelTab.value === 'fulfillment') void loadFulfillment()
-})
-watch(panelTab, tab => {
-  if (tab === 'fulfillment') void loadFulfillment()
-  if (tab === 'promotions') void loadPromotions()
 })
 onMounted(() => { void loadFulfillment() })
 </script>

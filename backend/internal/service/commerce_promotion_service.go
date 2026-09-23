@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/utils"
@@ -71,6 +72,156 @@ func (s *CommercePromotionService) write(apply func(*gorm.DB) error) error {
 
 func promotionBusinessType(v string) bool { return v == "restaurant" || v == "retail" }
 
+func normalizePromotionBusinessTypes(values []string, fallback string) ([]string, error) {
+	seen := make(map[string]struct{}, len(values)+1)
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if !promotionBusinessType(value) {
+			return nil, fmt.Errorf("%w: unsupported business type", ErrCommercePromotionInvalid)
+		}
+		seen[value] = struct{}{}
+	}
+	if len(seen) == 0 {
+		fallback = strings.TrimSpace(fallback)
+		if fallback != "" {
+			if !promotionBusinessType(fallback) {
+				return nil, fmt.Errorf("%w: unsupported business type", ErrCommercePromotionInvalid)
+			}
+			seen[fallback] = struct{}{}
+		}
+	}
+	if len(seen) == 0 {
+		return nil, fmt.Errorf("%w: at least one business type is required", ErrCommercePromotionInvalid)
+	}
+	result := make([]string, 0, len(seen))
+	for value := range seen {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result, nil
+}
+
+func containsPromotionBusinessType(values []string, target string) bool {
+	target = strings.TrimSpace(target)
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
+}
+
+// promotionScopeIncludesBusinessType validates a client-provided scope before
+// an update is allowed to mutate the stored promotion. A scoped caller may
+// only edit a template/campaign while retaining the business context it was
+// authorized to operate in. The store-wide marketing center passes an empty
+// scope and may intentionally change the complete set.
+func promotionScopeIncludesBusinessType(values []string, businessType string) bool {
+	if strings.TrimSpace(businessType) == "" {
+		return true
+	}
+	// Keep legacy callers that still send only the singular business_type
+	// field compatible with the normalized multi-business request.
+	normalized, err := normalizePromotionBusinessTypes(values, businessType)
+	return err == nil && containsPromotionBusinessType(normalized, businessType)
+}
+
+func promotionBusinessTypesForTemplate(tx *gorm.DB, row *model.CommerceCouponTemplate) ([]string, error) {
+	if tx == nil || row == nil || row.ID == 0 {
+		return nil, ErrCommercePromotionInvalid
+	}
+	var scopes []model.CommerceCouponTemplateBusinessType
+	if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND template_id = ?", row.TenantID, row.ChannelAccountID, row.ID).Order("business_type ASC").Find(&scopes).Error; err != nil {
+		return nil, err
+	}
+	if len(scopes) == 0 {
+		return []string{row.BusinessType}, nil
+	}
+	values := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		values = append(values, scope.BusinessType)
+	}
+	return values, nil
+}
+
+func promotionBusinessTypesForCampaign(tx *gorm.DB, row *model.CommerceAssistCampaign) ([]string, error) {
+	if tx == nil || row == nil || row.ID == 0 {
+		return nil, ErrCommercePromotionInvalid
+	}
+	var scopes []model.CommerceAssistCampaignBusinessType
+	if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND campaign_id = ?", row.TenantID, row.ChannelAccountID, row.ID).Order("business_type ASC").Find(&scopes).Error; err != nil {
+		return nil, err
+	}
+	if len(scopes) == 0 {
+		return []string{row.BusinessType}, nil
+	}
+	values := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		values = append(values, scope.BusinessType)
+	}
+	return values, nil
+}
+
+func promotionBusinessTypesForGrant(tx *gorm.DB, row *model.CommerceCouponGrant) ([]string, error) {
+	if tx == nil || row == nil || row.ID == 0 {
+		return nil, ErrCommercePromotionInvalid
+	}
+	var scopes []model.CommerceCouponGrantBusinessType
+	if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND grant_id = ?", row.TenantID, row.ChannelAccountID, row.ID).Order("business_type ASC").Find(&scopes).Error; err != nil {
+		return nil, err
+	}
+	if len(scopes) == 0 {
+		return []string{row.BusinessType}, nil
+	}
+	values := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		values = append(values, scope.BusinessType)
+	}
+	return values, nil
+}
+
+func ensurePromotionTemplateScopes(tx *gorm.DB, row *model.CommerceCouponTemplate, businessTypes []string) error {
+	if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND template_id = ? AND business_type NOT IN ?", row.TenantID, row.ChannelAccountID, row.ID, businessTypes).Delete(&model.CommerceCouponTemplateBusinessType{}).Error; err != nil {
+		return err
+	}
+	for _, businessType := range businessTypes {
+		scope := &model.CommerceCouponTemplateBusinessType{TenantID: row.TenantID, ChannelAccountID: row.ChannelAccountID, TemplateID: row.ID, BusinessType: businessType}
+		if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND template_id = ? AND business_type = ?", row.TenantID, row.ChannelAccountID, row.ID, businessType).FirstOrCreate(scope).Error; err != nil {
+			return err
+		}
+	}
+	row.BusinessTypes = append([]string(nil), businessTypes...)
+	return nil
+}
+
+func ensurePromotionCampaignScopes(tx *gorm.DB, row *model.CommerceAssistCampaign, businessTypes []string) error {
+	if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND campaign_id = ? AND business_type NOT IN ?", row.TenantID, row.ChannelAccountID, row.ID, businessTypes).Delete(&model.CommerceAssistCampaignBusinessType{}).Error; err != nil {
+		return err
+	}
+	for _, businessType := range businessTypes {
+		scope := &model.CommerceAssistCampaignBusinessType{TenantID: row.TenantID, ChannelAccountID: row.ChannelAccountID, CampaignID: row.ID, BusinessType: businessType}
+		if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND campaign_id = ? AND business_type = ?", row.TenantID, row.ChannelAccountID, row.ID, businessType).FirstOrCreate(scope).Error; err != nil {
+			return err
+		}
+	}
+	row.BusinessTypes = append([]string(nil), businessTypes...)
+	return nil
+}
+
+func ensurePromotionGrantScopes(tx *gorm.DB, row *model.CommerceCouponGrant, businessTypes []string) error {
+	for _, businessType := range businessTypes {
+		scope := &model.CommerceCouponGrantBusinessType{TenantID: row.TenantID, ChannelAccountID: row.ChannelAccountID, GrantID: row.ID, BusinessType: businessType}
+		if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND grant_id = ? AND business_type = ?", row.TenantID, row.ChannelAccountID, row.ID, businessType).FirstOrCreate(scope).Error; err != nil {
+			return err
+		}
+	}
+	row.BusinessTypes = append([]string(nil), businessTypes...)
+	return nil
+}
+
 func validateCouponTemplateInput(input CreateCommerceCouponTemplateInput) error {
 	input.Name = strings.TrimSpace(input.Name)
 	if !promotionBusinessType(input.BusinessType) || input.Name == "" || len([]rune(input.Name)) > 120 {
@@ -97,6 +248,7 @@ func validateCouponTemplateInput(input CreateCommerceCouponTemplateInput) error 
 type CreateCommerceCouponTemplateInput struct {
 	ChannelAccountID      uint       `json:"channel_account_id"`
 	BusinessType          string     `json:"business_type"`
+	BusinessTypes         []string   `json:"business_types"`
 	Name                  string     `json:"name"`
 	DiscountCents         int64      `json:"discount_cents"`
 	MinGoodsSubtotalCents int64      `json:"min_goods_subtotal_cents"`
@@ -110,6 +262,7 @@ type CreateCommerceCouponTemplateInput struct {
 }
 
 type UpdateCommerceCouponTemplateInput struct {
+	BusinessTypes  []string   `json:"business_types,omitempty"`
 	Name           string     `json:"name"`
 	StartsAt       *time.Time `json:"starts_at,omitempty"`
 	EndsAt         *time.Time `json:"ends_at,omitempty"`
@@ -121,6 +274,7 @@ type UpdateCommerceCouponTemplateInput struct {
 type CreateCommerceAssistCampaignInput struct {
 	ChannelAccountID        uint      `json:"channel_account_id"`
 	BusinessType            string    `json:"business_type"`
+	BusinessTypes           []string  `json:"business_types"`
 	Title                   string    `json:"title"`
 	StarterCouponTemplateID uint      `json:"starter_coupon_template_id"`
 	HelperCouponTemplateID  uint      `json:"helper_coupon_template_id"`
@@ -132,6 +286,7 @@ type CreateCommerceAssistCampaignInput struct {
 }
 
 type UpdateCommerceAssistCampaignInput struct {
+	BusinessTypes          []string  `json:"business_types,omitempty"`
 	Title                  string    `json:"title"`
 	StartsAt               time.Time `json:"starts_at"`
 	EndsAt                 time.Time `json:"ends_at"`
@@ -145,12 +300,14 @@ type CommerceCouponBenefitView struct {
 	MinGoodsSubtotalCents int64      `json:"min_goods_subtotal_cents"`
 	ValidDays             int        `json:"valid_days"`
 	TemplateEndsAt        *time.Time `json:"template_ends_at,omitempty"`
+	BusinessTypes         []string   `json:"business_types"`
 }
 
 type CommerceAssistCampaignView struct {
 	ID                    uint                      `json:"id"`
 	Title                 string                    `json:"title"`
 	BusinessType          string                    `json:"business_type"`
+	BusinessTypes         []string                  `json:"business_types"`
 	RequiredUniqueHelpers int                       `json:"required_unique_helpers"`
 	StartsAt              time.Time                 `json:"starts_at"`
 	EndsAt                time.Time                 `json:"ends_at"`
@@ -164,6 +321,7 @@ type CommerceAssistSessionView struct {
 	CampaignID            uint                      `json:"campaign_id"`
 	Title                 string                    `json:"title"`
 	BusinessType          string                    `json:"business_type"`
+	BusinessTypes         []string                  `json:"business_types"`
 	Status                string                    `json:"status"`
 	HelperCount           int                       `json:"helper_count"`
 	RequiredUniqueHelpers int                       `json:"required_unique_helpers"`
@@ -188,6 +346,13 @@ func (s *CommercePromotionService) checkScope(tx *gorm.DB, tenantID uint, channe
 	if channelID == 0 {
 		return nil
 	}
+	return s.checkChannelScope(tx, tenantID, channelID)
+}
+
+func (s *CommercePromotionService) checkChannelScope(tx *gorm.DB, tenantID, channelID uint) error {
+	if tenantID == 0 || channelID == 0 {
+		return ErrPromotionScopeDenied
+	}
 	var account model.ChannelAccount
 	if err := tx.Select("id", "tenant_id", "type", "status").First(&account, channelID).Error; err != nil {
 		return ErrPromotionScopeDenied
@@ -201,9 +366,24 @@ func (s *CommercePromotionService) checkScope(tx *gorm.DB, tenantID uint, channe
 	return nil
 }
 
-func (s *CommercePromotionService) checkPromotionScope(scope CommercePromotionScope) error {
-	if scope.ChannelAccountID == 0 || strings.TrimSpace(scope.BusinessType) == "" {
+func (s *CommercePromotionService) checkBusinessTypes(tx *gorm.DB, tenantID, channelID uint, businessTypes []string) error {
+	if len(businessTypes) == 0 {
 		return ErrPromotionScopeDenied
+	}
+	for _, businessType := range businessTypes {
+		if err := s.checkScope(tx, tenantID, channelID, businessType); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *CommercePromotionService) checkPromotionScope(scope CommercePromotionScope) error {
+	if scope.ChannelAccountID == 0 {
+		return ErrPromotionScopeDenied
+	}
+	if strings.TrimSpace(scope.BusinessType) == "" {
+		return s.checkChannelScope(s.db(), scope.TenantID, scope.ChannelAccountID)
 	}
 	return s.checkScope(s.db(), scope.TenantID, scope.ChannelAccountID, strings.TrimSpace(scope.BusinessType))
 }
@@ -221,7 +401,12 @@ func (s *CommercePromotionService) CreateCouponTemplateForScope(scope CommercePr
 	if err := s.checkPromotionScope(scope); err != nil {
 		return nil, err
 	}
-	input.ChannelAccountID, input.BusinessType = scope.ChannelAccountID, scope.BusinessType
+	input.ChannelAccountID = scope.ChannelAccountID
+	if len(input.BusinessTypes) == 0 && strings.TrimSpace(input.BusinessType) == "" {
+		input.BusinessType = scope.BusinessType
+	} else if scope.BusinessType != "" && !promotionScopeIncludesBusinessType(input.BusinessTypes, scope.BusinessType) {
+		return nil, ErrPromotionScopeDenied
+	}
 	return s.CreateCouponTemplate(scope.TenantID, input)
 }
 
@@ -231,15 +416,28 @@ func (s *CommercePromotionService) UpdateCouponTemplateForScope(scope CommercePr
 		return nil, err
 	}
 	var existing model.CommerceCouponTemplate
-	if err := s.db().Where("id = ? AND tenant_id = ? AND channel_account_id = ? AND business_type = ?", templateID, scope.TenantID, scope.ChannelAccountID, scope.BusinessType).First(&existing).Error; err != nil {
+	query := s.db().Where("id = ? AND tenant_id = ? AND channel_account_id = ?", templateID, scope.TenantID, scope.ChannelAccountID)
+	if scope.BusinessType != "" {
+		query = query.Where("business_type = ? OR EXISTS (SELECT 1 FROM commerce_coupon_template_business_types scope WHERE scope.template_id = commerce_coupon_templates.id AND scope.tenant_id = commerce_coupon_templates.tenant_id AND scope.channel_account_id = commerce_coupon_templates.channel_account_id AND scope.business_type = ?)", scope.BusinessType, scope.BusinessType)
+	}
+	if err := query.First(&existing).Error; err != nil {
+		return nil, ErrPromotionScopeDenied
+	}
+	if scope.BusinessType != "" && len(input.BusinessTypes) > 0 && !promotionScopeIncludesBusinessType(input.BusinessTypes, scope.BusinessType) {
 		return nil, ErrPromotionScopeDenied
 	}
 	row, err := s.UpdateCouponTemplate(scope.TenantID, templateID, input)
 	if err != nil {
 		return nil, err
 	}
-	if row.ChannelAccountID != scope.ChannelAccountID || row.BusinessType != scope.BusinessType {
+	if row.ChannelAccountID != scope.ChannelAccountID {
 		return nil, ErrPromotionScopeDenied
+	}
+	if scope.BusinessType != "" {
+		values, scopeErr := promotionBusinessTypesForTemplate(s.db(), row)
+		if scopeErr != nil || !containsPromotionBusinessType(values, scope.BusinessType) {
+			return nil, ErrPromotionScopeDenied
+		}
 	}
 	return row, nil
 }
@@ -257,7 +455,12 @@ func (s *CommercePromotionService) CreateAssistCampaignForScope(scope CommercePr
 	if err := s.checkPromotionScope(scope); err != nil {
 		return nil, err
 	}
-	input.ChannelAccountID, input.BusinessType = scope.ChannelAccountID, scope.BusinessType
+	input.ChannelAccountID = scope.ChannelAccountID
+	if len(input.BusinessTypes) == 0 && strings.TrimSpace(input.BusinessType) == "" {
+		input.BusinessType = scope.BusinessType
+	} else if scope.BusinessType != "" && !promotionScopeIncludesBusinessType(input.BusinessTypes, scope.BusinessType) {
+		return nil, ErrPromotionScopeDenied
+	}
 	return s.CreateAssistCampaign(scope.TenantID, input)
 }
 
@@ -267,15 +470,28 @@ func (s *CommercePromotionService) UpdateAssistCampaignForScope(scope CommercePr
 		return nil, err
 	}
 	var existing model.CommerceAssistCampaign
-	if err := s.db().Where("id = ? AND tenant_id = ? AND channel_account_id = ? AND business_type = ?", campaignID, scope.TenantID, scope.ChannelAccountID, scope.BusinessType).First(&existing).Error; err != nil {
+	query := s.db().Where("id = ? AND tenant_id = ? AND channel_account_id = ?", campaignID, scope.TenantID, scope.ChannelAccountID)
+	if scope.BusinessType != "" {
+		query = query.Where("business_type = ? OR EXISTS (SELECT 1 FROM commerce_assist_campaign_business_types scope WHERE scope.campaign_id = commerce_assist_campaigns.id AND scope.tenant_id = commerce_assist_campaigns.tenant_id AND scope.channel_account_id = commerce_assist_campaigns.channel_account_id AND scope.business_type = ?)", scope.BusinessType, scope.BusinessType)
+	}
+	if err := query.First(&existing).Error; err != nil {
+		return nil, ErrPromotionScopeDenied
+	}
+	if scope.BusinessType != "" && len(input.BusinessTypes) > 0 && !promotionScopeIncludesBusinessType(input.BusinessTypes, scope.BusinessType) {
 		return nil, ErrPromotionScopeDenied
 	}
 	row, err := s.UpdateAssistCampaign(scope.TenantID, campaignID, input)
 	if err != nil {
 		return nil, err
 	}
-	if row.ChannelAccountID != scope.ChannelAccountID || row.BusinessType != scope.BusinessType {
+	if row.ChannelAccountID != scope.ChannelAccountID {
 		return nil, ErrPromotionScopeDenied
+	}
+	if scope.BusinessType != "" {
+		values, scopeErr := promotionBusinessTypesForCampaign(s.db(), row)
+		if scopeErr != nil || !containsPromotionBusinessType(values, scope.BusinessType) {
+			return nil, ErrPromotionScopeDenied
+		}
 	}
 	return row, nil
 }
@@ -298,8 +514,8 @@ func (s *CommercePromotionService) ListAvailableAssistCampaignsForScope(scope Co
 	now := s.now()
 	var rows []model.CommerceAssistCampaign
 	err := s.db().Where(
-		"tenant_id = ? AND channel_account_id = ? AND business_type = ? AND status = ? AND starts_at <= ? AND ends_at > ?",
-		scope.TenantID, scope.ChannelAccountID, scope.BusinessType, "active", now, now,
+		"tenant_id = ? AND channel_account_id = ? AND (business_type = ? OR EXISTS (SELECT 1 FROM commerce_assist_campaign_business_types scope WHERE scope.campaign_id = commerce_assist_campaigns.id AND scope.tenant_id = commerce_assist_campaigns.tenant_id AND scope.channel_account_id = commerce_assist_campaigns.channel_account_id AND scope.business_type = ?)) AND status = ? AND starts_at <= ? AND ends_at > ?",
+		scope.TenantID, scope.ChannelAccountID, scope.BusinessType, scope.BusinessType, "active", now, now,
 	).Order("starts_at DESC, id DESC").Find(&rows).Error
 	if err != nil {
 		return nil, err
@@ -324,7 +540,11 @@ func (s *CommercePromotionService) validateAssistTokenScope(scope CommercePromot
 	if err := s.db().First(&campaign, session.CampaignID).Error; err != nil {
 		return err
 	}
-	if campaign.ChannelAccountID != scope.ChannelAccountID || campaign.BusinessType != scope.BusinessType {
+	if campaign.TenantID != scope.TenantID || campaign.ChannelAccountID != scope.ChannelAccountID {
+		return ErrPromotionScopeDenied
+	}
+	types, err := promotionBusinessTypesForCampaign(s.db(), &campaign)
+	if err != nil || !containsPromotionBusinessType(types, scope.BusinessType) {
 		return ErrPromotionScopeDenied
 	}
 	return nil
@@ -338,7 +558,11 @@ func (s *CommercePromotionService) CreateAssistSessionForScope(scope CommercePro
 	// CreateAssistSession verifies the campaign ownership and invokes the same
 	// strict channel check inside its transaction.
 	var campaign model.CommerceAssistCampaign
-	if err := s.db().Where("id = ? AND tenant_id = ? AND channel_account_id = ? AND business_type = ?", campaignID, scope.TenantID, scope.ChannelAccountID, scope.BusinessType).First(&campaign).Error; err != nil {
+	if err := s.db().Where("id = ? AND tenant_id = ? AND channel_account_id = ?", campaignID, scope.TenantID, scope.ChannelAccountID).First(&campaign).Error; err != nil {
+		return nil, ErrPromotionScopeDenied
+	}
+	types, err := promotionBusinessTypesForCampaign(s.db(), &campaign)
+	if err != nil || !containsPromotionBusinessType(types, scope.BusinessType) {
 		return nil, ErrPromotionScopeDenied
 	}
 	return s.CreateAssistSession(scope.TenantID, campaignID, starterCustomerID, idempotencyKey)
@@ -389,6 +613,11 @@ func normalizeTemplateStatus(status string) (string, error) {
 
 func (s *CommercePromotionService) CreateCouponTemplate(tenantID uint, input CreateCommerceCouponTemplateInput) (*model.CommerceCouponTemplate, error) {
 	input.BusinessType = strings.TrimSpace(input.BusinessType)
+	businessTypes, err := normalizePromotionBusinessTypes(input.BusinessTypes, input.BusinessType)
+	if err != nil {
+		return nil, err
+	}
+	input.BusinessType = businessTypes[0]
 	input.Name = strings.TrimSpace(input.Name)
 	if input.RefundReturnPolicy == "" {
 		input.RefundReturnPolicy = promotionRefundReturnPolicy
@@ -403,7 +632,7 @@ func (s *CommercePromotionService) CreateCouponTemplate(tenantID uint, input Cre
 	}
 	var result *model.CommerceCouponTemplate
 	err = s.write(func(tx *gorm.DB) error {
-		if err := s.checkScope(tx, tenantID, input.ChannelAccountID, input.BusinessType); err != nil {
+		if err := s.checkBusinessTypes(tx, tenantID, input.ChannelAccountID, businessTypes); err != nil {
 			return err
 		}
 		if input.Status == "active" {
@@ -413,6 +642,9 @@ func (s *CommercePromotionService) CreateCouponTemplate(tenantID uint, input Cre
 		}
 		row := &model.CommerceCouponTemplate{TenantID: tenantID, ChannelAccountID: input.ChannelAccountID, BusinessType: input.BusinessType, Name: input.Name, Version: 1, DiscountCents: input.DiscountCents, MinGoodsSubtotalCents: input.MinGoodsSubtotalCents, ValidDays: input.ValidDays, StartsAt: input.StartsAt, EndsAt: input.EndsAt, Status: input.Status, IssuanceCap: input.IssuanceCap, PerCustomerCap: input.PerCustomerCap, RefundReturnPolicy: input.RefundReturnPolicy}
 		if err := tx.Create(row).Error; err != nil {
+			return err
+		}
+		if err := ensurePromotionTemplateScopes(tx, row, businessTypes); err != nil {
 			return err
 		}
 		result = row
@@ -449,6 +681,19 @@ func (s *CommercePromotionService) UpdateCouponTemplate(tenantID, templateID uin
 		if err := s.checkScope(tx, tenantID, row.ChannelAccountID, row.BusinessType); err != nil {
 			return err
 		}
+		businessTypes, scopeErr := promotionBusinessTypesForTemplate(tx, &row)
+		if scopeErr != nil {
+			return scopeErr
+		}
+		if len(input.BusinessTypes) > 0 {
+			businessTypes, scopeErr = normalizePromotionBusinessTypes(input.BusinessTypes, "")
+			if scopeErr != nil {
+				return scopeErr
+			}
+		}
+		if err := s.checkBusinessTypes(tx, tenantID, row.ChannelAccountID, businessTypes); err != nil {
+			return err
+		}
 		// Active reward terms are immutable. This update API only exposes
 		// presentation, window, and issuance controls, so reject changes to
 		// issuance controls while an active template is in use.
@@ -463,11 +708,15 @@ func (s *CommercePromotionService) UpdateCouponTemplate(tenantID, templateID uin
 				return err
 			}
 		}
-		updates := map[string]interface{}{"name": input.Name, "starts_at": input.StartsAt, "ends_at": input.EndsAt, "status": status, "issuance_cap": input.IssuanceCap, "per_customer_cap": input.PerCustomerCap}
+		updates := map[string]interface{}{"name": input.Name, "starts_at": input.StartsAt, "ends_at": input.EndsAt, "status": status, "issuance_cap": input.IssuanceCap, "per_customer_cap": input.PerCustomerCap, "business_type": businessTypes[0]}
 		if err := tx.Model(&row).Updates(updates).Error; err != nil {
 			return err
 		}
-		row.Name, row.StartsAt, row.EndsAt, row.Status, row.IssuanceCap, row.PerCustomerCap = input.Name, input.StartsAt, input.EndsAt, status, input.IssuanceCap, input.PerCustomerCap
+		row.Name, row.StartsAt, row.EndsAt, row.Status, row.IssuanceCap, row.PerCustomerCap, row.BusinessType = input.Name, input.StartsAt, input.EndsAt, status, input.IssuanceCap, input.PerCustomerCap, businessTypes[0]
+		if err := ensurePromotionTemplateScopes(tx, &row, businessTypes); err != nil {
+			return err
+		}
+		row.BusinessTypes = businessTypes
 		result = &row
 		return nil
 	})
@@ -489,7 +738,7 @@ func (s *CommercePromotionService) ListCouponTemplates(tenantID uint, channelID 
 		q = q.Where("channel_account_id = ?", channelID)
 	}
 	if businessType != "" {
-		q = q.Where("business_type = ?", businessType)
+		q = q.Where("business_type = ? OR EXISTS (SELECT 1 FROM commerce_coupon_template_business_types scope WHERE scope.template_id = commerce_coupon_templates.id AND scope.tenant_id = commerce_coupon_templates.tenant_id AND scope.channel_account_id = commerce_coupon_templates.channel_account_id AND scope.business_type = ?)", businessType, businessType)
 	}
 	if status != "" {
 		q = q.Where("status = ?", status)
@@ -498,13 +747,25 @@ func (s *CommercePromotionService) ListCouponTemplates(tenantID uint, channelID 
 	if err := q.Order("id DESC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
+	for index := range rows {
+		values, err := promotionBusinessTypesForTemplate(db, &rows[index])
+		if err != nil {
+			return nil, err
+		}
+		rows[index].BusinessTypes = values
+	}
 	return rows, nil
 }
 
 func (s *CommercePromotionService) CreateAssistCampaign(tenantID uint, input CreateCommerceAssistCampaignInput) (*model.CommerceAssistCampaign, error) {
 	input.Title = strings.TrimSpace(input.Title)
 	input.BusinessType = strings.TrimSpace(input.BusinessType)
-	if input.Title == "" || len([]rune(input.Title)) > 160 || !promotionBusinessType(input.BusinessType) || input.StarterCouponTemplateID == 0 || input.HelperCouponTemplateID == 0 || input.RequiredUniqueHelpers <= 0 || input.PerStarterSessionLimit <= 0 || !input.EndsAt.After(input.StartsAt) {
+	businessTypes, err := normalizePromotionBusinessTypes(input.BusinessTypes, input.BusinessType)
+	if err != nil {
+		return nil, err
+	}
+	input.BusinessType = businessTypes[0]
+	if input.Title == "" || len([]rune(input.Title)) > 160 || input.StarterCouponTemplateID == 0 || input.HelperCouponTemplateID == 0 || input.RequiredUniqueHelpers <= 0 || input.PerStarterSessionLimit <= 0 || !input.EndsAt.After(input.StartsAt) {
 		return nil, ErrCommercePromotionInvalid
 	}
 	status, err := normalizeTemplateStatus(input.Status)
@@ -513,14 +774,17 @@ func (s *CommercePromotionService) CreateAssistCampaign(tenantID uint, input Cre
 	}
 	var result *model.CommerceAssistCampaign
 	err = s.write(func(tx *gorm.DB) error {
-		if err := s.checkScope(tx, tenantID, input.ChannelAccountID, input.BusinessType); err != nil {
+		if err := s.checkBusinessTypes(tx, tenantID, input.ChannelAccountID, businessTypes); err != nil {
 			return err
 		}
-		if err := s.validateCampaignTemplates(tx, tenantID, input.ChannelAccountID, input.BusinessType, input.StarterCouponTemplateID, input.HelperCouponTemplateID, status == "active"); err != nil {
+		if err := s.validateCampaignTemplates(tx, tenantID, input.ChannelAccountID, businessTypes, input.StarterCouponTemplateID, input.HelperCouponTemplateID, status == "active"); err != nil {
 			return err
 		}
 		row := &model.CommerceAssistCampaign{TenantID: tenantID, ChannelAccountID: input.ChannelAccountID, BusinessType: input.BusinessType, Title: input.Title, StarterCouponTemplateID: input.StarterCouponTemplateID, HelperCouponTemplateID: input.HelperCouponTemplateID, RequiredUniqueHelpers: input.RequiredUniqueHelpers, PerStarterSessionLimit: input.PerStarterSessionLimit, StartsAt: input.StartsAt, EndsAt: input.EndsAt, Status: status}
 		if err := tx.Create(row).Error; err != nil {
+			return err
+		}
+		if err := ensurePromotionCampaignScopes(tx, row, businessTypes); err != nil {
 			return err
 		}
 		result = row
@@ -529,9 +793,9 @@ func (s *CommercePromotionService) CreateAssistCampaign(tenantID uint, input Cre
 	return result, err
 }
 
-func (s *CommercePromotionService) validateCampaignTemplates(tx *gorm.DB, tenantID, channelID uint, businessType string, starterID, helperID uint, active bool) error {
+func (s *CommercePromotionService) validateCampaignTemplates(tx *gorm.DB, tenantID, channelID uint, businessTypes []string, starterID, helperID uint, active bool) error {
 	var rows []model.CommerceCouponTemplate
-	if err := tx.Where("id IN ? AND tenant_id = ? AND channel_account_id = ? AND business_type = ?", []uint{starterID, helperID}, tenantID, channelID, businessType).Find(&rows).Error; err != nil {
+	if err := tx.Where("id IN ? AND tenant_id = ? AND channel_account_id = ?", []uint{starterID, helperID}, tenantID, channelID).Find(&rows).Error; err != nil {
 		return err
 	}
 	expected := 2
@@ -540,6 +804,17 @@ func (s *CommercePromotionService) validateCampaignTemplates(tx *gorm.DB, tenant
 	}
 	if len(rows) != expected {
 		return ErrPromotionScopeDenied
+	}
+	for index := range rows {
+		types, err := promotionBusinessTypesForTemplate(tx, &rows[index])
+		if err != nil {
+			return err
+		}
+		for _, businessType := range businessTypes {
+			if !containsPromotionBusinessType(types, businessType) {
+				return ErrPromotionScopeDenied
+			}
+		}
 	}
 	if active {
 		for _, row := range rows {
@@ -566,18 +841,35 @@ func (s *CommercePromotionService) UpdateAssistCampaign(tenantID, campaignID uin
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", campaignID, tenantID).First(&row).Error; err != nil {
 			return err
 		}
-		if err := s.checkScope(tx, tenantID, row.ChannelAccountID, row.BusinessType); err != nil {
+		businessTypes, scopeErr := promotionBusinessTypesForCampaign(tx, &row)
+		if scopeErr != nil {
+			return scopeErr
+		}
+		if err := s.checkBusinessTypes(tx, tenantID, row.ChannelAccountID, businessTypes); err != nil {
+			return err
+		}
+		if len(input.BusinessTypes) > 0 {
+			businessTypes, scopeErr = normalizePromotionBusinessTypes(input.BusinessTypes, "")
+			if scopeErr != nil {
+				return scopeErr
+			}
+		}
+		if err := s.checkBusinessTypes(tx, tenantID, row.ChannelAccountID, businessTypes); err != nil {
 			return err
 		}
 		if status == "active" {
-			if err := s.validateCampaignTemplates(tx, tenantID, row.ChannelAccountID, row.BusinessType, row.StarterCouponTemplateID, row.HelperCouponTemplateID, true); err != nil {
+			if err := s.validateCampaignTemplates(tx, tenantID, row.ChannelAccountID, businessTypes, row.StarterCouponTemplateID, row.HelperCouponTemplateID, true); err != nil {
 				return err
 			}
 		}
-		if err := tx.Model(&row).Updates(map[string]interface{}{"title": input.Title, "starts_at": input.StartsAt, "ends_at": input.EndsAt, "required_unique_helpers": input.RequiredUniqueHelpers, "per_starter_session_limit": input.PerStarterSessionLimit, "status": status}).Error; err != nil {
+		if err := tx.Model(&row).Updates(map[string]interface{}{"title": input.Title, "starts_at": input.StartsAt, "ends_at": input.EndsAt, "required_unique_helpers": input.RequiredUniqueHelpers, "per_starter_session_limit": input.PerStarterSessionLimit, "status": status, "business_type": businessTypes[0]}).Error; err != nil {
 			return err
 		}
-		row.Title, row.StartsAt, row.EndsAt, row.RequiredUniqueHelpers, row.PerStarterSessionLimit, row.Status = input.Title, input.StartsAt, input.EndsAt, input.RequiredUniqueHelpers, input.PerStarterSessionLimit, status
+		row.Title, row.StartsAt, row.EndsAt, row.RequiredUniqueHelpers, row.PerStarterSessionLimit, row.Status, row.BusinessType = input.Title, input.StartsAt, input.EndsAt, input.RequiredUniqueHelpers, input.PerStarterSessionLimit, status, businessTypes[0]
+		if err := ensurePromotionCampaignScopes(tx, &row, businessTypes); err != nil {
+			return err
+		}
+		row.BusinessTypes = businessTypes
 		result = &row
 		return nil
 	})
@@ -594,7 +886,7 @@ func (s *CommercePromotionService) ListAssistCampaigns(tenantID uint, channelID 
 		q = q.Where("channel_account_id = ?", channelID)
 	}
 	if businessType != "" {
-		q = q.Where("business_type = ?", businessType)
+		q = q.Where("business_type = ? OR EXISTS (SELECT 1 FROM commerce_assist_campaign_business_types scope WHERE scope.campaign_id = commerce_assist_campaigns.id AND scope.tenant_id = commerce_assist_campaigns.tenant_id AND scope.channel_account_id = commerce_assist_campaigns.channel_account_id AND scope.business_type = ?)", businessType, businessType)
 	}
 	if status != "" {
 		q = q.Where("status = ?", status)
@@ -602,6 +894,13 @@ func (s *CommercePromotionService) ListAssistCampaigns(tenantID uint, channelID 
 	var rows []model.CommerceAssistCampaign
 	if err := q.Order("id DESC").Find(&rows).Error; err != nil {
 		return nil, err
+	}
+	for index := range rows {
+		values, err := promotionBusinessTypesForCampaign(db, &rows[index])
+		if err != nil {
+			return nil, err
+		}
+		rows[index].BusinessTypes = values
 	}
 	return rows, nil
 }
@@ -619,13 +918,14 @@ func newAssistToken() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func couponBenefitView(template *model.CommerceCouponTemplate) CommerceCouponBenefitView {
+func couponBenefitView(template *model.CommerceCouponTemplate, businessTypes []string) CommerceCouponBenefitView {
 	if template == nil {
 		return CommerceCouponBenefitView{}
 	}
 	return CommerceCouponBenefitView{
 		DiscountCents: template.DiscountCents, MinGoodsSubtotalCents: template.MinGoodsSubtotalCents,
 		ValidDays: template.ValidDays, TemplateEndsAt: template.EndsAt,
+		BusinessTypes: append([]string(nil), businessTypes...),
 	}
 }
 
@@ -634,11 +934,24 @@ func (s *CommercePromotionService) assistCampaignView(tx *gorm.DB, campaign *mod
 		return CommerceAssistCampaignView{}, ErrCommercePromotionInvalid
 	}
 	var templates []model.CommerceCouponTemplate
-	if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND business_type = ? AND id IN ?", campaign.TenantID, campaign.ChannelAccountID, campaign.BusinessType, []uint{campaign.StarterCouponTemplateID, campaign.HelperCouponTemplateID}).Find(&templates).Error; err != nil {
+	if err := tx.Where("tenant_id = ? AND channel_account_id = ? AND id IN ?", campaign.TenantID, campaign.ChannelAccountID, []uint{campaign.StarterCouponTemplateID, campaign.HelperCouponTemplateID}).Find(&templates).Error; err != nil {
+		return CommerceAssistCampaignView{}, err
+	}
+	businessTypes, err := promotionBusinessTypesForCampaign(tx, campaign)
+	if err != nil {
 		return CommerceAssistCampaignView{}, err
 	}
 	byID := make(map[uint]*model.CommerceCouponTemplate, len(templates))
 	for index := range templates {
+		types, typeErr := promotionBusinessTypesForTemplate(tx, &templates[index])
+		if typeErr != nil {
+			return CommerceAssistCampaignView{}, typeErr
+		}
+		for _, businessType := range businessTypes {
+			if !containsPromotionBusinessType(types, businessType) {
+				return CommerceAssistCampaignView{}, ErrPromotionScopeDenied
+			}
+		}
 		byID[templates[index].ID] = &templates[index]
 	}
 	starter, starterOK := byID[campaign.StarterCouponTemplateID]
@@ -646,11 +959,20 @@ func (s *CommercePromotionService) assistCampaignView(tx *gorm.DB, campaign *mod
 	if !starterOK || !helperOK {
 		return CommerceAssistCampaignView{}, ErrPromotionScopeDenied
 	}
+	starterTypes, err := promotionBusinessTypesForTemplate(tx, starter)
+	if err != nil {
+		return CommerceAssistCampaignView{}, err
+	}
+	helperTypes, err := promotionBusinessTypesForTemplate(tx, helper)
+	if err != nil {
+		return CommerceAssistCampaignView{}, err
+	}
 	return CommerceAssistCampaignView{
 		ID: campaign.ID, Title: campaign.Title, BusinessType: campaign.BusinessType,
+		BusinessTypes:         businessTypes,
 		RequiredUniqueHelpers: campaign.RequiredUniqueHelpers, StartsAt: campaign.StartsAt,
 		EndsAt: campaign.EndsAt, Status: campaign.Status,
-		StarterReward: couponBenefitView(starter), HelperReward: couponBenefitView(helper),
+		StarterReward: couponBenefitView(starter, starterTypes), HelperReward: couponBenefitView(helper, helperTypes),
 	}, nil
 }
 
@@ -665,7 +987,8 @@ func (s *CommercePromotionService) sessionView(tx *gorm.DB, row *model.CommerceA
 	}
 	return CommerceAssistSessionView{
 		ID: row.ID, CampaignID: row.CampaignID, Title: campaign.Title, BusinessType: campaign.BusinessType,
-		Status: row.Status, HelperCount: row.HelperCount, RequiredUniqueHelpers: campaign.RequiredUniqueHelpers,
+		BusinessTypes: view.BusinessTypes,
+		Status:        row.Status, HelperCount: row.HelperCount, RequiredUniqueHelpers: campaign.RequiredUniqueHelpers,
 		ExpiresAt: row.ExpiresAt, SucceededAt: row.SucceededAt,
 		StarterReward: view.StarterReward, HelperReward: view.HelperReward,
 	}, nil
@@ -686,7 +1009,11 @@ func (s *CommercePromotionService) CreateAssistSession(tenantID, campaignID uint
 		if campaign.TenantID != tenantID {
 			return ErrPromotionScopeDenied
 		}
-		if err := s.checkScope(tx, tenantID, campaign.ChannelAccountID, campaign.BusinessType); err != nil {
+		businessTypes, scopeErr := promotionBusinessTypesForCampaign(tx, &campaign)
+		if scopeErr != nil {
+			return scopeErr
+		}
+		if err := s.checkBusinessTypes(tx, tenantID, campaign.ChannelAccountID, businessTypes); err != nil {
 			return ErrPromotionScopeDenied
 		}
 		now := s.now()
@@ -787,7 +1114,11 @@ func (s *CommercePromotionService) HelpAssist(tenantID uint, rawToken, helperCus
 		if campaign.TenantID != tenantID {
 			return ErrPromotionScopeDenied
 		}
-		if err := s.checkScope(tx, tenantID, campaign.ChannelAccountID, campaign.BusinessType); err != nil {
+		businessTypes, scopeErr := promotionBusinessTypesForCampaign(tx, &campaign)
+		if scopeErr != nil {
+			return scopeErr
+		}
+		if err := s.checkBusinessTypes(tx, tenantID, campaign.ChannelAccountID, businessTypes); err != nil {
 			return ErrPromotionScopeDenied
 		}
 		now := s.now()
@@ -843,14 +1174,32 @@ func (s *CommercePromotionService) HelpAssist(tenantID uint, rawToken, helperCus
 
 func (s *CommercePromotionService) issueGrantTx(tx *gorm.DB, campaign *model.CommerceAssistCampaign, templateID uint, customerID, source, sourceIdentity string, now time.Time) (*model.CommerceCouponGrant, error) {
 	var template model.CommerceCouponTemplate
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND channel_account_id = ? AND business_type = ?", templateID, campaign.TenantID, campaign.ChannelAccountID, campaign.BusinessType).First(&template).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND channel_account_id = ?", templateID, campaign.TenantID, campaign.ChannelAccountID).First(&template).Error; err != nil {
 		return nil, ErrPromotionScopeDenied
+	}
+	campaignTypes, err := promotionBusinessTypesForCampaign(tx, campaign)
+	if err != nil {
+		return nil, err
+	}
+	templateTypes, err := promotionBusinessTypesForTemplate(tx, &template)
+	if err != nil {
+		return nil, err
+	}
+	for _, businessType := range campaignTypes {
+		if !containsPromotionBusinessType(templateTypes, businessType) {
+			return nil, ErrPromotionScopeDenied
+		}
 	}
 	if template.Status != "active" || (template.StartsAt != nil && now.Before(*template.StartsAt)) || (template.EndsAt != nil && !now.Before(*template.EndsAt)) {
 		return nil, ErrPromotionUnavailable
 	}
 	var existing model.CommerceCouponGrant
 	if err := tx.Where("tenant_id = ? AND template_id = ? AND source = ? AND source_identity = ? AND customer_id = ?", campaign.TenantID, templateID, source, sourceIdentity, customerID).First(&existing).Error; err == nil {
+		existingTypes, typesErr := promotionBusinessTypesForGrant(tx, &existing)
+		if typesErr != nil {
+			return nil, typesErr
+		}
+		existing.BusinessTypes = existingTypes
 		return &existing, nil
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
@@ -880,16 +1229,28 @@ func (s *CommercePromotionService) issueGrantTx(tx *gorm.DB, campaign *model.Com
 	if template.EndsAt != nil && expires.After(*template.EndsAt) {
 		expires = *template.EndsAt
 	}
+	// A grant is an immutable snapshot of the selected coupon template. The
+	// campaign must cover its own configured scope, but it must not narrow or
+	// rewrite the coupon's store-level applicability when the reward is issued.
 	row := &model.CommerceCouponGrant{TenantID: campaign.TenantID, TemplateID: template.ID, ChannelAccountID: template.ChannelAccountID, BusinessType: template.BusinessType, CustomerID: customerID, Source: source, SourceIdentity: sourceIdentity, DiscountCents: template.DiscountCents, MinGoodsSubtotalCents: template.MinGoodsSubtotalCents, RefundReturnPolicy: template.RefundReturnPolicy, Status: "available", ExpiresAt: expires}
 	if err := tx.Create(row).Error; err != nil {
 		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			var retry model.CommerceCouponGrant
 			if retryErr := tx.Where("tenant_id = ? AND template_id = ? AND source = ? AND source_identity = ? AND customer_id = ?", campaign.TenantID, templateID, source, sourceIdentity, customerID).First(&retry).Error; retryErr == nil {
+				retryTypes, typesErr := promotionBusinessTypesForGrant(tx, &retry)
+				if typesErr != nil {
+					return nil, typesErr
+				}
+				retry.BusinessTypes = retryTypes
 				return &retry, nil
 			}
 		}
 		return nil, err
 	}
+	if err := ensurePromotionGrantScopes(tx, row, templateTypes); err != nil {
+		return nil, err
+	}
+	row.BusinessTypes = append([]string(nil), templateTypes...)
 	return row, nil
 }
 
@@ -905,11 +1266,21 @@ func (s *CommercePromotionService) ListAvailableCoupons(tenantID uint, channelID
 		if err := s.checkScope(tx, tenantID, channelID, businessType); err != nil {
 			return err
 		}
-		if err := tx.Model(&model.CommerceCouponGrant{}).Where("tenant_id = ? AND channel_account_id = ? AND business_type = ? AND customer_id = ? AND status = ? AND expires_at <= ?", tenantID, channelID, businessType, customerID, "available", now).Updates(map[string]interface{}{"status": "expired"}).Error; err != nil {
+		if err := tx.Model(&model.CommerceCouponGrant{}).Where("tenant_id = ? AND channel_account_id = ? AND customer_id = ? AND status = ? AND expires_at <= ? AND (business_type = ? OR EXISTS (SELECT 1 FROM commerce_coupon_grant_business_types scope WHERE scope.grant_id = commerce_coupon_grants.id AND scope.tenant_id = commerce_coupon_grants.tenant_id AND scope.channel_account_id = commerce_coupon_grants.channel_account_id AND scope.business_type = ?))", tenantID, channelID, customerID, "available", now, businessType, businessType).Updates(map[string]interface{}{"status": "expired"}).Error; err != nil {
 			return err
 		}
-		q := tx.Where("tenant_id = ? AND channel_account_id = ? AND business_type = ? AND customer_id = ? AND status = ? AND expires_at > ?", tenantID, channelID, businessType, customerID, "available", now)
-		return q.Order("expires_at ASC, id ASC").Find(&rows).Error
+		q := tx.Where("tenant_id = ? AND channel_account_id = ? AND customer_id = ? AND status = ? AND expires_at > ? AND (business_type = ? OR EXISTS (SELECT 1 FROM commerce_coupon_grant_business_types scope WHERE scope.grant_id = commerce_coupon_grants.id AND scope.tenant_id = commerce_coupon_grants.tenant_id AND scope.channel_account_id = commerce_coupon_grants.channel_account_id AND scope.business_type = ?))", tenantID, channelID, customerID, "available", now, businessType, businessType)
+		if err := q.Order("expires_at ASC, id ASC").Find(&rows).Error; err != nil {
+			return err
+		}
+		for index := range rows {
+			values, err := promotionBusinessTypesForGrant(tx, &rows[index])
+			if err != nil {
+				return err
+			}
+			rows[index].BusinessTypes = values
+		}
+		return nil
 	})
 	return rows, err
 }
@@ -923,7 +1294,7 @@ func (s *CommercePromotionService) ReserveCouponTx(tx *gorm.DB, tenantID, orderI
 	}
 	now := s.now()
 	var grant model.CommerceCouponGrant
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND channel_account_id = ? AND business_type = ? AND customer_id = ? AND status = ? AND expires_at > ?", tenantID, channelID, businessType, customerID, "available", now).Order("expires_at ASC, id ASC").First(&grant).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND channel_account_id = ? AND customer_id = ? AND status = ? AND expires_at > ? AND (business_type = ? OR EXISTS (SELECT 1 FROM commerce_coupon_grant_business_types scope WHERE scope.grant_id = commerce_coupon_grants.id AND scope.tenant_id = commerce_coupon_grants.tenant_id AND scope.channel_account_id = commerce_coupon_grants.channel_account_id AND scope.business_type = ?))", tenantID, channelID, customerID, "available", now, businessType, businessType).Order("expires_at ASC, id ASC").First(&grant).Error; err != nil {
 		return nil, ErrCouponNotOwned
 	}
 	return s.reserveCouponGrantTx(tx, tenantID, orderID, grant.ID, customerID, businessType, channelID, goodsSubtotalCents, now)
@@ -959,7 +1330,11 @@ func (s *CommercePromotionService) reserveCouponGrantTx(tx *gorm.DB, tenantID, o
 		}
 		return nil, err
 	}
-	if grant.ChannelAccountID != channelID || grant.BusinessType != businessType || grant.CustomerID != customerID {
+	if grant.ChannelAccountID != channelID || grant.CustomerID != customerID {
+		return nil, ErrCouponNotOwned
+	}
+	grantTypes, err := promotionBusinessTypesForGrant(tx, &grant)
+	if err != nil || !containsPromotionBusinessType(grantTypes, businessType) {
 		return nil, ErrCouponNotOwned
 	}
 	if grant.Status == "available" && !now.Before(grant.ExpiresAt) {
@@ -994,6 +1369,7 @@ func (s *CommercePromotionService) reserveCouponGrantTx(tx *gorm.DB, tenantID, o
 		return nil, err
 	}
 	grant.Status, grant.ReservedOrderID, grant.ReservedAt = "reserved", orderID, &now
+	grant.BusinessTypes = grantTypes
 	return &grant, nil
 }
 

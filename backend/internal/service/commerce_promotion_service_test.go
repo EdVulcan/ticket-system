@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -13,8 +14,11 @@ func ensureCommercePromotionSchema(t *testing.T) {
 	t.Helper()
 	if err := model.DB.AutoMigrate(
 		&model.CommerceCouponTemplate{},
+		&model.CommerceCouponTemplateBusinessType{},
 		&model.CommerceCouponGrant{},
+		&model.CommerceCouponGrantBusinessType{},
 		&model.CommerceAssistCampaign{},
+		&model.CommerceAssistCampaignBusinessType{},
 		&model.CommerceAssistSession{},
 		&model.CommerceAssistRecord{},
 	); err != nil {
@@ -26,12 +30,108 @@ func resetCommercePromotionData(t *testing.T) {
 	t.Helper()
 	for _, table := range []interface{}{
 		&model.CommerceAssistRecord{}, &model.CommerceAssistSession{},
-		&model.CommerceAssistCampaign{}, &model.CommerceCouponGrant{},
-		&model.CommerceCouponTemplate{},
+		&model.CommerceAssistCampaignBusinessType{}, &model.CommerceAssistCampaign{},
+		&model.CommerceCouponGrantBusinessType{}, &model.CommerceCouponGrant{},
+		&model.CommerceCouponTemplateBusinessType{}, &model.CommerceCouponTemplate{},
 	} {
 		if err := model.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(table).Error; err != nil {
 			t.Fatalf("reset promotion table %T: %v", table, err)
 		}
+	}
+}
+
+func TestCommercePromotionBusinessScopesShareStoreChannelAndSnapshotGrantScope(t *testing.T) {
+	ensureCommercePromotionSchema(t)
+	if !promotionScopeIncludesBusinessType(nil, "restaurant") {
+		t.Fatal("legacy singular business_type should satisfy scoped validation")
+	}
+	if promotionScopeIncludesBusinessType([]string{"retail"}, "restaurant") {
+		t.Fatal("a different normalized business scope must be rejected")
+	}
+	tenantID := newCommerceTenant(t, "restaurant", "active")
+	resetCommercePromotionData(t)
+	if err := model.DB.Create(&model.TenantBusinessCapability{TenantID: tenantID, BusinessType: "retail", Status: "active"}).Error; err != nil {
+		t.Fatalf("enable retail capability: %v", err)
+	}
+	channel := &model.ChannelAccount{
+		TenantID: tenantID,
+		Code:     fmt.Sprintf("promotion-shared-%d", time.Now().UnixNano()),
+		Type:     "wechat_miniapp",
+		Status:   "active",
+	}
+	if err := model.DB.Create(channel).Error; err != nil {
+		t.Fatalf("create storefront channel: %v", err)
+	}
+	now := time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC)
+	end := now.Add(24 * time.Hour)
+	service := &CommercePromotionService{DB: model.DB, Clock: func() time.Time { return now }}
+	template, err := service.CreateCouponTemplate(tenantID, CreateCommerceCouponTemplateInput{
+		ChannelAccountID: channel.ID, BusinessTypes: []string{"restaurant", "retail"}, Name: "shared reward",
+		DiscountCents: 300, MinGoodsSubtotalCents: 1000, ValidDays: 1, StartsAt: &now, EndsAt: &end,
+		Status: "active", PerCustomerCap: 2,
+	})
+	if err != nil {
+		t.Fatalf("create shared template: %v", err)
+	}
+	if len(template.BusinessTypes) != 2 || template.BusinessTypes[0] != "restaurant" || template.BusinessTypes[1] != "retail" {
+		t.Fatalf("template scope=%v", template.BusinessTypes)
+	}
+	campaign, err := service.CreateAssistCampaign(tenantID, CreateCommerceAssistCampaignInput{
+		ChannelAccountID: channel.ID, BusinessTypes: []string{"restaurant"}, Title: "restaurant entry",
+		StarterCouponTemplateID: template.ID, HelperCouponTemplateID: template.ID,
+		RequiredUniqueHelpers: 1, PerStarterSessionLimit: 1, StartsAt: now, EndsAt: end, Status: "active",
+	})
+	if err != nil {
+		t.Fatalf("create scoped campaign: %v", err)
+	}
+	session, err := service.CreateAssistSession(tenantID, campaign.ID, "starter", "shared-scope-request")
+	if err != nil {
+		t.Fatalf("create assist session: %v", err)
+	}
+	result, err := service.HelpAssist(tenantID, session.ShareToken, "helper")
+	if err != nil {
+		t.Fatalf("help assist: %v", err)
+	}
+	if len(result.View.HelperReward.BusinessTypes) != 2 || result.View.HelperReward.BusinessTypes[0] != "restaurant" || result.View.HelperReward.BusinessTypes[1] != "retail" {
+		t.Fatalf("assist reward scope=%v, want template scope", result.View.HelperReward.BusinessTypes)
+	}
+	var grant model.CommerceCouponGrant
+	if err := model.DB.First(&grant, result.HelperGrantID).Error; err != nil {
+		t.Fatalf("load helper grant: %v", err)
+	}
+	grantTypes, err := promotionBusinessTypesForGrant(model.DB, &grant)
+	if err != nil || len(grantTypes) != 2 || grantTypes[0] != "restaurant" || grantTypes[1] != "retail" {
+		t.Fatalf("grant scope=%v err=%v, want template snapshot", grantTypes, err)
+	}
+	rows, err := service.ListAvailableCoupons(tenantID, channel.ID, "retail", "helper")
+	if err != nil || len(rows) != 1 || rows[0].ID != grant.ID {
+		t.Fatalf("cross-business coupon rows=%+v err=%v", rows, err)
+	}
+	if _, err := service.UpdateCouponTemplateForScope(CommercePromotionScope{
+		TenantID: tenantID, ChannelAccountID: channel.ID, BusinessType: "restaurant",
+	}, template.ID, UpdateCommerceCouponTemplateInput{
+		BusinessTypes: []string{"retail"}, Name: template.Name, StartsAt: &now, EndsAt: &end,
+		Status: "active", IssuanceCap: template.IssuanceCap, PerCustomerCap: template.PerCustomerCap,
+	}); !errors.Is(err, ErrPromotionScopeDenied) {
+		t.Fatalf("scoped update removing authorized business type err=%v", err)
+	}
+	var unchanged model.CommerceCouponTemplate
+	if err := model.DB.First(&unchanged, template.ID).Error; err != nil {
+		t.Fatalf("load unchanged template: %v", err)
+	}
+	unchangedTypes, err := promotionBusinessTypesForTemplate(model.DB, &unchanged)
+	if err != nil || len(unchangedTypes) != 2 {
+		t.Fatalf("template mutated after rejected update: types=%v err=%v", unchangedTypes, err)
+	}
+	if _, err := service.UpdateCouponTemplate(tenantID, template.ID, UpdateCommerceCouponTemplateInput{
+		BusinessTypes: []string{"restaurant"}, Name: template.Name, StartsAt: &now, EndsAt: &end,
+		Status: "active", IssuanceCap: template.IssuanceCap, PerCustomerCap: template.PerCustomerCap,
+	}); err != nil {
+		t.Fatalf("store-wide scope update: %v", err)
+	}
+	var retained model.CommerceCouponGrantBusinessType
+	if err := model.DB.Where("tenant_id = ? AND channel_account_id = ? AND grant_id = ? AND business_type = ?", tenantID, channel.ID, grant.ID, "retail").First(&retained).Error; err != nil {
+		t.Fatalf("issued grant scope was rewritten by template update: %v", err)
 	}
 }
 

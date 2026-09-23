@@ -222,7 +222,16 @@ func (s *CommerceStatsService) Get(q CommerceStatsQuery) (*CommerceStats, error)
 		}
 	}
 
-	assist := s.db().Model(&model.CommerceAssistSession{}).Where("tenant_id = ? AND status = 'succeeded' AND succeeded_at IS NOT NULL", q.TenantID).Where("campaign_id IN (?)", s.db().Model(&model.CommerceAssistCampaign{}).Select("id").Where("tenant_id = ? AND business_type = ?", q.TenantID, q.BusinessType))
+	// A campaign keeps business_type as a legacy primary value, while the
+	// normalized scope table is authoritative for multi-business campaigns.
+	// Match both representations so historical campaigns and newly scoped
+	// campaigns contribute to the same business report without crossing tenant
+	// or campaign/channel boundaries.
+	assist := s.db().Model(&model.CommerceAssistSession{}).
+		Where("tenant_id = ? AND status = 'succeeded' AND succeeded_at IS NOT NULL", q.TenantID).
+		Where("campaign_id IN (?)", s.db().Model(&model.CommerceAssistCampaign{}).
+			Select("id").
+			Where("tenant_id = ? AND (business_type = ? OR EXISTS (SELECT 1 FROM commerce_assist_campaign_business_types scope WHERE scope.tenant_id = commerce_assist_campaigns.tenant_id AND scope.campaign_id = commerce_assist_campaigns.id AND scope.channel_account_id = commerce_assist_campaigns.channel_account_id AND scope.business_type = ?))", q.TenantID, q.BusinessType, q.BusinessType))
 	if q.StartAt != nil {
 		assist = assist.Where("succeeded_at >= ?", *q.StartAt)
 	}
