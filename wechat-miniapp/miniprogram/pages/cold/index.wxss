@@ -1,0 +1,4 @@
+@import "../../pages/index/index.wxss";
+
+.home-page--cold .hero-card { background: #f4e9df; border-color: #eadbd0; }
+.menu-placeholder--cold { background: #f7ece5; color: #8b6255; }

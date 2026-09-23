@@ -1,0 +1,57 @@
+@import "../../../styles/common.wxss";
+.profile-page { padding-top: 42rpx; }
+.profile-header { display: flex; align-items: center; gap: 22rpx; }
+.avatar { width: 100rpx; height: 100rpx; background: var(--green-soft); border-radius: 50%; display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0; }
+.profile-copy { min-width: 0; }
+.profile-name { font-size: 38rpx; font-weight: 700; }
+.profile-sub { font-size: 22rpx; color: var(--muted); margin-top: 8rpx; }
+.coupon-banner { display: flex; align-items: center; gap: 20rpx; background: var(--green); border-radius: 16rpx; padding: 30rpx 26rpx; color: #fff; }
+.coupon-banner-copy { flex: 1; min-width: 0; }
+.coupon-banner-copy view:first-child { font-size: 30rpx; font-weight: 600; }
+.coupon-banner-copy view:last-child { color: #d2dfd0; font-size: 21rpx; margin-top: 8rpx; }
+.coupon-banner-number { flex-shrink: 0; font-size: 66rpx; line-height: 1; font-family: "DIN Alternate", sans-serif; }
+.coupon-banner-number text { font-size: 23rpx; margin-left: 8rpx; }
+.coupon-panel { margin-top: 14rpx; padding: 8rpx 24rpx; }
+.profile-coupon { display: flex; align-items: center; padding: 24rpx 0; border-bottom: 1rpx dashed var(--line); gap: 20rpx; }
+.profile-coupon:last-child { border: 0; }
+.profile-coupon-amount { color: var(--red); font-size: 46rpx; font-weight: 700; min-width: 92rpx; }
+.profile-coupon-copy { font-size: 26rpx; min-width: 0; }
+.profile-coupon-copy view:not(:first-child) { color: var(--muted); font-size: 21rpx; margin-top: 5rpx; }
+.coupon-empty { padding: 24rpx 0; text-align: center; }
+.quick-orders { padding: 32rpx 0; border-bottom: 1rpx solid var(--line); }
+.quick-orders-head { display: flex; justify-content: space-between; align-items: center; }
+.detail-card-title { font-size: 30rpx; font-weight: 600; }
+.quick-order-grid { display: flex; margin-top: 26rpx; }
+.quick-order-item { box-sizing: border-box; flex: 1; min-width: 0; text-align: center; font-size: 23rpx; color: var(--muted); position: relative; padding: 8rpx 4rpx; }
+.quick-order-icon { width: 48rpx; height: 48rpx; margin-bottom: 12rpx; }
+.quick-order-item text { position: absolute; top: 0; right: 30rpx; background: var(--red); color: #fff; border-radius: 20rpx; font-size: 18rpx; min-width: 28rpx; padding: 0 6rpx; }
+.menu-row { display: flex; align-items: center; gap: 20rpx; padding: 30rpx 0; border-bottom: 1rpx solid var(--line); }
+.menu-icon { width: 44rpx; height: 44rpx; flex-shrink: 0; }
+.menu-copy { flex: 1; min-width: 0; }
+.menu-copy view:first-child { font-size: 28rpx; }
+.menu-copy view:last-child { font-size: 22rpx; color: var(--muted); margin-top: 6rpx; }
+.profile-theme { display: flex; align-items: center; gap: 22rpx; margin: 30rpx 0; padding: 24rpx; background: #eeeee3; border-radius: 18rpx; }
+.profile-brand-name { font-family: "Songti SC", "SimSun", serif; color: var(--ink); font-size: 32rpx; font-weight: 600; letter-spacing: 2rpx; }
+.profile-brand-tagline { color: var(--muted); font-size: 22rpx; margin-top: 6rpx; }
+.profile-rabbits { width: 86rpx; height: 78rpx; }
+.contact-overlay { align-items: flex-end; background: rgba(25, 31, 28, .46); bottom: 0; display: flex; left: 0; position: fixed; right: 0; top: 0; z-index: 80; }
+.contact-sheet { background: #fbfaf6; border-radius: 28rpx 28rpx 0 0; box-sizing: border-box; padding: 16rpx 36rpx calc(34rpx + env(safe-area-inset-bottom)); width: 100%; }
+.contact-sheet-handle { background: #d9d8d1; border-radius: 999rpx; height: 8rpx; margin: 0 auto 26rpx; width: 72rpx; }
+.contact-sheet-head { align-items: flex-start; display: flex; justify-content: space-between; gap: 24rpx; }
+.contact-sheet-title { color: var(--ink); font-size: 34rpx; font-weight: 700; }
+.contact-sheet-sub { color: var(--muted); font-size: 23rpx; margin-top: 7rpx; }
+.contact-close { align-items: center; background: #efeee8; border-radius: 50%; display: flex; flex: 0 0 64rpx; height: 64rpx; justify-content: center; width: 64rpx; }
+.contact-close image { height: 28rpx; width: 28rpx; }
+.contact-qr-wrap { background: #fff; border: 1rpx solid var(--line); border-radius: 16rpx; box-shadow: 0 12rpx 36rpx rgba(35, 62, 53, .08); box-sizing: border-box; height: 440rpx; margin: 28rpx auto 0; padding: 22rpx; width: 440rpx; }
+.contact-qr { display: block; height: 100%; width: 100%; }
+.contact-tip { color: var(--muted); font-size: 22rpx; margin-top: 16rpx; text-align: center; }
+.contact-wechat-row { align-items: center; background: #f0f1e9; border-radius: 14rpx; display: flex; gap: 20rpx; justify-content: space-between; margin-top: 26rpx; min-width: 0; padding: 20rpx 22rpx; }
+.contact-wechat-copy { min-width: 0; }
+.contact-wechat-copy text { color: var(--muted); display: block; font-size: 20rpx; }
+.contact-wechat-copy view { color: var(--ink); font-size: 27rpx; margin-top: 4rpx; overflow-wrap: anywhere; }
+.contact-copy-button { align-items: center; background: var(--green); border: 0; border-radius: 10rpx; color: #fff; display: flex; flex: 0 0 auto; font-size: 23rpx; gap: 8rpx; line-height: 1; margin: 0; padding: 18rpx 22rpx; }
+.contact-copy-button::after { border: 0; }
+.contact-copy-button image { filter: brightness(0) invert(1); height: 24rpx; width: 24rpx; }
+@media (max-width: 340px) {
+  .contact-qr-wrap { height: 380rpx; width: 380rpx; }
+}

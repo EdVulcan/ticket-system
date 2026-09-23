@@ -1,0 +1,12 @@
+<view class="page-shell order-list-page">
+  <view class="order-heading"><view class="section-title">我的订单</view><view class="muted-text">每一笔订单，都值得认真对待</view></view>
+  <scroll-view scroll-x class="order-tabs" show-scrollbar="{{false}}"><view class="order-tabs-row"><view wx:for="{{tabs}}" wx:key="id" class="order-tab {{activeTab === item.id ? 'order-tab--active' : ''}}" data-id="{{item.id}}" bindtap="selectTab">{{item.name}}<text wx:if="{{item.count}}">{{item.count}}</text></view></view></scroll-view>
+  <view wx:if="{{filteredOrders.length}}" class="orders">
+    <view wx:for="{{filteredOrders}}" wx:key="id" class="order-card card" data-id="{{item.id}}" bindtap="openOrder">
+      <view class="order-card-head"><view><view class="order-kind">{{item.fulfillmentText}}</view><view class="order-time">{{item.createdText}}</view></view><view class="order-status order-status--{{item.status}}">{{item.statusText}}</view></view>
+      <view class="order-items"><view wx:for="{{item.itemsSnapshot}}" wx:key="lineId" class="order-item"><view class="order-item-visual" style="background: {{item.color}};"><image wx:if="{{item.coverImageUrl}}" class="order-item-photo" mode="aspectFill" src="{{item.coverImageUrl}}" lazy-load="{{true}}" /><image wx:else class="ui-icon ui-icon--large" src="{{item.fulfillmentType === 'COURIER' ? '/images/theme/snack.svg' : '/images/theme/bowl.svg'}}" /></view><view class="order-item-name">{{item.name}} × {{item.quantity}}</view><view class="order-item-price">¥{{item.subtotalText}}</view></view></view>
+      <view class="order-card-foot"><view class="order-count">共 {{item.itemCount}} 件</view><view class="order-total">实付 <text>¥{{item.payableText}}</text></view></view>
+    </view>
+  </view>
+  <view wx:else class="empty-state"><image class="empty-brand" src="/images/theme/rabbit-pair.svg" mode="aspectFit" /><view class="empty-title">还没有订单</view><view class="empty-desc">在琑遇，开启热乎乎的第一餐</view><button class="primary-button empty-button" bindtap="goHome">去点餐</button></view>
+</view>

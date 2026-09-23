@@ -1,0 +1,30 @@
+@import "../../../styles/common.wxss";
+
+.stats-heading { align-items: flex-start; display: flex; justify-content: space-between; margin-bottom: 24rpx; }
+.stats-heading .section-title { margin-bottom: 8rpx; }
+.refresh-link { color: var(--green); font-size: 23rpx; padding-top: 10rpx; }
+.stats-grid { display: flex; gap: 16rpx; }
+.stats-grid--secondary { margin-top: 16rpx; }
+.metric-card { background: var(--surface); border: 1rpx solid var(--line); border-radius: 14rpx; flex: 1; min-width: 0; padding: 24rpx; }
+.metric-card--green { background: var(--green-soft); }
+.metric-card--red { background: var(--red-soft); }
+.metric-label { color: var(--muted); font-size: 21rpx; }
+.metric-value { color: var(--ink); font-size: 42rpx; font-weight: 700; margin-top: 10rpx; }
+.metric-value--small { font-size: 36rpx; }
+.metric-foot { color: var(--muted); font-size: 18rpx; line-height: 28rpx; margin-top: 8rpx; }
+.stats-section { border-bottom: 1rpx solid var(--line); margin-top: 30rpx; padding-bottom: 24rpx; }
+.stats-section-head { align-items: baseline; display: flex; justify-content: space-between; }
+.detail-card-title { color: var(--ink); font-size: 30rpx; font-weight: 600; }
+.stats-section-head .muted-text { font-size: 20rpx; }
+.daily-list { margin-top: 20rpx; }
+.daily-row { align-items: center; display: flex; gap: 10rpx; margin: 16rpx 0; }
+.daily-date { color: var(--muted); font-size: 20rpx; width: 72rpx; }
+.daily-bar-track { background: var(--paper); border-radius: 99rpx; flex: 1; height: 16rpx; overflow: hidden; }
+.daily-bar { background: var(--green); border-radius: inherit; height: 100%; min-width: 0; }
+.daily-sales { color: var(--ink); font-size: 20rpx; text-align: right; width: 100rpx; }
+.daily-orders { color: var(--muted); font-size: 19rpx; text-align: right; width: 52rpx; }
+.stats-section--assist { border-bottom: 0; }
+.assist-metrics { display: flex; gap: 80rpx; margin-top: 24rpx; }
+.assist-number { color: var(--red); font-size: 42rpx; font-weight: 700; }
+.assist-label { color: var(--muted); font-size: 21rpx; margin-top: 6rpx; }
+.stats-note { color: var(--muted); font-size: 20rpx; line-height: 32rpx; margin: 18rpx 4rpx; }

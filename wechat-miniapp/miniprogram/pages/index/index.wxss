@@ -1,0 +1,59 @@
+@import "../../styles/common.wxss";
+
+.home-page { padding-top: 24rpx; }
+.home-header { display: flex; align-items: center; gap: 16rpx; margin-bottom: 28rpx; }
+.brand-copy { flex: 1; min-width: 0; }
+.brand-name { font-size: 32rpx; font-weight: 700; letter-spacing: 1rpx; line-height: 1.35; }
+.brand-subtitle { color: var(--muted); font-size: 21rpx; margin-top: 4rpx; }
+.open-status { color: var(--green); font-size: 21rpx; display: flex; align-items: center; white-space: nowrap; }
+.open-status--off { color: var(--red); }
+.open-status--off .status-dot { background: var(--red); }
+.hero-card { min-height: 320rpx; padding: 34rpx 30rpx; background: #eeeee3; border: 1rpx solid #e3e5d8; border-radius: 24rpx; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: space-between; gap: 16rpx; }
+.hero-copy { position: relative; z-index: 1; flex: 1 1 0; min-width: 0; }
+.hero-title { font-family: "Songti SC", "STSong", "SimSun", serif; font-size: 58rpx; font-weight: 600; line-height: 1.32; letter-spacing: 1rpx; overflow-wrap: anywhere; }
+.hero-title > view { color: var(--green); }
+.hero-subtitle { font-size: 25rpx; color: var(--ink); line-height: 1.5; margin-top: 22rpx; overflow-wrap: anywhere; }
+.benefit-row { display: flex; align-items: center; justify-content: space-between; gap: 12rpx; margin-top: 16rpx; padding: 18rpx 22rpx; background: #f6ede6; border-radius: 14rpx; }
+.benefit-title { display: flex; align-items: center; flex: 1; gap: 12rpx; font-size: 24rpx; color: #705746; line-height: 1.45; min-width: 0; }
+.benefit-action { display: flex; align-items: center; gap: 8rpx; font-size: 22rpx; color: #fff; background: var(--green); border-radius: 10rpx; padding: 12rpx 16rpx; flex-shrink: 0; }
+.notice-row { display: flex; align-items: flex-start; gap: 12rpx; color: var(--muted); font-size: 22rpx; line-height: 1.65; margin: 22rpx 0 0; }
+.notice-row .ui-icon { margin-top: 5rpx; }
+.section-head { display: flex; align-items: center; justify-content: space-between; margin: 30rpx 0 14rpx; }
+.section-head .section-title { font-size: 38rpx; display: flex; align-items: center; gap: 10rpx; }
+.heading-dot { background: var(--red); width: 10rpx; height: 10rpx; border-radius: 50%; margin-top: 12rpx; }
+.category-scroll { width: 100%; white-space: nowrap; border-bottom: 1rpx solid var(--line); }
+.category-row { display: flex; gap: 32rpx; }
+.category-item { flex-shrink: 0; color: var(--muted); font-size: 26rpx; padding: 14rpx 0 20rpx; position: relative; }
+.category-item--active { color: var(--green); font-weight: 700; }
+.category-item--active::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 5rpx; background: var(--green); border-radius: 4rpx; }
+.product-row { display: flex; gap: 22rpx; padding: 24rpx 0; border-bottom: 1rpx solid var(--line); align-items: center; }
+.product-image { width: 180rpx; height: 200rpx; border-radius: 16rpx; overflow: hidden; flex-shrink: 0; background: var(--green-soft); }
+.menu-placeholder { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5rpx; color: #536b54; background: #eaf0e7; }
+.placeholder-bowl { width: 88rpx; height: 64rpx; opacity: .7; }
+.menu-placeholder text { font-family: "Songti SC", "SimSun", serif; font-size: 28rpx; letter-spacing: 6rpx; }
+.product-row:nth-child(even) .menu-placeholder { background: #f0e8df; color: #856c5d; }
+.product-main { flex: 1; min-width: 0; }
+.product-name { font-size: 30rpx; font-weight: 600; line-height: 1.4; }
+.product-description { font-size: 23rpx; line-height: 1.55; color: var(--muted); margin-top: 8rpx; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.product-meta { display: flex; flex-wrap: wrap; gap: 10rpx; align-items: center; color: var(--muted); font-size: 21rpx; margin-top: 10rpx; }
+.product-bottom { display: flex; align-items: center; justify-content: space-between; margin-top: 12rpx; gap: 8rpx; }
+.add-button { display: flex; align-items: center; justify-content: center; height: 72rpx; width: 72rpx; border-radius: 50%; background: var(--green); flex-shrink: 0; }
+.add-button--disabled { background: #acb3a8; color: #fff; font-size: 20rpx; }
+.empty-menu { text-align: center; padding: 70rpx 0; color: var(--ink); font-size: 26rpx; }
+.empty-menu view { font-size: 22rpx; color: var(--muted); margin-top: 12rpx; }
+.delivery-strip { display: flex; gap: 16rpx; align-items: center; margin-top: 30rpx; padding: 22rpx 0; border-bottom: 1rpx solid var(--line); }
+.delivery-strip > view { flex: 1; min-width: 0; }
+.delivery-title { font-size: 25rpx; color: var(--green); }
+.delivery-text { font-size: 21rpx; color: var(--muted); margin-top: 6rpx; }
+.cart-float { position: fixed; z-index: 20; left: 24rpx; right: 24rpx; bottom: calc(22rpx + env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 18rpx; background: var(--ink); color: #fff; border-radius: 18rpx; padding: 20rpx 24rpx; box-shadow: 0 8rpx 28rpx rgba(35,62,53,.16); }
+.cart-float-icon { position: relative; }
+.cart-count { position: absolute; right: -10rpx; top: -8rpx; min-width: 28rpx; padding: 0 6rpx; height: 28rpx; line-height: 28rpx; text-align: center; font-size: 18rpx; color: #fff; background: var(--red); border-radius: 20rpx; }
+.cart-float-copy { flex: 1; min-width: 0; }
+.cart-float-total { font-size: 34rpx; font-weight: 600; line-height: 1.2; }
+.cart-float-hint { color: #cbd6cc; font-size: 18rpx; margin-top: 8rpx; }
+.cart-float-action { display: flex; align-items: center; gap: 8rpx; font-size: 27rpx; flex-shrink: 0; }
+
+.hero-note { font-size: 21rpx; color: var(--muted); margin-top: 8rpx; }
+.hero-brand { flex: 0 1 210rpx; min-width: 150rpx; text-align: center; }
+.hero-rabbits { width: 100%; height: 190rpx; display: block; }
+.hero-brand-caption { font-family: "Songti SC", "SimSun", serif; color: var(--green); font-size: 23rpx; letter-spacing: 5rpx; margin-top: 5rpx; }

@@ -1,0 +1,15 @@
+<view class="page-shell campaign-page">
+  <view wx:if="{{unavailable}}" class="save-tip">助力活动管理接口暂未接入，生产环境已禁用保存操作。</view>
+  <view class="campaign-heading"><view class="section-title">助力活动配置</view><view class="muted-text">邀请1位好友，双方各得1张券，不抵扣跑腿费</view></view>
+  <view class="form-card card">
+    <view class="form-group"><view class="form-label">活动 / 券名称</view><input class="form-input" value="{{form.name}}" data-field="name" bindinput="onInput" maxlength="60" /></view>
+    <view class="form-row"><view class="form-group form-group--half"><view class="form-label">优惠金额（元）</view><input class="form-input" type="digit" value="{{form.discountYuan}}" data-field="discountYuan" bindinput="onInput" /></view><view class="form-group form-group--half"><view class="form-label">商品门槛（元）</view><input class="form-input" type="digit" value="{{form.minimumYuan}}" data-field="minimumYuan" bindinput="onInput" /></view></view>
+    <view class="form-group"><view class="form-label">领券后有效天数（1–365）</view><input class="form-input" type="number" value="{{form.validDays}}" data-field="validDays" bindinput="onInput" /></view>
+    <view class="form-group"><view class="form-label">开始日期（北京时间）</view><picker mode="date" value="{{form.startDate}}" data-field="startDate" bindchange="onInput"><view class="form-input">{{form.startDate}}</view></picker></view>
+    <view class="form-group"><view class="form-label">结束日期（北京时间）</view><picker mode="date" value="{{form.endDate}}" data-field="endDate" bindchange="onInput"><view class="form-input">{{form.endDate}}</view></picker></view>
+    <view class="row-between"><text>启用活动</text><switch checked="{{form.enabled}}" bindchange="onEnabled" color="#2e6b4f" /></view>
+  </view>
+  <view class="save-tip">每个微信用户在同一活动仅可发起1次、帮助1次。已发出的券和已创建的助力任务保留原券规则；新建活动拥有新的参与额度。新启用的活动将成为顾客端当前活动。</view>
+  <button class="primary-button" bindtap="save" loading="{{saving}}" disabled="{{saving || unavailable}}">保存活动</button>
+  <button class="outline-button" bindtap="newCampaign" disabled="{{unavailable}}">新建另一场活动</button>
+</view>

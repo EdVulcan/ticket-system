@@ -1,0 +1,14 @@
+# WeChat DevTools machine-local settings
+project.private.config.json
+
+# Generated dependencies and build artifacts
+node_modules/
+miniprogram_npm/
+cloudfunctions/**/node_modules/
+dist/
+build/
+*.traineddata
+
+# Local test/debug output
+coverage/
+*.log

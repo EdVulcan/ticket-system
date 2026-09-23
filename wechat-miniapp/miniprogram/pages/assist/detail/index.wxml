@@ -1,0 +1,7 @@
+<view class="page-shell assist-detail-page">
+  <view class="friend-card card"><image class="friend-avatar" src="/images/theme/rabbit-pair.svg" mode="aspectFit" /><view class="friend-title">好事成双，就差你的助力</view><view class="friend-desc">发起者奖励：{{starterRewardText}}</view><view class="friend-desc">好友奖励：{{helperRewardText}}</view></view>
+  <view class="friend-ticket"><view class="ticket-label">{{brand.name}} · 好友助力券</view><view class="ticket-money">¥{{helperDiscountText}}</view><view class="ticket-condition">{{helperRewardText}}</view></view>
+  <view wx:if="{{session && (session.status === 'success' || session.status === 'completed')}}" class="help-result card"><view class="result-icon"><image class="ui-icon" src="/images/theme/check.svg" /></view><view>这次助力已经完成啦</view><view class="muted-text">发起者：{{starterRewardText}}</view><view class="muted-text">好友：{{helperRewardText}}</view></view>
+  <view wx:else class="help-action card"><view class="muted-text">助力口令：{{session ? session.token : '等待加载'}}</view><button class="primary-button" bindtap="help" disabled="{{!session || session.status !== 'active'}}">帮好友助力</button></view>
+  <view class="assist-detail-note">每人每期最多助力一位好友，券有效期以到账规则为准</view>
+</view>

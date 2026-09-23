@@ -1,0 +1,26 @@
+@import "../../../styles/common.wxss";
+
+.assist-detail-page { padding-top: 50rpx; }
+.friend-card { padding: 34rpx; text-align: center; }
+.friend-avatar { align-items: center; background: var(--green-soft); border-radius: 50%; color: var(--green); display: flex; font-size: 38rpx; font-weight: 700; height: 94rpx; justify-content: center; margin: 0 auto; width: 94rpx; }
+.friend-title { color: var(--ink); font-size: 33rpx; font-weight: 700; margin-top: 22rpx; }
+.friend-desc { color: var(--muted); font-size: 23rpx; line-height: 36rpx; margin-top: 10rpx; }
+.friend-ticket { background: var(--paper); border: 2rpx dashed var(--red); border-radius: 22rpx; margin: 24rpx 8rpx; padding: 26rpx; text-align: center; }
+.ticket-label { color: var(--red); font-size: 24rpx; }
+.ticket-money { color: var(--red); font-size: 72rpx; font-weight: 700; margin-top: 8rpx; }
+.ticket-condition { color: var(--red); font-size: 21rpx; }
+.help-action, .help-result { padding: 28rpx; text-align: center; }
+.help-action .primary-button { margin-top: 22rpx; width: 100%; }
+.result-icon { align-items: center; background: var(--paper); border-radius: 50%; color: var(--green); display: flex; font-size: 40rpx; height: 78rpx; justify-content: center; margin: 0 auto 18rpx; width: 78rpx; }
+.help-result > view:nth-child(2) { color: var(--ink); font-size: 28rpx; font-weight: 600; }
+.help-result .muted-text { margin-top: 8rpx; }
+.assist-detail-note { color: var(--muted); font-size: 20rpx; margin-top: 28rpx; text-align: center; }
+
+.friend-card { background: transparent; border: 0; padding: 16rpx 10rpx 30rpx; }
+.friend-avatar { border-radius: 24rpx; }
+.friend-ticket { border: 1rpx solid #e3c5be; border-top: 6rpx solid var(--red); background: var(--red-soft); padding: 40rpx 24rpx; border-radius: 16rpx; }
+.ticket-money { color: var(--red); font-size: 86rpx; }
+.ticket-condition, .ticket-label { color: #855c55; }
+.assist-detail-note { line-height: 1.8; }
+
+.friend-avatar { width: 168rpx; height: 144rpx; background: transparent; border-radius: 0; display: block; }

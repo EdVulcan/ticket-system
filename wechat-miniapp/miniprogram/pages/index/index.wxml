@@ -1,0 +1,61 @@
+<view class="page-shell home-page">
+  <view class="home-header">
+    <view class="brand-seal" aria-hidden="true">琑</view>
+    <view class="brand-copy">
+      <view class="brand-name">{{store.name || brand.name}}</view>
+      <view class="brand-subtitle">{{channelKicker}}</view>
+    </view>
+    <view class="open-status {{channelOpen ? '' : 'open-status--off'}}"><text class="status-dot"></text>{{channelOpen ? '可下单' : '暂停接单'}}</view>
+  </view>
+  <view class="hero-card">
+    <view class="hero-copy">
+      <view class="hero-title">{{heroLine1}}<view>{{heroLine2}}</view></view>
+      <view class="hero-subtitle">{{heroSubtitle}}</view><view class="hero-note">和喜欢的你，好好吃饭</view>
+    </view>
+    <view class="hero-brand" aria-hidden="true"><image class="hero-rabbits" src="/images/theme/rabbit-pair.svg" mode="aspectFit" /><view class="hero-brand-caption">二 两 兔</view></view>
+  </view>
+
+  <view class="benefit-row" bindtap="goAssist" role="button" aria-label="邀请好友助力领券">
+    <view class="benefit-title"><image class="ui-icon" src="/images/theme/ticket.svg" />好事成双 · 同好一起领券</view>
+    <view class="benefit-action">去助力<image class="ui-icon ui-icon--small" src="/images/theme/arrow-white.svg" /></view>
+  </view>
+  <view wx:if="{{store.announcement}}" class="notice-row"><image class="ui-icon ui-icon--small" src="/images/theme/notice.svg" /><view>{{store.announcement}}</view></view>
+
+  <view class="section-head">
+    <view class="section-title">{{menuTitle}}<view class="heading-dot"></view></view>
+    <view class="section-link" bindtap="goCoupons" role="button">我的券<image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view>
+  </view>
+  <scroll-view scroll-x class="category-scroll" show-scrollbar="{{false}}">
+    <view class="category-row">
+      <view wx:for="{{categories}}" wx:key="id" class="category-item {{activeCategory === item.id ? 'category-item--active' : ''}}" data-id="{{item.id}}" bindtap="selectCategory" role="button" aria-label="{{item.name || '其他'}}">{{item.name || '其他'}}</view>
+    </view>
+  </scroll-view>
+
+  <view class="product-list">
+    <view wx:for="{{visibleProducts}}" wx:key="id" class="product-row" data-id="{{item.id}}" bindtap="openProduct" role="button" aria-label="{{item.name || '未命名商品'}}，{{item.priceText || '0.00'}}元">
+      <view class="product-image">
+        <image wx:if="{{item.coverImageUrl}}" class="food-photo" mode="aspectFill" src="{{item.coverImageUrl}}" lazy-load="{{true}}" />
+        <view wx:else class="menu-placeholder"><image src="/images/theme/{{item.categoryId === 'drink' ? 'cup' : item.categoryId === 'snack' ? 'snack' : 'bowl'}}.svg" class="placeholder-bowl" /><text>{{item.categoryId === 'drink' ? '饮' : item.categoryId === 'noodle' ? '面' : item.categoryId === 'snack' ? '小食' : '饭'}}</text></view>
+      </view>
+      <view class="product-main">
+        <view class="product-name">{{item.name || '未命名商品'}}</view>
+        <view wx:if="{{item.description}}" class="product-description">{{item.description}}</view>
+        <view class="product-meta"><text wx:if="{{item.tag}}" class="tag">{{item.tag}}</text><text>{{item.isSoldOut || (item.stockMode !== 'UNLIMITED' && item.stock <= 0) ? '今日售罄' : (item.soldText || '销量待同步')}}</text></view>
+        <view class="product-bottom">
+          <view><text class="price">{{item.priceText}}</text><text wx:if="{{item.originalPrice > item.price}}" class="old-price">{{item.originalPriceText}}</text></view>
+      <view class="add-button {{(!channelOpen || item.isSoldOut || (item.stockMode !== 'UNLIMITED' && item.stock <= 0)) ? 'add-button--disabled' : ''}}" data-id="{{item.id}}" catchtap="addQuick" role="button" aria-label="选购{{item.name || '未命名商品'}}"><image class="ui-icon" src="/images/theme/plus-white.svg" /></view>
+        </view>
+      </view>
+    </view>
+    <view wx:if="{{!visibleProducts.length}}" class="empty-menu">这个分类暂时没有上架的商品<view>换个分类看看，或稍后再来</view></view>
+  </view>
+
+  <view class="delivery-strip"><image class="ui-icon" src="/images/theme/pin.svg" /><view><view class="delivery-title">{{serviceTitle}}</view><view class="delivery-text">{{serviceText}}</view></view></view>
+  <view class="theme-signature">{{brand.name}} · 门店餐饮</view>
+  <view class="bottom-space"></view>
+  <view wx:if="{{cartCount > 0}}" class="cart-float" bindtap="goCart" role="button" aria-label="购物车，已选{{cartCount}}件，去结算">
+    <view class="cart-float-icon"><image class="ui-icon ui-icon--large" src="/images/theme/bag-white.svg" /><view class="cart-count">{{cartCount}}</view></view>
+    <view class="cart-float-copy"><view class="cart-float-total">¥{{cartAmountText}}</view><view class="cart-float-hint">已选 {{cartCount}} 件 · 不同业务将分开履约</view></view>
+    <view class="cart-float-action">去结算<image class="ui-icon ui-icon--small" src="/images/theme/arrow-white.svg" /></view>
+  </view>
+</view>

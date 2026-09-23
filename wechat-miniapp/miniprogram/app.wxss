@@ -1,0 +1,24 @@
+/* 琑遇·二两兔 · 博君一肖主题。业务语义色保持独立。 */
+page {
+  --paper: #fbfaf6;
+  --surface: #ffffff;
+  --ink: #233e35;
+  --muted: #737970;
+  --line: #e5e7df;
+  --green: #27654b;
+  --green-soft: #eaf0e7;
+  --red: #b74e50;
+  --red-soft: #f7e9e5;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 28rpx;
+  line-height: 1.5;
+}
+view, scroll-view, swiper, button, input, textarea, image { box-sizing: border-box; }
+button { display: block; margin: 0; background: transparent; font-family: inherit; }
+button::after { border: 0; }
+button[disabled] { background: #e5e7df !important; color: #737970 !important; }
+.safe-bottom { padding-bottom: calc(32rpx + env(safe-area-inset-bottom)); }
+.muted { color: var(--muted); }
+.container { display: flex; flex-direction: column; align-items: center; }

@@ -1,0 +1,13 @@
+{
+  "name": "wechat-commerce-miniprogram",
+  "version": "1.0.0",
+  "private": true,
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build:cloud": "node scripts/build-cloud-shared.js",
+    "compile:wechat": "node scripts/compile-wechat.js",
+    "pretest": "node scripts/build-cloud-shared.js --check",
+    "test": "node --test tests/*.test.js",
+    "verify": "node scripts/validate-project.js --check"
+  }
+}

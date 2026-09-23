@@ -1,0 +1,24 @@
+<view class="page-shell merchant-coupons-page">
+  <view wx:if="{{unavailable}}" class="save-tip">优惠券模板管理接口暂未接入，生产环境已禁用保存操作。</view>
+  <view class="coupons-heading"><view class="section-title">优惠券模板</view><view class="muted-text">券面额、门槛和适用履约类型可独立配置</view></view>
+  <view wx:if="{{templates.length}}" class="template-list">
+    <view wx:for="{{templates}}" wx:key="id" class="template-card card {{form.id === item.id ? 'template-card--active' : ''}}" data-id="{{item.id}}" bindtap="selectTemplate">
+      <view class="template-card-head"><view><view class="template-name">{{item.name}}</view><view class="template-meta">{{item.scopeText}} · {{item.validText}}</view></view><view class="template-status {{item.enabled === false ? 'template-status--off' : ''}}">{{item.statusText}}</view></view>
+      <view class="template-value"><text class="template-discount">¥{{item.discountText}}</text><text>满 ¥{{item.minimumText}} 可用</text><text wx:if="{{item.excludeDeliveryFee !== false}}">不抵扣配送费</text><text wx:else>可抵扣对应配送费</text></view>
+      <view class="template-created">创建于 {{item.createdText}} · 点击载入编辑</view>
+    </view>
+  </view>
+  <view wx:else class="empty-state"><image class="empty-brand" src="/images/theme/ticket.svg" mode="aspectFit" /><view class="empty-title">还没有优惠券模板</view><view class="empty-desc">先创建一张券，再绑定到助力活动</view></view>
+
+  <view class="form-card card">
+    <view class="form-card-head"><view class="detail-card-title">{{form.id ? '编辑模板' : '新建模板'}}</view><view class="section-link" bindtap="newTemplate">清空</view></view>
+    <view class="form-group"><view class="form-label">模板名称</view><input class="form-input" value="{{form.name}}" maxlength="60" placeholder="例如：满25减3" data-field="name" bindinput="onInput" /></view>
+    <view class="form-row"><view class="form-group form-group--half"><view class="form-label">优惠金额（元）</view><input class="form-input" type="digit" value="{{form.discountYuan}}" data-field="discountYuan" bindinput="onInput" /></view><view class="form-group form-group--half"><view class="form-label">商品门槛（元）</view><input class="form-input" type="digit" value="{{form.minimumYuan}}" data-field="minimumYuan" bindinput="onInput" /></view></view>
+    <view class="form-group"><view class="form-label">适用履约类型</view><picker range="{{scopes}}" range-key="name" value="{{scopeIndex}}" bindchange="selectScope"><view class="form-input">{{scopes[scopeIndex].name}}</view></picker></view>
+    <view class="form-group"><view class="form-label">领券后有效天数（1-365）</view><input class="form-input" type="number" value="{{form.validDays}}" data-field="validDays" bindinput="onInput" /></view>
+    <view class="settings-row"><view><view class="settings-label">不抵扣配送费</view><view class="settings-help">开启后只从商品金额中抵扣</view></view><switch checked="{{form.excludeDeliveryFee}}" color="#27654b" bindchange="toggleExcludeDeliveryFee" /></view>
+    <view class="settings-row"><view><view class="settings-label">允许新活动使用</view><view class="settings-help">停用不会影响已发出的券</view></view><switch checked="{{form.enabled}}" color="#27654b" bindchange="toggleEnabled" /></view>
+  </view>
+  <view class="save-tip">编辑模板会生成新版本，已经发给用户的优惠券继续使用原来的金额、门槛和有效期。演示模式只展示样例，生产模式才会写入云端。</view>
+  <button class="primary-button" bindtap="save" loading="{{saving}}" disabled="{{saving || loading || unavailable}}">保存优惠券模板</button>
+</view>

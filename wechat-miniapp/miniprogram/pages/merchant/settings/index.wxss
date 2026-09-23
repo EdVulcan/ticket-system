@@ -1,0 +1,17 @@
+@import "../../../styles/common.wxss";
+
+.settings-heading { margin-bottom: 26rpx; }
+.settings-heading .section-title { margin-bottom: 8rpx; }
+.settings-card { margin-bottom: 18rpx; padding: 26rpx; }
+.settings-row { align-items: center; display: flex; justify-content: space-between; padding: 8rpx 0; }
+.settings-row--switch { padding: 0 0 6rpx; }
+.settings-label { color: var(--ink); font-size: 26rpx; }
+.settings-help { color: var(--muted); font-size: 20rpx; line-height: 32rpx; margin-top: 5rpx; }
+.settings-value { color: var(--ink); font-size: 24rpx; }
+.settings-card .form-group { margin-top: 24rpx; }
+.fee-editor { align-items: center; display: flex; margin-top: 14rpx; }
+.fee-button { align-items: center; background: var(--paper); border-radius: 50%; color: var(--ink); display: flex; font-size: 30rpx; height: 54rpx; justify-content: center; width: 54rpx; }
+.fee-value { color: var(--red); font-size: 34rpx; font-weight: 700; min-width: 90rpx; text-align: center; }
+.save-settings { margin-top: 28rpx; width: 100%; }
+.settings-card .form-row { align-items: flex-start; }
+.settings-card .form-group--half { width: 47%; }

@@ -1,0 +1,43 @@
+<view class="page-shell product-detail-page">
+  <view class="detail-visual" style="background: {{product.color}};">
+    <image wx:if="{{product.coverImageUrl}}" class="food-photo" mode="aspectFill" src="{{product.coverImageUrl}}" /><view wx:else class="detail-placeholder"><image class="detail-placeholder-icon" src="/images/theme/rabbit-pair.svg" /><view>{{brand.name}}</view></view>
+    <view wx:if="{{!product.coverImageUrl}}" class="visual-tag">{{brand.tagline}}</view>
+  </view>
+
+  <view class="detail-intro">
+    <view class="detail-title-row"><view class="detail-title">{{product.name || '未命名商品'}}</view><view wx:if="{{product.tag}}" class="tag">{{product.tag}}</view></view>
+    <view wx:if="{{product.description}}" class="detail-description">{{product.description}}</view>
+    <view wx:if="{{product.id && product.stockMode === 'UNLIMITED'}}" class="detail-sold">不限库存</view>
+    <view wx:elif="{{product.id && product.stockKnown}}" class="detail-sold">剩余库存：{{product.stock}}</view>
+    <view wx:elif="{{product.id}}" class="detail-sold">库存待同步</view>
+    <view class="detail-price-row"><text class="price">{{priceText}}</text><text wx:if="{{product.originalPrice > product.price}}" class="old-price">{{originalPriceText}}</text></view>
+  </view>
+
+  <view class="fulfillment-note card"><image class="ui-icon" src="{{fulfillmentType === 'COURIER' ? '/images/theme/truck.svg' : '/images/theme/pin.svg'}}" /><view><view>{{fulfillmentType === 'COURIER' ? '快递寄送' : '配送到家 / 门店自取'}}</view><text>{{deliveryText || '配送费用以结算页为准'}}</text></view></view>
+
+  <view wx:if="{{skuChoices.length}}" class="option-card card"><view class="option-group"><view class="option-title">规格 <text>必选</text></view><view class="option-values"><view wx:for="{{skuChoices}}" wx:key="id" class="option-value {{selectedSkuId === item.id ? 'option-value--selected' : ''}}" data-id="{{item.id}}" bindtap="selectSku">{{item.name}} · ¥{{item.price / 100}}</view></view></view></view>
+
+  <view wx:if="{{product.options.length}}" class="option-card card">
+      <view wx:for="{{product.options}}" wx:for-item="group" wx:key="id" class="option-group">
+      <view class="option-title">{{group.name || '可选项'}} <text wx:if="{{group.required}}">必选</text></view>
+      <view class="option-values">
+        <view wx:for="{{group.values}}" wx:for-item="option" wx:key="*this" class="option-value {{selectedValues[group.id] === option ? 'option-value--selected' : ''}}" data-group="{{group.id}}" data-value="{{option}}" bindtap="selectOption">{{option}}</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="detail-note card">
+    <view class="option-title">备注 <text>可选</text></view>
+    <input value="{{remark}}" maxlength="60" placeholder="口味、餐具等特殊要求" bindinput="onRemarkInput" />
+  </view>
+
+  <view wx:if="{{product.detailImageUrls && product.detailImageUrls.length}}" class="detail-media-section">
+    <view class="detail-media-heading"><view class="detail-media-title">商品详情</view><view class="detail-media-line"></view></view>
+    <view class="detail-gallery"><image wx:for="{{product.detailImageUrls}}" wx:key="*this" class="detail-gallery-image" mode="widthFix" src="{{item}}" lazy-load="{{true}}" /></view>
+  </view>
+
+  <view class="bottom-action">
+    <view class="quantity-control"><view class="quantity-button" bindtap="decrease">−</view><view class="quantity-number">{{quantity}}</view><view class="quantity-button quantity-button--plus" bindtap="increase">+</view></view>
+    <button class="primary-button add-detail-button" bindtap="addToCart" disabled="{{unavailable || product.isSoldOut || (product.stockMode !== 'UNLIMITED' && product.stock <= 0)}}">加入购物车 · ¥{{totalPriceText}}</button>
+  </view>
+</view>

@@ -1,0 +1,25 @@
+@import "../../../styles/common.wxss";
+
+.products-heading { margin-bottom: 26rpx; }
+.products-heading .section-title { margin-bottom: 8rpx; }
+.manage-product { margin-bottom: 18rpx; padding: 22rpx; }
+.manage-product-top { align-items: flex-start; display: flex; gap: 14rpx; }
+.manage-emoji { flex-shrink: 0; font-size: 50rpx; height: 110rpx; width: 110rpx; }
+.manage-product-copy { flex: 1; min-width: 0; }
+.manage-product-title { color: var(--ink); font-size: 27rpx; font-weight: 600; line-height: 1.45; overflow-wrap: anywhere; }
+.manage-product-title .tag { margin-left: 8rpx; vertical-align: middle; }
+.manage-product-kind { color: var(--green); font-size: 20rpx; margin-top: 8rpx; }
+.manage-product-price { color: var(--red); font-size: 28rpx; margin-top: 12rpx; }
+.manage-product-price text { color: var(--muted); font-size: 20rpx; margin-left: 10rpx; }
+.manage-product-description { color: var(--muted); font-size: 21rpx; line-height: 32rpx; margin: 16rpx 0 10rpx 128rpx; }
+.manage-product-actions { display: flex; justify-content: flex-end; }
+.edit-product-action { color: var(--green); font-size: 21rpx; padding: 8rpx 0 12rpx; }
+.stock-row { align-items: center; border-top: 1rpx solid var(--paper); display: flex; flex-wrap: wrap; gap: 14rpx 20rpx; justify-content: space-between; margin-top: 22rpx; padding-top: 18rpx; }
+.stock-status { background: var(--paper); border-radius: 999rpx; color: var(--green); font-size: 19rpx; padding: 7rpx 12rpx; }
+.stock-status--off { background: var(--paper); color: var(--red); }
+.stock-control { align-items: center; color: var(--muted); display: flex; flex-shrink: 0; font-size: 21rpx; }
+.stock-button { align-items: center; background: var(--paper); border-radius: 50%; color: var(--ink); display: flex; font-size: 25rpx; height: 42rpx; justify-content: center; margin-left: 9rpx; width: 42rpx; }
+.stock-number { color: var(--ink); min-width: 45rpx; text-align: center; }
+.soldout-action { color: var(--red); flex-shrink: 0; font-size: 20rpx; padding: 10rpx 0; }
+.merchant-products-page > .primary-button { margin-bottom: 24rpx; }
+.fulfillment-label { background: var(--green-soft); border-radius: 5rpx; color: var(--green); font-size: 18rpx; margin-left: 5rpx; padding: 3rpx 7rpx; }

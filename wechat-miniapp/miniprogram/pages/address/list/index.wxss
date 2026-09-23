@@ -1,0 +1,20 @@
+@import "../../../styles/common.wxss";
+
+.address-heading { margin-bottom: 26rpx; }
+.address-heading .section-title { margin-bottom: 8rpx; }
+.address-card { margin-bottom: 18rpx; padding: 26rpx; }
+.address-card-main { min-width: 0; }
+.address-card-top { align-items: center; display: flex; flex-wrap: wrap; gap: 8rpx 16rpx; }
+.address-card-name { color: var(--ink); font-size: 29rpx; font-weight: 600; }
+.address-card-phone { color: #6f786f; font-size: 23rpx; }
+.default-label { background: var(--paper); border-radius: 6rpx; color: var(--green); flex-shrink: 0; font-size: 19rpx; padding: 4rpx 8rpx; }
+.address-card-detail { color: #687268; font-size: 25rpx; line-height: 1.55; margin-top: 14rpx; overflow-wrap: anywhere; }
+.address-card-remark { color: var(--muted); font-size: 21rpx; margin-top: 8rpx; }
+.address-card-actions { border-top: 1rpx solid var(--paper); display: flex; justify-content: flex-end; margin-top: 22rpx; padding-top: 18rpx; }
+.edit-address, .delete-address { color: #778078; font-size: 22rpx; margin-left: 28rpx; }
+.delete-address { color: var(--red); }
+.address-add-card { align-items: center; color: var(--green); display: flex; font-size: 26rpx; justify-content: center; padding: 26rpx; }
+.address-add-icon { align-items: center; border: 2rpx solid var(--muted); border-radius: 50%; display: flex; font-size: 30rpx; height: 44rpx; justify-content: center; margin-right: 12rpx; width: 44rpx; }
+.address-tip { color: var(--muted); font-size: 21rpx; line-height: 34rpx; margin: 24rpx 6rpx; }
+.address-kind { background: var(--green-soft); border-radius: 999rpx; color: var(--green); display: inline-block; font-size: 19rpx; margin-bottom: 14rpx; padding: 5rpx 10rpx; }
+.address-kind--shipping { background: var(--red-soft); color: var(--red); }

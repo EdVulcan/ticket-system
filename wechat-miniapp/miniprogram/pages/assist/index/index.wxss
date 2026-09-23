@@ -1,0 +1,28 @@
+@import "../../../styles/common.wxss";
+.assist-page { padding-top: 28rpx; }
+.assist-hero { background: #eeeee3; border: 1rpx solid #e3e5d8; border-radius: 24rpx; padding: 36rpx 30rpx 28rpx; position: relative; overflow: hidden; }
+.assist-brand { position: absolute; right: 24rpx; top: 24rpx; width: 128rpx; height: 112rpx; }
+.assist-hero-title { font-family: "Songti SC", "SimSun", serif; font-size: 50rpx; font-weight: 600; color: var(--ink); line-height: 1.4; letter-spacing: 1rpx; }
+.assist-hero-title > view { color: var(--green); }
+.assist-hero-subtitle { color: #647361; font-size: 22rpx; margin-top: 16rpx; }
+.assist-hero-ticket { width: 100%; display: flex; border-radius: 14rpx; overflow: hidden; background: #fff; margin-top: 30rpx; }
+.ticket-half { width: 50%; text-align: center; padding: 24rpx 12rpx; }
+.ticket-half--friend { border-left: 2rpx dashed #d8dccc; background: #fdf6f2; }
+.ticket-for { color: var(--muted); font-size: 23rpx; margin-bottom: 12rpx; }
+.ticket-value { color: var(--green); font-size: 62rpx; font-weight: 700; line-height: 1.2; }
+.ticket-half--friend .ticket-value { color: var(--red); }
+.ticket-benefit { color: #647361; font-size: 22rpx; text-align: center; margin-top: 20rpx; }
+.session-card, .start-card, .success-card { margin-top: 24rpx; padding: 32rpx 24rpx; text-align: center; }
+.session-badge { background: var(--green-soft); border-radius: 8rpx; color: var(--green); display: inline-block; font-size: 22rpx; padding: 8rpx 16rpx; }
+.session-title, .start-title, .success-title { color: var(--ink); font-size: 31rpx; font-weight: 600; margin-top: 18rpx; }
+.session-desc, .start-desc, .success-desc { color: var(--muted); font-size: 24rpx; line-height: 1.7; margin: 12rpx auto 0; max-width: 560rpx; }
+.session-token { background: var(--paper); border-radius: 12rpx; color: var(--muted); font-size: 22rpx; margin: 22rpx auto; padding: 16rpx; width: 100%; word-break: break-all; }
+.share-button { margin-top: 24rpx; width: 100%; }
+.session-secondary { color: var(--green); font-size: 23rpx; padding: 16rpx 0 0; }
+.start-icon, .success-icon { align-items: center; display: flex; height: 84rpx; justify-content: center; margin: 0 auto; width: 112rpx; }
+.start-icon .ui-icon { width: 106rpx; height: 90rpx; }
+.success-icon .ui-icon { width: 60rpx; height: 60rpx; }
+.start-card .primary-button, .success-card .primary-button { margin-top: 24rpx; width: 100%; }
+.assist-rules { background: transparent; border: 0; margin-top: 20rpx; padding: 24rpx 6rpx; }
+.rule-row { align-items: flex-start; color: var(--muted); display: flex; font-size: 24rpx; line-height: 1.65; margin-top: 18rpx; }
+.rule-number { color: var(--green); flex-shrink: 0; font-size: 22rpx; margin-right: 16rpx; width: 28rpx; }

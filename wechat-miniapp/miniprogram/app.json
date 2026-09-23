@@ -1,0 +1,58 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/cold/index",
+    "pages/product/detail/index",
+    "pages/cart/index",
+    "pages/checkout/index",
+    "pages/order/list/index",
+    "pages/order/detail/index",
+    "pages/profile/index/index",
+    "pages/address/list/index",
+    "pages/address/edit/index",
+    "pages/assist/index/index",
+    "pages/assist/detail/index"
+  ],
+  "window": {
+    "backgroundColor": "#FBFAF6",
+    "backgroundTextStyle": "dark",
+    "navigationBarBackgroundColor": "#FBFAF6",
+    "navigationBarTitleText": "琑遇·二两兔",
+    "navigationBarTextStyle": "black"
+  },
+  "tabBar": {
+    "color": "#737970",
+    "selectedColor": "#27654B",
+    "backgroundColor": "#FFFFFF",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "餐饮",
+        "iconPath": "images/theme/bowl-muted.png",
+        "selectedIconPath": "images/theme/bowl-active.png"
+      },
+      {
+        "pagePath": "pages/cold/index",
+        "text": "零售",
+        "iconPath": "images/theme/bowl-muted.png",
+        "selectedIconPath": "images/theme/bowl-active.png"
+      },
+      {
+        "pagePath": "pages/order/list/index",
+        "text": "订单",
+        "iconPath": "images/theme/receipt-muted.png",
+        "selectedIconPath": "images/theme/receipt-active.png"
+      },
+      {
+        "pagePath": "pages/profile/index/index",
+        "text": "我的",
+        "iconPath": "images/theme/user-muted.png",
+        "selectedIconPath": "images/theme/user-active.png"
+      }
+    ]
+  },
+  "sitemapLocation": "sitemap.json",
+  "style": "v2",
+  "lazyCodeLoading": "requiredComponents"
+}

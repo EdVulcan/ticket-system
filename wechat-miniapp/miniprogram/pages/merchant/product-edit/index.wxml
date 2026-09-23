@@ -1,0 +1,27 @@
+<view class="page-shell product-edit-page">
+  <view wx:if="{{unavailable}}" class="save-tip">商品管理接口暂未接入，生产环境已禁用保存和图片写入。</view>
+  <view class="settings-heading"><view class="section-title">{{productId ? '编辑商品' : '新增商品'}}</view><view class="muted-text">价格单位为元，新商品默认下架，确认后再上架</view></view>
+  <view class="form-card card">
+    <view class="form-group"><image wx:if="{{form.imageFileIds.length}}" class="product-photo" mode="aspectFill" src="{{form.imageFileIds[0]}}" /><button class="outline-button" loading="{{uploading}}" bindtap="chooseImage">上传 / 替换商品图片</button></view>
+    <view class="form-group"><view class="form-label">销售履约</view><picker range="{{fulfillmentTypes}}" range-key="name" value="{{fulfillmentIndex}}" bindchange="selectFulfillment"><view class="form-input">{{fulfillmentTypes[fulfillmentIndex].name}}</view></picker></view><view class="form-group"><view class="form-label">分类</view><picker range="{{categories}}" range-key="name" value="{{categoryIndex}}" bindchange="selectCategory"><view class="form-input">{{categories[categoryIndex].name || '请先配置商品分类'}}</view></picker></view>
+    <view wx:if="{{!productId}}" class="form-group"><view class="form-label">初始库存</view><input class="form-input" type="number" value="{{form.stock}}" data-field="stock" bindinput="onInput" /></view>
+    <view class="form-group"><view class="form-label">商品名称</view><input class="form-input" value="{{form.name}}" maxlength="60" placeholder="例如：招牌鸡腿饭" data-field="name" bindinput="onInput" /></view>
+    <view class="form-group"><view class="form-label">商品介绍</view><textarea class="form-textarea" value="{{form.description}}" maxlength="240" placeholder="描述口味、分量和配菜" data-field="description" bindinput="onInput" /></view>
+    <view class="form-row"><view class="form-group form-group--half"><view class="form-label">现价（元）</view><input class="form-input" type="digit" value="{{form.basePriceYuan}}" data-field="basePriceYuan" bindinput="onInput" /></view><view class="form-group form-group--half"><view class="form-label">划线价（元）</view><input class="form-input" type="digit" value="{{form.originalPriceYuan}}" data-field="originalPriceYuan" bindinput="onInput" /></view></view>
+  </view>
+  <view class="save-tip">已支付订单保留创建时的商品快照，不会随本次修改变化。</view>
+  <view class="form-card card">
+    <view class="section-title">规格 / 加料</view>
+    <view wx:for="{{form.optionGroups}}" wx:for-item="group" wx:for-index="groupIndex" wx:key="id" class="form-group option-group-editor">
+      <view class="form-label">规格组名称</view><input class="form-input" value="{{group.name}}" data-group="{{groupIndex}}" data-field="name" bindinput="groupInput" placeholder="例如：辣度" />
+      <view class="row-between"><text>顾客必须选择</text><switch checked="{{group.required}}" data-group="{{groupIndex}}" data-field="required" bindchange="groupInput" color="#2e6b4f" /></view>
+      <view wx:for="{{group.options}}" wx:for-item="option" wx:for-index="optionIndex" wx:key="id" class="option-editor">
+        <view class="option-editor-fields"><input class="form-input" value="{{option.name}}" data-group="{{groupIndex}}" data-option="{{optionIndex}}" data-field="name" bindinput="optionInput" placeholder="选项名称" /><input class="form-input" type="digit" value="{{option.priceYuan}}" data-group="{{groupIndex}}" data-option="{{optionIndex}}" data-field="priceYuan" bindinput="optionInput" placeholder="加价（元）" /></view>
+        <view class="option-remove" data-group="{{groupIndex}}" data-option="{{optionIndex}}" bindtap="removeOption" role="button" aria-label="删除此选项">×</view>
+      </view>
+      <view class="option-group-actions"><button class="outline-button" data-group="{{groupIndex}}" bindtap="addOption">添加选项</button><button class="outline-button option-group-remove" data-group="{{groupIndex}}" bindtap="removeGroup">移除此规格组</button></view>
+    </view>
+    <button class="outline-button" bindtap="addGroup">添加规格组</button>
+  </view>
+  <button class="primary-button save-address" bindtap="saveProduct" disabled="{{saving || uploading || unavailable}}" loading="{{saving}}">保存商品</button>
+</view>

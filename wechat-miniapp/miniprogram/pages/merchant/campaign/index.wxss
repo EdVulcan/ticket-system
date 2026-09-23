@@ -1,0 +1,18 @@
+@import "../../../styles/common.wxss";
+
+.campaign-heading { margin-bottom: 26rpx; }
+.campaign-heading .section-title { margin-bottom: 8rpx; }
+.campaign-preview { background: var(--green-soft); border-radius: 24rpx; padding: 30rpx; }
+.campaign-preview-title { color: var(--ink); font-size: 36rpx; font-weight: 700; }
+.campaign-preview-desc { color: #5f7d65; font-size: 23rpx; line-height: 36rpx; margin-top: 10rpx; }
+.campaign-ticket-row { align-items: center; color: #628068; display: flex; font-size: 21rpx; margin-top: 26rpx; }
+.campaign-ticket { background: var(--paper); border-radius: 8rpx; color: var(--red); font-size: 21rpx; margin: 0 10rpx; padding: 9rpx 12rpx; }
+.campaign-active { color: var(--green); font-size: 21rpx; margin-top: 22rpx; }
+.campaign-stats { display: flex; justify-content: space-around; margin-top: 18rpx; padding: 24rpx; text-align: center; }
+.campaign-stat-number { color: var(--ink); font-size: 36rpx; font-weight: 700; }
+.campaign-stat-label { color: var(--muted); font-size: 20rpx; margin-top: 7rpx; }
+.rules-card { margin-top: 18rpx; padding: 28rpx; }
+.campaign-rule { align-items: center; border-bottom: 1rpx solid var(--paper); color: #6f786f; display: flex; font-size: 24rpx; justify-content: space-between; padding: 20rpx 0; }
+.campaign-rule:last-child { border-bottom: 0; padding-bottom: 0; }
+.campaign-rule text { color: var(--ink); }
+.campaign-tip { color: var(--muted); font-size: 21rpx; line-height: 35rpx; margin: 24rpx 6rpx; }

@@ -1,0 +1,21 @@
+@import "../../../styles/common.wxss";
+
+.coupons-heading { margin-bottom: 24rpx; }
+.coupons-heading .section-title { margin-bottom: 8rpx; }
+.template-card { margin-bottom: 16rpx; padding: 24rpx; }
+.template-card--active { border-color: var(--green); }
+.template-card-head { align-items: flex-start; display: flex; justify-content: space-between; gap: 16rpx; }
+.template-name { color: var(--ink); font-size: 28rpx; font-weight: 600; }
+.template-meta, .template-created { color: var(--muted); font-size: 20rpx; margin-top: 7rpx; }
+.template-status { background: var(--green-soft); border-radius: 999rpx; color: var(--green); flex-shrink: 0; font-size: 19rpx; padding: 6rpx 10rpx; }
+.template-status--off { background: var(--paper); color: var(--muted); }
+.template-value { align-items: baseline; border-top: 1rpx dashed var(--line); display: flex; flex-wrap: wrap; gap: 14rpx; margin-top: 18rpx; padding-top: 18rpx; color: var(--muted); font-size: 21rpx; }
+.template-discount { color: var(--red); font-size: 42rpx; font-weight: 700; }
+.form-card { margin-top: 24rpx; padding: 28rpx; }
+.form-card-head { align-items: center; display: flex; justify-content: space-between; margin-bottom: 22rpx; }
+.detail-card-title { color: var(--ink); font-size: 30rpx; font-weight: 600; }
+.settings-row { align-items: center; border-top: 1rpx solid var(--line); display: flex; justify-content: space-between; padding: 20rpx 0 0; }
+.settings-label { color: var(--ink); font-size: 25rpx; }
+.settings-help { color: var(--muted); font-size: 20rpx; line-height: 32rpx; margin-top: 5rpx; }
+.form-group--half { width: 47%; }
+.empty-state { padding-top: 60rpx; }

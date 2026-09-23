@@ -1,0 +1,61 @@
+{
+  "store_settings": [
+    {
+      "_id": "store_001",
+      "name": "琑遇·二两兔",
+      "slogan": "二两烟火，一份偏爱。",
+      "announcement": "午餐高峰订单较多，预计 35 分钟送达",
+      "phone": "18000001234",
+      "businessStatus": "OPEN",
+      "businessHours": "10:30 - 21:30",
+      "defaultMinGoodsAmount": 1500,
+      "defaultDeliveryFee": 300,
+      "courierStatus": "OPEN",
+      "defaultShippingFee": 800,
+      "freeShippingThreshold": 8800,
+      "courierMinGoodsAmount": 0,
+      "shippingCarrier": "中通快递",
+      "orderPayTimeoutMinutes": 10
+    }
+  ],
+  "staff": [
+    {
+      "_id": "store_001_REPLACE_WITH_OWNER_OPENID",
+      "storeId": "store_001",
+      "userId": "REPLACE_WITH_OWNER_OPENID",
+      "role": "OWNER",
+      "permissions": ["ORDER_MANAGE", "PRODUCT_MANAGE", "REFUND", "STORE_SETTING"],
+      "enabled": true
+    }
+  ],
+  "categories": [
+    { "_id": "rice", "storeId": "store_001", "name": "招牌盖饭", "fulfillmentType": "TAKEAWAY", "sort": 10, "enabled": true },
+    { "_id": "noodle", "storeId": "store_001", "name": "面食", "fulfillmentType": "TAKEAWAY", "sort": 20, "enabled": true },
+    { "_id": "snack", "storeId": "store_001", "name": "小吃", "fulfillmentType": "TAKEAWAY", "sort": 30, "enabled": true },
+    { "_id": "drink", "storeId": "store_001", "name": "饮品", "fulfillmentType": "TAKEAWAY", "sort": 40, "enabled": true },
+    { "_id": "cold_rabbit", "storeId": "store_001", "name": "冷吃兔", "fulfillmentType": "COURIER", "sort": 50, "enabled": true },
+    { "_id": "cold_duck", "storeId": "store_001", "name": "卤味小食", "fulfillmentType": "COURIER", "sort": 60, "enabled": true },
+    { "_id": "cold_mix", "storeId": "store_001", "name": "分享拼盘", "fulfillmentType": "COURIER", "sort": 70, "enabled": true }
+  ],
+  "products": [
+    { "_id": "p_001", "storeId": "store_001", "categoryId": "rice", "name": "招牌鸡腿饭", "description": "外酥里嫩的照烧鸡腿，配时蔬和热米饭", "basePrice": 1800, "originalPrice": 2200, "stockMode": "LIMITED", "stock": 28, "isSoldOut": false, "isOnSale": true, "sort": 10, "optionGroups": [{ "id": "spicy", "name": "口味", "type": "SINGLE", "required": true, "options": [{ "id": "none", "name": "不辣", "priceDelta": 0 }, { "id": "mild", "name": "微辣", "priceDelta": 0 }, { "id": "hot", "name": "香辣", "priceDelta": 0 }] }] },
+    { "_id": "p_002", "storeId": "store_001", "categoryId": "rice", "name": "黑椒牛肉饭", "description": "黑椒牛柳搭配脆爽洋葱，酱香浓郁", "basePrice": 2200, "originalPrice": 2600, "stockMode": "LIMITED", "stock": 16, "isSoldOut": false, "isOnSale": true, "sort": 20 },
+    { "_id": "p_003", "storeId": "store_001", "categoryId": "noodle", "name": "番茄肥牛拌面", "description": "酸甜番茄汤汁，拌入鲜嫩肥牛和手工面", "basePrice": 1600, "originalPrice": 1800, "stockMode": "LIMITED", "stock": 22, "isSoldOut": false, "isOnSale": true, "sort": 30 },
+    { "_id": "p_004", "storeId": "store_001", "categoryId": "snack", "name": "香酥鸡米花", "description": "现点现炸，外脆内嫩，适合加餐分享", "basePrice": 1200, "originalPrice": 1400, "stockMode": "LIMITED", "stock": 40, "isSoldOut": false, "isOnSale": true, "sort": 40 },
+    { "_id": "p_005", "storeId": "store_001", "categoryId": "drink", "name": "柠檬气泡水", "description": "清爽柠檬和细密气泡，冰镇更好喝", "basePrice": 800, "originalPrice": 1000, "stockMode": "LIMITED", "stock": 60, "isSoldOut": false, "isOnSale": true, "sort": 50 },
+    { "_id": "p_006", "storeId": "store_001", "categoryId": "drink", "fulfillmentType": "TAKEAWAY", "name": "桂花乌龙茶", "description": "淡淡桂花香，少糖不腻，搭配正餐刚好", "basePrice": 900, "originalPrice": 1100, "stockMode": "LIMITED", "stock": 50, "isSoldOut": false, "isOnSale": true, "sort": 60 },
+    { "_id": "p_cold_001", "storeId": "store_001", "categoryId": "cold_rabbit", "fulfillmentType": "COURIER", "name": "冷吃兔·经典麻辣", "description": "成都发货，麻辣鲜香，独立锁鲜包装", "basePrice": 2680, "originalPrice": 3200, "stockMode": "LIMITED", "stock": 80, "isSoldOut": false, "isOnSale": true, "sort": 70, "optionGroups": [{ "id": "flavor", "name": "口味", "required": true, "options": [{ "id": "classic", "name": "经典麻辣", "priceDelta": 0 }, { "id": "less-oil", "name": "香辣少油", "priceDelta": 0 }] }, { "id": "weight", "name": "重量", "required": true, "options": [{ "id": "250g", "name": "250g", "priceDelta": 0 }, { "id": "500g", "name": "500g", "priceDelta": 1800 }] }] },
+    { "_id": "p_cold_002", "storeId": "store_001", "categoryId": "cold_duck", "fulfillmentType": "COURIER", "name": "冷吃鸭舌·香辣锁鲜", "description": "卤香打底，香辣回甘，成都仓当天打包", "basePrice": 3280, "originalPrice": 3800, "stockMode": "LIMITED", "stock": 45, "isSoldOut": false, "isOnSale": true, "sort": 80, "optionGroups": [{ "id": "flavor", "name": "口味", "required": true, "options": [{ "id": "hot", "name": "香辣", "priceDelta": 0 }, { "id": "ma", "name": "麻辣", "priceDelta": 0 }] }, { "id": "weight", "name": "规格", "required": true, "options": [{ "id": "150g", "name": "150g", "priceDelta": 0 }, { "id": "300g", "name": "300g", "priceDelta": 1600 }] }] },
+    { "_id": "p_cold_003", "storeId": "store_001", "categoryId": "cold_mix", "fulfillmentType": "COURIER", "name": "成都冷吃拼盘", "description": "兔肉、牛肉、藕片一盒齐聚，追剧分享刚刚好", "basePrice": 4980, "originalPrice": 5680, "stockMode": "LIMITED", "stock": 32, "isSoldOut": false, "isOnSale": true, "sort": 90, "optionGroups": [{ "id": "flavor", "name": "口味", "required": true, "options": [{ "id": "classic", "name": "经典麻辣", "priceDelta": 0 }, { "id": "less-oil", "name": "香辣少油", "priceDelta": 0 }] }] }
+  ],
+  "delivery_zones": [
+    { "_id": "zone_dorm_6", "storeId": "store_001", "campusId": "east", "campusName": "东校区", "zoneName": "学生公寓 6 号楼", "deliveryFee": 300, "minGoodsAmount": 1500, "enabled": true, "sort": 10 },
+    { "_id": "zone_teach", "storeId": "store_001", "campusId": "east", "campusName": "东校区", "zoneName": "教学楼区域", "deliveryFee": 400, "minGoodsAmount": 1500, "enabled": true, "sort": 20 }
+  ],
+  "coupon_templates": [
+    { "_id": "coupon_assist_300", "storeId": "store_001", "name": "满25减3", "type": "FIXED", "discountAmount": 300, "minGoodsAmount": 2500, "validDays": 5, "excludeDeliveryFee": true, "enabled": true }
+  ],
+  "assist_campaigns": [
+    { "_id": "campaign_001", "storeId": "store_001", "name": "好友助力双方得券", "starterCouponTemplateId": "coupon_assist_300", "helperCouponTemplateId": "coupon_assist_300", "requiredHelpers": 1, "sessionValidHours": 24, "startAt": "2026-09-01T00:00:00.000Z", "endAt": "2026-12-31T23:59:59.000Z", "enabled": true }
+  ]
+}
