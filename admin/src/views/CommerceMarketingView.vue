@@ -52,7 +52,7 @@
               <h2>优惠券模板</h2>
               <p class="muted">已配置 {{ couponTemplates.length }} 个模板；适用板块决定用户在哪类订单中可以使用。</p>
             </div>
-            <el-button v-if="canWrite" type="primary" plain :icon="Plus" @click="openCouponDialog()">新增模板</el-button>
+            <el-button v-if="canWrite" type="primary" plain :icon="Plus" @click="openCouponDialog()">新增优惠券模板</el-button>
           </div>
           <el-table v-loading="loading" :data="couponTemplates" class="marketing-table" border stripe>
             <el-table-column prop="name" label="名称" min-width="190" />
@@ -69,7 +69,11 @@
             <el-table-column label="有效期" min-width="150"><template #default="{ row }">{{ validityLabel(row) }}</template></el-table-column>
             <el-table-column label="状态" width="90" align="center"><template #default="{ row }"><el-tag :type="statusType(row.status)" effect="plain">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
             <el-table-column label="操作" width="100" fixed="right" align="right"><template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openCouponDialog(row)">编辑</el-button><span v-else class="muted">只读</span></template></el-table-column>
-            <template #empty><el-empty description="暂无优惠券模板" :image-size="64" /></template>
+            <template #empty>
+              <el-empty description="暂无优惠券模板" :image-size="64">
+                <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCouponDialog()">新增优惠券模板</el-button>
+              </el-empty>
+            </template>
           </el-table>
         </section>
       </el-tab-pane>
@@ -81,7 +85,7 @@
               <h2>分享助力活动</h2>
               <p class="muted">活动归属店铺，参与者获得的优惠券可按模板适用板块使用。</p>
             </div>
-            <el-button v-if="canWrite" type="primary" plain :icon="Plus" :disabled="couponTemplates.length === 0" @click="openCampaignDialog()">新增活动</el-button>
+            <el-button v-if="canWrite && couponTemplates.length" type="primary" plain :icon="Plus" @click="openCampaignDialog()">新增分享助力活动</el-button>
           </div>
           <el-table v-loading="loading" :data="campaigns" class="marketing-table" border stripe>
             <el-table-column prop="title" label="活动名称" min-width="200" />
@@ -92,7 +96,12 @@
             <el-table-column label="活动时间" min-width="220"><template #default="{ row }">{{ dateLabel(row.starts_at) }} 至 {{ dateLabel(row.ends_at) }}</template></el-table-column>
             <el-table-column label="状态" width="90" align="center"><template #default="{ row }"><el-tag :type="statusType(row.status)" effect="plain">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
             <el-table-column label="操作" width="100" fixed="right" align="right"><template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openCampaignDialog(row)">编辑</el-button><span v-else class="muted">只读</span></template></el-table-column>
-            <template #empty><el-empty description="暂无分享助力活动" :image-size="64" /></template>
+            <template #empty>
+              <el-empty description="暂无分享助力活动" :image-size="64">
+                <el-button v-if="canWrite && couponTemplates.length" type="primary" :icon="Plus" @click="openCampaignDialog()">新增分享助力活动</el-button>
+                <el-button v-else-if="canWrite" type="primary" plain :icon="Plus" @click="activeTab = 'coupons'; openCouponDialog()">先创建优惠券模板</el-button>
+              </el-empty>
+            </template>
           </el-table>
         </section>
       </el-tab-pane>
@@ -154,12 +163,13 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import request from '@/utils/request'
-import { configuredBusinessCapabilitySet, readStoredUser } from '@/utils/tenantAccess'
+import { activeBusinessCapabilitySet, configuredBusinessCapabilitySet, readStoredUser } from '@/utils/tenantAccess'
+import { hasPermission } from '@/utils/permissions'
 
 type BusinessType = 'restaurant' | 'retail'
 
-const props = defineProps<{ canWrite?: boolean }>()
-const canWrite = computed(() => props.canWrite !== false)
+// An omitted Boolean prop is false in Vue; true means the parent has not overridden the page's own permission check.
+const props = withDefaults(defineProps<{ canWrite?: boolean }>(), { canWrite: true })
 const activeTab = ref('coupons')
 const loading = ref(false)
 const saving = ref(false)
@@ -173,6 +183,8 @@ const campaignDialogVisible = ref(false)
 
 const user = readStoredUser()
 const configuredTypes = configuredBusinessCapabilitySet(user)
+const activeTypes = activeBusinessCapabilitySet(user)
+const canWrite = computed(() => props.canWrite !== false && hasPermission(user, 'catalog.write') && [...activeTypes].some(type => type === 'restaurant' || type === 'retail'))
 const availableBusinessTypes = computed<BusinessType[]>(() => {
   const values = (['restaurant', 'retail'] as BusinessType[]).filter(type => configuredTypes.has(type))
   return values.length ? values : ['restaurant', 'retail']
