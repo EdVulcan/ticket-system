@@ -37,9 +37,8 @@ Page({
   },
   chooseImage() {
     if (this.data.uploading) return;
-    // CloudBase is retired from the production path. Keep the control explicit
-    // until the SaaS media endpoint is wired; never upload a product image to a
-    // second, unscoped storage authority.
+    // Keep the control explicit until the SaaS media endpoint is wired; never
+    // upload a product image to a second, unscoped storage authority.
     wx.showToast({ title: api.isProduction() ? '图片上传接口尚未接入' : '演示模式暂不上传图片', icon: 'none' });
   },
   async saveProduct() {

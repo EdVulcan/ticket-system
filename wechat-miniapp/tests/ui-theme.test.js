@@ -42,12 +42,12 @@ test('home promotion uses live business information without fixed campus or coup
   assert.ok(!/满\s*25\s*减\s*3/.test(source));
 });
 
-test('theme keeps the original routes and demo deployment mode', () => {
+test('theme keeps the original routes and explicit runtime selection', () => {
   const app = JSON.parse(read('app.json'));
   assert.equal(app.pages.length, 12);
   assert.equal(app.pages.some(page => page.startsWith('pages/merchant/')), false);
   assert.deepEqual(app.tabBar.list.map(tab => tab.text), ['餐饮', '零售', '订单', '我的']);
-  assert.match(read('app.js'), /deploymentMode:\s*'demo'/);
+  assert.match(read('app.js'), /deploymentMode:\s*runtime\.deploymentMode/);
   assert.equal((read('app.wxss').match(/^page\s*\{/gm) || []).length, 1);
 });
 

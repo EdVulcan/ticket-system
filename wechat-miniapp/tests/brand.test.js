@@ -18,13 +18,11 @@ function storageHarness(mode, entries) {
   return { storage: module.exports, values };
 }
 
-test('formal brand is consistent in app navigation, demo defaults and deployment seed', () => {
+test('formal brand is consistent in app navigation and local mock defaults', () => {
   const app = require('../miniprogram/app.json');
-  const seed = require('../database/seed-data.json');
   const mock = require('../miniprogram/data/mock');
   assert.equal(brand.name, '琑遇·二两兔');
   assert.equal(app.window.navigationBarTitleText, brand.name);
-  assert.equal(seed.store_settings[0].name, brand.name);
   assert.equal(mock.store.name, brand.name);
   assert.equal(mock.store.slogan, brand.tagline);
 });

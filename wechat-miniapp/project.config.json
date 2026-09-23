@@ -1,6 +1,5 @@
 {
   "miniprogramRoot": "miniprogram/",
-  "cloudfunctionRoot": "cloudfunctions/",
   "setting": {
     "urlCheck": true,
     "es6": true,
@@ -47,7 +46,6 @@
   "appid": "wxff2677e498bce360",
   "projectname": "wechat-commerce-storefront",
   "libVersion": "2.20.1",
-  "cloudfunctionTemplateRoot": "cloudfunctionTemplate/",
   "condition": {
     "search": {
       "list": []

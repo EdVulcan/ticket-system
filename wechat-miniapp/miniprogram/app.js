@@ -5,8 +5,8 @@ const runtime = require('./config/runtime');
 
 App({
   globalData: {
-    // Demo is intentionally local (default deploymentMode: 'demo'). A production build must set an HTTPS API prefix
-    // and AppID in config/runtime.js; no app secret belongs in this package.
+    // The runtime file selects demo or production explicitly. Production requires an HTTPS API prefix
+    // and AppID; no app secret belongs in this package.
     deploymentMode: runtime.deploymentMode,
     apiBaseUrl: runtime.apiBaseUrl,
     appId: runtime.appId,

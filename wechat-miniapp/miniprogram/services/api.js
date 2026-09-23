@@ -31,7 +31,7 @@ function productionMode() {
 }
 
 // Kept as a compatibility name for existing catalog pages. It means that the
-// HTTPS storefront is configured, not that CloudBase is available.
+// HTTPS storefront configuration is independent of any legacy backend.
 function cloudEnabled() { return productionMode() && http.isConfigured(); }
 
 function apiError(code, message) {

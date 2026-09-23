@@ -41,14 +41,9 @@ for (const page of app.pages) {
   }
   wxmlCount += 1;
 }
-// CloudBase remains only in the unregistered vendor example page. Any
-// wx.cloud call in a page shipped through app.json would create a second
-// production authority alongside the SaaS API, so fail the package check.
 for (const page of app.pages) {
   const source = fs.readFileSync(path.join(root, 'miniprogram', `${page}.js`), 'utf8');
-  if (/\bwx\.cloud\b/.test(source)) throw new Error(`${page}: production pages must use the SaaS HTTPS API, not wx.cloud`);
+  if (/\bwx\.cloud\b/.test(source)) throw new Error(`${page}: storefront pages must use the SaaS HTTPS API`);
 }
 for (const tab of app.tabBar.list) if (!app.pages.includes(tab.pagePath)) throw new Error(`Unregistered tab ${tab.pagePath}`);
-if (!process.argv.includes('--check')) process.argv.push('--check');
-require('./build-cloud-shared');
-console.log(`Static checks passed: ${jsCount} JS, ${jsonCount} JSON, ${wxmlCount} registered pages. Not a WeChat render test.`);
+console.log(`Static checks passed: ${jsCount} JS, ${jsonCount} JSON, ${wxmlCount} registered pages. SaaS storefront only; not a WeChat render test.`);
