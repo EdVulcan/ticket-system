@@ -239,7 +239,7 @@ func (s MiniappService) LoginXiaohongshu(ctx context.Context, appID, code string
 	openIDHash := hashMiniappValue(platformSession.OpenID)
 	tokenHash := hashMiniappValue(token)
 	var memberID *uint
-	if s.Member != nil {
+	if s.Member != nil && ChannelAllowsMemberIdentity(account) {
 		if member, memberErr := s.Member.ResolveSelfHostedIdentity(SelfHostedIdentityInput{
 			TenantID: account.TenantID, ChannelAccountID: account.ID, Provider: "xiaohongshu_miniapp", Subject: platformSession.OpenID,
 		}); memberErr == nil && member != nil {
@@ -258,6 +258,11 @@ func (s MiniappService) LoginXiaohongshu(ctx context.Context, appID, code string
 		}
 		if err := requireAnyActiveTenantCapability(tx, account.TenantID, "supplier", "distributor"); err != nil {
 			return ErrMiniappUnavailable
+		}
+		if !ChannelAllowsMemberIdentity(&current) {
+			// Disabling the platform-controlled gate takes effect for new
+			// sessions immediately without changing historical order facts.
+			memberID = nil
 		}
 
 		var customer model.MiniappCustomer
@@ -312,15 +317,29 @@ func (s MiniappService) Authenticate(token string) (*model.MiniappCustomer, erro
 	if err := requireAnyActiveTenantCapability(model.DB, customer.TenantID, "supplier", "distributor"); err != nil {
 		return nil, ErrMiniappUnavailable
 	}
-	if customer.MemberID != nil && s.Member != nil {
+	// Keep profile/history association separate from the optional new-order
+	// attribution. A stored member ID is not enough to authorize attribution
+	// when the member service is unavailable or the channel gate is disabled.
+	customer.OrderMemberID = nil
+	if customer.MemberID != nil && s.Member != nil && ChannelAllowsMemberIdentity(&account) {
 		// Keep the stored alias for historical attribution, but use the
 		// canonical member for all new requests after a cross-channel merge.
 		if canonical, resolveErr := s.Member.ResolveCanonical(customer.TenantID, *customer.MemberID); resolveErr == nil && canonical != nil {
 			canonicalID := canonical.ID
 			customer.MemberID = &canonicalID
+			if (canonical.Status == model.TenantMemberStatusActive || canonical.Status == model.TenantMemberStatusFrozen) && canonical.MembershipStatus != model.TenantMembershipStatusWithdrawn {
+				customer.OrderMemberID = &canonicalID
+			} else {
+				customer.OrderMemberID = nil
+			}
 		} else {
 			customer.MemberID = nil
+			customer.OrderMemberID = nil
 		}
+	} else if !ChannelAllowsMemberIdentity(&account) {
+		// Do not expose a stale member association after the gate is disabled.
+		customer.MemberID = nil
+		customer.OrderMemberID = nil
 	}
 	return &customer, nil
 }

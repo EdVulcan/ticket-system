@@ -210,7 +210,12 @@ type commerceStorefrontContext struct {
 	Binding    model.CommerceStorefrontBinding
 	Location   model.CommerceFulfillmentLocation
 	CustomerID string
-	MemberID   *uint
+	// MemberID is retained for the authenticated user's own profile view.
+	MemberID *uint
+	// OrderMemberID is only populated when the member is eligible for new
+	// attribution. Membership withdrawal must not block the legacy storefront
+	// flow, but it must stop future orders from gaining member ownership.
+	OrderMemberID *uint
 }
 
 type commerceStorefrontBusiness struct {
@@ -466,7 +471,7 @@ func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceSto
 	now := s.now()
 	expiresAt := now.Add(s.sessionTTL())
 	var memberID *uint
-	if s.Member != nil {
+	if s.Member != nil && ChannelAllowsMemberIdentity(account) {
 		if member, memberErr := s.Member.ResolveSelfHostedIdentity(SelfHostedIdentityInput{
 			TenantID: account.TenantID, ChannelAccountID: account.ID, Provider: "wechat_miniapp", Subject: subject,
 		}); memberErr == nil && member != nil {
@@ -484,6 +489,11 @@ func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceSto
 		businesses, loadErr = s.loadBusinesses(tx, &current, "", false)
 		if loadErr != nil {
 			return loadErr
+		}
+		if !ChannelAllowsMemberIdentity(&current) {
+			// Keep the storefront transaction available while preventing a
+			// channel that is no longer approved from attributing new orders.
+			memberID = nil
 		}
 		if err := tx.Model(&model.CommerceCustomerSession{}).
 			Where("tenant_id = ? AND channel_account_id = ? AND subject_hash = ? AND status = ?", current.TenantID, current.ID, subjectHash, "active").
@@ -591,24 +601,41 @@ func (s *CommerceStorefrontService) authenticate(token string) (*commerceStorefr
 	}
 	session.LastSeenAt = &now
 	memberID := session.MemberID
-	if memberID != nil && s.Member != nil {
+	// Do not trust a persisted association by itself. The order projection is
+	// populated only after the current member graph has been resolved through
+	// the configured service and channel gate.
+	var orderMemberID *uint
+	if memberID != nil && s.Member != nil && ChannelAllowsMemberIdentity(&account) {
 		// A prior cross-channel merge keeps the session's historical alias for
 		// auditability. Resolve it at the authorization boundary so new orders
 		// use the canonical member without rewriting the session or old orders.
 		if canonical, resolveErr := s.Member.ResolveCanonical(session.TenantID, *memberID); resolveErr == nil && canonical != nil {
 			canonicalID := canonical.ID
 			memberID = &canonicalID
+			if (canonical.Status == model.TenantMemberStatusActive || canonical.Status == model.TenantMemberStatusFrozen) && canonical.MembershipStatus != model.TenantMembershipStatusWithdrawn {
+				orderMemberID = &canonicalID
+			}
 		} else {
 			// Membership is an additive association. If the optional graph is
 			// temporarily unavailable, preserve the existing storefront flow and
 			// leave this order unassociated rather than guessing ownership.
 			memberID = nil
+			orderMemberID = nil
 		}
+	} else if !ChannelAllowsMemberIdentity(&account) {
+		// A mode change must take effect at the authorization boundary; it
+		// does not rewrite the member_id already stored on historical orders.
+		memberID = nil
+		orderMemberID = nil
 	}
+	// Return the authorization projection rather than the stored historical
+	// alias. The database session remains unchanged for auditability.
+	session.MemberID = memberID
 	return &commerceStorefrontContext{
 		Session: session, Account: account,
-		CustomerID: storefrontCustomerID(session.ChannelAccountID, session.SubjectHash),
-		MemberID:   memberID,
+		CustomerID:    storefrontCustomerID(session.ChannelAccountID, session.SubjectHash),
+		MemberID:      memberID,
+		OrderMemberID: orderMemberID,
 	}, nil
 }
 
@@ -1523,7 +1550,7 @@ func (s *CommerceStorefrontService) checkoutOwnedCart(context *commerceStorefron
 		}
 		order, err := orders.CreateOrder(context.Session.TenantID, CreateCommerceOrderInput{
 			IdempotencyKey: input.IdempotencyKey, Channel: "wechat_miniapp", CustomerID: context.CustomerID,
-			MemberID:     context.MemberID,
+			MemberID:     context.OrderMemberID,
 			BusinessType: context.Binding.BusinessType, LocationID: context.Binding.LocationID,
 			ContactName: input.ContactName, ContactPhone: input.ContactPhone,
 			ShippingAddressJSON: input.ShippingAddress, FulfillmentMethod: input.FulfillmentMethod, Items: items,

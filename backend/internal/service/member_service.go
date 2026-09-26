@@ -47,6 +47,8 @@ var (
 	ErrMemberPhoneConflict       = errors.New("verified phone belongs to another member")
 	ErrMemberConsentRequired     = errors.New("membership consent is required")
 	ErrMemberIdempotencyConflict = errors.New("member idempotency key was reused with different data")
+	ErrMemberExportReason        = errors.New("member export reason is required")
+	ErrMemberExportTooLarge      = errors.New("member export exceeds the safe row limit")
 	ErrMemberIdentityRevokeAuth  = errors.New("recent strong authentication is required")
 	ErrMemberLastIdentity        = errors.New("the last recoverable identity cannot be revoked")
 	ErrMemberLifecycle           = errors.New("member lifecycle state does not allow this operation")
@@ -64,6 +66,7 @@ type MemberAdminListQuery struct {
 
 type MemberAdminRecord struct {
 	ID               uint
+	MemberNo         string
 	DisplayName      string
 	Phone            string
 	PhoneMasked      string
@@ -86,9 +89,11 @@ type MemberAdminAuthorization struct {
 }
 
 type MemberAdminOrderSummary struct {
-	TicketCount   int64
-	HotelCount    int64
-	CommerceCount int64
+	TicketCount     int64
+	HotelCount      int64
+	CommerceCount   int64
+	PaidOrderCount  int64
+	TotalSpendCents int64
 }
 
 type MemberAdminDetail struct {
@@ -104,6 +109,24 @@ type MemberAdminPage struct {
 	PageSize int
 	Total    int64
 	HasNext  bool
+}
+
+const maxMemberExportRows = 10000
+
+// MemberSelfProfile is the small, customer-safe projection used by
+// authenticated first-party storefronts. It deliberately exposes neither
+// internal member IDs nor provider subjects; those values are authorization
+// facts owned by the server, not client identifiers.
+type MemberSelfProfile struct {
+	MemberNo                 string `json:"member_no"`
+	DisplayName              string `json:"display_name,omitempty"`
+	AvatarURL                string `json:"avatar_url,omitempty"`
+	Status                   string `json:"status"`
+	MembershipStatus         string `json:"membership_status"`
+	PhoneMasked              string `json:"phone_masked,omitempty"`
+	PhoneVerified            bool   `json:"phone_verified"`
+	MembershipConsentGranted bool   `json:"membership_consent_granted"`
+	SourceCount              int    `json:"source_count"`
 }
 
 // MemberService is the only service allowed to maintain the tenant member
@@ -397,16 +420,22 @@ func (s *MemberService) verifyTrustedPhoneTx(tx *gorm.DB, input TrustedPhoneVeri
 			return nil, err
 		}
 	}
-	if input.MembershipConsentGranted {
-		member.MembershipStatus = MembershipStatusActive
-		if err := tx.Save(member).Error; err != nil {
-			return nil, err
-		}
-	}
 	if consent != nil {
 		if err := s.appendMembershipConsentTx(tx, member.ID, *consent); err != nil {
 			return nil, err
 		}
+	}
+	// Storefront verification records both facts in one transaction. The
+	// legacy non-storefront method may still assert consent directly, but an
+	// explicit consent record by itself never upgrades a member without a
+	// trusted phone contact.
+	if consent == nil && input.MembershipConsentGranted {
+		member.MembershipStatus = MembershipStatusActive
+	} else if err := s.refreshMembershipStatusTx(tx, member); err != nil {
+		return nil, err
+	}
+	if err := tx.Save(member).Error; err != nil {
+		return nil, err
 	}
 	// Keep a non-sensitive, idempotent evidence event for platform
 	// verification. The platform code and phone value are deliberately
@@ -417,6 +446,40 @@ func (s *MemberService) verifyTrustedPhoneTx(tx *gorm.DB, input TrustedPhoneVeri
 		}
 	}
 	return member, nil
+}
+
+// refreshMembershipStatusTx derives membership qualification from the latest
+// membership consent and the presence of an active trusted phone. Keeping this
+// derivation in one transaction prevents a consent-only record from being
+// mistaken for a verified membership.
+func (s *MemberService) refreshMembershipStatusTx(tx *gorm.DB, member *model.TenantMember) error {
+	if member == nil {
+		return ErrMemberInvalidInput
+	}
+	desired := MembershipStatusProvisional
+	var consent model.TenantMemberConsent
+	err := tx.Where("tenant_id = ? AND member_id = ? AND purpose = ?", member.TenantID, member.ID, "membership").
+		Order("occurred_at DESC, id DESC").First(&consent).Error
+	if err == nil {
+		switch consent.Decision {
+		case model.TenantMemberConsentDecisionRevoke:
+			desired = MembershipStatusWithdrawn
+		case model.TenantMemberConsentDecisionGrant:
+			var verified int64
+			if err := tx.Model(&model.TenantMemberVerifiedContact{}).
+				Where("tenant_id = ? AND member_id = ? AND contact_type = ? AND status = ?", member.TenantID, member.ID, model.TenantMemberContactTypePhone, MemberContactActive).
+				Count(&verified).Error; err != nil {
+				return err
+			}
+			if verified > 0 {
+				desired = MembershipStatusActive
+			}
+		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	member.MembershipStatus = desired
+	return nil
 }
 
 func (s *MemberService) appendMembershipConsentTx(tx *gorm.DB, memberID uint, input ConsentInput) error {
@@ -488,10 +551,8 @@ func (s *MemberService) AppendConsent(input ConsentInput) error {
 			return nil
 		}
 		if input.Purpose == "membership" {
-			if input.Decision == "grant" {
-				member.MembershipStatus = MembershipStatusActive
-			} else {
-				member.MembershipStatus = MembershipStatusWithdrawn
+			if err := s.refreshMembershipStatusTx(tx, member); err != nil {
+				return err
 			}
 			if err := tx.Save(member).Error; err != nil {
 				return err
@@ -570,6 +631,42 @@ func (s *MemberService) AutoConverge(input AutoConvergeInput) (*model.TenantMemb
 		return nil
 	})
 	return result, err
+}
+
+// AutoConvergeByTrustedPhone resolves the already-verified owner of a phone
+// and applies the narrowly-scoped provisional-to-active merge policy. It is
+// used only after a current self-owned channel has supplied a fresh trusted
+// phone assertion and explicit membership consent; it never transfers a phone
+// or merges two active members.
+func (s *MemberService) AutoConvergeByTrustedPhone(input AutoConvergeInput) (*model.TenantMember, error) {
+	if input.TenantID == 0 || input.CurrentMemberID == 0 || strings.TrimSpace(input.TrustedPhone) == "" || strings.TrimSpace(input.IdempotencyKey) == "" {
+		return nil, ErrMemberInvalidInput
+	}
+	phone, err := normalizePhone(input.TrustedPhone)
+	if err != nil {
+		return nil, ErrMemberInvalidInput
+	}
+	blind := s.contactBlindIndex(input.TenantID, model.TenantMemberContactTypePhone, phone)
+	var targetID uint
+	if err := s.db.Model(&model.TenantMemberVerifiedContact{}).
+		Where("tenant_id = ? AND contact_type = ? AND value_blind_index = ? AND status = ?", input.TenantID, model.TenantMemberContactTypePhone, blind, MemberContactActive).
+		Order("id ASC").Pluck("member_id", &targetID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrMemberPhoneConflict
+		}
+		return nil, err
+	}
+	if targetID == 0 || targetID == input.CurrentMemberID {
+		return nil, ErrMemberPhoneConflict
+	}
+	target, err := s.ResolveCanonical(input.TenantID, targetID)
+	if err != nil {
+		return nil, err
+	}
+	return s.AutoConverge(AutoConvergeInput{
+		TenantID: input.TenantID, CurrentMemberID: input.CurrentMemberID, TargetMemberID: target.ID,
+		TrustedPhone: phone, IdempotencyKey: strings.TrimSpace(input.IdempotencyKey),
+	})
 }
 
 func (s *MemberService) RevokeIdentity(input RevokeIdentityInput) error {
@@ -664,15 +761,22 @@ func (s *MemberService) ListMembers(ctx context.Context, tenantID uint, query Me
 	query.Phone = strings.TrimSpace(query.Phone)
 	if query.Status != "" {
 		switch query.Status {
-		case MemberStatusActive, MemberStatusFrozen, MemberStatusMerged, MemberStatusAnonymized, MembershipStatusProvisional:
+		case MemberStatusActive, MemberStatusFrozen, MemberStatusMerged, MemberStatusAnonymized, MembershipStatusProvisional, MembershipStatusWithdrawn:
 		default:
 			return MemberAdminPage{}, ErrMemberInvalidInput
 		}
 	}
 	q := s.db.Model(&model.TenantMember{}).Where("tenant_id = ?", tenantID)
+	// Normal customer views represent one row per canonical member. Merged
+	// aliases remain available through the explicit "merged" audit filter so
+	// historical identity records are not silently discarded or duplicated.
+	includeMergedAliases := query.Status == MemberStatusMerged
+	if !includeMergedAliases {
+		q = q.Where("merged_into_member_id IS NULL")
+	}
 	if query.Status != "" {
-		if query.Status == MembershipStatusProvisional {
-			q = q.Where("membership_status = ?", MembershipStatusProvisional)
+		if query.Status == MembershipStatusProvisional || query.Status == MembershipStatusWithdrawn {
+			q = q.Where("membership_status = ?", query.Status)
 		} else if query.Status == MemberStatusActive {
 			q = q.Where("status = ? AND membership_status = ?", MemberStatusActive, MembershipStatusActive)
 		} else {
@@ -710,13 +814,69 @@ func (s *MemberService) ListMembers(ctx context.Context, tenantID uint, query Me
 	}
 	items := make([]MemberAdminRecord, 0, len(rows))
 	for i := range rows {
-		record, err := s.memberAdminRecord(tenantID, &rows[i])
+		var record MemberAdminRecord
+		var err error
+		if includeMergedAliases && rows[i].MergedIntoMemberID != nil {
+			// The merged filter is intentionally an alias/audit view. Project the
+			// alias lifecycle state instead of replacing it with the canonical row.
+			record, err = s.memberAdminRecordWithDB(s.db, tenantID, &rows[i], []uint{rows[i].ID})
+		} else {
+			record, err = s.memberAdminRecord(tenantID, &rows[i])
+		}
 		if err != nil {
 			return MemberAdminPage{}, err
 		}
 		items = append(items, record)
 	}
 	return MemberAdminPage{Items: items, Page: query.Page, PageSize: query.PageSize, Total: total, HasNext: int64(query.Page*query.PageSize) < total}, nil
+}
+
+// ExportMembers reads the same tenant-scoped projection as the admin list,
+// with an explicit row limit and an audit record. Sensitive phone values are
+// only retained in the returned records when the caller already holds the
+// separate members.sensitive.read permission.
+func (s *MemberService) ExportMembers(ctx context.Context, tenantID uint, query MemberAdminListQuery, reason string, actorUserID uint, actorRole, requestID string, includeSensitive bool) ([]MemberAdminRecord, error) {
+	if tenantID == 0 {
+		return nil, ErrMemberInvalidInput
+	}
+	reason = strings.TrimSpace(reason)
+	if len([]rune(reason)) < 3 || len([]rune(reason)) > 200 {
+		return nil, ErrMemberExportReason
+	}
+	query.Page = 1
+	query.PageSize = 100
+	items := make([]MemberAdminRecord, 0)
+	for {
+		page, err := s.ListMembers(ctx, tenantID, query)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range page.Items {
+			if !includeSensitive {
+				item.Phone = ""
+			}
+			items = append(items, item)
+			if len(items) > maxMemberExportRows {
+				return nil, ErrMemberExportTooLarge
+			}
+		}
+		if !page.HasNext {
+			break
+		}
+		query.Page++
+	}
+	after, err := json.Marshal(map[string]interface{}{
+		"row_count":         len(items),
+		"include_sensitive": includeSensitive,
+		"status_filter":     strings.TrimSpace(query.Status),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := recordAuditTx(s.db, actorUserID, tenantID, actorRole, "tenant", "member.export", "tenant_member_export", tenantID, reason, "{}", string(after)); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 func (s *MemberService) GetMember(ctx context.Context, tenantID, memberID uint) (MemberAdminDetail, error) {
@@ -770,12 +930,70 @@ func (s *MemberService) GetMember(ctx context.Context, tenantID, memberID uint) 
 			Where("ord.member_id IN ?", memberIDs).Count(&detail.Orders.HotelCount).Error; err != nil {
 			return err
 		}
-		return tx.Model(&model.CommerceOrder{}).Where("tenant_id = ? AND member_id IN ?", tenantID, memberIDs).Count(&detail.Orders.CommerceCount).Error
+		if err := tx.Model(&model.CommerceOrder{}).Where("tenant_id = ? AND member_id IN ?", tenantID, memberIDs).Count(&detail.Orders.CommerceCount).Error; err != nil {
+			return err
+		}
+		return s.memberOrderSpendSummaryTx(tx, tenantID, memberIDs, &detail.Orders)
 	})
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return MemberAdminDetail{}, ErrMemberNotFound
 	}
 	return detail, err
+}
+
+// GetSelfProfile returns only the authenticated member's own safe projection.
+// The caller must already have resolved the member from a trusted storefront
+// session; this method never accepts a provider subject or client identifier.
+func (s *MemberService) GetSelfProfile(ctx context.Context, tenantID, memberID uint) (MemberSelfProfile, error) {
+	if tenantID == 0 || memberID == 0 {
+		return MemberSelfProfile{}, ErrMemberInvalidInput
+	}
+	_ = ctx
+	var profile MemberSelfProfile
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		member, err := s.resolveCanonicalTx(tx, tenantID, memberID, false)
+		if err != nil {
+			return err
+		}
+		memberIDs, err := s.memberGraphIDsTx(tx, tenantID, member.ID)
+		if err != nil {
+			return err
+		}
+		profile = MemberSelfProfile{
+			MemberNo:         member.MemberNo,
+			DisplayName:      member.DisplayName,
+			AvatarURL:        member.AvatarURL,
+			Status:           member.Status,
+			MembershipStatus: member.MembershipStatus,
+		}
+		var contact model.TenantMemberVerifiedContact
+		if err := tx.Where("tenant_id = ? AND member_id IN ? AND contact_type = ? AND status = ?", tenantID, memberIDs, model.TenantMemberContactTypePhone, MemberContactActive).
+			Order("verified_at DESC, id DESC").First(&contact).Error; err == nil {
+			profile.PhoneVerified = true
+			if phone, decryptErr := utils.DecryptAES(contact.ValueCiphertext); decryptErr == nil {
+				profile.PhoneMasked = maskMemberPhone(phone)
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		var consent model.TenantMemberConsent
+		if err := tx.Where("tenant_id = ? AND member_id IN ? AND purpose = ?", tenantID, memberIDs, "membership").
+			Order("occurred_at DESC, id DESC").First(&consent).Error; err == nil {
+			profile.MembershipConsentGranted = consent.Decision == model.TenantMemberConsentDecisionGrant
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		var sourceCount int64
+		if err := tx.Model(&model.TenantMemberIdentity{}).Where("tenant_id = ? AND member_id IN ?", tenantID, memberIDs).Count(&sourceCount).Error; err != nil {
+			return err
+		}
+		profile.SourceCount = int(sourceCount)
+		return nil
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return MemberSelfProfile{}, ErrMemberNotFound
+	}
+	return profile, err
 }
 
 func (s *MemberService) SetMemberStatus(ctx context.Context, tenantID, memberID uint, status string, actorUserID uint, actorRole, requestID string) (MemberAdminDetail, error) {
@@ -829,11 +1047,95 @@ func (s *MemberService) memberAdminRecord(tenantID uint, member *model.TenantMem
 	if err != nil {
 		return MemberAdminRecord{}, err
 	}
-	return s.memberAdminRecordWithDB(s.db, tenantID, member, memberIDs)
+	// Always project the canonical record. Historical merged aliases remain
+	// queryable for audit purposes, but must not surface a stale member number,
+	// lifecycle state, or display name in the normal customer view.
+	return s.memberAdminRecordWithDB(s.db, tenantID, canonical, memberIDs)
+}
+
+// memberOrderSpendSummaryTx projects the read-only customer spend summary.
+// It deliberately reads immutable order/refund facts instead of maintaining a
+// denormalized member balance, so refunds and historical aliases remain
+// explainable and no financial workflow can be bypassed by a member update.
+func (s *MemberService) memberOrderSpendSummaryTx(tx *gorm.DB, tenantID uint, memberIDs []uint, summary *MemberAdminOrderSummary) error {
+	if tx == nil || summary == nil || tenantID == 0 || len(memberIDs) == 0 {
+		return ErrMemberInvalidInput
+	}
+	type ticketOrderSpendRow struct {
+		OrderID       uint
+		Status        string
+		TotalAmount   float64
+		RefundedCents int64
+	}
+	var ticketOrders []ticketOrderSpendRow
+	if err := tx.Table("orders AS ord").Select(`
+		ord.id AS order_id,
+		ord.status,
+		ord.total_amount,
+		COALESCE((
+			SELECT SUM(CASE WHEN refund.amount_cents <> 0 THEN refund.amount_cents
+				ELSE CAST(ROUND(refund.amount * 100.0) AS BIGINT) END)
+			FROM refunds AS refund
+			WHERE refund.tenant_id = ord.tenant_id
+				AND refund.order_no = ord.order_no
+				AND COALESCE(refund.parent_refund_id, 0) = 0
+				AND refund.status IN ('succeeded', 'group_succeeded')
+				AND refund.deleted_at IS NULL
+		), 0) AS refunded_cents`).
+		Where("ord.tenant_id = ? AND ord.member_id IN ? AND ord.status IN ? AND ord.deleted_at IS NULL", tenantID, memberIDs, []string{"paid", "completed", "partial_refunded", "refunded"}).
+		Scan(&ticketOrders).Error; err != nil {
+		return err
+	}
+	for _, order := range ticketOrders {
+		summary.PaidOrderCount++
+		net := moneyCents(order.TotalAmount) - order.RefundedCents
+		// A few legacy fully-refunded rows predate a durable refund amount.
+		// Their terminal status is still authoritative for customer spend.
+		if order.Status == "refunded" && order.RefundedCents == 0 {
+			net = 0
+		}
+		if net > 0 {
+			summary.TotalSpendCents += net
+		}
+	}
+
+	type commerceOrderSpendRow struct {
+		PaymentStatus string
+		TotalAmount   int64
+		RefundedCents int64
+	}
+	var commerceOrders []commerceOrderSpendRow
+	if err := tx.Model(&model.CommerceOrder{}).Select(`
+		commerce_orders.payment_status,
+		commerce_orders.total_amount_cents AS total_amount,
+		COALESCE((
+			SELECT SUM(after_sale.amount_cents)
+			FROM commerce_after_sale_requests AS after_sale
+			WHERE after_sale.tenant_id = commerce_orders.tenant_id
+				AND after_sale.order_id = commerce_orders.id
+				AND after_sale.type = 'refund'
+				AND after_sale.status = 'completed'
+				AND after_sale.deleted_at IS NULL
+		), 0) AS refunded_cents`).
+		Where("commerce_orders.tenant_id = ? AND commerce_orders.member_id IN ? AND commerce_orders.payment_status IN ? AND commerce_orders.deleted_at IS NULL", tenantID, memberIDs, []string{"paid", "refunded"}).
+		Scan(&commerceOrders).Error; err != nil {
+		return err
+	}
+	for _, order := range commerceOrders {
+		summary.PaidOrderCount++
+		net := order.TotalAmount - order.RefundedCents
+		if order.PaymentStatus == "refunded" && order.RefundedCents == 0 {
+			net = 0
+		}
+		if net > 0 {
+			summary.TotalSpendCents += net
+		}
+	}
+	return nil
 }
 
 func (s *MemberService) memberAdminRecordWithDB(db *gorm.DB, tenantID uint, member *model.TenantMember, memberIDs []uint) (MemberAdminRecord, error) {
-	record := MemberAdminRecord{ID: member.ID, DisplayName: member.DisplayName, Status: member.Status, MembershipStatus: member.MembershipStatus, CreatedAt: member.CreatedAt, LastSeenAt: &member.LastSeenAt}
+	record := MemberAdminRecord{ID: member.ID, MemberNo: member.MemberNo, DisplayName: member.DisplayName, Status: member.Status, MembershipStatus: member.MembershipStatus, CreatedAt: member.CreatedAt, LastSeenAt: &member.LastSeenAt}
 	var contact model.TenantMemberVerifiedContact
 	if err := db.Where("tenant_id = ? AND member_id IN ? AND contact_type = ? AND status = ?", tenantID, memberIDs, model.TenantMemberContactTypePhone, MemberContactActive).Order("verified_at DESC, id DESC").First(&contact).Error; err == nil {
 		if phone, decryptErr := utils.DecryptAES(contact.ValueCiphertext); decryptErr == nil {

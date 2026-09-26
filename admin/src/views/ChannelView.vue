@@ -3,7 +3,7 @@
     <header class="page-heading">
       <div class="page-heading-copy">
         <h2 class="text-xl font-semibold text-gray-900">渠道连接</h2>
-        <p class="text-sm text-gray-500 mt-1">统一管理渠道凭据；商业微信小程序的商品发布和履约地点在商业工作台配置。</p>
+        <p class="text-sm text-gray-500 mt-1">统一管理渠道凭据；商业微信小程序的商品发布和履约地点在商业工作台配置。会员来源由平台审核控制，外部渠道默认不纳入会员中心。</p>
       </div>
       <div class="page-actions">
         <el-button :icon="Refresh" title="刷新" @click="load">刷新</el-button>
@@ -16,6 +16,7 @@
       <el-table-column label="适配器类型" width="140"><template #default="{row}">{{ adapterTypeText(row.type) }}</template></el-table-column>
       <el-table-column label="接口参数" width="120"><template #default="{row}"><el-tag v-if="['ctrip', 'xiaohongshu', 'wechat_miniapp'].includes(row.type)" :type="row.protocol_configured ? 'success' : 'danger'" effect="plain">{{ row.protocol_configured ? '已配置' : '待配置' }}</el-tag><span v-else>-</span></template></el-table-column>
       <el-table-column prop="status" label="状态" width="120"><template #default="{row}"><el-tag :type="row.status === 'active' ? 'success' : row.status === 'sandbox' ? 'warning' : 'info'">{{ accountStatusText(row.status) }}</el-tag></template></el-table-column>
+      <el-table-column label="会员来源" width="130"><template #default="{row}"><el-tag :type="row.member_mode === 'first_party' ? 'success' : 'info'" effect="plain">{{ memberModeText(row.member_mode) }}</el-tag></template></el-table-column>
       <el-table-column prop="rate_limit_per_min" label="限流/分钟" width="120" />
       <el-table-column prop="permissions_json" label="权限" min-width="220" show-overflow-tooltip />
       <el-table-column label="操作" width="260" fixed="right">
@@ -1062,6 +1063,7 @@ const xiaohongshuAuditAlertTitle = computed(() => {
 const cents = (value: number) => (Number(value || 0) / 100).toFixed(2)
 const signedCents = (value: number) => `${Number(value || 0) > 0 ? '+' : Number(value || 0) < 0 ? '-' : ''}¥${cents(Math.abs(Number(value || 0)))}`
 const accountStatusText = (status: string) => ({ active: '正式启用', sandbox: '测试中', disabled: '已停用' } as Record<string, string>)[status] || '未知状态'
+const memberModeText = (mode: string) => mode === 'first_party' ? '自营会员入口' : '未纳入会员'
 const adapterTypeText = (type: string) => ({ core: '通用渠道', ctrip: '携程', xiaohongshu: '小红书', wechat_miniapp: '微信小程序（商业）', meituan: '美团', zyb: '智游宝上游' } as Record<string, string>)[type] || '自定义渠道'
 const mappingStatusText = (status: string) => ({ active: '已启用', disabled: '已停用' } as Record<string, string>)[status] || '未知状态'
 const ctripTaskKindText = (kind: string) => ({ price: '价格', inventory: '库存', consumed: '核销通知' } as Record<string, string>)[kind] || '其他'

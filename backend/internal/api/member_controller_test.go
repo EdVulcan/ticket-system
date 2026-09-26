@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"ticket-backend/internal/authz"
@@ -25,6 +26,12 @@ type fakeMemberService struct {
 	statusArgs struct {
 		tenant, id, actor uint
 		status, requestID string
+	}
+	exportErr  error
+	exportArgs struct {
+		tenant    uint
+		reason    string
+		sensitive bool
 	}
 }
 
@@ -50,6 +57,18 @@ func (s *fakeMemberService) SetStatus(_ context.Context, tenantID, id uint, stat
 		status, requestID string
 	}{tenant: tenantID, id: id, actor: actor, status: status, requestID: requestID}
 	return s.detail, s.statusErr
+}
+
+func (s *fakeMemberService) Export(_ context.Context, tenantID uint, _ MemberListQuery, reason string, _ uint, _ string, _ string, sensitive bool) ([]MemberRecord, error) {
+	s.exportArgs = struct {
+		tenant    uint
+		reason    string
+		sensitive bool
+	}{tenant: tenantID, reason: reason, sensitive: sensitive}
+	if s.exportErr != nil {
+		return nil, s.exportErr
+	}
+	return []MemberRecord{{MemberNo: "M-001", DisplayName: "彭程", Phone: "13346516523", PhoneMasked: "133****6523", Status: "active", MembershipStatus: "active", SourceCount: 1}}, nil
 }
 
 func invokeMemberController(t *testing.T, method, path string, role string, service MemberService, handler gin.HandlerFunc, params gin.Params) *httptest.ResponseRecorder {
@@ -186,5 +205,29 @@ func TestMemberControllerMapsIdempotencyConflictToConflict(t *testing.T) {
 	response := invokeMemberController(t, http.MethodPost, "/api/v1/members/9/freeze", "admin", fake, (&MemberController{Service: fake}).Freeze, gin.Params{{Key: "id", Value: "9"}})
 	if response.Code != http.StatusConflict {
 		t.Fatalf("status=%d body=%s want 409", response.Code, response.Body.String())
+	}
+}
+
+func TestMemberExportRequiresReasonAndMasksWithoutSensitivePermission(t *testing.T) {
+	service := &fakeMemberService{}
+	controller := &MemberController{Service: service}
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/members/export", strings.NewReader(`{"reason":"月度客户归档"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Request.Header.Set("X-Request-ID", "export-1")
+	ctx.Set("tenant_id", uint(42))
+	ctx.Set("user_id", uint(77))
+	ctx.Set("role", "viewer")
+	controller.Export(ctx)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	if service.exportArgs.tenant != 42 || service.exportArgs.reason != "月度客户归档" || service.exportArgs.sensitive {
+		t.Fatalf("export args=%+v", service.exportArgs)
+	}
+	if !strings.Contains(recorder.Body.String(), "133****6523") || strings.Contains(recorder.Body.String(), "13346516523") {
+		t.Fatalf("export leaked or omitted masked phone: %s", recorder.Body.String())
 	}
 }

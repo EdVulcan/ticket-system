@@ -34,6 +34,18 @@
 .profile-brand-name { font-family: "Songti SC", "SimSun", serif; color: var(--ink); font-size: 32rpx; font-weight: 600; letter-spacing: 2rpx; }
 .profile-brand-tagline { color: var(--muted); font-size: 22rpx; margin-top: 6rpx; }
 .profile-rabbits { width: 86rpx; height: 78rpx; }
+.member-card { background: #f0f5ef; border: 1rpx solid #d9e6d9; border-radius: 18rpx; box-sizing: border-box; margin-bottom: 22rpx; padding: 24rpx; }
+.member-card-head { align-items: flex-start; display: flex; gap: 16rpx; justify-content: space-between; }
+.member-card-title { color: var(--ink); font-size: 30rpx; font-weight: 700; }
+.member-card-sub { color: var(--muted); font-size: 21rpx; line-height: 1.5; margin-top: 8rpx; }
+.member-card-status { background: #dcebdc; border-radius: 999rpx; color: var(--green); flex-shrink: 0; font-size: 20rpx; padding: 8rpx 14rpx; }
+.member-phone { color: var(--ink); font-size: 27rpx; letter-spacing: 1rpx; margin-top: 16rpx; }
+.member-consent { align-items: center; color: var(--muted); display: flex; font-size: 21rpx; line-height: 1.4; margin-top: 18rpx; }
+.member-consent checkbox { transform: scale(.78); transform-origin: left center; }
+.member-action { background: var(--green); border: 0; border-radius: 10rpx; color: #fff; font-size: 25rpx; line-height: 1; margin: 18rpx 0 0; padding: 20rpx 24rpx; width: 100%; }
+.member-action[disabled] { background: #aebcaf; color: #f7faf5; }
+.member-action::after { border: 0; }
+.member-error { color: #b34836; font-size: 21rpx; line-height: 1.45; margin-top: 14rpx; }
 .contact-overlay { align-items: flex-end; background: rgba(25, 31, 28, .46); bottom: 0; display: flex; left: 0; position: fixed; right: 0; top: 0; z-index: 80; }
 .contact-sheet { background: #fbfaf6; border-radius: 28rpx 28rpx 0 0; box-sizing: border-box; padding: 16rpx 36rpx calc(34rpx + env(safe-area-inset-bottom)); width: 100%; }
 .contact-sheet-handle { background: #d9d8d1; border-radius: 999rpx; height: 8rpx; margin: 0 auto 26rpx; width: 72rpx; }

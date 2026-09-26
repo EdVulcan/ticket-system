@@ -22,12 +22,12 @@ func TestWechatMiniappChannelIsCommercialOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	account := model.ChannelAccount{Code: "wechat-commercial", Status: "active"}
+	account := model.ChannelAccount{Code: "wechat-commercial", Status: "active", MemberMode: model.ChannelMemberModeFirstParty}
 	channels := &ChannelService{}
 	if err := channels.CreateWechatMiniapp(tenant.ID, &account, "wx-commercial-app", "wx-commercial-secret"); err != nil {
 		t.Fatalf("create commercial channel: %v", err)
 	}
-	if account.Type != "wechat_miniapp" || account.SignAlgorithm != "access-token" || account.SecretCiphertext == "" {
+	if account.Type != "wechat_miniapp" || account.SignAlgorithm != "access-token" || account.SecretCiphertext == "" || account.MemberMode != model.ChannelMemberModeDisabled {
 		t.Fatalf("unexpected account: %+v", account)
 	}
 	secret, err := utils.DecryptAES(account.SecretCiphertext)

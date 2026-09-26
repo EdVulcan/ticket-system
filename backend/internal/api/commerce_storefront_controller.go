@@ -160,6 +160,15 @@ func (c *CommerceStorefrontController) VerifyPhone(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, result)
 }
 
+func (c *CommerceStorefrontController) MemberMe(ctx *gin.Context) {
+	profile, err := c.Service.GetMemberProfile(ctx.Request.Context(), commerceStorefrontBearerToken(ctx))
+	if err != nil {
+		commerceStorefrontMemberError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, profile)
+}
+
 func (c *CommerceStorefrontController) Catalog(ctx *gin.Context) {
 	catalog, err := c.Service.ListCatalog(commerceStorefrontBearerToken(ctx), commerceStorefrontBusinessType(ctx))
 	if err != nil {
@@ -562,8 +571,24 @@ func commerceStorefrontPhoneError(ctx *gin.Context, err error) {
 		status, message = http.StatusServiceUnavailable, "当前会员服务暂时不可用，请重新进入小程序"
 	case errors.Is(err, service.ErrMemberPhoneConflict):
 		status, message = http.StatusConflict, "该手机号已绑定其他会员，请联系管理员处理"
+	case errors.Is(err, service.ErrMemberLifecycle):
+		status, message = http.StatusConflict, "当前会员状态暂不能完成认证，请稍后重试或联系管理员"
 	case errors.Is(err, service.ErrWechatPhoneAppIDMismatch), errors.Is(err, service.ErrWechatPhoneOpenIDMismatch), errors.Is(err, service.ErrWechatPhoneMissing), errors.Is(err, service.ErrWechatPhoneMalformed), errors.Is(err, service.ErrWechatPhoneEmptyResponse):
 		status, message = http.StatusBadGateway, "微信手机号授权结果无效，请重新授权"
+	}
+	ctx.JSON(status, gin.H{"error": message})
+}
+
+func commerceStorefrontMemberError(ctx *gin.Context, err error) {
+	status := http.StatusServiceUnavailable
+	message := "会员资料暂时不可用，请重新进入小程序"
+	switch {
+	case errors.Is(err, service.ErrCommerceStorefrontUnauthenticated):
+		status, message = http.StatusUnauthorized, "登录状态已失效，请重新进入小程序"
+	case errors.Is(err, service.ErrStorefrontMemberUnavailable), errors.Is(err, service.ErrMemberTenantUnavailable):
+		status, message = http.StatusServiceUnavailable, "会员资料暂时不可用，请重新进入小程序"
+	case errors.Is(err, service.ErrMemberNotFound), errors.Is(err, service.ErrMemberLifecycle):
+		status, message = http.StatusConflict, "当前会员状态需要重新确认，请重新进入小程序"
 	}
 	ctx.JSON(status, gin.H{"error": message})
 }

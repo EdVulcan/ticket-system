@@ -54,6 +54,7 @@ type CommerceStorefrontChannelView struct {
 	AppID            string `json:"app_id"`
 	Status           string `json:"status"`
 	Environment      string `json:"environment"`
+	MemberMode       string `json:"member_mode"`
 	CredentialsReady bool   `json:"credentials_ready"`
 }
 
@@ -74,7 +75,7 @@ func (s *CommerceStorefrontService) ListChannelAccounts(tenantID uint) ([]Commer
 	for _, account := range accounts {
 		result = append(result, CommerceStorefrontChannelView{
 			ID: account.ID, Code: account.Code, AppID: account.AppID, Status: account.Status,
-			Environment:      account.Environment,
+			Environment: account.Environment, MemberMode: account.MemberMode,
 			CredentialsReady: strings.TrimSpace(account.AppID) != "" && strings.TrimSpace(account.SecretCiphertext) != "",
 		})
 	}

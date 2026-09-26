@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 144
+const CurrentPostgresSchemaVersion = 145
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -785,6 +785,9 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateTenantMemberCenter(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateChannelMemberMode(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	if err := migrateCommerceStorefrontPhoneBinding(db, previousSchemaVersion); err != nil {
 		return err
 	}
@@ -793,7 +796,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "commerce promotion business scopes",
+		Name:      "channel member mode gate",
 		AppliedAt: time.Now(),
 	}).Error
 }
@@ -987,6 +990,33 @@ func migrateTenantMemberCenter(db *gorm.DB, previous int) error {
 			FOREIGN KEY (tenant_id, member_id) REFERENCES tenant_members(tenant_id, id);
 	`).Error; err != nil {
 		return fmt.Errorf("add tenant member center constraints and indexes: %w", err)
+	}
+	return nil
+}
+
+// migrateChannelMemberMode adds the platform-controlled gate that decides
+// whether an authenticated channel is allowed to create or resolve tenant
+// members. Existing official WeChat and Xiaohongshu self-hosted accounts are
+// the compatibility exception: they already carried the first-party meaning
+// before this gate existed, so they are backfilled as first_party. All other
+// accounts, and all accounts created after this migration, remain disabled
+// until a platform administrator explicitly approves them.
+func migrateChannelMemberMode(db *gorm.DB, previous int) error {
+	if previous >= 145 {
+		return nil
+	}
+	if err := db.Exec(`
+		ALTER TABLE channel_accounts
+			ADD COLUMN IF NOT EXISTS member_mode VARCHAR(20) NOT NULL DEFAULT 'disabled';
+		ALTER TABLE channel_accounts DROP CONSTRAINT IF EXISTS chk_channel_member_mode;
+		ALTER TABLE channel_accounts ADD CONSTRAINT chk_channel_member_mode
+			CHECK (member_mode IN ('disabled','first_party'));
+		UPDATE channel_accounts
+		SET member_mode = 'first_party'
+		WHERE member_mode = 'disabled'
+		  AND type IN ('wechat_miniapp','xiaohongshu');
+	`).Error; err != nil {
+		return fmt.Errorf("add channel member mode gate: %w", err)
 	}
 	return nil
 }

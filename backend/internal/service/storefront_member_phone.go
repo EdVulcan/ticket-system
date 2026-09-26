@@ -64,6 +64,30 @@ func verifyStorefrontMemberPhone(ctx context.Context, members *MemberService, te
 	} else {
 		member, err = members.VerifyTrustedPhone(phoneInput)
 	}
+	if errors.Is(err, ErrMemberPhoneConflict) && input.MembershipConsentGranted {
+		// A second self-owned channel may represent the same person. The
+		// trusted provider assertion plus explicit consent is enough to enter
+		// the narrowly-scoped provisional-to-active convergence rule; two
+		// active members, frozen members, and any lifecycle mismatch remain a
+		// conflict and never get merged.
+		member, err = members.AutoConvergeByTrustedPhone(AutoConvergeInput{
+			TenantID: tenantID, CurrentMemberID: memberID, TrustedPhone: phone,
+			IdempotencyKey: memberMergeIdempotencyKey(input.RequestID),
+		})
+		if err == nil && member != nil {
+			// The first verification stopped before writing consent because the
+			// phone was already owned by another member. Preserve the explicit
+			// consent from this second self-owned channel on the canonical member
+			// after the merge, using the same idempotency key as the original
+			// request so retries remain safe.
+			err = members.AppendConsent(ConsentInput{
+				TenantID: tenantID, MemberID: member.ID, Purpose: "membership",
+				PolicyVersion: input.MembershipPolicyVersion, Decision: "grant",
+				ChannelAccountID: channelAccountID, EvidenceMethod: method,
+				IdempotencyKey: membershipConsentIdempotencyKey(input.RequestID),
+			})
+		}
+	}
 	if err != nil {
 		return StorefrontPhoneVerificationResult{}, err
 	}
@@ -77,6 +101,15 @@ func verifyStorefrontMemberPhone(ctx context.Context, members *MemberService, te
 	return StorefrontPhoneVerificationResult{
 		Verified: true, PhoneMasked: maskMemberPhone(normalized), MembershipStatus: member.MembershipStatus,
 	}, nil
+}
+
+func memberMergeIdempotencyKey(requestID string) string {
+	const suffix = ":member-merge"
+	if len(requestID)+len(suffix) <= 160 {
+		return requestID + suffix
+	}
+	digest := sha256.Sum256([]byte(requestID))
+	return "member-merge:" + hex.EncodeToString(digest[:])
 }
 
 // membershipConsentIdempotencyKey keeps the derived database key within the

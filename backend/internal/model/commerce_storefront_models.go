@@ -19,7 +19,11 @@ type CommerceCustomerSession struct {
 	// MemberID is a server-resolved, optional tenant customer association. It
 	// is never accepted from storefront requests and is not used as an order
 	// access credential.
-	MemberID         *uint      `gorm:"index" json:"-"`
+	MemberID *uint `gorm:"index" json:"-"`
+	// OrderMemberID is the safe projection for new order attribution. Keep the
+	// profile association separate so a withdrawn/anonymized member can still
+	// read their own status and history without being attached to new orders.
+	OrderMemberID    *uint      `gorm:"-" json:"-"`
 	SubjectHash      string     `gorm:"size:64;not null;uniqueIndex:idx_commerce_customer_sessions_subject,priority:2;index" json:"-"`
 	OpenIDCiphertext string     `gorm:"type:text;not null;default:''" json:"-"`
 	TokenHash        string     `gorm:"size:64;not null;uniqueIndex" json:"-"`

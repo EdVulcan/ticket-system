@@ -12,7 +12,11 @@ type MiniappCustomer struct {
 	// MemberID is populated only after the authenticated self-hosted identity
 	// has been resolved by the tenant member service. Existing channel
 	// customer/session fields remain the order-access authority.
-	MemberID             *uint      `gorm:"index" json:"-"`
+	MemberID *uint `gorm:"index" json:"-"`
+	// OrderMemberID is an in-memory authorization projection. A withdrawn or
+	// anonymized member may still be shown their own profile/history, but must
+	// not be written onto a new order. It is never persisted.
+	OrderMemberID        *uint      `gorm:"-" json:"-"`
 	OpenIDHash           string     `gorm:"size:64;uniqueIndex:idx_miniapp_customer_openid,priority:2;not null" json:"-"`
 	OpenIDCiphertext     string     `gorm:"type:text;not null" json:"-"`
 	SessionKeyCiphertext string     `gorm:"type:text;not null" json:"-"`

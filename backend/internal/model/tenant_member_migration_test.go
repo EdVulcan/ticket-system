@@ -136,6 +136,6 @@ func TestTenantMemberCenterMigrationAndOwnershipGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	if latest.Version != CurrentPostgresSchemaVersion {
-		t.Fatalf("latest migration=%+v, want 142", latest)
+		t.Fatalf("latest migration=%+v, want %d", latest, CurrentPostgresSchemaVersion)
 	}
 }

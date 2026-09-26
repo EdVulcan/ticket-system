@@ -890,6 +890,34 @@ module.exports = {
     if (!productionMode()) return Promise.resolve(normalizeStorefrontContact({}));
     return productionRequest('/contact').then(normalizeStorefrontContact);
   },
+  getMemberProfile() {
+    if (!productionMode()) {
+      return Promise.resolve({
+        member_no: '',
+        status: 'active',
+        membership_status: 'provisional',
+        phone_masked: '',
+        phone_verified: false,
+        membership_consent_granted: false,
+        source_count: 1
+      });
+    }
+    return productionRequest('/member/me').then(resource);
+  },
+  verifyMemberPhone(code, requestId, membershipConsentGranted, membershipPolicyVersion) {
+    if (!productionMode()) return Promise.reject(apiError('DEMO_ONLY', '演示模式不发送线上请求'));
+    const value = String(code || '').trim();
+    if (!value) return Promise.reject(apiError('PHONE_CODE_MISSING', '没有取得有效的手机号授权凭据'));
+    return productionRequest('/member/verify-phone', {
+      method: 'POST',
+      data: {
+        code: value,
+        request_id: String(requestId || ''),
+        membership_consent_granted: membershipConsentGranted !== false,
+        membership_policy_version: String(membershipPolicyVersion || 'member-phone-v1')
+      }
+    }).then(resource);
+  },
   createCart(input) {
     // The storefront resolves business type, tenant, channel and location from
     // the bearer session. Do not send client-owned binding facts as authority.

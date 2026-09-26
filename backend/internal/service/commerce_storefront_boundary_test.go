@@ -28,7 +28,7 @@ func createCommerceStorefrontAccountAndBinding(t *testing.T, tenantID, locationI
 	t.Helper()
 	account := model.ChannelAccount{
 		TenantID: tenantID, Code: code, Type: "wechat_miniapp", AppID: appID,
-		Status: "active", Environment: "production",
+		Status: "active", Environment: "production", MemberMode: model.ChannelMemberModeFirstParty,
 	}
 	if err := model.DB.Create(&account).Error; err != nil {
 		t.Fatalf("create storefront channel account: %v", err)

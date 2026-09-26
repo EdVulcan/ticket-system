@@ -15,15 +15,17 @@ Page({
     error: '',
     phoneVerified: false,
     phoneMasked: '',
+    memberConsentGranted: false,
     verifyingPhone: false,
     phoneError: ''
   },
 
   onLoad() {
     app.setNavigationTitle(app.globalData.storeName || '官方商城');
+    this.loadMemberProfile();
     this.loadOrders(true);
   },
-  onShow() { if (this.data.allOrders.length) this.loadOrders(true); },
+  onShow() { this.loadMemberProfile(); if (this.data.allOrders.length) this.loadOrders(true); },
   onPullDownRefresh() { this.loadOrders(true).finally(() => xhs.stopPullDownRefresh()); },
   onReachBottom() {
     if (!this.data.loading && !this.data.loadingMore && this.data.allOrders.length < this.data.total) this.loadOrders(false);
@@ -33,13 +35,17 @@ Page({
     const detail = event && event.detail ? event.detail : {};
     const message = String(detail.errMsg || '');
     if (message && message.indexOf(':ok') < 0) {
-      this.setData({ phoneError: '未完成手机号授权，可稍后再次绑定。' });
+      this.setData({ phoneError: '未完成会员授权，可稍后再次尝试。' });
       return;
     }
     const encryptedData = detail.encryptedData || detail.encrypted_data || '';
     const iv = detail.iv || '';
     if (!encryptedData || !iv) {
-      this.setData({ phoneError: '没有取得有效的授权凭据，请重新点击绑定。' });
+      this.setData({ phoneError: '没有取得有效的授权凭据，请重新点击认证。' });
+      return;
+    }
+    if (!this.data.memberConsentGranted) {
+      this.setData({ phoneError: '请先同意会员服务说明，再完成认证。' });
       return;
     }
     if (this.data.verifyingPhone) return;
@@ -56,9 +62,31 @@ Page({
       }
     }).then(result => {
       this.setData({ phoneVerified: Boolean(result && result.verified), phoneMasked: result && result.phone_masked ? result.phone_masked : '', verifyingPhone: false, phoneError: '' });
-      xhs.showToast({ title: '手机号已绑定', icon: 'success' });
+      this.setData({ memberConsentGranted: true });
+      xhs.showToast({ title: '会员认证完成', icon: 'success' });
     }).catch(error => {
-      this.setData({ verifyingPhone: false, phoneError: error.message || '手机号授权失败，请稍后重试' });
+      this.setData({ verifyingPhone: false, phoneError: error.message || '暂时无法完成会员授权，请稍后重试' });
+    });
+  },
+
+  onMemberConsentChange(event) {
+    const values = event && event.detail && Array.isArray(event.detail.value) ? event.detail.value : [];
+    this.setData({ memberConsentGranted: values.indexOf('member') >= 0, phoneError: '' });
+  },
+
+  loadMemberProfile() {
+    return app.request('/member/me').then(profile => {
+      const value = profile || {};
+      this.setData({
+        phoneVerified: Boolean(value.phone_verified || value.phoneVerified),
+        phoneMasked: value.phone_masked || value.phoneMasked || '',
+        memberConsentGranted: Boolean(value.membership_consent_granted || value.membershipConsentGranted),
+        phoneError: ''
+      });
+    }).catch(error => {
+      // A legacy session may not have the additive member association yet;
+      // orders remain usable and the user can retry after re-entering.
+      if (error && error.statusCode === 401) this.setData({ phoneError: '登录状态已失效，请重新进入小程序' });
     });
   },
 

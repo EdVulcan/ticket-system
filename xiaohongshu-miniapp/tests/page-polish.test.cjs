@@ -84,3 +84,24 @@ test('booking selected stay derives checkout and submitting keeps selection fixe
   page.selectDate({currentTarget:{dataset:{date:'2026-09-11'}}});
   assert.equal(page.data.checkInDate,'2026-09-10');
 });
+
+test('member authorization uses membership language in the orders experience',()=>{
+  const template=fs.readFileSync(path.join(root,'pages/orders/index.xhsml'),'utf8');
+  const source=fs.readFileSync(path.join(root,'pages/orders/index.js'),'utf8');
+  assert.match(template,/已成为会员/);
+  assert.match(template,/member-inline/);
+  assert.match(template,/member-cta/);
+  assert.match(template,/完成会员认证/);
+  assert.match(template,/header-row/);
+  assert.match(template,/验证手机号/);
+  assert.match(template,/订单已自动归档/);
+  assert.match(template,/会员服务说明/);
+  assert.doesNotMatch(template,/member-status/);
+  assert.doesNotMatch(template,/member-hero/);
+  assert.doesNotMatch(template,/member-button/);
+  assert.doesNotMatch(template,/member-strip/);
+  assert.doesNotMatch(template,/member-action/);
+  assert.match(source,/会员认证完成/);
+  assert.doesNotMatch(source,/手机号已绑定/);
+  assert.doesNotMatch(template,/手机号已绑定/);
+});

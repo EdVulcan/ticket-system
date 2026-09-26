@@ -70,6 +70,15 @@ func (c *MiniappController) VerifyPhone(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, result)
 }
 
+func (c *MiniappController) MemberMe(ctx *gin.Context) {
+	profile, err := c.Service.GetXiaohongshuMemberProfile(ctx.Request.Context(), bearerToken(ctx.GetHeader("Authorization")))
+	if err != nil {
+		xiaohongshuMemberError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, profile)
+}
+
 func xiaohongshuPhoneError(ctx *gin.Context, err error) {
 	status := http.StatusBadGateway
 	message := "手机号授权暂时失败，请稍后重试"
@@ -82,8 +91,24 @@ func xiaohongshuPhoneError(ctx *gin.Context, err error) {
 		status, message = http.StatusServiceUnavailable, "当前会员服务暂时不可用，请重新进入小程序"
 	case errors.Is(err, service.ErrMemberPhoneConflict):
 		status, message = http.StatusConflict, "该手机号已绑定其他会员，请联系管理员处理"
+	case errors.Is(err, service.ErrMemberLifecycle):
+		status, message = http.StatusConflict, "当前会员状态暂不能完成认证，请稍后重试或联系管理员"
 	case errors.Is(err, service.ErrXiaohongshuPhoneAuthAppID), errors.Is(err, service.ErrXiaohongshuPhoneAuthExpired), errors.Is(err, service.ErrXiaohongshuPhoneAuthPayload), errors.Is(err, service.ErrXiaohongshuPhoneAuthPhoneMissing), errors.Is(err, service.ErrXiaohongshuPhoneAuthSessionKey):
 		status, message = http.StatusBadGateway, "小红书手机号授权结果无效，请重新授权"
+	}
+	ctx.JSON(status, gin.H{"error": message})
+}
+
+func xiaohongshuMemberError(ctx *gin.Context, err error) {
+	status := http.StatusServiceUnavailable
+	message := "会员资料暂时不可用，请重新进入小程序"
+	switch {
+	case errors.Is(err, service.ErrMiniappUnauthenticated):
+		status, message = http.StatusUnauthorized, "登录状态已失效，请重新进入小程序"
+	case errors.Is(err, service.ErrStorefrontMemberUnavailable), errors.Is(err, service.ErrMiniappUnavailable), errors.Is(err, service.ErrMemberTenantUnavailable):
+		status, message = http.StatusServiceUnavailable, "会员资料暂时不可用，请重新进入小程序"
+	case errors.Is(err, service.ErrMemberNotFound), errors.Is(err, service.ErrMemberLifecycle):
+		status, message = http.StatusConflict, "当前会员状态需要重新确认，请重新进入小程序"
 	}
 	ctx.JSON(status, gin.H{"error": message})
 }

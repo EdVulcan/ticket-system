@@ -1,8 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +25,7 @@ type MemberService interface {
 	List(context.Context, uint, MemberListQuery) (MemberPage, error)
 	Get(context.Context, uint, uint) (MemberDetail, error)
 	SetStatus(context.Context, uint, uint, string, uint, string) (MemberDetail, error)
+	Export(context.Context, uint, MemberListQuery, string, uint, string, string, bool) ([]MemberRecord, error)
 }
 
 var (
@@ -51,6 +55,7 @@ type MemberPage struct {
 
 type MemberRecord struct {
 	ID               uint       `json:"id"`
+	MemberNo         string     `json:"member_no"`
 	DisplayName      string     `json:"display_name"`
 	Phone            string     `json:"-"`
 	PhoneMasked      string     `json:"-"`
@@ -73,9 +78,11 @@ type MemberAuthorizationSummary struct {
 }
 
 type MemberOrderSummary struct {
-	TicketCount   int64 `json:"ticket_count"`
-	HotelCount    int64 `json:"hotel_count"`
-	CommerceCount int64 `json:"commerce_count"`
+	TicketCount     int64 `json:"ticket_count"`
+	HotelCount      int64 `json:"hotel_count"`
+	CommerceCount   int64 `json:"commerce_count"`
+	PaidOrderCount  int64 `json:"paid_order_count"`
+	TotalSpendCents int64 `json:"total_spend_cents"`
 }
 
 type MemberDetail struct {
@@ -144,9 +151,11 @@ func (a *MemberServiceAdapter) Get(ctx context.Context, tenantID, memberID uint)
 			Consented:     detail.Authorization.Consented,
 		},
 		Orders: MemberOrderSummary{
-			TicketCount:   detail.Orders.TicketCount,
-			HotelCount:    detail.Orders.HotelCount,
-			CommerceCount: detail.Orders.CommerceCount,
+			TicketCount:     detail.Orders.TicketCount,
+			HotelCount:      detail.Orders.HotelCount,
+			CommerceCount:   detail.Orders.CommerceCount,
+			PaidOrderCount:  detail.Orders.PaidOrderCount,
+			TotalSpendCents: detail.Orders.TotalSpendCents,
 		},
 	}, nil
 }
@@ -172,17 +181,36 @@ func (a *MemberServiceAdapter) SetStatus(ctx context.Context, tenantID, memberID
 			Consented:     detail.Authorization.Consented,
 		},
 		Orders: MemberOrderSummary{
-			TicketCount:   detail.Orders.TicketCount,
-			HotelCount:    detail.Orders.HotelCount,
-			CommerceCount: detail.Orders.CommerceCount,
+			TicketCount:     detail.Orders.TicketCount,
+			HotelCount:      detail.Orders.HotelCount,
+			CommerceCount:   detail.Orders.CommerceCount,
+			PaidOrderCount:  detail.Orders.PaidOrderCount,
+			TotalSpendCents: detail.Orders.TotalSpendCents,
 		},
 	}, nil
+}
+
+func (a *MemberServiceAdapter) Export(ctx context.Context, tenantID uint, query MemberListQuery, reason string, actorID uint, actorRole, requestID string, includeSensitive bool) ([]MemberRecord, error) {
+	if a == nil || a.Service == nil {
+		return nil, ErrMemberUnavailable
+	}
+	items, err := a.Service.ExportMembers(ctx, tenantID, service.MemberAdminListQuery{
+		Page: query.Page, PageSize: query.PageSize, Status: query.Status, Keyword: query.Keyword, Phone: query.Phone,
+	}, reason, actorID, actorRole, requestID, includeSensitive)
+	if err != nil {
+		return nil, mapMemberServiceError(err)
+	}
+	result := make([]MemberRecord, 0, len(items))
+	for _, item := range items {
+		result = append(result, memberRecordFromService(item))
+	}
+	return result, nil
 }
 
 type memberActorRoleContextKey struct{}
 
 func memberRecordFromService(record service.MemberAdminRecord) MemberRecord {
-	return MemberRecord{ID: record.ID, DisplayName: record.DisplayName, Phone: record.Phone, PhoneMasked: record.PhoneMasked, Status: record.Status, MembershipStatus: record.MembershipStatus, SourceCount: record.SourceCount, CreatedAt: record.CreatedAt, LastSeenAt: record.LastSeenAt}
+	return MemberRecord{ID: record.ID, MemberNo: record.MemberNo, DisplayName: record.DisplayName, Phone: record.Phone, PhoneMasked: record.PhoneMasked, Status: record.Status, MembershipStatus: record.MembershipStatus, SourceCount: record.SourceCount, CreatedAt: record.CreatedAt, LastSeenAt: record.LastSeenAt}
 }
 
 func mapMemberServiceError(err error) error {
@@ -249,6 +277,40 @@ func (c *MemberController) Unfreeze(ctx *gin.Context) {
 	c.setStatus(ctx, "active")
 }
 
+// Export returns a tenant-scoped CSV only after an explicit operator reason
+// has been supplied. The route is separately permissioned from ordinary
+// member reads and never accepts tenant or member IDs from the request body.
+func (c *MemberController) Export(ctx *gin.Context) {
+	if c == nil || c.Service == nil {
+		memberError(ctx, ErrMemberUnavailable)
+		return
+	}
+	query, err := parseMemberListQuery(ctx)
+	if err != nil {
+		memberError(ctx, err)
+		return
+	}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		memberError(ctx, service.ErrMemberExportReason)
+		return
+	}
+	items, err := c.Service.Export(ctx.Request.Context(), ctx.GetUint("tenant_id"), query, body.Reason, ctx.GetUint("user_id"), ctx.GetString("role"), requestID(ctx), canReadSensitiveMember(ctx))
+	if err != nil {
+		memberError(ctx, err)
+		return
+	}
+	data, err := memberCSV(items, canReadSensitiveMember(ctx))
+	if err != nil {
+		memberError(ctx, err)
+		return
+	}
+	ctx.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="members-%s.csv"`, time.Now().UTC().Format("20060102-150405")))
+	ctx.Data(http.StatusOK, "text/csv; charset=utf-8", data)
+}
+
 func (c *MemberController) setStatus(ctx *gin.Context, status string) {
 	if c == nil || c.Service == nil {
 		memberError(ctx, ErrMemberUnavailable)
@@ -281,6 +343,7 @@ func RegisterMemberRoutes(group *gin.RouterGroup, controller *MemberController) 
 	group.GET("/:id", controller.Get)
 	group.POST("/:id/freeze", controller.Freeze)
 	group.POST("/:id/unfreeze", controller.Unfreeze)
+	group.POST("/export", controller.Export)
 }
 
 func parseMemberListQuery(ctx *gin.Context) (MemberListQuery, error) {
@@ -323,6 +386,7 @@ func canReadSensitiveMember(ctx *gin.Context) bool {
 
 type memberView struct {
 	ID               uint       `json:"id"`
+	MemberNo         string     `json:"member_no"`
 	DisplayName      string     `json:"display_name"`
 	Phone            string     `json:"phone"`
 	Status           string     `json:"status"`
@@ -353,7 +417,34 @@ func memberRecordView(record MemberRecord, sensitive bool) memberView {
 			phone = maskMemberPhone(record.PhoneMasked)
 		}
 	}
-	return memberView{ID: record.ID, DisplayName: record.DisplayName, Phone: phone, Status: record.Status, MembershipStatus: record.MembershipStatus, SourceCount: record.SourceCount, CreatedAt: record.CreatedAt, LastSeenAt: record.LastSeenAt}
+	return memberView{ID: record.ID, MemberNo: record.MemberNo, DisplayName: record.DisplayName, Phone: phone, Status: record.Status, MembershipStatus: record.MembershipStatus, SourceCount: record.SourceCount, CreatedAt: record.CreatedAt, LastSeenAt: record.LastSeenAt}
+}
+
+func memberCSV(items []MemberRecord, sensitive bool) ([]byte, error) {
+	var buffer bytes.Buffer
+	buffer.Write([]byte{0xEF, 0xBB, 0xBF})
+	writer := csv.NewWriter(&buffer)
+	if err := writer.Write([]string{"会员编号", "客户名称", "手机号", "账户状态", "会员状态", "入口身份数", "创建时间", "最近访问"}); err != nil {
+		return nil, err
+	}
+	for _, item := range items {
+		phone := item.PhoneMasked
+		if sensitive && item.Phone != "" {
+			phone = item.Phone
+		}
+		lastSeen := ""
+		if item.LastSeenAt != nil {
+			lastSeen = item.LastSeenAt.UTC().Format(time.RFC3339)
+		}
+		if err := writer.Write([]string{item.MemberNo, item.DisplayName, phone, item.Status, item.MembershipStatus, strconv.Itoa(item.SourceCount), item.CreatedAt.UTC().Format(time.RFC3339), lastSeen}); err != nil {
+			return nil, err
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
 }
 
 type memberDetailViewResponse struct {
@@ -403,6 +494,10 @@ func memberError(ctx *gin.Context, err error) {
 		status, message = http.StatusConflict, "会员状态冲突"
 	case errors.Is(err, service.ErrMemberInvalidInput):
 		status, message = http.StatusBadRequest, "会员请求参数不正确"
+	case errors.Is(err, service.ErrMemberExportReason):
+		status, message = http.StatusBadRequest, "导出原因需填写 3 至 200 个字符"
+	case errors.Is(err, service.ErrMemberExportTooLarge):
+		status, message = http.StatusRequestEntityTooLarge, "筛选结果过多，请缩小范围后再导出"
 	}
 	ctx.JSON(status, gin.H{"error": message})
 }

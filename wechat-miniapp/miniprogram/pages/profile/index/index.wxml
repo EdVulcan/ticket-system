@@ -2,6 +2,14 @@
   <view class="profile-header"><view class="avatar"><image wx:if="{{profile.avatarUrl}}" class="food-photo" src="{{profile.avatarUrl}}" mode="aspectFill" /><image wx:else class="profile-rabbits" src="/images/theme/rabbit-pair.svg" /></view><view class="profile-copy"><view class="profile-name">{{profile.nickname || '朋友'}}，你好</view><view class="profile-sub">今天的偏爱，也留一份给自己</view></view></view>
   <view class="profile-theme"><view class="brand-seal brand-seal--red">琑</view><view class="profile-brand-copy"><view class="profile-brand-name">{{brand.name}}</view><view class="profile-brand-tagline">{{brand.tagline}}</view></view></view>
 
+  <view class="member-card">
+    <view class="member-card-head"><view><view class="member-card-title">{{memberProfile.membershipStatus === 'active' ? '正式会员' : '完善会员认证'}}</view><view class="member-card-sub">{{memberProfile.phoneVerified ? '手机号已验证，可在自营入口统一查看订单' : '验证手机号后，可在自营入口统一查看订单'}}</view></view><view wx:if="{{memberProfile.phoneVerified}}" class="member-card-status">已认证</view></view>
+    <view wx:if="{{memberProfile.phoneMasked}}" class="member-phone">{{memberProfile.phoneMasked}}</view>
+    <checkbox-group wx:if="{{!memberProfile.phoneVerified}}" bindchange="onMemberConsentChange"><label class="member-consent"><checkbox value="member" checked="{{memberConsentGranted}}" color="#27654B" />我已阅读并同意会员服务说明</label></checkbox-group>
+    <button wx:if="{{!memberProfile.phoneVerified}}" class="member-action" open-type="getPhoneNumber" bindgetphonenumber="onGetPhoneNumber" disabled="{{verifyingMemberPhone || !memberConsentGranted}}">{{verifyingMemberPhone ? '认证中…' : '完成会员认证'}}</button>
+    <view wx:if="{{memberError}}" class="member-error">{{memberError}}</view>
+  </view>
+
   <view class="coupon-banner" bindtap="toggleCoupons" role="button" aria-label="我的优惠券，{{couponCount}}张可用">
     <view class="coupon-banner-copy"><view>我的优惠券</view><view>给这一餐，加一点小确幸</view></view>
     <view class="coupon-banner-number">{{couponCount}}<text>张</text></view><image class="ui-icon ui-icon--small" src="/images/theme/arrow-white.svg" />

@@ -541,7 +541,10 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 		}
 		order = model.Order{
 			TenantID: customer.TenantID, Channel: "xiaohongshu", ChannelAccountID: account.ID,
-			MemberID:   customer.MemberID,
+			// Authenticate keeps MemberID for the user's profile/history. New
+			// orders use only the eligibility projection so a withdrawn member
+			// continues to use the storefront without being re-associated.
+			MemberID:   customer.OrderMemberID,
 			ExternalNo: &externalID, ContactName: input.GuestName, ContactPhone: input.ContactPhone,
 			Items: []model.OrderItem{{ProductID: product.ID, Quantity: input.Quantity, UseDate: useDate}},
 		}

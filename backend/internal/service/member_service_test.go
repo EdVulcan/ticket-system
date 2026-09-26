@@ -22,6 +22,7 @@ func ensureMemberServiceSchema(t *testing.T) {
 		&model.TenantMemberVerifiedContact{},
 		&model.TenantMemberConsent{},
 		&model.TenantMemberEvent{},
+		&model.AuditLog{},
 	); err != nil {
 		t.Fatalf("migrate member schema: %v", err)
 	}
@@ -173,6 +174,164 @@ func TestMemberServiceTrustedPhoneConflictAndConsent(t *testing.T) {
 	}
 }
 
+func TestMemberServiceSelfProfileIsCanonicalAndSafe(t *testing.T) {
+	ensureMemberServiceSchema(t)
+	service := newMemberServiceForTest(t)
+	tenantID := newMemberServiceTenant(t)
+	member, err := service.ResolveSelfHostedIdentity(SelfHostedIdentityInput{TenantID: tenantID, ChannelAccountID: 41, Provider: "wechat_miniapp", Subject: "self-profile"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.AppendConsent(ConsentInput{TenantID: tenantID, MemberID: member.ID, Purpose: "membership", PolicyVersion: "member-phone-v1", Decision: "grant", EvidenceMethod: "wechat_phone_authorization", ChannelAccountID: 41, IdempotencyKey: "self-profile-consent"}); err != nil {
+		t.Fatal(err)
+	}
+	profile, err := service.GetSelfProfile(context.Background(), tenantID, member.ID)
+	if err != nil {
+		t.Fatalf("get self profile: %v", err)
+	}
+	if profile.MemberNo != member.MemberNo || profile.MembershipStatus != MembershipStatusProvisional || !profile.MembershipConsentGranted || profile.SourceCount != 1 {
+		t.Fatalf("unexpected self profile: %+v", profile)
+	}
+	if profile.PhoneMasked != "" || profile.MemberNo == fmt.Sprint(member.ID) {
+		t.Fatalf("self profile exposed unsafe or unexpected fields: %+v", profile)
+	}
+}
+
+func TestMemberServiceConsentAndTrustedPhoneBothRequiredForActiveMembership(t *testing.T) {
+	ensureMemberServiceSchema(t)
+	service := newMemberServiceForTest(t)
+	tenantID := newMemberServiceTenant(t)
+	member, err := service.ResolveSelfHostedIdentity(SelfHostedIdentityInput{TenantID: tenantID, ChannelAccountID: 42, Provider: "wechat_miniapp", Subject: "consent-before-phone"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.AppendConsent(ConsentInput{TenantID: tenantID, MemberID: member.ID, Purpose: "membership", PolicyVersion: "member-phone-v1", Decision: "grant", EvidenceMethod: "checkbox", ChannelAccountID: 42, IdempotencyKey: "consent-before-phone"}); err != nil {
+		t.Fatalf("append consent: %v", err)
+	}
+	profile, err := service.GetSelfProfile(context.Background(), tenantID, member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.MembershipStatus != MembershipStatusProvisional || !profile.MembershipConsentGranted || profile.PhoneVerified {
+		t.Fatalf("consent alone activated membership: %+v", profile)
+	}
+	if _, err := service.VerifyTrustedPhone(TrustedPhoneVerificationInput{TenantID: tenantID, MemberID: member.ID, Phone: "13800138001", VerificationMethod: "wechat_phone_authorization", MembershipConsentGranted: false, ChannelAccountID: 42}); err != nil {
+		t.Fatalf("verify trusted phone after consent: %v", err)
+	}
+	profile, err = service.GetSelfProfile(context.Background(), tenantID, member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.MembershipStatus != MembershipStatusActive || !profile.PhoneVerified {
+		t.Fatalf("phone plus prior consent did not activate membership: %+v", profile)
+	}
+}
+
+func TestMemberServiceListFiltersWithdrawnMemberships(t *testing.T) {
+	ensureMemberServiceSchema(t)
+	service := newMemberServiceForTest(t)
+	tenantID := newMemberServiceTenant(t)
+	member, err := service.ResolveSelfHostedIdentity(SelfHostedIdentityInput{TenantID: tenantID, ChannelAccountID: 43, Provider: "wechat_miniapp", Subject: "withdrawn-member"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.AppendConsent(ConsentInput{TenantID: tenantID, MemberID: member.ID, Purpose: "membership", PolicyVersion: "member-phone-v1", Decision: "grant", EvidenceMethod: "checkbox", ChannelAccountID: 43, IdempotencyKey: "withdrawn-grant"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.AppendConsent(ConsentInput{TenantID: tenantID, MemberID: member.ID, Purpose: "membership", PolicyVersion: "member-phone-v1", Decision: "revoke", EvidenceMethod: "checkbox", ChannelAccountID: 43, IdempotencyKey: "withdrawn-revoke"}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := service.ListMembers(context.Background(), tenantID, MemberAdminListQuery{Page: 1, PageSize: 20, Status: MembershipStatusWithdrawn})
+	if err != nil {
+		t.Fatalf("list withdrawn members: %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ID != member.ID || page.Items[0].MembershipStatus != MembershipStatusWithdrawn {
+		t.Fatalf("unexpected withdrawn member page: %+v", page)
+	}
+}
+
+func TestMemberServiceOrderSummaryUsesNetPaidFactsAndCanonicalProjection(t *testing.T) {
+	ensureMemberServiceSchema(t)
+	service := newMemberServiceForTest(t)
+	tenantID := newMemberServiceTenant(t)
+	canonical, err := service.ResolveSelfHostedIdentity(SelfHostedIdentityInput{TenantID: tenantID, ChannelAccountID: 4501, Provider: "wechat_miniapp", Subject: "spend-canonical"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.VerifyTrustedPhone(TrustedPhoneVerificationInput{TenantID: tenantID, MemberID: canonical.ID, Phone: "13800138010", VerificationMethod: "wechat_phone_authorization", MembershipConsentGranted: true}); err != nil {
+		t.Fatalf("verify canonical phone: %v", err)
+	}
+	alias, err := service.ResolveSelfHostedIdentity(SelfHostedIdentityInput{TenantID: tenantID, ChannelAccountID: 4502, Provider: "xiaohongshu_miniapp", Subject: "spend-alias"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AutoConverge(AutoConvergeInput{TenantID: tenantID, CurrentMemberID: alias.ID, TargetMemberID: canonical.ID, TrustedPhone: "13800138010", IdempotencyKey: "spend-merge"}); err != nil {
+		t.Fatalf("merge spend alias: %v", err)
+	}
+
+	if err := model.DB.Create(&model.Order{TenantID: tenantID, MemberID: &alias.ID, OrderNo: "MEMBER-SPEND-TICKET-" + fmt.Sprint(time.Now().UnixNano()), Status: "paid", TotalAmount: 80, Channel: "online"}).Error; err != nil {
+		t.Fatalf("create ticket order: %v", err)
+	}
+	if err := model.DB.Create(&model.Order{TenantID: tenantID, MemberID: &canonical.ID, OrderNo: "MEMBER-SPEND-REFUNDED-" + fmt.Sprint(time.Now().UnixNano()), Status: "refunded", TotalAmount: 50, Channel: "online"}).Error; err != nil {
+		t.Fatalf("create refunded ticket order: %v", err)
+	}
+	location := model.CommerceFulfillmentLocation{TenantID: tenantID, BusinessType: "retail", Name: "Member spend warehouse", LocationType: "warehouse", Status: "active"}
+	if err := model.DB.Create(&location).Error; err != nil {
+		t.Fatalf("create commerce location: %v", err)
+	}
+	if err := model.DB.Create(&model.CommerceOrder{TenantID: tenantID, MemberID: &canonical.ID, OrderNo: "MEMBER-SPEND-COMMERCE-" + fmt.Sprint(time.Now().UnixNano()), BusinessType: "retail", CustomerID: "member-spend-customer", LocationID: location.ID, OriginalAmountCents: 3000, TotalAmountCents: 3000, PaymentStatus: "paid", FulfillmentStatus: "pending_shipment", RefundStatus: "none"}).Error; err != nil {
+		t.Fatalf("create commerce order: %v", err)
+	}
+
+	detail, err := service.GetMember(context.Background(), tenantID, alias.ID)
+	if err != nil {
+		t.Fatalf("get merged member detail: %v", err)
+	}
+	if detail.ID != canonical.ID {
+		t.Fatalf("member detail did not project canonical record: got %d want %d", detail.ID, canonical.ID)
+	}
+	if detail.Orders.PaidOrderCount != 3 {
+		t.Fatalf("paid order count=%d want 3 historical paid orders", detail.Orders.PaidOrderCount)
+	}
+	if detail.Orders.TotalSpendCents != 11000 {
+		t.Fatalf("total spend=%d want 11000 cents", detail.Orders.TotalSpendCents)
+	}
+}
+
+func TestMemberServiceExportMasksPhoneAndAuditsSummary(t *testing.T) {
+	ensureMemberServiceSchema(t)
+	service := newMemberServiceForTest(t)
+	tenantID := newMemberServiceTenant(t)
+	member, err := service.ResolveSelfHostedIdentity(SelfHostedIdentityInput{TenantID: tenantID, ChannelAccountID: 44, Provider: "wechat_miniapp", Subject: "export-member"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.VerifyTrustedPhone(TrustedPhoneVerificationInput{TenantID: tenantID, MemberID: member.ID, Phone: "13800138003", VerificationMethod: "wechat_phone_authorization", ChannelAccountID: 44}); err != nil {
+		t.Fatal(err)
+	}
+	masked, err := service.ExportMembers(context.Background(), tenantID, MemberAdminListQuery{Page: 1, PageSize: 20}, "客户归档", 77, "viewer", "export-request", false)
+	if err != nil {
+		t.Fatalf("masked export: %v", err)
+	}
+	if len(masked) != 1 || masked[0].Phone != "" {
+		t.Fatalf("masked export leaked phone: %+v", masked)
+	}
+	sensitive, err := service.ExportMembers(context.Background(), tenantID, MemberAdminListQuery{Page: 1, PageSize: 20}, "安全核对", 77, "admin", "export-request-2", true)
+	if err != nil {
+		t.Fatalf("sensitive export: %v", err)
+	}
+	if len(sensitive) != 1 {
+		t.Fatalf("sensitive export returned %d rows, want 1", len(sensitive))
+	}
+	var audit model.AuditLog
+	if err := model.DB.Where("tenant_id = ? AND action = ?", tenantID, "member.export").Order("id DESC").First(&audit).Error; err != nil {
+		t.Fatalf("load export audit: %v", err)
+	}
+	if strings.Contains(audit.BeforeJSON+audit.AfterJSON, "13800138003") || strings.Contains(audit.BeforeJSON+audit.AfterJSON, "export-request") {
+		t.Fatalf("export audit persisted sensitive/request data: before=%s after=%s", audit.BeforeJSON, audit.AfterJSON)
+	}
+}
+
 func TestMemberServiceTrustedPhoneWithConsentDoesNotLeaveConsentOnPhoneConflict(t *testing.T) {
 	ensureMemberServiceSchema(t)
 	service := newMemberServiceForTest(t)
@@ -237,6 +396,82 @@ func TestMemberServicePhoneVerificationBindsRequestToPhoneAndBoundsConsentKey(t 
 	}
 	if contactCount != 1 {
 		t.Fatalf("replayed request created %d active contacts", contactCount)
+	}
+}
+
+func TestStorefrontPhoneVerificationConvergesASecondSelfOwnedChannel(t *testing.T) {
+	ensureMemberServiceSchema(t)
+	service := newMemberServiceForTest(t)
+	tenantID := newMemberServiceTenant(t)
+	target, err := service.ResolveSelfHostedIdentity(SelfHostedIdentityInput{TenantID: tenantID, ChannelAccountID: 51, Provider: "wechat_miniapp", Subject: "canonical-phone-owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifyStorefrontMemberPhone(context.Background(), service, tenantID, 51, target.ID, "13800138002", "wechat_phone_authorization", StorefrontPhoneVerificationInput{RequestID: "canonical-phone-request", MembershipConsentGranted: true, MembershipPolicyVersion: "member-phone-v1"}); err != nil {
+		t.Fatalf("verify canonical phone: %v", err)
+	}
+	current, err := service.ResolveSelfHostedIdentity(SelfHostedIdentityInput{TenantID: tenantID, ChannelAccountID: 52, Provider: "xiaohongshu_miniapp", Subject: "secondary-phone-owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := verifyStorefrontMemberPhone(context.Background(), service, tenantID, 52, current.ID, "13800138002", "xiaohongshu_phone_authorization", StorefrontPhoneVerificationInput{RequestID: "secondary-phone-request", MembershipConsentGranted: true, MembershipPolicyVersion: "member-phone-v1"})
+	if err != nil {
+		t.Fatalf("second channel phone verification: %v", err)
+	}
+	if !result.Verified || result.MembershipStatus != MembershipStatusActive {
+		t.Fatalf("unexpected convergence result: %+v", result)
+	}
+	canonical, err := service.ResolveCanonical(tenantID, current.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical.ID != target.ID {
+		t.Fatalf("secondary channel resolved to member %d, want canonical %d", canonical.ID, target.ID)
+	}
+	var identity model.TenantMemberIdentity
+	if err := model.DB.Where("tenant_id = ? AND channel_account_id = ? AND provider = ?", tenantID, 52, "xiaohongshu_miniapp").First(&identity).Error; err != nil {
+		t.Fatal(err)
+	}
+	if identity.MemberID != current.ID || identity.Status != MemberIdentityActive {
+		t.Fatalf("channel identity was rewritten instead of retaining alias: %+v", identity)
+	}
+	var secondChannelConsent model.TenantMemberConsent
+	if err := model.DB.Where("tenant_id = ? AND member_id = ? AND channel_account_id = ? AND decision = ?", tenantID, target.ID, 52, "grant").First(&secondChannelConsent).Error; err != nil {
+		t.Fatalf("second channel membership consent was not retained on canonical member: %v", err)
+	}
+}
+
+func TestMemberServiceListShowsCanonicalRowsAndExplicitMergedAliases(t *testing.T) {
+	ensureMemberServiceSchema(t)
+	service := newMemberServiceForTest(t)
+	tenantID := newMemberServiceTenant(t)
+	canonical, err := service.ResolveSelfHostedIdentity(SelfHostedIdentityInput{TenantID: tenantID, ChannelAccountID: 61, Provider: "wechat_miniapp", Subject: "list-canonical"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.VerifyTrustedPhone(TrustedPhoneVerificationInput{TenantID: tenantID, MemberID: canonical.ID, Phone: "13800138061", VerificationMethod: "sms", MembershipConsentGranted: true}); err != nil {
+		t.Fatal(err)
+	}
+	alias, err := service.ResolveSelfHostedIdentity(SelfHostedIdentityInput{TenantID: tenantID, ChannelAccountID: 62, Provider: "xiaohongshu_miniapp", Subject: "list-alias"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AutoConverge(AutoConvergeInput{TenantID: tenantID, CurrentMemberID: alias.ID, TargetMemberID: canonical.ID, TrustedPhone: "13800138061", IdempotencyKey: "list-merge"}); err != nil {
+		t.Fatal(err)
+	}
+	page, err := service.ListMembers(context.Background(), tenantID, MemberAdminListQuery{Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("list canonical members: %v", err)
+	}
+	if len(page.Items) != 1 || page.Items[0].ID != canonical.ID || page.Items[0].Status == MemberStatusMerged {
+		t.Fatalf("default member list exposed alias or stale status: %+v", page.Items)
+	}
+	merged, err := service.ListMembers(context.Background(), tenantID, MemberAdminListQuery{Page: 1, PageSize: 20, Status: MemberStatusMerged})
+	if err != nil {
+		t.Fatalf("list merged aliases: %v", err)
+	}
+	if len(merged.Items) != 1 || merged.Items[0].ID != alias.ID || merged.Items[0].Status != MemberStatusMerged {
+		t.Fatalf("merged audit filter did not expose alias: %+v", merged.Items)
 	}
 }
 

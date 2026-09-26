@@ -91,6 +91,9 @@ func (s *ChannelService) Create(tenantID uint, account *model.ChannelAccount, se
 	account.Base = model.Base{}
 	account.TenantID = tenantID
 	account.StorefrontImageURL = ""
+	// First-party member eligibility is never client-controlled at channel
+	// creation time. A platform administrator must approve it explicitly.
+	account.MemberMode = model.ChannelMemberModeDisabled
 	account.Status = normalizeChannelStatus(account.Status)
 	account.Environment = channelEnvironment(account.Status)
 	account.SecretCiphertext = ciphertext
@@ -128,6 +131,7 @@ func (s *ChannelService) CreateWechatMiniapp(tenantID uint, account *model.Chann
 	account.TenantID = tenantID
 	account.Type = "wechat_miniapp"
 	account.AppID = appID
+	account.MemberMode = model.ChannelMemberModeDisabled
 	account.Status = normalizeChannelStatus(account.Status)
 	account.Environment = channelEnvironment(account.Status)
 	account.SecretCiphertext = secretCiphertext
@@ -224,6 +228,7 @@ func (s *ChannelService) createXiaohongshu(tenantID uint, account *model.Channel
 	account.StorefrontImageURL = ""
 	account.Type = "xiaohongshu"
 	account.AppID = appID
+	account.MemberMode = model.ChannelMemberModeDisabled
 	account.Status = normalizeChannelStatus(account.Status)
 	account.Environment = channelEnvironment(account.Status)
 	account.SecretCiphertext = secretCiphertext

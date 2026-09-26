@@ -2,27 +2,41 @@ package model
 
 import "time"
 
+const (
+	// ChannelMemberModeDisabled keeps the channel out of the tenant member
+	// graph. It is the fail-closed default for newly created accounts.
+	ChannelMemberModeDisabled = "disabled"
+	// ChannelMemberModeFirstParty marks a platform-approved, tenant-owned
+	// channel whose authenticated users may enter the member graph.
+	ChannelMemberModeFirstParty = "first_party"
+)
+
 // ChannelAccount is an independently managed external sales connection.
 // Secrets are encrypted at rest by the channel service and are never exposed
 // in API responses.
 type ChannelAccount struct {
 	Base
-	TenantID                 uint       `gorm:"index;not null" json:"tenant_id"`
-	Code                     string     `gorm:"size:80;uniqueIndex;not null" json:"code"`
-	Type                     string     `gorm:"size:30;not null" json:"type"`
-	AppID                    string     `gorm:"size:120" json:"app_id"`
-	SecretCiphertext         string     `gorm:"type:text" json:"-"`
-	VerifyKeyCiphertext      string     `gorm:"type:text" json:"-"`
-	ProtocolConfigCiphertext string     `gorm:"type:text" json:"-"`
-	SignAlgorithm            string     `gorm:"size:20;not null;default:'hmac-sha256'" json:"sign_algorithm"`
-	PermissionsJSON          string     `gorm:"type:text" json:"permissions_json"`
-	CallbackURL              string     `gorm:"size:255" json:"callback_url"`
-	Status                   string     `gorm:"size:20;not null;default:'active';index" json:"status"`    // active, disabled, sandbox
-	Environment              string     `gorm:"size:20;not null;default:'production'" json:"environment"` // sandbox, production
-	KeyVersion               int        `gorm:"not null;default:1" json:"key_version"`
-	LastUsedAt               *time.Time `json:"last_used_at,omitempty"`
-	RateLimitPerMin          int        `gorm:"not null;default:600" json:"rate_limit_per_min"`
-	AllowedIPsJSON           string     `gorm:"type:text" json:"allowed_ips_json,omitempty"`
+	TenantID                 uint   `gorm:"index;not null" json:"tenant_id"`
+	Code                     string `gorm:"size:80;uniqueIndex;not null" json:"code"`
+	Type                     string `gorm:"size:30;not null" json:"type"`
+	AppID                    string `gorm:"size:120" json:"app_id"`
+	SecretCiphertext         string `gorm:"type:text" json:"-"`
+	VerifyKeyCiphertext      string `gorm:"type:text" json:"-"`
+	ProtocolConfigCiphertext string `gorm:"type:text" json:"-"`
+	SignAlgorithm            string `gorm:"size:20;not null;default:'hmac-sha256'" json:"sign_algorithm"`
+	PermissionsJSON          string `gorm:"type:text" json:"permissions_json"`
+	CallbackURL              string `gorm:"size:255" json:"callback_url"`
+	Status                   string `gorm:"size:20;not null;default:'active';index" json:"status"`    // active, disabled, sandbox
+	Environment              string `gorm:"size:20;not null;default:'production'" json:"environment"` // sandbox, production
+	// MemberMode is platform-controlled. It is deliberately separate from
+	// channel status: a usable external channel must not become a first-party
+	// customer source unless its authentication and ownership have been
+	// reviewed.
+	MemberMode      string     `gorm:"size:20;not null;default:'disabled';index;check:chk_channel_member_mode,member_mode IN ('disabled','first_party')" json:"member_mode"`
+	KeyVersion      int        `gorm:"not null;default:1" json:"key_version"`
+	LastUsedAt      *time.Time `json:"last_used_at,omitempty"`
+	RateLimitPerMin int        `gorm:"not null;default:600" json:"rate_limit_per_min"`
+	AllowedIPsJSON  string     `gorm:"type:text" json:"allowed_ips_json,omitempty"`
 	// StorefrontImageURL is independent storefront presentation. It is only
 	// writable through the dedicated Xiaohongshu storefront endpoint so generic
 	// channel-account create/update bindings cannot inject it.

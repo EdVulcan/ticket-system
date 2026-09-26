@@ -160,6 +160,28 @@ test('storefront contact is read from the shared channel endpoint and disabled d
   assert.equal(hidden.qrCodeUrl, '');
 });
 
+test('member profile and trusted phone authorization use the shared storefront contract', async () => {
+  const calls = [];
+  const api = loadApi(async (pathValue, options) => {
+    calls.push({ path: pathValue, options });
+    if (pathValue === '/member/me') return { member_no: 'M-001', membership_status: 'provisional', phone_verified: false };
+    return { verified: true, phone_masked: '138****8000', membership_status: 'active' };
+  });
+  const profile = await api.getMemberProfile();
+  assert.equal(profile.member_no, 'M-001');
+  const verified = await api.verifyMemberPhone('phone-code', 'member-phone-1', true, 'member-phone-v1');
+  assert.equal(verified.membership_status, 'active');
+  assert.equal(calls[0].path, '/member/me');
+  assert.equal(calls[1].path, '/member/verify-phone');
+  assert.equal(calls[1].options.method, 'POST');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[1].options.data)), {
+    code: 'phone-code',
+    request_id: 'member-phone-1',
+    membership_consent_granted: true,
+    membership_policy_version: 'member-phone-v1'
+  });
+});
+
 test('assist pages use explicit APIs and share the raw token', async () => {
   let indexPage;
   let detailPage;

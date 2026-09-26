@@ -127,6 +127,9 @@ func TestXiaohongshuLoginClearsStaleMemberAfterIdentityRevoked(t *testing.T) {
 	if err := (&ChannelService{}).CreateXiaohongshu(tenantID, &account, "miniapp-member-revoked", "app-secret"); err != nil {
 		t.Fatal(err)
 	}
+	if err := model.DB.Model(&model.ChannelAccount{}).Where("id = ?", account.ID).Update("member_mode", model.ChannelMemberModeFirstParty).Error; err != nil {
+		t.Fatalf("approve xiaohongshu member source: %v", err)
+	}
 	memberService, err := NewMemberServiceForTest(model.DB, []byte("member-test-blind-index-key"), func(value string) (string, error) {
 		return "cipher:" + value, nil
 	}, time.Now)
