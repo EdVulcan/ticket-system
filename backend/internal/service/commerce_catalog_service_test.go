@@ -89,6 +89,12 @@ func TestCommerceCatalogCRUDAndLifecycle(t *testing.T) {
 	if err != nil || updated.Status != "online" {
 		t.Fatalf("online product=%+v err=%v", updated, err)
 	}
+	if _, err := service.UpdateSKU(tenantID, product.SKUs[0].ID, UpdateCommerceSKUInput{
+		SKUCode: product.SKUs[0].SkuCode, Name: product.SKUs[0].Name, OriginalPriceCents: product.SKUs[0].OriginalPriceCents,
+		PriceCents: product.SKUs[0].PriceCents, Status: "inactive", AttributesJSON: product.SKUs[0].AttributesJSON,
+	}); !errors.Is(err, ErrCommerceProductInvalid) {
+		t.Fatalf("deactivating the last online sku err=%v", err)
+	}
 	updated, err = service.SetProductStatus(tenantID, product.ID, "offline")
 	if err != nil || updated.Status != "offline" {
 		t.Fatalf("offline product=%+v err=%v", updated, err)
@@ -231,6 +237,7 @@ func TestCommerceCatalogRejectsInvalidInputs(t *testing.T) {
 		{"negative price", CreateCommerceProductInput{BusinessType: "restaurant", Name: "Meal", SKUs: []CreateCommerceSKUInput{{SKUCode: "S", Name: "Meal", OriginalPriceCents: -1, PriceCents: 0}}}},
 		{"sale exceeds original", CreateCommerceProductInput{BusinessType: "restaurant", Name: "Meal", SKUs: []CreateCommerceSKUInput{{SKUCode: "S", Name: "Meal", OriginalPriceCents: 10, PriceCents: 11}}}},
 		{"duplicate sku", CreateCommerceProductInput{BusinessType: "restaurant", Name: "Meal", SKUs: []CreateCommerceSKUInput{{SKUCode: "S", Name: "One"}, {SKUCode: "S", Name: "Two"}}}},
+		{"online without active sku", CreateCommerceProductInput{BusinessType: "restaurant", Name: "Unavailable", Status: "online", SKUs: []CreateCommerceSKUInput{{SKUCode: "S", Name: "Unavailable", Status: "inactive"}}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

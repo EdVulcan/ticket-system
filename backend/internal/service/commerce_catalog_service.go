@@ -159,6 +159,18 @@ func (s *CommerceCatalogService) CreateProduct(tenantID uint, input CreateCommer
 		if err := requireActiveCommerceCapability(tx, tenantID, input.BusinessType); err != nil {
 			return err
 		}
+		if input.Status == "online" {
+			hasActiveSKU := false
+			for _, sku := range input.SKUs {
+				if sku.Status == "active" {
+					hasActiveSKU = true
+					break
+				}
+			}
+			if !hasActiveSKU {
+				return fmt.Errorf("%w: an online product needs an active sku", ErrCommerceProductInvalid)
+			}
+		}
 		product := model.CommerceProduct{
 			TenantID: tenantID, BusinessType: input.BusinessType, Name: input.Name, ShortTitle: input.ShortTitle,
 			Description: input.Description, CategoryName: input.CategoryName, Status: input.Status,
@@ -416,6 +428,17 @@ func (s *CommerceCatalogService) UpdateSKU(tenantID, skuID uint, input UpdateCom
 		}
 		if err := requireActiveCommerceCapability(tx, tenantID, product.BusinessType); err != nil {
 			return err
+		}
+		if product.Status == "online" && sku.Status == "active" && input.Status == "inactive" {
+			var activeCount int64
+			if err := tx.Model(&model.CommerceSKU{}).
+				Where("tenant_id = ? AND product_id = ? AND status = ?", tenantID, product.ID, "active").
+				Count(&activeCount).Error; err != nil {
+				return err
+			}
+			if activeCount <= 1 {
+				return fmt.Errorf("%w: an online product needs an active sku", ErrCommerceProductInvalid)
+			}
 		}
 		var duplicate int64
 		if err := tx.Model(&model.CommerceSKU{}).Where("tenant_id = ? AND sku_code = ? AND id <> ?", tenantID, input.SKUCode, skuID).Count(&duplicate).Error; err != nil {
