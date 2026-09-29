@@ -1185,12 +1185,16 @@ func (s *CommerceStorefrontService) CreateCheckoutQuote(token string, raw Commer
 		}
 	}
 	delivery := CommerceDeliveryService{DB: s.db(), Clock: s.Now}
+	memberDiscount, _, err := memberDiscountTx(s.db(), context.Session.TenantID, context.OrderMemberID, subtotal)
+	if err != nil {
+		return nil, err
+	}
 	return delivery.CreateQuote(CommerceCheckoutQuoteInput{
 		TenantID: context.Session.TenantID, ChannelAccountID: context.Session.ChannelAccountID,
 		BusinessType: context.Binding.BusinessType, CustomerID: context.CustomerID,
 		LocationID: context.Binding.LocationID, FulfillmentMethod: method, Address: address,
 		ZoneID: raw.ZoneID, SlotID: raw.SlotID, SlotDate: raw.SlotDate,
-		GoodsSubtotalCents: subtotal, ExpiresIn: 10 * time.Minute,
+		GoodsSubtotalCents: subtotal, DiscountCents: memberDiscount, ExpiresIn: 10 * time.Minute,
 	})
 }
 
@@ -1343,6 +1347,41 @@ func (s *CommerceStorefrontService) CheckoutCartByID(token string, cartID uint, 
 	return s.checkoutOwnedCart(context, cartID, raw)
 }
 
+func memberDiscountTx(tx *gorm.DB, tenantID uint, memberID *uint, goodsCents int64) (int64, int, error) {
+	if tx == nil || tenantID == 0 || memberID == nil || *memberID == 0 || goodsCents <= 0 {
+		return 0, 0, nil
+	}
+	var member model.TenantMember
+	if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Select("id", "status", "membership_status").Where("tenant_id = ? AND id = ?", tenantID, *memberID).First(&member).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, 0, fmt.Errorf("%w: member association is invalid", ErrCommerceStorefrontInvalid)
+		}
+		return 0, 0, err
+	}
+	// Frozen, provisional, merged, and withdrawn members retain historical
+	// ownership but do not qualify for new pricing benefits.
+	if member.Status != model.TenantMemberStatusActive || member.MembershipStatus != model.TenantMembershipStatusActive {
+		return 0, 0, nil
+	}
+	var config model.TenantMemberBenefit
+	if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("tenant_id = ?", tenantID).First(&config).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, 0, nil
+		}
+		return 0, 0, err
+	}
+	if config.DiscountPercent < 0 || config.DiscountPercent > 100 {
+		return 0, 0, fmt.Errorf("%w: invalid member discount configuration", ErrCommerceStorefrontInvalid)
+	}
+	if config.DiscountPercent == 0 {
+		return 0, config.DiscountPercent, nil
+	}
+	// Split before multiplication to avoid overflow while rounding down to cents.
+	percent := int64(config.DiscountPercent)
+	discount := (goodsCents/100)*percent + (goodsCents%100)*percent/100
+	return discount, config.DiscountPercent, nil
+}
+
 func (s *CommerceStorefrontService) applyCheckoutQuoteAndCouponTx(tx *gorm.DB, context *commerceStorefrontContext, input CommerceStorefrontCheckoutInput, order *model.CommerceOrder) error {
 	if tx == nil || context == nil || order == nil || order.ID == 0 {
 		return ErrCommerceStorefrontInvalid
@@ -1367,12 +1406,20 @@ func (s *CommerceStorefrontService) applyCheckoutQuoteAndCouponTx(tx *gorm.DB, c
 		return fmt.Errorf("%w: checkout fee overflow", ErrCommerceStorefrontInvalid)
 	}
 	feeTotal, ok = commerceSafeAddInt64(feeTotal, quote.ShippingFeeCents)
-	if !ok || quote.DiscountCents != 0 {
-		return fmt.Errorf("%w: checkout quote totals are inconsistent", ErrCommerceQuoteConflict)
+	memberDiscount, memberDiscountPercent, err := memberDiscountTx(tx, order.TenantID, order.MemberID, order.TotalAmountCents)
+	if err != nil {
+		return err
 	}
-	quotedTotal, ok := commerceSafeAddInt64(order.TotalAmountCents, feeTotal)
+	if quote.DiscountCents != memberDiscount {
+		return fmt.Errorf("%w: membership pricing changed", ErrCommerceQuoteConflict)
+	}
+	discountedGoods := order.TotalAmountCents - memberDiscount
+	quotedTotal, ok := commerceSafeAddInt64(discountedGoods, feeTotal)
 	if !ok || quotedTotal != quote.TotalCents {
 		return fmt.Errorf("%w: checkout quote amount changed", ErrCommerceQuoteConflict)
+	}
+	if discountedGoods < 0 {
+		return fmt.Errorf("%w: member discount exceeds goods amount", ErrCommerceStorefrontInvalid)
 	}
 
 	couponDiscount := int64(0)
@@ -1384,15 +1431,15 @@ func (s *CommerceStorefrontService) applyCheckoutQuoteAndCouponTx(tx *gorm.DB, c
 			return err
 		}
 		couponDiscount = grant.DiscountCents
-		if couponDiscount > order.TotalAmountCents {
-			couponDiscount = order.TotalAmountCents
+		if couponDiscount > discountedGoods {
+			couponDiscount = discountedGoods
 		}
 	}
 	originalWithFees, ok := commerceSafeAddInt64(order.OriginalAmountCents, feeTotal)
 	if !ok {
 		return fmt.Errorf("%w: checkout amount overflow", ErrCommerceStorefrontInvalid)
 	}
-	totalWithFees, ok := commerceSafeAddInt64(order.TotalAmountCents, feeTotal)
+	totalWithFees, ok := commerceSafeAddInt64(discountedGoods, feeTotal)
 	if !ok || couponDiscount > totalWithFees {
 		return fmt.Errorf("%w: checkout amount is invalid", ErrCommerceStorefrontInvalid)
 	}
@@ -1421,6 +1468,16 @@ func (s *CommerceStorefrontService) applyCheckoutQuoteAndCouponTx(tx *gorm.DB, c
 	appendFee("packaging_fee", "打包费", quote.PackagingFeeCents)
 	appendFee("delivery_fee", "配送费", quote.DeliveryFeeCents)
 	appendFee("shipping_fee", "运费", quote.ShippingFeeCents)
+	if memberDiscount > 0 {
+		memberSnapshot, marshalErr := json.Marshal(map[string]interface{}{
+			"member_id": order.MemberID, "discount_percent": memberDiscountPercent,
+			"base_goods_amount_cents": order.TotalAmountCents,
+		})
+		if marshalErr != nil {
+			return marshalErr
+		}
+		adjustments = append(adjustments, model.CommerceOrderAdjustment{TenantID: order.TenantID, OrderID: order.ID, Kind: "member_discount", AmountCents: memberDiscount, Description: "会员折扣", SnapshotJSON: string(memberSnapshot)})
+	}
 	if grant != nil && couponDiscount > 0 {
 		couponSnapshot, marshalErr := json.Marshal(map[string]interface{}{"grant_id": grant.ID, "template_id": grant.TemplateID})
 		if marshalErr != nil {
@@ -1470,6 +1527,14 @@ func (s *CommerceStorefrontService) checkoutOwnedCart(context *commerceStorefron
 	}
 	var result *model.CommerceOrder
 	err = s.db().Transaction(func(tx *gorm.DB) error {
+		var currentAccount model.ChannelAccount
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Where("id = ? AND tenant_id = ? AND status IN ?", context.Session.ChannelAccountID, context.Session.TenantID, []string{"active", "sandbox"}).First(&currentAccount).Error; err != nil {
+			return ErrCommerceStorefrontUnavailable
+		}
+		context.Account = currentAccount
+		if s.Member == nil || !ChannelAllowsMemberIdentity(&currentAccount) {
+			context.OrderMemberID = nil
+		}
 		// Re-resolve and lock the current publication route in the checkout
 		// transaction. An administrator changing the binding cannot move an
 		// existing cart to another business or fulfillment location mid-checkout.

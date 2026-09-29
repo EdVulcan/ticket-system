@@ -130,6 +130,7 @@ func main() {
 
 	// Register Routes
 	router.InitRouterWithMaintenance(r, maintenanceService)
+	registerTemporaryQRAPI(r)
 
 	r.GET("/ping", func(c *gin.Context) {
 		c.JSON(200, gin.H{
@@ -676,6 +677,7 @@ func serveAdminUI(engine *gin.Engine, directory string) {
 		return
 	}
 	engine.StaticFS("/assets", http.Dir(filepath.Join(absDirectory, "assets")))
+	serveTemporaryQRTicketManager(engine, absDirectory)
 	serveXiaohongshuValidationFiles(engine, absDirectory)
 	downloadsDirectory := filepath.Join(absDirectory, "downloads")
 	if info, err := os.Stat(downloadsDirectory); err == nil && info.IsDir() {
@@ -688,6 +690,28 @@ func serveAdminUI(engine *gin.Engine, directory string) {
 			return
 		}
 		ctx.File(indexPath)
+	})
+}
+
+// serveTemporaryQRTicketManager mounts the isolated short-lived QR utility.
+// Removing admin/public/temporary-qr removes the utility from the build.
+func serveTemporaryQRTicketManager(engine *gin.Engine, directory string) {
+	utilityDirectory := filepath.Join(directory, "temporary-qr")
+	if info, err := os.Stat(filepath.Join(utilityDirectory, "index.html")); err != nil || info.IsDir() {
+		return
+	}
+	engine.GET("/temporary-qr/*file", func(ctx *gin.Context) {
+		name := strings.TrimPrefix(ctx.Param("file"), "/")
+		if name == "" {
+			name = "index.html"
+		}
+		switch name {
+		case "index.html", "app.js", "styles.css", "qrcode.min.js":
+			ctx.Header("Cache-Control", "no-store")
+			ctx.File(filepath.Join(utilityDirectory, name))
+		default:
+			ctx.Status(http.StatusNotFound)
+		}
 	})
 }
 

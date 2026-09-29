@@ -141,6 +141,66 @@ type MemberService struct {
 	encrypt       func(string) (string, error)
 }
 
+// MemberBenefitConfig is the tenant-wide pricing rule used by commerce
+// checkout. A nil configuration means the tenant has not configured a
+// discount; checkout then charges the normal product price.
+type MemberBenefitConfig struct {
+	TenantID        uint `json:"tenant_id"`
+	DiscountPercent int  `json:"discount_percent"`
+}
+
+func (s *MemberService) GetBenefitConfig(tenantID uint) (*MemberBenefitConfig, error) {
+	if s == nil || s.db == nil || tenantID == 0 {
+		return nil, ErrMemberTenantUnavailable
+	}
+	var tenant model.Tenant
+	if err := s.db.Select("id").Where("id = ? AND status = ?", tenantID, "active").First(&tenant).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrMemberTenantUnavailable
+		}
+		return nil, err
+	}
+	var row model.TenantMemberBenefit
+	if err := s.db.Where("tenant_id = ?", tenantID).First(&row).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &MemberBenefitConfig{TenantID: row.TenantID, DiscountPercent: row.DiscountPercent}, nil
+}
+
+func (s *MemberService) SaveBenefitConfig(tenantID uint, discountPercent int) (*MemberBenefitConfig, error) {
+	return s.SaveBenefitConfigAudited(tenantID, discountPercent, 0, "")
+}
+
+func (s *MemberService) SaveBenefitConfigAudited(tenantID uint, discountPercent int, actorUserID uint, actorRole string) (*MemberBenefitConfig, error) {
+	if s == nil || s.db == nil || tenantID == 0 || discountPercent < 0 || discountPercent > 100 {
+		return nil, ErrMemberInvalidInput
+	}
+	row := model.TenantMemberBenefit{TenantID: tenantID, DiscountPercent: discountPercent}
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var tenant model.Tenant
+		if err := tx.Clauses(clause.Locking{Strength: "SHARE"}).Select("id").Where("id = ? AND status = ?", tenantID, "active").First(&tenant).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrMemberTenantUnavailable
+			}
+			return err
+		}
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "tenant_id"}}, DoUpdates: clause.Assignments(map[string]interface{}{"discount_percent": discountPercent, "updated_at": s.now()})}).Create(&row).Error; err != nil {
+			return err
+		}
+		if actorUserID != 0 {
+			return recordAuditTx(tx, actorUserID, tenantID, actorRole, "tenant", "member.benefit.updated", "tenant_member_benefit", row.ID, "", "", fmt.Sprintf(`{"discount_percent":%d}`, discountPercent))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &MemberBenefitConfig{TenantID: row.TenantID, DiscountPercent: row.DiscountPercent}, nil
+}
+
 func NewMemberService(db *gorm.DB, blindIndexKey []byte) (*MemberService, error) {
 	if db == nil || len(blindIndexKey) < 16 {
 		return nil, ErrMemberInvalidInput
@@ -1088,6 +1148,9 @@ func (s *MemberService) memberOrderSpendSummaryTx(tx *gorm.DB, tenantID uint, me
 	}
 	for _, order := range ticketOrders {
 		summary.PaidOrderCount++
+		if order.Status == "paid" {
+			continue
+		}
 		net := moneyCents(order.TotalAmount) - order.RefundedCents
 		// A few legacy fully-refunded rows predate a durable refund amount.
 		// Their terminal status is still authoritative for customer spend.
@@ -1100,13 +1163,15 @@ func (s *MemberService) memberOrderSpendSummaryTx(tx *gorm.DB, tenantID uint, me
 	}
 
 	type commerceOrderSpendRow struct {
-		PaymentStatus string
-		TotalAmount   int64
-		RefundedCents int64
+		PaymentStatus     string
+		FulfillmentStatus string
+		TotalAmount       int64
+		RefundedCents     int64
 	}
 	var commerceOrders []commerceOrderSpendRow
 	if err := tx.Model(&model.CommerceOrder{}).Select(`
 		commerce_orders.payment_status,
+		commerce_orders.fulfillment_status,
 		commerce_orders.total_amount_cents AS total_amount,
 		COALESCE((
 			SELECT SUM(after_sale.amount_cents)
@@ -1123,6 +1188,9 @@ func (s *MemberService) memberOrderSpendSummaryTx(tx *gorm.DB, tenantID uint, me
 	}
 	for _, order := range commerceOrders {
 		summary.PaidOrderCount++
+		if order.FulfillmentStatus != "completed" {
+			continue
+		}
 		net := order.TotalAmount - order.RefundedCents
 		if order.PaymentStatus == "refunded" && order.RefundedCents == 0 {
 			net = 0

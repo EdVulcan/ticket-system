@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 145
+const CurrentPostgresSchemaVersion = 146
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -83,6 +83,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&CommerceCouponTemplate{}, &CommerceCouponTemplateBusinessType{}, &CommerceCouponGrant{}, &CommerceCouponGrantBusinessType{},
 		&CommerceAssistCampaign{}, &CommerceAssistCampaignBusinessType{}, &CommerceAssistSession{}, &CommerceAssistRecord{},
 		&TenantMember{}, &TenantMemberIdentity{}, &TenantMemberVerifiedContact{}, &TenantMemberConsent{}, &TenantMemberEvent{},
+		&TenantMemberBenefit{},
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
@@ -785,6 +786,9 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateTenantMemberCenter(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateTenantMemberBenefits(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	if err := migrateChannelMemberMode(db, previousSchemaVersion); err != nil {
 		return err
 	}
@@ -796,9 +800,30 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "channel member mode gate",
+		Name:      "tenant member benefit pricing",
 		AppliedAt: time.Now(),
 	}).Error
+}
+
+func migrateTenantMemberBenefits(db *gorm.DB, previous int) error {
+	if previous >= 146 {
+		return nil
+	}
+	if err := db.Exec(`
+		ALTER TABLE tenant_member_benefits DROP CONSTRAINT IF EXISTS chk_tenant_member_benefit_percent;
+		ALTER TABLE tenant_member_benefits ADD CONSTRAINT chk_tenant_member_benefit_percent
+			CHECK (discount_percent >= 0 AND discount_percent <= 100);
+	`).Error; err != nil {
+		return fmt.Errorf("add tenant member benefit constraints: %w", err)
+	}
+	if err := db.Exec(`
+		ALTER TABLE commerce_order_adjustments DROP CONSTRAINT IF EXISTS chk_commerce_order_adjustment_kind;
+		ALTER TABLE commerce_order_adjustments ADD CONSTRAINT chk_commerce_order_adjustment_kind
+			CHECK (kind IN ('delivery_fee','packaging_fee','shipping_fee','coupon_discount','member_discount'));
+	`).Error; err != nil {
+		return fmt.Errorf("allow member discount order adjustments: %w", err)
+	}
+	return nil
 }
 
 // migrateCommercePromotionBusinessTypes adds the normalized business-scope
@@ -1145,7 +1170,7 @@ func commercePhaseTwoConstraintSpecs() []commercePhaseTwoConstraintSpec {
 		{table: "commerce_checkout_quotes", name: "chk_commerce_checkout_quote_discount", expr: "discount_cents >= 0"},
 		{table: "commerce_checkout_quotes", name: "chk_commerce_checkout_quote_total", expr: "total_cents >= 0"},
 		{table: "commerce_checkout_quotes", name: "chk_commerce_checkout_quote_status", expr: "status IN ('active','consumed','expired','cancelled')"},
-		{table: "commerce_order_adjustments", name: "chk_commerce_order_adjustment_kind", expr: "kind IN ('delivery_fee','packaging_fee','shipping_fee','coupon_discount')"},
+		{table: "commerce_order_adjustments", name: "chk_commerce_order_adjustment_kind", expr: "kind IN ('delivery_fee','packaging_fee','shipping_fee','coupon_discount','member_discount')"},
 		{table: "commerce_order_adjustments", name: "chk_commerce_order_adjustment_amount", expr: "amount_cents >= 0"},
 		{table: "commerce_shipments", name: "chk_commerce_shipments_status", expr: "status IN ('pending_shipment','shipped','in_transit','out_for_delivery','delivered','exception','cancelled')"},
 		{table: "commerce_shipments", name: "chk_commerce_shipments_source", expr: "source IN ('manual','provider')"},

@@ -90,7 +90,7 @@ type CommerceOrderAdjustment struct {
 	Base
 	TenantID     uint   `gorm:"not null;index:idx_commerce_order_adjustment_scope" json:"tenant_id"`
 	OrderID      uint   `gorm:"not null;index:idx_commerce_order_adjustment_scope" json:"order_id"`
-	Kind         string `gorm:"size:30;not null;check:chk_commerce_order_adjustment_kind,kind IN ('delivery_fee','packaging_fee','shipping_fee','coupon_discount')" json:"kind"`
+	Kind         string `gorm:"size:30;not null;check:chk_commerce_order_adjustment_kind,kind IN ('delivery_fee','packaging_fee','shipping_fee','coupon_discount','member_discount')" json:"kind"`
 	AmountCents  int64  `gorm:"not null;check:chk_commerce_order_adjustment_amount,amount_cents >= 0" json:"amount_cents"`
 	Description  string `gorm:"size:255;not null" json:"description"`
 	SnapshotJSON string `gorm:"type:text" json:"snapshot_json,omitempty"`

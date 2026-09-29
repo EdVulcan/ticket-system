@@ -263,6 +263,9 @@ const navGroups = computed<NavGroup[]>(() => {
   if ((scenicHistorySupplier || hasCapability('travel_agency')) && can('teams.read')) distribution.push({ path: '/teams', label: '旅行社团队', icon: Tickets })
 
   const channels: NavItem[] = []
+  if (user.value.customer_membership_enabled === true && can('members.read')) {
+    channels.push({ path: '/members', label: '客户与会员', icon: Connection })
+  }
   if ((scenicHistorySupplier || hasCapability('distributor') || configuredBusinessCapabilities.value.size > 0) && can('channels.read')) {
     channels.push({ path: '/channels', label: '渠道连接', icon: Connection })
   }
@@ -283,7 +286,6 @@ const navGroups = computed<NavGroup[]>(() => {
   if (currentHistoryTenant && can('after_sales.read')) data.push({ path: '/after-sales', label: '售后工作台', icon: Warning })
 
   const settings: NavItem[] = []
-  if (can('members.read')) settings.push({ path: '/members', label: '客户与会员', icon: User })
   if (scenicSupplier && can('onsite.manage')) settings.push({ path: '/staff', label: '员工管理', icon: User })
   if (can('tenant_accounts.manage')) settings.push({ path: '/system-user', label: '管理账号', icon: UserFilled })
   if ((scenicSupplier || hasCapability('distributor') || configuredBusinessCapabilities.value.size > 0) && can('payment_config.manage')) settings.push({ path: '/payment-config', label: '支付参数配置', icon: CreditCard })

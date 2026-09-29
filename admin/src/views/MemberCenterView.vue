@@ -7,10 +7,22 @@
         <p>统一查看自营微信、小红书小程序产生的客户。第三方渠道订单不会自动归入会员。</p>
       </div>
       <div class="heading-actions">
+        <el-button :loading="benefitSaving" @click="saveBenefit">保存会员折扣</el-button>
         <el-button :icon="Download" :loading="exporting" @click="exportMembers">导出客户</el-button>
         <el-button :icon="Refresh" :loading="loading" @click="loadMembers">刷新</el-button>
       </div>
     </header>
+
+    <section class="benefit-panel">
+      <div>
+        <div class="section-label">统一会员权益</div>
+        <p class="muted">正式会员可享受商品金额减免，配送费、打包费和快递费不参与折扣；优惠券可继续叠加。</p>
+      </div>
+      <div class="benefit-control">
+        <el-input-number v-model="benefitPercent" :min="0" :max="100" :step="1" controls-position="right" />
+        <span>% 减免</span>
+      </div>
+    </section>
 
     <section class="filter-panel">
       <el-input v-model="filters.keyword" clearable placeholder="搜索姓名或会员编号" @keyup.enter="loadMembers" />
@@ -110,6 +122,8 @@ import request from '@/utils/request'
 const loading = ref(false)
 const exporting = ref(false)
 const statusSaving = ref(false)
+const benefitSaving = ref(false)
+const benefitPercent = ref<number | undefined>(undefined)
 const rows = ref<any[]>([])
 const total = ref(0)
 const page = ref(1)
@@ -142,6 +156,31 @@ async function loadMembers() {
     ElMessage.error(error.response?.data?.error || '客户列表加载失败')
   } finally {
     loading.value = false
+  }
+}
+
+async function loadBenefit() {
+  try {
+    const response = await request.get('/members/benefit', { skipErrorToast: true } as any)
+    benefitPercent.value = response.data?.configured ? Number(response.data.discount_percent) : undefined
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '会员折扣配置加载失败')
+  }
+}
+
+async function saveBenefit() {
+  if (benefitPercent.value === undefined || !Number.isInteger(benefitPercent.value) || benefitPercent.value < 0 || benefitPercent.value > 100) {
+    ElMessage.warning('请填写 0 至 100 的整数折扣比例')
+    return
+  }
+  benefitSaving.value = true
+  try {
+    await request.put('/members/benefit', { discount_percent: benefitPercent.value }, { skipErrorToast: true } as any)
+    ElMessage.success('会员折扣已保存')
+  } catch (error: any) {
+    ElMessage.error(error.response?.data?.error || '会员折扣保存失败')
+  } finally {
+    benefitSaving.value = false
   }
 }
 
@@ -205,7 +244,7 @@ async function toggleStatus() {
   }
 }
 
-onMounted(loadMembers)
+onMounted(() => { loadMembers(); loadBenefit() })
 </script>
 
 <style scoped>
@@ -216,6 +255,9 @@ onMounted(loadMembers)
 .page-heading p { margin: 8px 0 0; color: #64748b; }
 .eyebrow { color: #0f766e; font-size: 11px; font-weight: 700; letter-spacing: .08em; }
 .filter-panel, .table-panel { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; }
+.benefit-panel { display: flex; align-items: center; justify-content: space-between; gap: 16px; background: #f0fdfa; border: 1px solid #99f6e4; border-radius: 8px; padding: 16px; }
+.benefit-panel p { margin: 6px 0 0; }
+.benefit-control { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .filter-panel { display: flex; gap: 10px; flex-wrap: wrap; }
 .filter-panel .el-input { width: 220px; }
 .filter-panel .el-select { width: 150px; }

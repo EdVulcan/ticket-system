@@ -75,6 +75,12 @@ const router = createRouter({
             meta: { scope: 'tenant', permission: 'teams.read', capabilities: ['supplier', 'travel_agency'], supplierBusinessType: 'scenic', supplierBusinessTypeAllowSuspended: true, supplierBusinessTypeAlternativeCapabilities: ['travel_agency'], title: '旅行社团队' }
         },
         {
+            path: '/members',
+            name: 'members',
+            component: () => import('../views/MemberCenterView.vue'),
+            meta: { scope: 'tenant', permission: 'members.read', title: '客户与会员' }
+        },
+        {
             path: '/refund-tasks',
             name: 'refund-tasks',
             component: () => import('../views/RefundTaskView.vue'),
@@ -169,12 +175,6 @@ const router = createRouter({
             name: 'commerce-index',
             component: () => import('../views/CommerceView.vue'),
             meta: { scope: 'tenant', permission: 'catalog.read', businessCapabilities: ['restaurant', 'retail'], businessCapabilityAllowSuspended: true, title: '商业工作台' }
-        },
-        {
-            path: '/members',
-            name: 'members',
-            component: () => import('../views/MemberCenterView.vue'),
-            meta: { scope: 'tenant', permission: 'members.read', title: '客户与会员' }
         },
         {
             path: '/login',
@@ -299,6 +299,10 @@ router.beforeEach(async (to, _from, next) => {
         const hasChannelCenterAccess = configuredCapabilities.has('supplier') || configuredCapabilities.has('distributor') || configuredBusinessCapabilities.has('restaurant') || configuredBusinessCapabilities.has('retail')
         const missingChannelCenter = channelCenter && !hasChannelCenterAccess
         const missingPermission = permission && !hasPermission(user, permission)
+        if (to.name === 'members' && user.customer_membership_enabled !== true) {
+            next({ name: 'home' })
+            return
+        }
         const missingAnyPermission = permissions && !permissions.some(value => hasPermission(user, value))
         if (platformOnTenantRoute || (requiredScope && user.scope !== requiredScope) || (roles && !roles.includes(user.role)) || missingPermission || missingAnyPermission || missingPaymentConfigAccess || (capability && !allowedCapabilities.has(capability)) || (capabilities && !capabilities.some(value => activeCapabilities.has(value))) || missingSupplierBusinessType || missingBusinessCapability || missingChannelCenter) {
             next({ name: 'home' })

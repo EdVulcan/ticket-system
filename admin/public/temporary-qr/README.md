@@ -1,0 +1,14 @@
+# 临时票券二维码工具
+
+访问路径：`/temporary-qr/`
+
+## 部署前配置
+
+1. 服务端校验密码，当前初始化值为 `cbw123456`，生产环境可用 `TICKET_SERVER_TEMPORARY_QR_PASSWORD` 覆盖。登录会话有效期为 12 小时，服务重启后需重新登录。
+2. 重新执行管理端和后端构建，后端会自动托管该目录。
+
+票据初始数据在 `tickets.json`，只能通过登录后的接口读取，静态路由不公开该文件。状态保存在服务端 `data/temporary-qr.json`，可用 `TICKET_SERVER_TEMPORARY_QR_STORE_PATH` 覆盖。现有 CI 将 data 链接到 `/var/lib/ticket-system`，状态保留跨部署。所有终端每 5 秒同步，写入时版本校验避免旧数据覆盖。
+
+## 完整移除
+
+移除 `admin/public/temporary-qr` 和 `backend/cmd/temporary_qr.go`，以及 `backend/cmd/main.go` 中的 `registerTemporaryQRAPI` 调用、`serveTemporaryQRTicketManager` 调用和函数即可。运行时数据可另行归档。正式业务路由、模型、数据库和 Vue 页面不依赖此工具。

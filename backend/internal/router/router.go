@@ -41,8 +41,9 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	apiGroup.POST("/auth/staff/login", loginLimit, authController.StaffLogin)
 	apiGroup.POST("/auth/platform/login", loginLimit, authController.PlatformLogin)
 
+	membershipEnabled := config.GlobalConfig.Features.CustomerMembershipEnabled
 	var memberService *service.MemberService
-	if model.DB != nil && len(strings.TrimSpace(config.GlobalConfig.Security.EncryptionKey)) >= 16 {
+	if membershipEnabled && model.DB != nil && len(strings.TrimSpace(config.GlobalConfig.Security.EncryptionKey)) >= 16 {
 		memberService, _ = service.NewMemberService(model.DB, []byte(config.GlobalConfig.Security.EncryptionKey))
 	}
 	miniappService := service.NewMiniappService()
@@ -51,8 +52,10 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	miniappPromotionController := &api.MiniappPromotionController{Miniapp: miniappService, Promotion: service.MiniappPromotionService{}}
 	miniappGroup := apiGroup.Group("/storefront/xiaohongshu")
 	miniappGroup.POST("/session", middleware.MiniappLoginRateLimit(), miniappController.LoginXiaohongshu)
-	miniappGroup.POST("/member/verify-phone", middleware.MiniappLoginRateLimit(), miniappController.VerifyPhone)
-	miniappGroup.GET("/member/me", miniappController.MemberMe)
+	if membershipEnabled && memberService != nil {
+		miniappGroup.POST("/member/verify-phone", middleware.MiniappLoginRateLimit(), miniappController.VerifyPhone)
+		miniappGroup.GET("/member/me", miniappController.MemberMe)
+	}
 	miniappGroup.GET("/catalog", miniappController.ListCatalog)
 	miniappGroup.POST("/orders", miniappController.CreateOrder)
 	miniappGroup.GET("/orders", miniappController.ListOrders)
@@ -86,8 +89,10 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	commerceLogisticsController := &api.CommerceLogisticsController{Service: service.CommerceLogisticsService{}, Storefront: commerceStorefrontService}
 	commerceStorefrontGroup := apiGroup.Group("/storefront/wechat")
 	commerceStorefrontGroup.POST("/session", middleware.MiniappLoginRateLimit(), commerceStorefrontController.Login)
-	commerceStorefrontGroup.POST("/member/verify-phone", middleware.MiniappLoginRateLimit(), commerceStorefrontController.VerifyPhone)
-	commerceStorefrontGroup.GET("/member/me", commerceStorefrontController.MemberMe)
+	if membershipEnabled && memberService != nil {
+		commerceStorefrontGroup.POST("/member/verify-phone", middleware.MiniappLoginRateLimit(), commerceStorefrontController.VerifyPhone)
+		commerceStorefrontGroup.GET("/member/me", commerceStorefrontController.MemberMe)
+	}
 	commerceStorefrontGroup.GET("/catalog", commerceStorefrontController.Catalog)
 	commerceStorefrontGroup.GET("/contact", commerceStorefrontController.Contact)
 	commerceStorefrontGroup.GET("/cart", commerceStorefrontController.GetCart)
@@ -146,7 +151,9 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	platformGroup.GET("/devices", platformController.ListDevices)
 	platformGroup.GET("/settlements", platformController.ListSettlements)
 	platformGroup.GET("/audit-logs", platformController.ListAuditLogs)
-	platformGroup.PUT("/tenants/:tenantID/channel-accounts/:accountID/member-mode", middleware.RequireAnyRole("platform_admin"), platformController.SetChannelMemberMode)
+	if membershipEnabled && memberService != nil {
+		platformGroup.PUT("/tenants/:tenantID/channel-accounts/:accountID/member-mode", middleware.RequireAnyRole("platform_admin"), platformController.SetChannelMemberMode)
+	}
 
 	platformUserController := &api.PlatformUserController{}
 	platformUserGroup := protected.Group("/platform-users")
@@ -206,7 +213,10 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	// safely read member contacts.
 	if memberService != nil {
 		memberController := &api.MemberController{Service: api.NewMemberServiceAdapter(memberService)}
+		memberBenefitController := &api.MemberBenefitController{Service: memberService}
 		memberGroup := protected.Group("/members")
+		memberGroup.GET("/benefit", middleware.RequireTenantPermission(authz.PermissionMembersRead), memberBenefitController.Get)
+		memberGroup.PUT("/benefit", middleware.RequireTenantPermission(authz.PermissionMembersStatusWrite), memberBenefitController.Save)
 		memberGroup.GET("", middleware.RequireTenantPermission(authz.PermissionMembersRead), memberController.List)
 		memberGroup.GET("/:id", middleware.RequireTenantPermission(authz.PermissionMembersRead), memberController.Get)
 		memberGroup.POST("/:id/freeze", middleware.RequireTenantPermission(authz.PermissionMembersStatusWrite), memberController.Freeze)

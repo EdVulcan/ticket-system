@@ -106,6 +106,7 @@ type CommerceCheckoutQuoteInput struct {
 	SlotID             uint
 	SlotDate           time.Time
 	GoodsSubtotalCents int64 `json:"-"` // populated by a trusted cart/order calculator
+	DiscountCents      int64 `json:"-"` // populated by trusted membership pricing
 	ExpiresIn          time.Duration
 }
 
@@ -481,6 +482,9 @@ func (s *CommerceDeliveryService) CreateQuote(input CommerceCheckoutQuoteInput) 
 	if input.GoodsSubtotalCents < 0 {
 		return nil, fmt.Errorf("%w: goods subtotal must be non-negative", ErrCommerceQuoteInvalid)
 	}
+	if input.DiscountCents < 0 || input.DiscountCents > input.GoodsSubtotalCents {
+		return nil, fmt.Errorf("%w: quote discount is invalid", ErrCommerceQuoteInvalid)
+	}
 	if (input.BusinessType == "restaurant" && input.FulfillmentMethod != "pickup" && input.FulfillmentMethod != "delivery") ||
 		(input.BusinessType == "retail" && input.FulfillmentMethod != "shipping") {
 		return nil, fmt.Errorf("%w: invalid fulfillment method for business", ErrCommerceQuoteInvalid)
@@ -608,7 +612,8 @@ func (s *CommerceDeliveryService) CreateQuote(input CommerceCheckoutQuoteInput) 
 			return fmt.Errorf("%w: goods subtotal is below minimum", ErrCommerceQuoteInvalid)
 		}
 		pack := config.PackagingFeeCents
-		total, ok := commerceSafeAddInt64(input.GoodsSubtotalCents, pack)
+		totalGoods := input.GoodsSubtotalCents - input.DiscountCents
+		total, ok := commerceSafeAddInt64(totalGoods, pack)
 		if !ok {
 			return fmt.Errorf("%w: quote amount overflow", ErrCommerceQuoteInvalid)
 		}
@@ -626,7 +631,7 @@ func (s *CommerceDeliveryService) CreateQuote(input CommerceCheckoutQuoteInput) 
 			addressJSON = string(bytes)
 		}
 		expiresAt := now.Add(input.ExpiresIn)
-		row := model.CommerceCheckoutQuote{TenantID: input.TenantID, ChannelAccountID: input.ChannelAccountID, BusinessType: input.BusinessType, CustomerHash: customerHash(input.CustomerID), LocationID: location.ID, AddressSnapshotJSON: addressJSON, FulfillmentMethod: input.FulfillmentMethod, GoodsSubtotalCents: input.GoodsSubtotalCents, PackagingFeeCents: pack, DeliveryFeeCents: fee, ShippingFeeCents: shippingFee, DiscountCents: 0, TotalCents: total, Status: "active", TokenHash: tokenHash, ExpiresAt: expiresAt, ConfigVersion: config.ConfigVersion}
+		row := model.CommerceCheckoutQuote{TenantID: input.TenantID, ChannelAccountID: input.ChannelAccountID, BusinessType: input.BusinessType, CustomerHash: customerHash(input.CustomerID), LocationID: location.ID, AddressSnapshotJSON: addressJSON, FulfillmentMethod: input.FulfillmentMethod, GoodsSubtotalCents: input.GoodsSubtotalCents, PackagingFeeCents: pack, DeliveryFeeCents: fee, ShippingFeeCents: shippingFee, DiscountCents: input.DiscountCents, TotalCents: total, Status: "active", TokenHash: tokenHash, ExpiresAt: expiresAt, ConfigVersion: config.ConfigVersion}
 		if zone != nil {
 			id := zone.ID
 			row.ZoneID = &id

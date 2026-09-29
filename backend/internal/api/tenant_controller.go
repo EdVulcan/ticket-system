@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
 
@@ -233,6 +234,7 @@ func (c *TenantController) GetSelf(ctx *gin.Context) {
 		return
 	}
 
+	tenant.CustomerMembershipEnabled = config.GlobalConfig.Features.CustomerMembershipEnabled && len(config.GlobalConfig.Security.EncryptionKey) >= 16
 	ctx.JSON(http.StatusOK, tenant)
 }
 

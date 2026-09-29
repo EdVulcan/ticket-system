@@ -30,7 +30,9 @@ func TestChannelMemberModeMigrationBackfillsFirstPartyAccountsAndFailsClosed(t *
 	if err := db.Where("version = ?", CurrentPostgresSchemaVersion).Delete(&SchemaMigration{}).Error; err != nil {
 		t.Fatalf("remove current marker: %v", err)
 	}
-	if err := db.Create(&SchemaMigration{Version: CurrentPostgresSchemaVersion - 1, Name: "pre member mode", AppliedAt: time.Now()}).Error; err != nil {
+	// This migration was introduced at schema 145. Keep the fixture pinned to
+	// the actual predecessor so adding later migrations cannot re-enable a gate.
+	if err := db.Create(&SchemaMigration{Version: 144, Name: "pre member mode", AppliedAt: time.Now()}).Error; err != nil {
 		t.Fatalf("create previous marker: %v", err)
 	}
 	if err := runMigrations(db); err != nil {

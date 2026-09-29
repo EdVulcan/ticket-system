@@ -62,6 +62,7 @@ export const isScenicHistorySupplier = (user: TenantIdentity) => (
 
 const mergeTenantIdentity = (current: TenantIdentity, tenant: TenantIdentity): TenantIdentity => ({
   ...current,
+  customer_membership_enabled: tenant.customer_membership_enabled === true,
   tenant_id: tenant.id ?? current.tenant_id,
   tenant_name: tenant.name ?? current.tenant_name,
   system_code: tenant.system_code ?? current.system_code,

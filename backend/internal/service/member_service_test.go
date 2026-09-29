@@ -269,7 +269,7 @@ func TestMemberServiceOrderSummaryUsesNetPaidFactsAndCanonicalProjection(t *test
 		t.Fatalf("merge spend alias: %v", err)
 	}
 
-	if err := model.DB.Create(&model.Order{TenantID: tenantID, MemberID: &alias.ID, OrderNo: "MEMBER-SPEND-TICKET-" + fmt.Sprint(time.Now().UnixNano()), Status: "paid", TotalAmount: 80, Channel: "online"}).Error; err != nil {
+	if err := model.DB.Create(&model.Order{TenantID: tenantID, MemberID: &alias.ID, OrderNo: "MEMBER-SPEND-TICKET-" + fmt.Sprint(time.Now().UnixNano()), Status: "completed", TotalAmount: 80, Channel: "online"}).Error; err != nil {
 		t.Fatalf("create ticket order: %v", err)
 	}
 	if err := model.DB.Create(&model.Order{TenantID: tenantID, MemberID: &canonical.ID, OrderNo: "MEMBER-SPEND-REFUNDED-" + fmt.Sprint(time.Now().UnixNano()), Status: "refunded", TotalAmount: 50, Channel: "online"}).Error; err != nil {
@@ -279,7 +279,7 @@ func TestMemberServiceOrderSummaryUsesNetPaidFactsAndCanonicalProjection(t *test
 	if err := model.DB.Create(&location).Error; err != nil {
 		t.Fatalf("create commerce location: %v", err)
 	}
-	if err := model.DB.Create(&model.CommerceOrder{TenantID: tenantID, MemberID: &canonical.ID, OrderNo: "MEMBER-SPEND-COMMERCE-" + fmt.Sprint(time.Now().UnixNano()), BusinessType: "retail", CustomerID: "member-spend-customer", LocationID: location.ID, OriginalAmountCents: 3000, TotalAmountCents: 3000, PaymentStatus: "paid", FulfillmentStatus: "pending_shipment", RefundStatus: "none"}).Error; err != nil {
+	if err := model.DB.Create(&model.CommerceOrder{TenantID: tenantID, MemberID: &canonical.ID, OrderNo: "MEMBER-SPEND-COMMERCE-" + fmt.Sprint(time.Now().UnixNano()), BusinessType: "retail", CustomerID: "member-spend-customer", LocationID: location.ID, OriginalAmountCents: 3000, TotalAmountCents: 3000, PaymentStatus: "paid", FulfillmentStatus: "completed", RefundStatus: "none"}).Error; err != nil {
 		t.Fatalf("create commerce order: %v", err)
 	}
 

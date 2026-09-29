@@ -16,6 +16,7 @@ type Base struct {
 
 // Tenant 租户/主体
 type Tenant struct {
+	CustomerMembershipEnabled bool `gorm:"-" json:"customer_membership_enabled"`
 	Base
 	Name                   string                     `gorm:"size:100;not null" json:"name"`
 	SystemCode             string                     `gorm:"size:50;uniqueIndex;not null" json:"system_code"`                      // 唯一系统编号

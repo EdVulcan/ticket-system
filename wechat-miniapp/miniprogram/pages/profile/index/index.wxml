@@ -2,7 +2,7 @@
   <view class="profile-header"><view class="avatar"><image wx:if="{{profile.avatarUrl}}" class="food-photo" src="{{profile.avatarUrl}}" mode="aspectFill" /><image wx:else class="profile-rabbits" src="/images/theme/rabbit-pair.svg" /></view><view class="profile-copy"><view class="profile-name">{{profile.nickname || '朋友'}}，你好</view><view class="profile-sub">今天的偏爱，也留一份给自己</view></view></view>
   <view class="profile-theme"><view class="brand-seal brand-seal--red">琑</view><view class="profile-brand-copy"><view class="profile-brand-name">{{brand.name}}</view><view class="profile-brand-tagline">{{brand.tagline}}</view></view></view>
 
-  <view class="member-card">
+  <view wx:if="{{membershipEnabled}}" class="member-card">
     <view class="member-card-head"><view><view class="member-card-title">{{memberProfile.membershipStatus === 'active' ? '正式会员' : '完善会员认证'}}</view><view class="member-card-sub">{{memberProfile.phoneVerified ? '手机号已验证，可在自营入口统一查看订单' : '验证手机号后，可在自营入口统一查看订单'}}</view></view><view wx:if="{{memberProfile.phoneVerified}}" class="member-card-status">已认证</view></view>
     <view wx:if="{{memberProfile.phoneMasked}}" class="member-phone">{{memberProfile.phoneMasked}}</view>
     <checkbox-group wx:if="{{!memberProfile.phoneVerified}}" bindchange="onMemberConsentChange"><label class="member-consent"><checkbox value="member" checked="{{memberConsentGranted}}" color="#27654B" />我已阅读并同意会员服务说明</label></checkbox-group>

@@ -21,6 +21,7 @@ type Config struct {
 	Bootstrap          BootstrapConfig          `mapstructure:"bootstrap"`
 	Backup             BackupConfig             `mapstructure:"backup"`
 	Maintenance        MaintenanceConfig        `mapstructure:"maintenance"`
+	Features            FeatureConfig            `mapstructure:"features"`
 	UpstreamScheduling UpstreamSchedulingConfig `mapstructure:"upstream_scheduling"`
 }
 
@@ -112,6 +113,14 @@ type MaintenanceConfig struct {
 	Path              string `mapstructure:"path"`
 	SessionTTLSeconds int    `mapstructure:"session_ttl_seconds"`
 	MaxSessionTTL     int    `mapstructure:"max_session_ttl_seconds"`
+}
+
+// FeatureConfig contains deployment-level switches for optional product
+// modules. Customer membership is kept disabled until its full product and
+// operational contract is ready; enabling it is an explicit deployment
+// decision rather than an accidental side effect of database state.
+type FeatureConfig struct {
+	CustomerMembershipEnabled bool `mapstructure:"customer_membership_enabled"`
 }
 
 const (
@@ -214,6 +223,7 @@ func InitConfig() error {
 	viper.SetDefault("maintenance.path", "/api/v1/hardware/maintenance/ws")
 	viper.SetDefault("maintenance.session_ttl_seconds", 900)
 	viper.SetDefault("maintenance.max_session_ttl_seconds", 1800)
+	viper.SetDefault("features.customer_membership_enabled", false)
 	viper.SetDefault("upstream_scheduling.request_interval_ms", defaultUpstreamRequestIntervalMS)
 	viper.SetDefault("upstream_scheduling.cooldown_seconds", defaultUpstreamCooldownSeconds)
 	viper.SetDefault("upstream_scheduling.max_cooldown_seconds", defaultUpstreamMaxCooldown)

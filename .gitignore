@@ -18,6 +18,9 @@ pnpm-debug.log*
 .env.local
 .env.*.local
 
+# Temporary QR ticket utility runtime secret
+admin/public/temporary-qr/config.js
+
 # Go (Backend)
 backend/bin/
 backend/vendor/

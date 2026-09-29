@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex,nofollow">
+  <title>临时票券管理</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main id="app" class="shell">
+    <section id="lockScreen" class="panel lock-panel">
+      <div class="eyebrow">TEMPORARY TICKET TOOL</div>
+      <h1>票券二维码</h1>
+      <p class="muted">请输入访问密码</p>
+      <form id="loginForm" class="stack">
+        <label>访问密码<input id="passwordInput" type="password" autocomplete="current-password" required></label>
+        <button class="primary" type="submit">进入管理页</button>
+        <p id="loginError" class="error" hidden>密码不正确</p>
+      </form>
+    </section>
+
+    <section id="manager" hidden>
+      <header class="topbar">
+        <div><div class="eyebrow">TEMPORARY TICKET TOOL</div><h1>票券二维码</h1></div>
+        <button id="logoutButton" class="ghost" type="button">锁定</button>
+      </header>
+      <section class="panel controls">
+        <label>票名<input id="titleInput" type="text" maxlength="80" placeholder="例如：周末门票"></label>
+        <label>导入二维码字符串<textarea id="codesInput" rows="4" placeholder="每行一个字符串"></textarea></label>
+        <div class="control-row"><button id="importButton" class="primary" type="button">导入并展示</button><button id="clearButton" class="danger" type="button">清空全部</button></div>
+        <div class="toolbar"><strong id="summary">共 0 张</strong><div class="filters" role="group" aria-label="筛选状态"><button class="filter active" data-filter="all" type="button">全部</button><button class="filter" data-filter="available" type="button">未销售</button><button class="filter" data-filter="sold" type="button">已销售</button></div></div>
+      </section>
+      <section id="ticketGrid" class="ticket-grid" aria-live="polite"></section>
+      <p id="emptyState" class="panel empty">还没有二维码，请粘贴字符串后导入。</p>
+    </section>
+  </main>
+  <dialog id="ticketDialog"><div class="ticket-preview"><button id="closeDialog" class="close" type="button" aria-label="关闭">×</button><div class="ticket-brand">临时电子票</div><h2 id="dialogTitle"></h2><div id="dialogQr" class="dialog-qr"></div><p id="dialogCode" class="ticket-code"></p><div class="ticket-footer">请凭此二维码核验入场</div></div></dialog>
+  <script src="./qrcode.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
