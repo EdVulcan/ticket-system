@@ -22,7 +22,7 @@
 
     <section id="manager" hidden>
       <header class="topbar">
-        <div><div class="eyebrow">TEMPORARY TICKET TOOL</div><h1>票券二维码</h1></div>
+        <div class="brand-lockup"><div class="brand-mark">QR</div><div><div class="eyebrow">TICKET DESK</div><h1>票券二维码</h1></div></div>
         <button id="logoutButton" class="ghost" type="button">锁定</button>
       </header>
       <section class="panel controls">
@@ -35,8 +35,9 @@
       <p id="emptyState" class="panel empty">还没有二维码，请粘贴字符串后导入。</p>
     </section>
   </main>
-  <dialog id="ticketDialog"><div class="ticket-preview"><button id="closeDialog" class="close" type="button" aria-label="关闭">×</button><div class="ticket-brand">临时电子票</div><h2 id="dialogTitle"></h2><div id="dialogQr" class="dialog-qr"></div><p id="dialogCode" class="ticket-code"></p><div class="ticket-footer">请凭此二维码核验入场</div></div></dialog>
+  <dialog id="ticketDialog"><div class="ticket-preview" id="ticketExport"><button id="closeDialog" class="close" type="button" aria-label="关闭">×</button><div class="ticket-brand"><span class="brand-dot"></span>临时电子票</div><h2 id="dialogTitle"></h2><div class="ticket-divider"></div><div id="dialogQr" class="dialog-qr"></div><p class="ticket-label">核验码</p><p id="dialogCode" class="ticket-code"></p><div class="ticket-footer"><span>请凭此二维码核验入场</span><span>VALID TICKET</span></div></div><div class="dialog-actions"><button id="saveTicketImage" class="primary" type="button">保存票据图片</button><button id="closeDialogSecondary" class="ghost" type="button">关闭</button></div></dialog>
   <script src="./qrcode.min.js"></script>
+  <script src="./html2canvas.min.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>

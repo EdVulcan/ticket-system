@@ -78,6 +78,21 @@
     new QRCode($('dialogQr'), { text: ticket.code, width: 240, height: 240, correctLevel: QRCode.CorrectLevel.H });
     $('ticketDialog').showModal();
   }
+  async function saveTicketImage() {
+    const button = $('saveTicketImage');
+    button.disabled = true; button.textContent = '生成中...';
+    const ticketExport = $('ticketExport');
+    ticketExport.classList.add('exporting');
+    try {
+      const canvas = await html2canvas(ticketExport, { backgroundColor: '#ffffff', scale: 3, logging: false });
+      const link = document.createElement('a');
+      const fileTitle = ($('dialogTitle').textContent || '临时门票').replace(/[\\/:*?"<>|]/g, '-');
+      const fileCode = $('dialogCode').textContent.replace(/[\\/:*?"<>|]/g, '-');
+      link.download = `${fileTitle}-${fileCode}.png`;
+      link.href = canvas.toDataURL('image/png'); link.click();
+    } catch (_) { alert('图片生成失败，请重试。'); }
+    finally { ticketExport.classList.remove('exporting'); button.disabled = false; button.textContent = '保存票据图片'; }
+  }
   async function initManager() {
     try {
       apply(await api('state'));
@@ -112,6 +127,8 @@
     render();
   });
   $('closeDialog').onclick = () => $('ticketDialog').close();
+  $('closeDialogSecondary').onclick = () => $('ticketDialog').close();
+  $('saveTicketImage').onclick = saveTicketImage;
   $('ticketDialog').onclick = (event) => { if (event.target === $('ticketDialog')) $('ticketDialog').close(); };
   setInterval(() => { if (!document.hidden && document.activeElement !== $('titleInput')) refresh().catch(() => {}); }, 5000);
   window.addEventListener('focus', () => refresh().catch(() => {}));
