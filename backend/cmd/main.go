@@ -706,7 +706,7 @@ func serveTemporaryQRTicketManager(engine *gin.Engine, directory string) {
 			name = "index.html"
 		}
 		switch name {
-		case "index.html", "app.js", "styles.css", "qrcode.min.js":
+		case "index.html", "app.js", "styles.css", "qrcode.min.js", "html2canvas.min.js":
 			ctx.Header("Cache-Control", "no-store")
 			ctx.File(filepath.Join(utilityDirectory, name))
 		default:
