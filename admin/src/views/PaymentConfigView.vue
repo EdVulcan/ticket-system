@@ -38,7 +38,7 @@
                   <span>请在微信支付商户平台分别配置以下地址；地址由系统生成，不能自行修改。</span>
                 </div>
                 <div class="callback-address-list">
-                  <div class="callback-address-item">
+                  <div v-if="showTicketCallback" class="callback-address-item">
                     <span>票务支付通知</span>
                     <code :title="wechatReadiness.callback_url">{{ wechatReadiness.callback_url || '系统地址未生成' }}</code>
                   </div>
@@ -185,6 +185,7 @@ import { computed, ref, onMounted } from 'vue'
 import { ElMessage, type UploadUserFile } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
 import request from '@/utils/request'
+import { activeCapabilitySet, isActiveScenicSupplier, readStoredUser } from '@/utils/tenantAccess'
 
 const activeTab = ref('wechat')
 
@@ -196,6 +197,12 @@ const wechatPlatformKeyFiles = ref<UploadUserFile[]>([])
 const readiness = ref<any[]>([])
 const wechatReadiness = computed(() => readiness.value.find(item => item.provider === 'wechat'))
 const alipayReadiness = computed(() => readiness.value.find(item => item.provider === 'alipay'))
+// The legacy ticket callback is relevant to scenic suppliers and distributors.
+// Restaurant/retail-only tenants use the shared commerce callbacks instead.
+const showTicketCallback = computed(() => {
+    const user = readStoredUser()
+    return isActiveScenicSupplier(user) || activeCapabilitySet(user).has('distributor')
+})
 const readinessText = (item: any) => item?.configuration_ready ? '配置已就绪' : item?.enabled ? '配置不完整' : '尚未启用'
 const readinessType = (item: any) => item?.configuration_ready ? 'success' : item?.enabled ? 'warning' : 'info'
 
