@@ -679,6 +679,7 @@ func serveAdminUI(engine *gin.Engine, directory string) {
 	engine.StaticFS("/assets", http.Dir(filepath.Join(absDirectory, "assets")))
 	serveTemporaryQRTicketManager(engine, absDirectory)
 	serveXiaohongshuValidationFiles(engine, absDirectory)
+	serveManagedChannelVerificationFiles(engine, indexPath)
 	downloadsDirectory := filepath.Join(absDirectory, "downloads")
 	if info, err := os.Stat(downloadsDirectory); err == nil && info.IsDir() {
 		engine.StaticFS("/downloads", http.Dir(downloadsDirectory))
@@ -687,6 +688,24 @@ func serveAdminUI(engine *gin.Engine, directory string) {
 	engine.NoRoute(func(ctx *gin.Context) {
 		if strings.HasPrefix(ctx.Request.URL.Path, "/api/") || ctx.Request.Method != http.MethodGet {
 			ctx.JSON(http.StatusNotFound, gin.H{"error": "route not found"})
+			return
+		}
+		ctx.File(indexPath)
+	})
+}
+
+// Managed verification files retain the same root URL required by WeChat and
+// Xiaohongshu, while their bytes live in the persistent upload directory.
+// Unknown single-segment paths continue to fall back to the SPA entrypoint.
+func serveManagedChannelVerificationFiles(engine *gin.Engine, indexPath string) {
+	engine.GET("/:filename", func(ctx *gin.Context) {
+		filename := filepath.Base(strings.TrimSpace(ctx.Param("filename")))
+		data, err := service.NewPlatformChannelVerificationService().ReadPublic(filename)
+		if err == nil {
+			ctx.Header("Cache-Control", "no-store, no-cache, must-revalidate")
+			ctx.Header("Pragma", "no-cache")
+			ctx.Header("Expires", "0")
+			ctx.Data(http.StatusOK, "text/plain; charset=utf-8", data)
 			return
 		}
 		ctx.File(indexPath)
@@ -738,6 +757,15 @@ func serveXiaohongshuValidationFiles(engine *gin.Engine, directory string) {
 		filename := entry.Name()
 		content := append([]byte(nil), validationContent...)
 		engine.GET("/"+filename, func(ctx *gin.Context) {
+			// A platform-managed replacement takes precedence over the legacy
+			// static fallback with the same public filename.
+			if managed, managedErr := service.NewPlatformChannelVerificationService().ReadPublic(filename); managedErr == nil {
+				ctx.Header("Cache-Control", "no-store, no-cache, must-revalidate")
+				ctx.Header("Pragma", "no-cache")
+				ctx.Header("Expires", "0")
+				ctx.Data(http.StatusOK, "text/plain; charset=utf-8", managed)
+				return
+			}
 			// A missing validation file previously fell through to the SPA index.
 			// Do not let browsers or intermediaries cache that old HTML response.
 			ctx.Header("Cache-Control", "no-store, no-cache, must-revalidate")

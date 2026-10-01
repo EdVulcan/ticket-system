@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 148
+const CurrentPostgresSchemaVersion = 149
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -58,6 +58,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&Policy{}, &PaymentConfig{}, &Payment{}, &Refund{}, &PaymentReconciliationTask{}, &DigitalRefundTask{},
 		&AuditLog{}, &OTANonce{}, &FinancialDocument{},
 		&ChannelAccount{}, &MiniappCustomer{}, &ChannelProductMapping{}, &XiaohongshuProductConfig{}, &MiniappInstantDiscountActivity{}, &MiniappInstantDiscountActivityMapping{}, &MiniappInstantDiscountGrant{}, &XiaohongshuBookingOperation{}, &XiaohongshuOrderOperation{}, &ChannelRequest{}, &ChannelNonce{}, &ChannelReservation{},
+		&ChannelVerificationFile{},
 		&CtripOrderLink{}, &CtripOrderItem{}, &CtripOutboundTask{}, &XiaohongshuOrderLink{}, &XiaohongshuVoucherLink{}, &XiaohongshuVoucherVerification{}, &XiaohongshuWebhookEvent{}, &XiaohongshuRefundCoordination{},
 		&ChannelBillRecord{}, &ChannelReconciliation{}, &ChannelReconciliationLine{},
 		&TravelContract{}, &TravelAgent{}, &TourGuide{}, &TravelVehicle{}, &TourGroup{}, &TourGroupMember{},
@@ -806,7 +807,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "restaurant delivery execution choice",
+		Name:      "platform managed channel verification files",
 		AppliedAt: time.Now(),
 	}).Error
 }

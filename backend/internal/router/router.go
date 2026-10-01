@@ -175,6 +175,14 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	platformAIQuotaGroup.GET("", platformAIController.ListTenantQuotas)
 	platformAIQuotaGroup.PUT("/:tenantID", platformAIController.UpdateTenantQuota)
 
+	platformVerificationController := &api.PlatformChannelVerificationController{Service: service.NewPlatformChannelVerificationService()}
+	platformVerificationGroup := protected.Group("/platform/channel-verification-files")
+	platformVerificationGroup.Use(middleware.RequirePlatformScope(), middleware.RequireAnyRole("platform_admin"))
+	platformVerificationGroup.GET("/accounts", platformVerificationController.Accounts)
+	platformVerificationGroup.GET("", platformVerificationController.List)
+	platformVerificationGroup.POST("", platformVerificationController.Upload)
+	platformVerificationGroup.DELETE("/:id", platformVerificationController.Delete)
+
 	// Tenant Routes
 	tenantController := &api.TenantController{Service: service.TenantService{Maintenance: maintenanceService}}
 	tenantGroup := protected.Group("/tenants")

@@ -57,6 +57,12 @@ const router = createRouter({
             meta: { scope: 'platform', roles: ['platform_admin'], title: 'AI 租户额度' }
         },
         {
+            path: '/platform/channel-verification-files',
+            name: 'platform-channel-verification-files',
+            component: () => import('../views/PlatformChannelVerificationView.vue'),
+            meta: { scope: 'platform', roles: ['platform_admin'], title: '小程序校验文件' }
+        },
+        {
             path: '/distribution',
             name: 'distribution',
             component: () => import('../views/DistributionView.vue'),

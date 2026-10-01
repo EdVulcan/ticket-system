@@ -147,7 +147,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
-  CaretBottom, Connection, CopyDocument, CreditCard, Expand, Fold, ForkSpoon, Key, List, Location,
+  CaretBottom, Connection, CopyDocument, CreditCard, Document, Expand, Fold, ForkSpoon, Key, List, Location,
   Menu as MenuIcon, Money, Monitor, Odometer, OfficeBuilding, Operation, Reading, Setting,
   ShoppingBag, SwitchButton, Ticket, Tickets, TrendCharts, User, UserFilled, Warning
 } from '@element-plus/icons-vue'
@@ -219,6 +219,7 @@ const navGroups = computed<NavGroup[]>(() => {
       platformItems.push({ path: '/platform-users', label: '平台账号', icon: UserFilled })
       platformItems.push({ path: '/platform-ai', label: 'AI 助手配置', icon: Setting })
       platformItems.push({ path: '/platform-ai/quotas', label: 'AI 租户额度', icon: Operation })
+      platformItems.push({ path: '/platform/channel-verification-files', label: '小程序校验文件', icon: Document })
     }
     platformItems.push({ path: '/platform-operations', label: '平台运营工作台', icon: Monitor })
     return [overview, { label: '平台管理', items: platformItems }]
