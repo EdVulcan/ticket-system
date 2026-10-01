@@ -68,7 +68,7 @@
             <el-table-column label="使用门槛" width="120" align="right"><template #default="{ row }">¥{{ yuan(row.min_goods_subtotal_cents) }}</template></el-table-column>
             <el-table-column label="有效期" min-width="150"><template #default="{ row }">{{ validityLabel(row) }}</template></el-table-column>
             <el-table-column label="状态" width="90" align="center"><template #default="{ row }"><el-tag :type="statusType(row.status)" effect="plain">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
-            <el-table-column label="操作" width="100" fixed="right" align="right"><template #default="{ row }"><el-button v-if="canWrite" link type="primary" @click="openCouponDialog(row)">编辑</el-button><span v-else class="muted">只读</span></template></el-table-column>
+            <el-table-column label="操作" width="180" fixed="right" align="right"><template #default="{ row }"><template v-if="canWrite"><el-button link type="primary" @click="openCouponDialog(row)">编辑</el-button><el-button link :type="row.status === 'active' ? 'warning' : 'success'" @click="toggleCouponStatus(row)">{{ row.status === 'active' ? '停用' : '启用' }}</el-button></template><span v-else class="muted">只读</span></template></el-table-column>
             <template #empty>
               <el-empty description="暂无优惠券模板" :image-size="64">
                 <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCouponDialog()">新增优惠券模板</el-button>
@@ -160,7 +160,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import request from '@/utils/request'
 import { activeBusinessCapabilitySet, configuredBusinessCapabilitySet, readStoredUser } from '@/utils/tenantAccess'
@@ -253,6 +253,39 @@ async function saveCoupon() {
     }
     couponDialogVisible.value = false; ElMessage.success('优惠券模板已保存'); await loadPromotions()
   } catch (error) { errorMessage.value = apiError(error, '优惠券模板保存失败') } finally { saving.value = false }
+}
+
+async function toggleCouponStatus(row: any) {
+  const nextStatus = row.status === 'active' ? 'inactive' : 'active'
+  const actionLabel = nextStatus === 'active' ? '启用' : '停用'
+  try {
+    await ElMessageBox.confirm(`确定${actionLabel}优惠券模板“${row.name}”吗？`, `${actionLabel}优惠券模板`, {
+      type: nextStatus === 'active' ? 'success' : 'warning',
+      confirmButtonText: `确认${actionLabel}`,
+      cancelButtonText: '取消',
+    })
+  } catch {
+    return
+  }
+  saving.value = true
+  resetError()
+  try {
+    await request.put(`/commerce/promotions/coupon-templates/${row.id}`, {
+      business_types: normalizedBusinessTypes(row),
+      name: String(row.name || '').trim(),
+      starts_at: optionalISOString(row.starts_at),
+      ends_at: optionalISOString(row.ends_at),
+      status: nextStatus,
+      issuance_cap: Number(row.issuance_cap || 0),
+      per_customer_cap: Number(row.per_customer_cap || 1),
+    }, { params: { channel_account_id: Number(row.channel_account_id || channelID.value) }, skipErrorToast: true } as any)
+    ElMessage.success(`优惠券模板已${actionLabel}`)
+    await loadPromotions()
+  } catch (error) {
+    errorMessage.value = apiError(error, `优惠券模板${actionLabel}失败`)
+  } finally {
+    saving.value = false
+  }
 }
 
 function openCampaignDialog(row?: any) {
