@@ -32,21 +32,21 @@
                   <el-tag size="small" :type="item.available ? 'success' : 'info'">{{ item.available ? '已具备配置' : '暂不可用' }}</el-tag>
                 </div>
               </div>
-              <div v-if="wechatReadiness" class="callback-addresses">
+              <div v-if="wechatReadiness && showCallbackAddresses" class="callback-addresses">
                 <div class="callback-heading">
-                  <strong>微信支付回调地址</strong>
-                  <span>请在微信支付商户平台分别配置以下地址；地址由系统生成，不能自行修改。</span>
+                  <strong>系统回调地址</strong>
+                  <span>地址由系统在支付请求中自动传递，仅供核对，不需要在微信支付商户平台另行填写。</span>
                 </div>
                 <div class="callback-address-list">
                   <div v-if="showTicketCallback" class="callback-address-item">
                     <span>票务支付通知</span>
                     <code :title="wechatReadiness.callback_url">{{ wechatReadiness.callback_url || '系统地址未生成' }}</code>
                   </div>
-                  <div class="callback-address-item">
+                  <div v-if="showCommerceCallback" class="callback-address-item">
                     <span>商业支付通知</span>
                     <code :title="wechatReadiness.commerce_payment_callback_url">{{ wechatReadiness.commerce_payment_callback_url || '系统地址未生成' }}</code>
                   </div>
-                  <div class="callback-address-item">
+                  <div v-if="showCommerceCallback" class="callback-address-item">
                     <span>商业退款通知</span>
                     <code :title="wechatReadiness.commerce_refund_callback_url">{{ wechatReadiness.commerce_refund_callback_url || '系统地址未生成' }}</code>
                   </div>
@@ -185,7 +185,7 @@ import { computed, ref, onMounted } from 'vue'
 import { ElMessage, type UploadUserFile } from 'element-plus'
 import { UploadFilled } from '@element-plus/icons-vue'
 import request from '@/utils/request'
-import { activeCapabilitySet, isActiveScenicSupplier, readStoredUser } from '@/utils/tenantAccess'
+import { activeCapabilitySet, configuredBusinessCapabilitySet, isActiveScenicSupplier, readStoredUser } from '@/utils/tenantAccess'
 
 const activeTab = ref('wechat')
 
@@ -197,12 +197,19 @@ const wechatPlatformKeyFiles = ref<UploadUserFile[]>([])
 const readiness = ref<any[]>([])
 const wechatReadiness = computed(() => readiness.value.find(item => item.provider === 'wechat'))
 const alipayReadiness = computed(() => readiness.value.find(item => item.provider === 'alipay'))
-// The legacy ticket callback is relevant to scenic suppliers and distributors.
-// Restaurant/retail-only tenants use the shared commerce callbacks instead.
+// Ticket callbacks are relevant to scenic suppliers and distributors only.
 const showTicketCallback = computed(() => {
     const user = readStoredUser()
     return isActiveScenicSupplier(user) || activeCapabilitySet(user).has('distributor')
 })
+// Suspended commercial capabilities still have historical orders whose
+// provider notifications must remain routable, so use configured rather than
+// active business capabilities for this display decision.
+const showCommerceCallback = computed(() => {
+    const capabilities = configuredBusinessCapabilitySet(readStoredUser())
+    return capabilities.has('restaurant') || capabilities.has('retail')
+})
+const showCallbackAddresses = computed(() => showTicketCallback.value || showCommerceCallback.value)
 const readinessText = (item: any) => item?.configuration_ready ? '配置已就绪' : item?.enabled ? '配置不完整' : '尚未启用'
 const readinessType = (item: any) => item?.configuration_ready ? 'success' : item?.enabled ? 'warning' : 'info'
 

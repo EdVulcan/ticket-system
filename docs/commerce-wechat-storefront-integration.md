@@ -54,7 +54,7 @@ CloudBase 不再作为商业商品、SKU、库存、购物车、订单、支付�
 
 当前本地商业订单状态机提供支付/退款边界、人工复核和重启恢复所需的持久化事实。微信支付下单、签名验签、通知解密、主动查单、退款申请、退款回调和金额校验已完成代码实现；真实商户凭据、真机支付、通知重放及生产金额验收仍未完成。
 
-支付配置页会同时显示系统生成的三类微信回调地址：票务支付通知、商业支付通知 `/api/v1/commerce/payments/notify/wechat/{tenant_id}` 和商业退款通知 `/api/v1/commerce/refunds/notify/wechat/{tenant_id}`。商业支付和退款请求只使用后两类地址；地址由服务端公网 HTTPS 配置生成，不能由租户请求体覆盖。正式使用前必须在微信支付商户平台配置商业支付通知和退款通知，并用真实小额支付、支付回调、退款和退款回调逐项验收。
+支付配置页按租户已配置的业务能力显示系统回调地址：票务支付通知、商业支付通知 `/api/v1/commerce/payments/notify/wechat/{tenant_id}` 和商业退款通知 `/api/v1/commerce/refunds/notify/wechat/{tenant_id}`。商业支付和退款请求会在调用微信支付接口时自动携带后两类 `notify_url`，不需要在微信支付商户平台另行填写；地址由服务端公网 HTTPS 配置生成，不能由租户请求体覆盖。正式使用前仍必须用真实小额支付、支付回调、退款和退款回调逐项验收。
 
 在可信 provider confirmation 到达前，退款只能停留在 `requested`、`approved` 或 `processing` 等处理中状态；普通租户请求不能直接把退款改成 `completed`、把订单标记为 `refunded` 或恢复库存。provider reference 和 provider amount 必须由认证的支付适配器写入并与原订单快照匹配，重复 confirmation 必须幂等。
 
