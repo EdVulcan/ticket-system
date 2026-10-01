@@ -589,6 +589,12 @@
         <div v-if="selectedOrder.restaurant_fulfillment || selectedOrder.retail_fulfillment" class="order-fulfillment-summary">
           <el-divider content-position="left">履约信息</el-divider>
           <div v-if="selectedOrder.restaurant_fulfillment">{{ selectedOrder.restaurant_fulfillment.method === 'delivery' ? '配送' : '自取' }} · {{ fulfillmentStatusLabel(selectedOrder.restaurant_fulfillment.status) }}</div>
+          <div v-if="selectedOrder.restaurant_fulfillment?.method === 'delivery' && selectedOrder.restaurant_fulfillment?.delivery_provider">
+            配送执行：{{ deliveryProviderLabel(selectedOrder.restaurant_fulfillment.delivery_provider) }}
+            <span v-if="selectedOrder.restaurant_fulfillment.courier_platform_name"> · {{ selectedOrder.restaurant_fulfillment.courier_platform_name }}</span>
+            <span v-if="selectedOrder.restaurant_fulfillment.courier_order_no"> · 跑腿单号 {{ selectedOrder.restaurant_fulfillment.courier_order_no }}</span>
+          </div>
+          <div v-if="selectedOrder.restaurant_fulfillment?.delivery_note" class="secondary-cell">配送备注：{{ selectedOrder.restaurant_fulfillment.delivery_note }}</div>
           <div v-if="selectedOrder.retail_fulfillment">{{ selectedOrder.retail_fulfillment.carrier || '待填写物流公司' }} · {{ selectedOrder.retail_fulfillment.tracking_no || '待填写运单号' }}</div>
         </div>
         <div v-if="selectedOrder.business_type === 'retail' && shipmentTimeline" class="order-shipment-timeline">
@@ -631,6 +637,36 @@
         <el-form-item label="运单号" required><el-input v-model="shippingForm.tracking_no" maxlength="120" placeholder="请输入运单号" /></el-form-item>
       </el-form>
       <template #footer><el-button @click="shippingDialogVisible = false">取消</el-button><el-button type="primary" :loading="orderActionID !== 0" @click="submitShipping">确认发货</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="deliveryDialogVisible" title="安排餐饮配送" width="min(560px, calc(100vw - 32px))" destroy-on-close>
+      <el-alert
+        type="info"
+        :closable="false"
+        title="用户已选择外卖配送。请记录本单实际由店家配送，或由跑腿平台承运。"
+        class="capability-alert"
+      />
+      <el-form :model="deliveryForm" label-position="top" class="commerce-form delivery-form">
+        <el-form-item label="配送执行方式" required>
+          <el-radio-group v-model="deliveryForm.delivery_provider">
+            <el-radio-button label="merchant">店家自送</el-radio-button>
+            <el-radio-button label="courier_platform">跑腿平台</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item v-if="deliveryForm.delivery_provider === 'courier_platform'" label="跑腿平台名称" required>
+          <el-input v-model="deliveryForm.courier_platform_name" maxlength="80" placeholder="例如：达达、闪送、顺丰同城" />
+        </el-form-item>
+        <el-form-item v-if="deliveryForm.delivery_provider === 'courier_platform'" label="跑腿订单号" required>
+          <el-input v-model="deliveryForm.courier_order_no" maxlength="120" placeholder="请填写跑腿平台返回的订单号" />
+        </el-form-item>
+        <el-form-item v-if="deliveryForm.delivery_provider === 'courier_platform'" label="骑手联系方式">
+          <el-input v-model="deliveryForm.courier_contact" maxlength="40" placeholder="可选" />
+        </el-form-item>
+        <el-form-item label="配送备注">
+          <el-input v-model="deliveryForm.delivery_note" type="textarea" :rows="3" maxlength="500" placeholder="可选，例如已在跑腿平台备注送达要求" />
+        </el-form-item>
+      </el-form>
+      <template #footer><el-button @click="deliveryDialogVisible = false">取消</el-button><el-button type="primary" :loading="orderActionID !== 0" @click="submitDelivery">确认开始配送</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="storefrontDialogVisible" :title="storefrontForm.id ? '编辑小程序发布配置' : '新增小程序发布配置'" width="min(620px, calc(100vw - 32px))" destroy-on-close>
@@ -787,6 +823,9 @@ const orderActionID = ref(0)
 const shippingDialogVisible = ref(false)
 const shippingOrder = ref<any | null>(null)
 const shippingForm = reactive({ carrier: '', tracking_no: '' })
+const deliveryDialogVisible = ref(false)
+const deliveryOrder = ref<any | null>(null)
+const deliveryForm = reactive({ delivery_provider: 'merchant', courier_platform_name: '', courier_order_no: '', courier_contact: '', delivery_note: '' })
 const storefrontLoading = ref(false)
 const storefrontSaving = ref(false)
 const storefrontDialogVisible = ref(false)
@@ -1126,6 +1165,10 @@ function fulfillmentStatusType(value: string) {
   return ({ pending_acceptance: 'warning', pending_shipment: 'warning', accepted: 'primary', preparing: 'primary', ready: 'success', delivering: 'primary', shipped: 'primary', in_transit: 'primary', delivered: 'success', completed: 'success', cancelled: 'danger' } as Record<string, string>)[value] || 'info'
 }
 
+function deliveryProviderLabel(value: string) {
+  return ({ merchant: '店家自送', courier_platform: '跑腿平台' } as Record<string, string>)[value] || value || '未记录'
+}
+
 function refundStatusLabel(value: string) {
   return ({ none: '无售后', requested: '退款申请中', processing: '退款处理中', partial: '部分退款', refunded: '已退款', rejected: '已拒绝' } as Record<string, string>)[value] || value || '-'
 }
@@ -1421,6 +1464,12 @@ async function advanceFulfillment(row: any) {
     shippingDialogVisible.value = true
     return
   }
+  if (row.business_type === 'restaurant' && next === 'delivering') {
+    deliveryOrder.value = row
+    Object.assign(deliveryForm, { delivery_provider: 'merchant', courier_platform_name: '', courier_order_no: '', courier_contact: '', delivery_note: '' })
+    deliveryDialogVisible.value = true
+    return
+  }
   try {
     await ElMessageBox.confirm(`确认将订单${advanceFulfillmentLabel(row)}？`, row.business_type === 'restaurant' ? '更新餐饮履约' : '更新电商物流', {
       type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消',
@@ -1444,6 +1493,31 @@ async function advanceFulfillment(row: any) {
   finally {
     orderActionID.value = 0
   }
+}
+
+async function submitDelivery() {
+  const row = deliveryOrder.value
+  const provider = deliveryForm.delivery_provider
+  if (!row?.id || !['merchant', 'courier_platform'].includes(provider)) return
+  if (provider === 'courier_platform' && (!deliveryForm.courier_platform_name.trim() || !deliveryForm.courier_order_no.trim())) {
+    ElMessage.warning('请填写跑腿平台名称和跑腿订单号')
+    return
+  }
+  orderActionID.value = row.id
+  try {
+    await request.post(`/commerce/orders/${row.id}/restaurant-fulfillment`, {
+      status: 'delivering',
+      delivery_provider: provider,
+      courier_platform_name: deliveryForm.courier_platform_name.trim(),
+      courier_order_no: deliveryForm.courier_order_no.trim(),
+      courier_contact: deliveryForm.courier_contact.trim(),
+      delivery_note: deliveryForm.delivery_note.trim(),
+    })
+    deliveryDialogVisible.value = false
+    ElMessage.success('订单已进入配送中')
+    await loadOrders()
+  } catch { /* request interceptor already reported the error */ }
+  finally { orderActionID.value = 0 }
 }
 
 async function submitShipping() {

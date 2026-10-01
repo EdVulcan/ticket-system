@@ -144,10 +144,15 @@ type CommercePaymentOutcome struct {
 }
 
 type RestaurantFulfillmentTransitionInput struct {
-	Status      string `json:"status"`
-	Reason      string `json:"reason,omitempty"`
-	ActorUserID uint   `json:"-"`
-	ActorRole   string `json:"-"`
+	Status              string `json:"status"`
+	DeliveryProvider    string `json:"delivery_provider,omitempty"`
+	CourierPlatformName string `json:"courier_platform_name,omitempty"`
+	CourierOrderNo      string `json:"courier_order_no,omitempty"`
+	CourierContact      string `json:"courier_contact,omitempty"`
+	DeliveryNote        string `json:"delivery_note,omitempty"`
+	Reason              string `json:"reason,omitempty"`
+	ActorUserID         uint   `json:"-"`
+	ActorRole           string `json:"-"`
 }
 
 type RetailFulfillmentTransitionInput struct {
@@ -1432,7 +1437,7 @@ func (s *CommerceOrderService) ConfirmReceipt(tenantID, orderID uint) (*model.Co
 			if fulfillment.Status != "delivering" {
 				return fmt.Errorf("%w: restaurant delivery is not ready for confirmation", ErrCommerceOrderState)
 			}
-			if err := tx.Model(&fulfillment).Updates(map[string]interface{}{"status": "completed", "completed_at": now}).Error; err != nil {
+			if err := tx.Model(&fulfillment).Updates(map[string]interface{}{"status": "completed", "completed_at": now, "delivered_at": now}).Error; err != nil {
 				return err
 			}
 			if err := tx.Model(&order).Update("fulfillment_status", "completed").Error; err != nil {
@@ -1679,6 +1684,11 @@ func retailTransitionAllowed(current, next string) bool {
 
 func (s *CommerceOrderService) TransitionRestaurantFulfillment(tenantID, orderID uint, input RestaurantFulfillmentTransitionInput) (*model.RestaurantFulfillment, error) {
 	input.Status = strings.TrimSpace(input.Status)
+	input.DeliveryProvider = strings.TrimSpace(input.DeliveryProvider)
+	input.CourierPlatformName = strings.TrimSpace(input.CourierPlatformName)
+	input.CourierOrderNo = strings.TrimSpace(input.CourierOrderNo)
+	input.CourierContact = strings.TrimSpace(input.CourierContact)
+	input.DeliveryNote = strings.TrimSpace(input.DeliveryNote)
 	if input.Status == "" {
 		return nil, ErrCommerceOrderState
 	}
@@ -1701,6 +1711,20 @@ func (s *CommerceOrderService) TransitionRestaurantFulfillment(tenantID, orderID
 		if !restaurantTransitionAllowed(fulfillment.Status, input.Status, fulfillment.Method) {
 			return fmt.Errorf("%w: restaurant %s -> %s is not allowed", ErrCommerceOrderState, fulfillment.Status, input.Status)
 		}
+		if input.Status == "delivering" {
+			if fulfillment.Method != "delivery" {
+				return fmt.Errorf("%w: pickup orders cannot be dispatched", ErrCommerceOrderState)
+			}
+			if input.DeliveryProvider != "merchant" && input.DeliveryProvider != "courier_platform" {
+				return fmt.Errorf("%w: delivery provider must be merchant or courier_platform", ErrCommerceOrderInvalid)
+			}
+			if input.DeliveryProvider == "courier_platform" && (input.CourierPlatformName == "" || input.CourierOrderNo == "") {
+				return fmt.Errorf("%w: courier platform and order number are required", ErrCommerceOrderInvalid)
+			}
+			if len([]rune(input.CourierPlatformName)) > 80 || len([]rune(input.CourierOrderNo)) > 120 || len([]rune(input.CourierContact)) > 40 || len([]rune(input.DeliveryNote)) > 500 {
+				return fmt.Errorf("%w: delivery details are too long", ErrCommerceOrderInvalid)
+			}
+		}
 		beforeJSON, _ := json.Marshal(fulfillment)
 		now := s.now()
 		updates := map[string]interface{}{"status": input.Status}
@@ -1712,6 +1736,17 @@ func (s *CommerceOrderService) TransitionRestaurantFulfillment(tenantID, orderID
 		}
 		if input.Status == "completed" {
 			updates["completed_at"] = now
+			if fulfillment.Method == "delivery" {
+				updates["delivered_at"] = now
+			}
+		}
+		if input.Status == "delivering" {
+			updates["delivery_provider"] = input.DeliveryProvider
+			updates["courier_platform_name"] = input.CourierPlatformName
+			updates["courier_order_no"] = input.CourierOrderNo
+			updates["courier_contact"] = input.CourierContact
+			updates["delivery_note"] = input.DeliveryNote
+			updates["delivery_started_at"] = now
 		}
 		if err := tx.Model(&fulfillment).Updates(updates).Error; err != nil {
 			return err
@@ -1720,6 +1755,17 @@ func (s *CommerceOrderService) TransitionRestaurantFulfillment(tenantID, orderID
 			return err
 		}
 		fulfillment.Status = input.Status
+		if input.Status == "delivering" {
+			fulfillment.DeliveryProvider = input.DeliveryProvider
+			fulfillment.CourierPlatformName = input.CourierPlatformName
+			fulfillment.CourierOrderNo = input.CourierOrderNo
+			fulfillment.CourierContact = input.CourierContact
+			fulfillment.DeliveryNote = input.DeliveryNote
+			fulfillment.DeliveryStartedAt = &now
+		}
+		if input.Status == "completed" && fulfillment.Method == "delivery" {
+			fulfillment.DeliveredAt = &now
+		}
 		if err := recordCommerceAuditTx(tx, input.ActorUserID, tenantID, input.ActorRole, "commerce.restaurant_fulfillment.transition", "restaurant_fulfillment", fulfillment.ID, commerceTransitionReason(input.Reason), string(beforeJSON), fmt.Sprintf(`{"status":%q}`, input.Status)); err != nil {
 			return err
 		}

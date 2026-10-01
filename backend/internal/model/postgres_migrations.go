@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 147
+const CurrentPostgresSchemaVersion = 148
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -801,11 +801,40 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateMiniappPromotionRefundRestore(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateCommerceRestaurantDeliveryExecution(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "miniapp promotion refund restore",
+		Name:      "restaurant delivery execution choice",
 		AppliedAt: time.Now(),
 	}).Error
+}
+
+// migrateCommerceRestaurantDeliveryExecution adds the merchant/courier
+// execution facts to restaurant fulfillment. Existing orders retain an empty
+// provider and can still be viewed; new transitions to delivering validate the
+// provider and (for external couriers) the courier order number in the service.
+func migrateCommerceRestaurantDeliveryExecution(db *gorm.DB, previous int) error {
+	if previous >= 148 {
+		return nil
+	}
+	if err := db.Exec(`
+		ALTER TABLE restaurant_fulfillments
+			ADD COLUMN IF NOT EXISTS delivery_provider varchar(30) NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS courier_platform_name varchar(80) NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS courier_order_no varchar(120) NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS courier_contact varchar(40) NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS delivery_note varchar(500) NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS delivery_started_at timestamptz,
+			ADD COLUMN IF NOT EXISTS delivered_at timestamptz;
+		ALTER TABLE restaurant_fulfillments DROP CONSTRAINT IF EXISTS chk_restaurant_fulfillment_provider;
+		ALTER TABLE restaurant_fulfillments ADD CONSTRAINT chk_restaurant_fulfillment_provider
+			CHECK (delivery_provider IN ('','merchant','courier_platform'));
+	`).Error; err != nil {
+		return fmt.Errorf("migrate restaurant delivery execution facts: %w", err)
+	}
+	return nil
 }
 
 func migrateMiniappPromotionRefundRestore(db *gorm.DB, previous int) error {

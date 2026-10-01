@@ -151,6 +151,45 @@ func TestCommerceOrderPaymentAndRefundLifecycle(t *testing.T) {
 	}
 }
 
+func TestCommerceRestaurantDeliveryRecordsExecutionChoice(t *testing.T) {
+	tenantID, productID, skuID, locationID, now := commerceOrderFixture(t)
+	service := &CommerceOrderService{Clock: func() time.Time { return now }}
+	input := commerceOrderInput(productID, skuID, locationID, "delivery-execution-choice", now.Add(time.Minute))
+	input.FulfillmentMethod = "delivery"
+	input.ShippingAddressJSON = `{"recipient_name":"顾客","phone":"13800138000","detail":"门店附近"}`
+	order, err := service.CreateOrder(tenantID, input)
+	if err != nil {
+		t.Fatalf("create delivery order: %v", err)
+	}
+	if _, err := service.ConfirmPayment(tenantID, order.ID); err != nil {
+		t.Fatalf("confirm payment: %v", err)
+	}
+	for _, status := range []string{"accepted", "preparing", "ready"} {
+		if _, err := service.TransitionRestaurantFulfillment(tenantID, order.ID, RestaurantFulfillmentTransitionInput{Status: status}); err != nil {
+			t.Fatalf("transition to %s: %v", status, err)
+		}
+	}
+	if _, err := service.TransitionRestaurantFulfillment(tenantID, order.ID, RestaurantFulfillmentTransitionInput{Status: "delivering", DeliveryProvider: "courier_platform"}); !errors.Is(err, ErrCommerceOrderInvalid) {
+		t.Fatalf("courier delivery without order number should fail, err=%v", err)
+	}
+	row, err := service.TransitionRestaurantFulfillment(tenantID, order.ID, RestaurantFulfillmentTransitionInput{
+		Status: "delivering", DeliveryProvider: "courier_platform", CourierPlatformName: "闪送", CourierOrderNo: "RUN-123", CourierContact: "13900000000", DeliveryNote: "放前台",
+	})
+	if err != nil {
+		t.Fatalf("start courier delivery: %v", err)
+	}
+	if row.DeliveryProvider != "courier_platform" || row.CourierOrderNo != "RUN-123" || row.DeliveryStartedAt == nil {
+		t.Fatalf("delivery execution facts=%+v", row)
+	}
+	row, err = service.TransitionRestaurantFulfillment(tenantID, order.ID, RestaurantFulfillmentTransitionInput{Status: "completed"})
+	if err != nil {
+		t.Fatalf("complete delivery: %v", err)
+	}
+	if row.DeliveredAt == nil || row.Status != "completed" {
+		t.Fatalf("delivery completion facts=%+v", row)
+	}
+}
+
 func TestCommerceOrderSnapshotsProductMediaAtCreation(t *testing.T) {
 	tenantID, productID, skuID, locationID, now := commerceOrderFixture(t)
 	store := CommerceImageStore{Directory: t.TempDir(), PublicBaseURL: "https://tickets.example.com"}

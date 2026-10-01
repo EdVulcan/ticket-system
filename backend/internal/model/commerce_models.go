@@ -311,15 +311,25 @@ type CommerceOrderItem struct {
 
 type RestaurantFulfillment struct {
 	Base
-	TenantID        uint       `gorm:"not null;index:idx_restaurant_fulfillment_scope" json:"tenant_id"`
-	OrderID         uint       `gorm:"not null;uniqueIndex:idx_restaurant_fulfillment_order" json:"order_id"`
-	LocationID      uint       `gorm:"not null;index:idx_restaurant_fulfillment_scope" json:"location_id"`
-	Method          string     `gorm:"size:20;not null;check:chk_restaurant_fulfillment_method,method IN ('pickup','delivery')" json:"method"`
-	Status          string     `gorm:"size:30;not null;default:'pending_acceptance';index;check:chk_restaurant_fulfillment_status,status IN ('pending_acceptance','accepted','preparing','ready','delivering','completed','cancelled')" json:"status"`
-	AcceptedAt      *time.Time `json:"accepted_at,omitempty"`
-	ReadyAt         *time.Time `json:"ready_at,omitempty"`
-	CompletedAt     *time.Time `json:"completed_at,omitempty"`
-	AddressSnapshot string     `gorm:"type:text" json:"address_snapshot,omitempty"`
+	TenantID   uint   `gorm:"not null;index:idx_restaurant_fulfillment_scope" json:"tenant_id"`
+	OrderID    uint   `gorm:"not null;uniqueIndex:idx_restaurant_fulfillment_order" json:"order_id"`
+	LocationID uint   `gorm:"not null;index:idx_restaurant_fulfillment_scope" json:"location_id"`
+	Method     string `gorm:"size:20;not null;check:chk_restaurant_fulfillment_method,method IN ('pickup','delivery')" json:"method"`
+	Status     string `gorm:"size:30;not null;default:'pending_acceptance';index;check:chk_restaurant_fulfillment_status,status IN ('pending_acceptance','accepted','preparing','ready','delivering','completed','cancelled')" json:"status"`
+	// DeliveryProvider records the merchant's execution choice after an order
+	// is ready. It is intentionally separate from Method: customers still only
+	// choose pickup or delivery at checkout.
+	DeliveryProvider    string     `gorm:"size:30;not null;default:'';index;check:chk_restaurant_fulfillment_provider,delivery_provider IN ('','merchant','courier_platform')" json:"delivery_provider,omitempty"`
+	CourierPlatformName string     `gorm:"size:80;not null;default:''" json:"courier_platform_name,omitempty"`
+	CourierOrderNo      string     `gorm:"size:120;not null;default:''" json:"courier_order_no,omitempty"`
+	CourierContact      string     `gorm:"size:40;not null;default:''" json:"courier_contact,omitempty"`
+	DeliveryNote        string     `gorm:"size:500;not null;default:''" json:"delivery_note,omitempty"`
+	DeliveryStartedAt   *time.Time `json:"delivery_started_at,omitempty"`
+	DeliveredAt         *time.Time `json:"delivered_at,omitempty"`
+	AcceptedAt          *time.Time `json:"accepted_at,omitempty"`
+	ReadyAt             *time.Time `json:"ready_at,omitempty"`
+	CompletedAt         *time.Time `json:"completed_at,omitempty"`
+	AddressSnapshot     string     `gorm:"type:text" json:"address_snapshot,omitempty"`
 }
 
 type RetailFulfillment struct {

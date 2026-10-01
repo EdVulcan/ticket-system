@@ -675,9 +675,11 @@ func TestCommerceStorefrontCustomerCancellationAndReceiptConfirmation(t *testing
 		t.Fatalf("premature receipt confirmation error=%v", err)
 	}
 	for _, status := range []string{"accepted", "preparing", "ready", "delivering"} {
-		if _, err := orders.TransitionRestaurantFulfillment(fixture.tenantID, delivered.ID, RestaurantFulfillmentTransitionInput{
-			Status: status, ActorUserID: 101, ActorRole: "admin", Reason: "customer receipt test",
-		}); err != nil {
+		transition := RestaurantFulfillmentTransitionInput{Status: status, ActorUserID: 101, ActorRole: "admin", Reason: "customer receipt test"}
+		if status == "delivering" {
+			transition.DeliveryProvider = "merchant"
+		}
+		if _, err := orders.TransitionRestaurantFulfillment(fixture.tenantID, delivered.ID, transition); err != nil {
 			t.Fatalf("transition restaurant delivery to %s: %v", status, err)
 		}
 	}
