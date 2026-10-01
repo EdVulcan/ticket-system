@@ -27,8 +27,8 @@
           <div v-if="selectedAccount" class="field-note">AppID：{{ selectedAccount.app_id || '未配置' }}；文件类型：{{ channelTypeText(selectedAccount.channel_type) }}</div>
         </el-form-item>
         <el-form-item label="校验文件" required>
-          <input ref="fileInput" class="file-input" type="file" accept=".txt,text/plain" @change="handleFileChange" />
-          <div class="field-note">微信文件名必须为 <code>MP_verify_*.txt</code>；小红书文件名必须为十六进制 <code>.txt</code>。最大 64 KB。</div>
+          <input ref="fileInput" class="file-input" type="file" @change="handleFileChange" />
+          <div class="field-note">按微信或小红书平台提供的原始文件名上传，系统不会改名或限制扩展名。最大 64 KB。</div>
         </el-form-item>
         <div class="form-actions">
           <span v-if="selectedFile" class="selected-file">{{ selectedFile.name }}（{{ formatBytes(selectedFile.size) }}）</span>

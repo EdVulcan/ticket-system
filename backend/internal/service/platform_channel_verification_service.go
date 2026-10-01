@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"ticket-backend/internal/config"
@@ -20,11 +19,6 @@ import (
 )
 
 const MaxChannelVerificationFileBytes = 64 << 10
-
-var (
-	wechatVerificationFilenamePattern      = regexp.MustCompile(`^MP_verify_[A-Za-z0-9_-]{1,180}\.txt$`)
-	xiaohongshuVerificationFilenamePattern = regexp.MustCompile(`^[0-9a-fA-F]{8,64}\.txt$`)
-)
 
 var (
 	ErrVerificationFileNotFound = errors.New("校验文件不存在")
@@ -318,17 +312,11 @@ func (s PlatformChannelVerificationService) absolutePath(relativePath string) st
 }
 
 func validateChannelVerificationFile(kind, filename string) error {
-	switch kind {
-	case "wechat_miniapp":
-		if !wechatVerificationFilenamePattern.MatchString(filename) {
-			return errors.New("微信校验文件名必须为 MP_verify_*.txt")
-		}
-	case "xiaohongshu":
-		if !xiaohongshuVerificationFilenamePattern.MatchString(strings.ToLower(filename)) {
-			return errors.New("小红书校验文件名必须为十六进制文件名，例如 6cc8262d.txt")
-		}
-	default:
+	if kind != "wechat_miniapp" && kind != "xiaohongshu" {
 		return errors.New("不支持的校验文件类型")
+	}
+	if strings.TrimSpace(filename) == "" {
+		return errors.New("校验文件名不能为空")
 	}
 	return nil
 }
