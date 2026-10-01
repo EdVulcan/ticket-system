@@ -1572,6 +1572,9 @@ func applyRefundBusinessFactsTx(tx *gorm.DB, order *model.Order, refund *model.R
 	}
 	order.Status = orderStatus
 	if orderStatus == "refunded" {
+		if err := (MiniappPromotionService{}).RestoreGrantAfterRefundTx(tx, order, refund); err != nil {
+			return err
+		}
 		return updateFulfillmentOrdersTx(tx, order.ID, "cancelled")
 	}
 	return nil

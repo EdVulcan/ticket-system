@@ -41,4 +41,8 @@ type MiniappInstantDiscountGrant struct {
 	ReservedOrderID   uint       `gorm:"index;not null;default:0" json:"-"`
 	ReservedAt        *time.Time `json:"-"`
 	ConsumedAt        *time.Time `json:"-"`
+	// RestoredFromGrantID links a refund-issued opportunity to the original
+	// consumed opportunity. The original row remains immutable and append-only.
+	RestoredFromGrantID  uint `gorm:"index;not null;default:0" json:"-"`
+	RestoredFromRefundID uint `gorm:"index;not null;default:0" json:"-"`
 }

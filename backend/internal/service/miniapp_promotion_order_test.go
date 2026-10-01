@@ -189,6 +189,9 @@ func TestMiniappPromotionPaymentRefundAndNextOpportunity(t *testing.T) {
 	if refund.Status != "succeeded" || fake.addRequest.Price.RefundPrice != 199 || len(fake.addRequest.Vouchers) != 2 || fake.addRequest.Vouchers[0].RefundPrice+fake.addRequest.Vouchers[1].RefundPrice != 199 {
 		t.Fatalf("refund=%+v request=%+v", refund, fake.addRequest)
 	}
+	// The refund worker uses the application clock; align the deterministic
+	// promotion clock with it before checking the newly issued opportunity.
+	*now = time.Now()
 	for _, voucher := range fake.addRequest.Vouchers {
 		if (voucher.VoucherCode == "promotion-v1" && voucher.RefundPrice != 100) || (voucher.VoucherCode == "promotion-v2" && voucher.RefundPrice != 99) {
 			t.Fatalf("voucher amount binding changed: %+v", voucher)
@@ -199,13 +202,24 @@ func TestMiniappPromotionPaymentRefundAndNextOpportunity(t *testing.T) {
 		t.Fatalf("refunded sales report=%+v err=%v", stats, err)
 	}
 	after, err := p.AcquireOpportunity(&f.customer)
-	if err != nil || after.GrantID != grant.GrantID || after.Status != "cooldown" {
-		t.Fatalf("refund restored discount: %+v %v", after, err)
+	if err != nil || after.GrantID == grant.GrantID || after.Status != "available" || after.DiscountCents != grant.DiscountCents {
+		t.Fatalf("refund did not restore one opportunity: %+v %v", after, err)
+	}
+	var restored int64
+	if err := model.DB.Model(&model.MiniappInstantDiscountGrant{}).Where("restored_from_grant_id = ?", grant.GrantID).Count(&restored).Error; err != nil || restored != 1 {
+		t.Fatalf("restored grant count=%d err=%v", restored, err)
+	}
+	if err := model.DB.Model(&model.MiniappInstantDiscountGrant{}).Where("id = ?", after.GrantID).Update("consumed_at", time.Now()).Error; err != nil {
+		t.Fatal(err)
+	}
+	cooldown, err := p.AcquireOpportunity(&f.customer)
+	if err != nil || cooldown.Status != "cooldown" {
+		t.Fatalf("restored grant bypassed cooldown: %+v %v", cooldown, err)
 	}
 	*now = now.Add(8 * 24 * time.Hour)
-	after, err = p.AcquireOpportunity(&f.customer)
-	if err != nil || after.GrantID == grant.GrantID || after.Status != "available" {
-		t.Fatalf("next opportunity: %+v %v", after, err)
+	available, err := p.AcquireOpportunity(&f.customer)
+	if err != nil || available.GrantID == after.GrantID || available.Status != "available" {
+		t.Fatalf("next opportunity: %+v %v", available, err)
 	}
 }
 

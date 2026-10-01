@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 146
+const CurrentPostgresSchemaVersion = 147
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -798,11 +798,31 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateCommercePromotionBusinessTypes(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateMiniappPromotionRefundRestore(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "tenant member benefit pricing",
+		Name:      "miniapp promotion refund restore",
 		AppliedAt: time.Now(),
 	}).Error
+}
+
+func migrateMiniappPromotionRefundRestore(db *gorm.DB, previous int) error {
+	if previous >= 147 {
+		return nil
+	}
+	if err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_miniapp_discount_grant_restore_source
+			ON miniapp_instant_discount_grants (restored_from_grant_id)
+			WHERE restored_from_grant_id <> 0 AND deleted_at IS NULL;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_miniapp_discount_grant_restore_refund
+			ON miniapp_instant_discount_grants (restored_from_refund_id)
+			WHERE restored_from_refund_id <> 0 AND deleted_at IS NULL;
+	`).Error; err != nil {
+		return fmt.Errorf("migrate miniapp promotion refund restore: %w", err)
+	}
+	return nil
 }
 
 func migrateTenantMemberBenefits(db *gorm.DB, previous int) error {
@@ -3145,6 +3165,8 @@ func applyPostgresMiniappPromotionGuards(db *gorm.DB) error {
 				OR NEW.miniapp_customer_id IS DISTINCT FROM OLD.miniapp_customer_id OR NEW.activity_id IS DISTINCT FROM OLD.activity_id
 				OR NEW.discount_cents IS DISTINCT FROM OLD.discount_cents OR NEW.obtained_at IS DISTINCT FROM OLD.obtained_at
 				OR NEW.expires_at IS DISTINCT FROM OLD.expires_at OR NEW.next_eligible_at IS DISTINCT FROM OLD.next_eligible_at
+				OR NEW.restored_from_grant_id IS DISTINCT FROM OLD.restored_from_grant_id
+				OR NEW.restored_from_refund_id IS DISTINCT FROM OLD.restored_from_refund_id
 			)) THEN
 				RAISE EXCEPTION 'miniapp discount grant ownership or immutable snapshot mismatch';
 			END IF;

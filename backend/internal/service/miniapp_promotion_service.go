@@ -486,6 +486,55 @@ func (s MiniappPromotionService) ConsumeGrantForOrderTx(tx *gorm.DB, order *mode
 	return tx.Model(&grant).Update("consumed_at", s.now()).Error
 }
 
+// RestoreGrantAfterRefundTx issues one fresh opportunity only after a
+// successful full refund. The consumed grant is retained as history; the
+// unique source/refund links make repeated provider callbacks harmless.
+func (s MiniappPromotionService) RestoreGrantAfterRefundTx(tx *gorm.DB, order *model.Order, refund *model.Refund) error {
+	if tx == nil || order == nil || refund == nil || order.Channel != "xiaohongshu" ||
+		order.PromotionGrantID == 0 || order.TenantID == 0 || order.ChannelAccountID == 0 || refund.ID == 0 {
+		return nil
+	}
+	var link model.XiaohongshuOrderLink
+	if err := tx.Where("order_id = ? AND tenant_id = ? AND channel_account_id = ?", order.ID, order.TenantID, order.ChannelAccountID).First(&link).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	var source model.MiniappInstantDiscountGrant
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND channel_account_id = ? AND miniapp_customer_id = ?", order.PromotionGrantID, order.TenantID, order.ChannelAccountID, link.MiniappCustomerID).First(&source).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	var existing model.MiniappInstantDiscountGrant
+	if err := tx.Where("(restored_from_grant_id = ? OR restored_from_refund_id = ?) AND tenant_id = ? AND channel_account_id = ?", source.ID, refund.ID, order.TenantID, order.ChannelAccountID).First(&existing).Error; err == nil {
+		return nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	now := s.now()
+	validity := source.ExpiresAt.Sub(source.ObtainedAt)
+	if validity <= 0 {
+		return nil
+	}
+	grant := &model.MiniappInstantDiscountGrant{
+		TenantID: order.TenantID, ChannelAccountID: order.ChannelAccountID, MiniappCustomerID: link.MiniappCustomerID,
+		ActivityID: source.ActivityID, DiscountCents: source.DiscountCents, ObtainedAt: now,
+		ExpiresAt: now.Add(validity), NextEligibleAt: source.NextEligibleAt,
+		RestoredFromGrantID: source.ID, RestoredFromRefundID: refund.ID,
+	}
+	if err := tx.Create(grant).Error; err != nil {
+		var duplicate model.MiniappInstantDiscountGrant
+		if findErr := tx.Where("(restored_from_grant_id = ? OR restored_from_refund_id = ?) AND tenant_id = ? AND channel_account_id = ?", source.ID, refund.ID, order.TenantID, order.ChannelAccountID).First(&duplicate).Error; findErr == nil {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 func lockMiniappPromotionCustomerTx(tx *gorm.DB, customer *model.MiniappCustomer) (*model.MiniappCustomer, error) {
 	if customer == nil || customer.ID == 0 {
 		return nil, ErrMiniappUnauthenticated
