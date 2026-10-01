@@ -3,8 +3,12 @@ package api
 import (
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
+	"ticket-backend/internal/config"
 	"ticket-backend/internal/model"
 	"ticket-backend/internal/service"
 	"ticket-backend/internal/xiaohongshu"
@@ -29,7 +33,20 @@ func (c *ChannelController) List(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	ctx.JSON(http.StatusOK, gin.H{"data": rows})
+	ctx.JSON(http.StatusOK, gin.H{"data": rows, "wechat_miniapp_server_domain": wechatMiniappServerDomain()})
+}
+
+// Use the configured public server, never the admin browser or request Host.
+// WeChat's server allowlist accepts an HTTPS origin, not an API path.
+func wechatMiniappServerDomain() string {
+	u, err := url.Parse(strings.TrimSpace(config.GlobalConfig.Server.PublicBaseURL))
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil ||
+		u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") ||
+		(u.Port() != "" && u.Port() != "443") || net.ParseIP(u.Hostname()) != nil ||
+		strings.EqualFold(u.Hostname(), "localhost") {
+		return ""
+	}
+	return "https://" + u.Hostname()
 }
 
 func (c *ChannelController) Create(ctx *gin.Context) {

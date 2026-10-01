@@ -21,6 +21,7 @@
       <el-table-column label="操作" width="260" fixed="right">
         <template #default="{row}">
           <div class="channel-actions">
+          <el-button v-if="row.type === 'wechat_miniapp'" link type="primary" @click="wechatDomainsDialog = true">服务器域名</el-button>
           <el-button v-if="row.type !== 'wechat_miniapp'" link type="primary" @click="openOrders(row)">渠道订单</el-button>
           <el-button v-if="canActiveWrite && row.type !== 'wechat_miniapp'" link type="primary" @click="openMapping(row)">商品映射</el-button>
           <el-dropdown trigger="click" @command="handleAccountCommand($event, row)">
@@ -103,8 +104,27 @@
       <el-form class="mt-4" :model="wechatConfig" label-position="top">
         <el-form-item label="小程序 AppID"><el-input v-model="wechatConfig.app_id" autocomplete="off" /></el-form-item>
         <el-form-item label="小程序 AppSecret"><el-input v-model="wechatConfig.app_secret" type="password" show-password autocomplete="new-password" /></el-form-item>
+        <el-button plain @click="wechatDomainsDialog = true">查看微信公众平台服务器域名配置</el-button>
       </el-form>
       <template #footer><el-button @click="wechatConfigDialog = false">取消</el-button><el-button type="primary" :loading="wechatConfigSaving" @click="saveWechatConfig">保存参数</el-button></template>
+    </el-dialog>
+
+    <el-dialog v-model="wechatDomainsDialog" title="微信小程序服务器域名" width="620px">
+      <el-alert type="info" :closable="false" title="请登录微信公众平台的小程序后台，在「开发管理 → 开发设置 → 服务器域名」中配置以下地址。" />
+      <el-form v-if="wechatServerDomain" class="mt-4" label-position="top">
+        <el-form-item v-for="field in wechatDomainFields" :key="field.label" :label="field.label">
+          <el-input :model-value="wechatServerDomain" readonly><template #append><el-button @click="copyText(wechatServerDomain, field.label)">复制</el-button></template></el-input>
+          <div class="mt-1 text-sm text-gray-500">{{ field.note }}</div>
+        </el-form-item>
+        <el-form-item label="小程序 API 地址（用于小程序发布配置）">
+          <el-input :model-value="`${wechatServerDomain}/api/v1`" readonly><template #append><el-button @click="copyText(`${wechatServerDomain}/api/v1`, 'API 地址')">复制</el-button></template></el-input>
+          <div class="mt-1 text-sm text-gray-500">与小程序 runtime.js 的 apiBaseUrl 保持一致；服务器域名只填上方域名，不带 /api/v1 或其他路径。</div>
+        </el-form-item>
+      </el-form>
+      <el-alert v-else class="mt-4" type="warning" :closable="false" title="服务端尚未配置有效的公网 HTTPS 域名，请联系平台管理员配置 server.public_base_url 后刷新。" />
+      <p class="mt-4 text-sm text-gray-500">当前小程序未使用 uploadFile、WebSocket 或 web-view，无需配置 uploadFile、socket 合法域名和业务域名。商品图片若使用其他图片域名，还需将实际图片域名加入 downloadFile 合法域名。</p>
+      <p class="mt-2 text-sm text-gray-500">以上域名供小程序访问 SaaS 服务，与微信支付和退款回调不同；支付及退款回调由服务端自动传递。</p>
+      <template #footer><el-button @click="wechatDomainsDialog = false">关闭</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="xiaohongshuDiagnosticDialog" title="小红书连接测试" width="620px" :close-on-click-modal="false">
@@ -528,6 +548,12 @@ const xiaohongshuConfig = reactive({ app_id: '', app_secret: '', message_token: 
 const wechatConfigDialog = ref(false)
 const wechatConfigSaving = ref(false)
 const wechatConfig = reactive({ app_id: '', app_secret: '' })
+const wechatDomainsDialog = ref(false)
+const wechatServerDomain = ref('')
+const wechatDomainFields = [
+  { label: 'request 合法域名', note: '用于微信登录、商品、购物车、下单、订单查询等 SaaS API 请求。' },
+  { label: 'downloadFile 合法域名', note: '用于商品图片及客服二维码的查看、预览。' },
+]
 const xiaohongshuDiagnosticDialog = ref(false)
 const xiaohongshuDiagnosticLoading = ref(false)
 const xiaohongshuDiagnostic = ref<any>(null)
@@ -564,7 +590,14 @@ const dateValue = (date: Date) => `${date.getFullYear()}-${String(date.getMonth(
 const syncEnd = new Date(); syncEnd.setDate(syncEnd.getDate() + 30)
 const syncDateRange = ref<[string, string]>([dateValue(new Date()), dateValue(syncEnd)])
 
-const load = async () => { loading.value = true; try { accounts.value = (await request.get('/channel-accounts')).data.data || [] } finally { loading.value = false } }
+const load = async () => {
+  loading.value = true
+  try {
+    const response = (await request.get('/channel-accounts')).data
+    accounts.value = response.data || []
+    wechatServerDomain.value = response.wechat_miniapp_server_domain || ''
+  } finally { loading.value = false }
+}
 const openCreateDialog = () => {
   Object.assign(form, { code: '', type: canActiveWrite ? 'core' : 'wechat_miniapp', app_id: '', secret: '', aes_key: '', aes_iv: '', status: canActiveWrite ? 'active' : 'active' })
   createDialog.value = true
