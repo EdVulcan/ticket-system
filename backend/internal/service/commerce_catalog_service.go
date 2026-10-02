@@ -52,6 +52,19 @@ type CreateCommerceProductInput struct {
 	SKUs         []CreateCommerceSKUInput `json:"skus"`
 }
 
+// UpdateCommerceProductInput contains only mutable presentation fields. SKU,
+// inventory, options and publication status have their own guarded endpoints.
+// Updating these fields creates a new current product version; order items
+// continue to use their immutable snapshots.
+type UpdateCommerceProductInput struct {
+	Name         string     `json:"name"`
+	ShortTitle   string     `json:"short_title"`
+	Description  string     `json:"description"`
+	CategoryName string     `json:"category_name"`
+	SaleStartsAt *time.Time `json:"sale_starts_at,omitempty"`
+	SaleEndsAt   *time.Time `json:"sale_ends_at,omitempty"`
+}
+
 type CreateCommerceSKUInput struct {
 	SKUCode            string `json:"sku_code"`
 	Name               string `json:"name"`
@@ -276,6 +289,53 @@ func (s *CommerceCatalogService) GetProduct(tenantID, productID uint) (*model.Co
 		return nil, err
 	}
 	return &product, nil
+}
+
+func normalizeCommerceProductUpdateInput(input UpdateCommerceProductInput) (UpdateCommerceProductInput, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	input.ShortTitle = strings.TrimSpace(input.ShortTitle)
+	input.Description = strings.TrimSpace(input.Description)
+	input.CategoryName = strings.TrimSpace(input.CategoryName)
+	if input.Name == "" || len([]rune(input.Name)) > 160 {
+		return input, fmt.Errorf("%w: name is required and must be at most 160 characters", ErrCommerceProductInvalid)
+	}
+	if len([]rune(input.ShortTitle)) > 80 || len([]rune(input.CategoryName)) > 80 || len([]rune(input.Description)) > 2000 {
+		return input, fmt.Errorf("%w: product presentation fields are too long", ErrCommerceProductInvalid)
+	}
+	if input.SaleStartsAt != nil && input.SaleEndsAt != nil && input.SaleEndsAt.Before(*input.SaleStartsAt) {
+		return input, fmt.Errorf("%w: sale end must not precede sale start", ErrCommerceProductInvalid)
+	}
+	return input, nil
+}
+
+func (s *CommerceCatalogService) UpdateProduct(tenantID, productID uint, input UpdateCommerceProductInput) (*model.CommerceProduct, error) {
+	input, err := normalizeCommerceProductUpdateInput(input)
+	if err != nil {
+		return nil, err
+	}
+	var result *model.CommerceProduct
+	err = s.write(func(tx *gorm.DB) error {
+		var product model.CommerceProduct
+		if err := tx.Where("id = ? AND tenant_id = ?", productID, tenantID).First(&product).Error; err != nil {
+			return err
+		}
+		if err := requireActiveCommerceCapability(tx, tenantID, product.BusinessType); err != nil {
+			return err
+		}
+		if err := tx.Model(&product).Updates(map[string]interface{}{
+			"name": input.Name, "short_title": input.ShortTitle, "description": input.Description,
+			"category_name": input.CategoryName, "sale_starts_at": input.SaleStartsAt, "sale_ends_at": input.SaleEndsAt,
+			"current_version": gorm.Expr("current_version + 1"),
+		}).Error; err != nil {
+			return err
+		}
+		if err := tx.Preload("SKUs").Preload("OptionGroups.Options").Preload("Media", "tenant_id = ?", tenantID).First(&product, product.ID).Error; err != nil {
+			return err
+		}
+		result = &product
+		return nil
+	})
+	return result, err
 }
 
 func (s *CommerceCatalogService) SetProductStatus(tenantID, productID uint, status string) (*model.CommerceProduct, error) {

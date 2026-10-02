@@ -408,6 +408,35 @@
       </template>
     </el-dialog>
 
+    <el-dialog
+      v-model="productEditDialogVisible"
+      :title="`编辑${productNoun}基本信息`"
+      width="min(720px, calc(100vw - 32px))"
+      destroy-on-close
+    >
+      <el-form :model="productEditForm" label-position="top" class="commerce-form">
+        <div class="form-grid">
+          <el-form-item :label="`${productNoun}名称`" required>
+            <el-input v-model="productEditForm.name" maxlength="160" :placeholder="`请输入${productNoun}名称`" />
+          </el-form-item>
+          <el-form-item :label="shortTitleLabel">
+            <el-input v-model="productEditForm.short_title" maxlength="80" :placeholder="shortTitlePlaceholder" />
+          </el-form-item>
+          <el-form-item :label="categoryLabel">
+            <el-input v-model="productEditForm.category_name" maxlength="80" :placeholder="categoryPlaceholder" />
+          </el-form-item>
+        </div>
+        <el-form-item :label="`${productNoun}介绍`">
+          <el-input v-model="productEditForm.description" type="textarea" :rows="4" maxlength="2000" :placeholder="productDescriptionPlaceholder" show-word-limit />
+        </el-form-item>
+        <p class="form-help">修改只影响后续展示和新订单；已有订单保留下单时的商品名称与介绍快照。</p>
+      </el-form>
+      <template #footer>
+        <el-button @click="productEditDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="productEditSaving" @click="saveProductEdit">保存修改</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="productDetailVisible" :title="`${productNoun}详情`" width="min(980px, calc(100vw - 32px))" top="4vh" destroy-on-close>
       <div v-if="detailProduct" v-loading="detailLoading" class="detail-workspace">
         <div class="detail-header">
@@ -415,7 +444,10 @@
             <h2>{{ detailProduct.name }}</h2>
             <p class="muted">{{ detailProduct.category_name || '未分类' }} · {{ productStatusLabel(detailProduct.status) }}</p>
           </div>
-          <el-tag :type="productStatusType(detailProduct.status)" effect="plain">{{ productStatusLabel(detailProduct.status) }}</el-tag>
+          <div class="detail-header-actions">
+            <el-button v-if="canWrite" plain type="primary" :icon="Edit" @click="openProductEditDialog">编辑基本信息</el-button>
+            <el-tag :type="productStatusType(detailProduct.status)" effect="plain">{{ productStatusLabel(detailProduct.status) }}</el-tag>
+          </div>
         </div>
 
         <section class="detail-section">
@@ -858,6 +890,8 @@ const storefrontContactForm = reactive({
 
 const productDialogVisible = ref(false)
 const productDetailVisible = ref(false)
+const productEditDialogVisible = ref(false)
+const productEditSaving = ref(false)
 const skuDialogVisible = ref(false)
 const optionGroupDialogVisible = ref(false)
 const optionDialogVisible = ref(false)
@@ -872,6 +906,15 @@ const productForm = reactive({
   category_name: '',
   status: 'draft' as ProductStatus,
   skus: [] as ProductSKU[],
+})
+const productEditForm = reactive({
+  id: 0,
+  name: '',
+  short_title: '',
+  description: '',
+  category_name: '',
+  sale_starts_at: null as string | null,
+  sale_ends_at: null as string | null,
 })
 const skuForm = reactive<ProductSKU>(newSkuForm())
 const optionGroupForm = reactive({ id: 0, name: '', required: false, min_selections: 0, max_selections: 1 })
@@ -1545,6 +1588,7 @@ function handleIdentityRefresh(event: Event) {
   if (!isCurrentDomainActive.value) {
     if (activeTab.value === 'phase-two') activeTab.value = 'products'
     productDialogVisible.value = false
+    productEditDialogVisible.value = false
     skuDialogVisible.value = false
     optionGroupDialogVisible.value = false
     optionDialogVisible.value = false
@@ -1635,6 +1679,47 @@ async function openProductDetail(row: any) {
     if (statusCode(error) !== 403) ElMessage.error('规格暂时无法加载')
   } finally {
     detailLoading.value = false
+  }
+}
+
+function openProductEditDialog() {
+  const product = detailProduct.value
+  if (!product || !canWrite.value) return
+  Object.assign(productEditForm, {
+    id: Number(product.id || 0),
+    name: product.name || '',
+    short_title: product.short_title || '',
+    description: product.description || '',
+    category_name: product.category_name || '',
+    sale_starts_at: product.sale_starts_at || null,
+    sale_ends_at: product.sale_ends_at || null,
+  })
+  productEditDialogVisible.value = true
+}
+
+async function saveProductEdit() {
+  if (!canWrite.value || !productEditForm.id) return
+  if (!productEditForm.name.trim()) {
+    ElMessage.warning(`请填写${productNoun.value}名称`)
+    return
+  }
+  productEditSaving.value = true
+  try {
+    const response = await request.put(`/commerce/products/${productEditForm.id}`, {
+      name: productEditForm.name.trim(),
+      short_title: productEditForm.short_title.trim(),
+      description: productEditForm.description.trim(),
+      category_name: productEditForm.category_name.trim(),
+      sale_starts_at: productEditForm.sale_starts_at,
+      sale_ends_at: productEditForm.sale_ends_at,
+    })
+    productEditDialogVisible.value = false
+    if (response.data) detailProduct.value = response.data
+    ElMessage.success(`${productNoun.value}基本信息已保存`)
+    await loadProducts()
+    syncDetailProduct()
+  } finally {
+    productEditSaving.value = false
   }
 }
 
@@ -2016,6 +2101,7 @@ onBeforeUnmount(() => {
 .detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--ui-border); }
 .detail-header h2 { margin: 0; font-size: 20px; }
 .detail-header p { margin: 6px 0 0; }
+.detail-header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
 .detail-section { display: flex; flex-direction: column; gap: 12px; }
 .product-media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
 .product-media-card { min-width: 0; overflow: hidden; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface-soft); }

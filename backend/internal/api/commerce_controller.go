@@ -87,6 +87,24 @@ func (c *CommerceCatalogController) GetProduct(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, product)
 }
 
+func (c *CommerceCatalogController) UpdateProduct(ctx *gin.Context) {
+	productID, err := parseCommerceID(ctx, "id")
+	if err != nil {
+		return
+	}
+	var input service.UpdateCommerceProductInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "商品信息格式不正确"})
+		return
+	}
+	product, err := c.Service.UpdateProduct(ctx.GetUint("tenant_id"), productID, input)
+	if err != nil {
+		commerceCatalogError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, product)
+}
+
 func (c *CommerceCatalogController) SetProductStatus(ctx *gin.Context) {
 	productID, err := parseCommerceID(ctx, "id")
 	if err != nil {

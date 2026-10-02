@@ -158,6 +158,7 @@ func TestCommerceControllersFailClosedWhenBusinessCapabilitySuspended(t *testing
 			}{
 				{"list products", invokeCommerceController(t, http.MethodGet, "/commerce/products?business_type="+businessType, tenant.ID, nil, nil, catalogController.ListProducts)},
 				{"create product", invokeCommerceController(t, http.MethodPost, "/commerce/products", tenant.ID, commerceControllerProductPayload(tenant.ID, businessType, "Blocked", "BLOCKED-SKU"), nil, catalogController.CreateProduct)},
+				{"update product", invokeCommerceController(t, http.MethodPut, "/commerce/products/"+productID, tenant.ID, map[string]interface{}{"name": "Blocked update"}, gin.Params{{Key: "id", Value: productID}}, catalogController.UpdateProduct)},
 				{"set product status", invokeCommerceController(t, http.MethodPatch, "/commerce/products/"+productID+"/status", tenant.ID, map[string]string{"status": "offline"}, gin.Params{{Key: "id", Value: productID}}, catalogController.SetProductStatus)},
 				{"list locations", invokeCommerceController(t, http.MethodGet, "/commerce/locations?business_type="+businessType, tenant.ID, nil, nil, operationsController.ListLocations)},
 				{"create location", invokeCommerceController(t, http.MethodPost, "/commerce/locations", tenant.ID, map[string]interface{}{
@@ -267,6 +268,10 @@ func TestCommerceControllerCrossTenantProductIsNotReadableOrWritable(t *testing.
 	response = invokeCommerceController(t, http.MethodPatch, "/commerce/products/"+productID+"/status", foreign.ID, map[string]string{"status": "offline"}, gin.Params{{Key: "id", Value: productID}}, catalogController.SetProductStatus)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("cross-tenant update status=%d body=%s, want 404", response.Code, response.Body.String())
+	}
+	response = invokeCommerceController(t, http.MethodPut, "/commerce/products/"+productID, foreign.ID, map[string]string{"name": "Foreign rename"}, gin.Params{{Key: "id", Value: productID}}, catalogController.UpdateProduct)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant update product=%d body=%s, want 404", response.Code, response.Body.String())
 	}
 	var stored model.CommerceProduct
 	if err := db.First(&stored, product.ID).Error; err != nil {

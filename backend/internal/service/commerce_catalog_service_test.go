@@ -84,6 +84,17 @@ func TestCommerceCatalogCRUDAndLifecycle(t *testing.T) {
 	if err != nil || detail.Description != "Product description" {
 		t.Fatalf("get product detail=%+v err=%v", detail, err)
 	}
+	previousVersion := detail.CurrentVersion
+	updatedInfo, err := service.UpdateProduct(tenantID, product.ID, UpdateCommerceProductInput{
+		Name: "Rice bowl updated", ShortTitle: "Updated bowl", Description: "Updated description", CategoryName: "Updated meals",
+	})
+	if err != nil || updatedInfo.Name != "Rice bowl updated" || updatedInfo.ShortTitle != "Updated bowl" || updatedInfo.Description != "Updated description" || updatedInfo.CategoryName != "Updated meals" || updatedInfo.CurrentVersion != previousVersion+1 {
+		t.Fatalf("updated product info=%+v err=%v", updatedInfo, err)
+	}
+	rows, err = service.ListProducts(tenantID, "restaurant", "draft", "updated")
+	if err != nil || len(rows) != 1 || rows[0].Name != "Rice bowl updated" {
+		t.Fatalf("updated product list rows=%v err=%v", rows, err)
+	}
 
 	updated, err := service.SetProductStatus(tenantID, product.ID, "online")
 	if err != nil || updated.Status != "online" {
@@ -249,6 +260,9 @@ func TestCommerceCatalogRejectsInvalidInputs(t *testing.T) {
 	if _, err := service.SetProductStatus(tenantID, 999999, "unknown"); !errors.Is(err, ErrCommerceProductInvalid) {
 		t.Fatalf("invalid status error=%v", err)
 	}
+	if _, err := service.UpdateProduct(tenantID, 999999, UpdateCommerceProductInput{Name: "Missing product"}); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("missing product update error=%v", err)
+	}
 }
 
 func TestCommerceCatalogRequiresActiveCapabilityForAllOperations(t *testing.T) {
@@ -299,6 +313,9 @@ func TestCommerceCatalogScopesProductsAndSKUsToTenant(t *testing.T) {
 	}
 	if _, err := service.SetProductStatus(secondTenant.ID, product.ID, "offline"); !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("cross-tenant status update err=%v", err)
+	}
+	if _, err := service.UpdateProduct(secondTenant.ID, product.ID, UpdateCommerceProductInput{Name: "Foreign rename"}); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("cross-tenant product update err=%v", err)
 	}
 	if rows, err := service.ListProducts(secondTenant.ID, "restaurant", "", ""); err != nil || len(rows) != 0 {
 		t.Fatalf("cross-tenant list rows=%v err=%v", rows, err)

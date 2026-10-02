@@ -362,6 +362,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		commerceCatalogGroup.POST("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceCatalogController.CreateProduct)
 		commerceCatalogGroup.GET("", middleware.RequireTenantPermission(authz.PermissionCatalogRead), commerceCatalogController.ListProducts)
 		commerceCatalogGroup.GET("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogRead), commerceCatalogController.GetProduct)
+		commerceCatalogGroup.PUT("/:id", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceCatalogController.UpdateProduct)
 		commerceCatalogGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceCatalogController.SetProductStatus)
 		commerceCatalogGroup.POST("/:id/media", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceCatalogController.UploadProductMedia)
 		commerceCatalogGroup.DELETE("/:id/media/:mediaID", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceCatalogController.DeleteProductMedia)
