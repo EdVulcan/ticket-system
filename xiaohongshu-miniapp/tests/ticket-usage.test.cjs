@@ -57,6 +57,18 @@ test('older backend without usage projection is not falsely labelled unused', as
   assert.equal(page.data.ticketCodes[0].usageLabel, '使用状态待查询');
 });
 
+test('supplier check-in is shown as completed without changing local core status', async () => {
+  const page = loadDetail({
+    status: 'completed', core_order_status: 'paid', provider_status: 'checked',
+    ticket_codes: ['DEMO'], tickets: [{ code: 'DEMO', status: 'unused', check_in_count: 0 }]
+  });
+  await page.loadOrder();
+  assert.equal(page.data.status, 'completed');
+  assert.equal(page.data.statusLabel, '已完成');
+  assert.equal(page.data.ticketCodes[0].usageLabel, '已使用');
+  assert.match(page.data.ticketCodes[0].usageDetail, /供应商已核销/);
+});
+
 test('refund service remains visible when issued ticket metadata is missing', async () => {
   const page = loadDetail({status: 'paid', ticket_codes: ['DEMO'], can_apply_refund: false,
     refund_application_message: '该订单暂不支持自助退款，请联系景区客服'});

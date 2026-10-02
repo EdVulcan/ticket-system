@@ -101,6 +101,7 @@ Page({
 	  if (requestVersion !== this.orderRequestVersion) return;
 	  this.hasActiveOrderRequest = false;
 	  const coreStatus = order.core_order_status || order.status;
+	  const displayStatus = order.status || coreStatus;
 	  const canUsePaidEntitlements = ['paid', 'partial_refunded'].indexOf(coreStatus) >= 0;
       order.isPackage = order.product_kind === 'scenic_hotel_package';
       order.contactPhoneText = this.maskPhone(order.contact_phone);
@@ -122,16 +123,17 @@ Page({
       }));
       const ticketCodes = order.refund_pending ? [] : this.usableTicketCodes(order.ticket_codes, coreStatus).map(ticket => {
         const usage = (order.tickets || []).find(item => item.code === ticket.code);
-        const used = usage && (Number(usage.check_in_count) > 0 || usage.status === 'used');
-        return { ...ticket, usageLabel: usage ? (used ? '已使用' : '未使用') : '使用状态待查询',
-          usageDetail: used ? `已核验 ${Number(usage.check_in_count) || 1} 次 · 后续使用按票种规则核验` : '按所购票种规则使用',
+        const providerUsed = order.provider_status === 'checked';
+        const used = providerUsed || (usage && (Number(usage.check_in_count) > 0 || usage.status === 'used'));
+        return { ...ticket, usageLabel: used ? '已使用' : (usage ? '未使用' : '使用状态待查询'),
+          usageDetail: used ? (providerUsed ? '供应商已核销 · 具体使用记录以供应商为准' : `已核验 ${Number(usage.check_in_count) || 1} 次 · 后续使用按票种规则核验`) : '按所购票种规则使用',
           used: Boolean(used) };
       });
       const packageAwaitingBooking = order.isPackage && order.package_entitlements.some(item => item.status === 'pending_booking');
       const issuanceStatus = order.ticket_issuance_status || order.voucher_issuance_status || '';
       const issuancePending = coreStatus === 'paid' && !order.refund_pending && !packageAwaitingBooking && ticketCodes.length === 0 && (issuanceStatus === 'pending' || issuanceStatus === '');
       const issuanceManualReview = coreStatus === 'paid' && !order.refund_pending && !packageAwaitingBooking && issuanceStatus === 'manual_review';
-	  const view = this.statusView(coreStatus, order.product_kind, Boolean(order.pay_token), issuancePending, issuanceManualReview);
+      const view = this.statusView(displayStatus, order.product_kind, Boolean(order.pay_token), issuancePending, issuanceManualReview);
       order.amountText = (Number(order.amount_cents || 0) / 100).toFixed(2);
 	  order.discountText = (Number(order.discount_cents || 0) / 100).toFixed(2);
 	  order.originalAmountText = (Number(order.original_amount_cents || order.amount_cents || 0) / 100).toFixed(2);
@@ -143,7 +145,7 @@ Page({
       }
       this.setData({
         order,
-		status: coreStatus,
+        status: displayStatus,
         statusLabel: order.refund_pending ? '退款处理中' : view.label,
         statusTitle: order.refund_pending ? '退款处理中' : view.title,
         statusDetail: order.refund_pending ? '正在核实退款结果，期间票码暂停使用，请勿重复申请' : view.detail,
@@ -342,7 +344,7 @@ Page({
 	  return { label: '正在出票', title: '支付成功，正在出票', detail: '正在生成电子票，出票后会自动显示二维码，无需重复下单' };
 	}
     if (status === 'paid') return { label: '已支付', title: '支付成功', detail: isPackage ? '请在下方查看或完成每份套餐的入住预约' : '门票已经出票，请妥善保管票码' };
-    if (status === 'completed') return { label: '已使用', title: '订单已使用', detail: '具体使用记录以实际核销结果为准' };
+    if (status === 'completed') return { label: '已完成', title: '订单已完成', detail: '供应商已核销，具体使用记录以供应商为准' };
     if (status === 'partial_refunded') return { label: '部分退款', title: '订单部分退款', detail: '未退款的权益按原订单规则使用，票码能否继续使用以核销结果为准' };
     if (status === 'cancelled' || status === 'failed') return { label: '已关闭', title: '订单未完成', detail: '本次订单已关闭，请勿使用本订单凭证' };
     if (status === 'refunded') return { label: '已退款', title: '退款完成', detail: '款项将按小红书规则原路退回' };

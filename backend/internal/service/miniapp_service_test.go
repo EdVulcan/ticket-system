@@ -18,6 +18,44 @@ import (
 	"gorm.io/gorm"
 )
 
+func TestXiaohongshuDisplayOrderStatusUsesSupplierCheckInProjection(t *testing.T) {
+	cases := []struct {
+		name, core, platform, provider, want string
+	}{
+		{name: "supplier fully checked", core: "paid", platform: "paid", provider: "checked", want: "completed"},
+		{name: "supplier partially checked", core: "paid", platform: "paid", provider: "checking", want: "paid"},
+		{name: "unpaid cannot complete", core: "unpaid", platform: "paid", provider: "checked", want: "unpaid"},
+		{name: "local core state preserved", core: "completed", platform: "paid", provider: "checked", want: "completed"},
+		{name: "non paid platform state cannot complete", core: "paid", platform: "unpaid", provider: "checked", want: "paid"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := xiaohongshuDisplayOrderStatus(tc.core, tc.platform, tc.provider); got != tc.want {
+				t.Fatalf("status=%q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSummarizeXiaohongshuProviderStatusesRequiresEverySupplierItem(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		input []string
+		want  string
+	}{
+		{name: "none", input: nil, want: ""},
+		{name: "all checked", input: []string{"checked", "checked"}, want: "checked"},
+		{name: "partial use", input: []string{"checked", "checking"}, want: "checking"},
+		{name: "not used", input: []string{"un_check"}, want: "un_check"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := summarizeXiaohongshuProviderStatuses(tc.input); got != tc.want {
+				t.Fatalf("status=%q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestXiaohongshuMiniappLoginAndCatalogAreChannelScoped(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)

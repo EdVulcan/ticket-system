@@ -160,6 +160,7 @@ type MiniappOrderResult struct {
 	AmountCents              int64                       `json:"amount_cents"`
 	Status                   string                      `json:"status"`
 	CoreOrderStatus          string                      `json:"core_order_status"`
+	ProviderStatus           string                      `json:"provider_status,omitempty"`
 	PlatformPaymentState     string                      `json:"platform_payment_state"`
 	VoucherIssuanceStatus    string                      `json:"voucher_issuance_status"`
 	TicketIssuanceStatus     string                      `json:"ticket_issuance_status"`
@@ -185,6 +186,7 @@ type MiniappOrderSummary struct {
 	AmountCents          int64      `json:"amount_cents"`
 	Status               string     `json:"status"`
 	CoreOrderStatus      string     `json:"core_order_status"`
+	ProviderStatus       string     `json:"provider_status,omitempty"`
 	PlatformPaymentState string     `json:"platform_payment_state"`
 	CreatedAt            time.Time  `json:"created_at"`
 	ExpiresAt            *time.Time `json:"expires_at,omitempty"`

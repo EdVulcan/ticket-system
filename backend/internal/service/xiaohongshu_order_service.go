@@ -64,6 +64,49 @@ type xiaohongshuOrderIntent struct {
 	ContactPhone string `json:"contact_phone"`
 }
 
+// xiaohongshuProviderStatus returns the durable supplier status projection for
+// an order. Supplier usage is deliberately kept separate from local ticket
+// check-ins: it is used to present the channel order accurately without
+// consuming local check-in rights or creating a fake local check-in record.
+func xiaohongshuProviderStatus(orderID, tenantID uint) (string, error) {
+	var statuses []string
+	if err := model.DB.Model(&model.OrderItemSupplySnapshot{}).
+		Where("order_id = ? AND sales_tenant_id = ? AND mode = 'upstream'", orderID, tenantID).
+		Pluck("provider_status", &statuses).Error; err != nil {
+		return "", err
+	}
+	return summarizeXiaohongshuProviderStatuses(statuses), nil
+}
+
+func summarizeXiaohongshuProviderStatuses(statuses []string) string {
+	if len(statuses) == 0 {
+		return ""
+	}
+	allChecked := true
+	for _, status := range statuses {
+		if status != "checked" {
+			allChecked = false
+			break
+		}
+	}
+	if allChecked {
+		return "checked"
+	}
+	for _, status := range statuses {
+		if status == "checking" {
+			return "checking"
+		}
+	}
+	return statuses[0]
+}
+
+func xiaohongshuDisplayOrderStatus(coreStatus, platformState, providerStatus string) string {
+	if coreStatus == "paid" && platformState == "paid" && providerStatus == "checked" {
+		return "completed"
+	}
+	return coreStatus
+}
+
 var miniappContactPhonePattern = regexp.MustCompile(`^[0-9+()\-\s]{6,20}$`)
 
 func validateMiniappOrderContact(name, phone string) error {
@@ -184,6 +227,7 @@ func (s XiaohongshuOrderService) ListXiaohongshuOrders(customer *model.MiniappCu
 	}
 
 	type orderRow struct {
+		OrderID              uint
 		OrderNo              string
 		ProductName          string
 		ImageURL             string
@@ -197,7 +241,7 @@ func (s XiaohongshuOrderService) ListXiaohongshuOrders(customer *model.MiniappCu
 	}
 	var rows []orderRow
 	err := base.
-		Select(`orders.order_no, item.product_name, COALESCE(xhs_config.image_url, '') AS image_url,
+		Select(`orders.id AS order_id, orders.order_no, item.product_name, COALESCE(xhs_config.image_url, '') AS image_url,
 			item.quantity, orders.total_amount, orders.status AS status, link.state AS platform_payment_state,
 			orders.created_at, link.pay_token_expires_at AS expires_at,
 			COALESCE(hotel_package.id, 0) AS package_id`).
@@ -217,10 +261,15 @@ func (s XiaohongshuOrderService) ListXiaohongshuOrders(customer *model.MiniappCu
 		if row.PackageID != 0 {
 			kind = "scenic_hotel_package"
 		}
+		providerStatus, err := xiaohongshuProviderStatus(row.OrderID, customer.TenantID)
+		if err != nil {
+			return nil, err
+		}
+		displayStatus := xiaohongshuDisplayOrderStatus(row.Status, row.PlatformPaymentState, providerStatus)
 		items = append(items, MiniappOrderSummary{
 			OrderNo: row.OrderNo, ProductName: row.ProductName, ProductKind: kind, ImageURL: row.ImageURL,
-			Quantity: row.Quantity, AmountCents: moneyCents(row.TotalAmount), Status: row.Status,
-			CoreOrderStatus: row.Status, PlatformPaymentState: row.PlatformPaymentState,
+			Quantity: row.Quantity, AmountCents: moneyCents(row.TotalAmount), Status: displayStatus,
+			CoreOrderStatus: row.Status, ProviderStatus: providerStatus, PlatformPaymentState: row.PlatformPaymentState,
 			CreatedAt: row.CreatedAt, ExpiresAt: row.ExpiresAt,
 		})
 	}
@@ -261,11 +310,16 @@ func (s XiaohongshuOrderService) loadOrderResult(customer *model.MiniappCustomer
 }
 
 func (s XiaohongshuOrderService) orderResult(link *model.XiaohongshuOrderLink, order *model.Order, includePayToken bool) (*MiniappOrderResult, error) {
+	providerStatus, err := xiaohongshuProviderStatus(order.ID, order.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	displayStatus := xiaohongshuDisplayOrderStatus(order.Status, link.State, providerStatus)
 	result := &MiniappOrderResult{
 		OriginalAmountCents: order.OriginalAmountCents, DiscountCents: order.DiscountCents,
 		OrderNo: order.OrderNo, PlatformOrderID: link.PlatformOrderID, AmountCents: moneyCents(order.TotalAmount),
 		ContactName: order.ContactName, ContactPhone: order.ContactPhone,
-		Status: order.Status, CoreOrderStatus: order.Status, PlatformPaymentState: link.State, VoucherIssuanceStatus: link.VoucherIssuanceStatus, ExpiresAt: link.PayTokenExpiresAt,
+		Status: displayStatus, CoreOrderStatus: order.Status, ProviderStatus: providerStatus, PlatformPaymentState: link.State, VoucherIssuanceStatus: link.VoucherIssuanceStatus, ExpiresAt: link.PayTokenExpiresAt,
 	}
 	type presentationRow struct {
 		ProductName string
