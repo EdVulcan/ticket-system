@@ -35,8 +35,8 @@
       {
         "pagePath": "pages/cold/index",
         "text": "零售",
-        "iconPath": "images/theme/bowl-muted.png",
-        "selectedIconPath": "images/theme/bowl-active.png"
+        "iconPath": "images/theme/store-muted.png",
+        "selectedIconPath": "images/theme/store-active.png"
       },
       {
         "pagePath": "pages/order/list/index",

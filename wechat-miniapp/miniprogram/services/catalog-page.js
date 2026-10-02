@@ -57,6 +57,18 @@ function serviceText(channel, store) {
   return `${minimum > 0 ? `满 ${format.yuan(minimum)} 元起送` : '无起送门槛'} · 配送费 ${format.yuan(fee)} 元起`;
 }
 
+function hasAssistCoupon(reward) {
+  const amount = Number(reward && reward.discountAmount);
+  return Boolean(reward && Number.isFinite(amount) && amount > 0);
+}
+
+function isAssistCampaignAvailable(campaign, businessType) {
+  if (!campaign || !campaign.id || String(campaign.status || '').toLowerCase() !== 'active') return false;
+  const campaignType = String(campaign.businessType || campaign.business_type || '').toLowerCase();
+  if (campaignType && campaignType !== businessType) return false;
+  return hasAssistCoupon(campaign.starterReward) && hasAssistCoupon(campaign.helperReward);
+}
+
 function createCatalogPage(channel) {
   const copy = pageCopy(channel);
   const businessType = commerce.businessTypeForFulfillment(channel);
@@ -70,6 +82,8 @@ function createCatalogPage(channel) {
       cartCount: 0,
       cartAmountText: '0.00',
       channelOpen: false,
+      assistAvailable: false,
+      assistCampaign: null,
       store: { name: '', businessStatus: 'PAUSED', courierStatus: 'PAUSED' }
     }, copy),
 
@@ -78,6 +92,21 @@ function createCatalogPage(channel) {
     onShow() {
       this.refreshCart();
       this.loadCatalog();
+      this.loadAssistCampaign();
+    },
+
+    loadAssistCampaign() {
+      this.setData({ assistAvailable: false, assistCampaign: null });
+      if (typeof api.getAssistCampaigns !== 'function') return;
+      api.getAssistCampaigns(businessType).then((result) => {
+        const campaigns = Array.isArray(result && result.data) ? result.data : [];
+        const campaign = campaigns.find(item => isAssistCampaignAvailable(item, businessType)) || null;
+        this.setData({ assistAvailable: Boolean(campaign), assistCampaign: campaign });
+      }).catch((error) => {
+        // 助力是可选营销入口，活动接口异常时保持隐藏，避免给用户展示无法使用的入口。
+        console.error('load assist campaign failed', error);
+        this.setData({ assistAvailable: false, assistCampaign: null });
+      });
     },
 
     isChannelOpen(store) {
@@ -167,7 +196,10 @@ function createCatalogPage(channel) {
     },
 
     goCart() { wx.navigateTo({ url: '/pages/cart/index' }); },
-    goAssist() { wx.navigateTo({ url: '/pages/assist/index/index' }); },
+    goAssist() {
+      const typeQuery = businessType === 'restaurant' ? '' : `?business_type=${encodeURIComponent(businessType)}`;
+      wx.navigateTo({ url: `/pages/assist/index/index${typeQuery}` });
+    },
     goCoupons() { wx.switchTab({ url: '/pages/profile/index/index' }); },
     goTakeaway() { wx.switchTab({ url: '/pages/index/index' }); },
     goCold() { wx.switchTab({ url: '/pages/cold/index' }); },

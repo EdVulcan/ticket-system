@@ -15,9 +15,9 @@
     <view class="hero-brand" aria-hidden="true"><image class="hero-rabbits" src="/images/theme/rabbit-pair.svg" mode="aspectFit" /><view class="hero-brand-caption">二 两 兔</view></view>
   </view>
 
-  <view class="benefit-row" bindtap="goAssist" role="button" aria-label="邀请好友助力领券">
+  <view wx:if="{{assistAvailable}}" class="benefit-row" bindtap="goAssist" role="button" aria-label="发起好友助力领券">
     <view class="benefit-title"><image class="ui-icon" src="/images/theme/ticket.svg" />好事成双 · 同好一起领券</view>
-    <view class="benefit-action">去助力<image class="ui-icon ui-icon--small" src="/images/theme/arrow-white.svg" /></view>
+    <view class="benefit-action">发起助力<image class="ui-icon ui-icon--small" src="/images/theme/arrow-white.svg" /></view>
   </view>
   <view wx:if="{{store.announcement}}" class="notice-row"><image class="ui-icon ui-icon--small" src="/images/theme/notice.svg" /><view>{{store.announcement}}</view></view>
 

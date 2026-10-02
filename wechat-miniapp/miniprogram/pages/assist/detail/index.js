@@ -4,6 +4,10 @@ const api = require('../../../services/api');
 
 const BUSINESS_TYPE = 'restaurant';
 
+function normalizeBusinessType(value) {
+  return String(value || '').toLowerCase() === 'retail' ? 'retail' : BUSINESS_TYPE;
+}
+
 function amountText(cents) {
   const amount = Number(cents);
   if (!Number.isFinite(amount)) return '';
@@ -60,13 +64,14 @@ Page({
 
   onLoad(options) {
     this.shareToken = String((options && (options.token || options.share_token)) || '').trim();
-    this.setData({ shareToken: this.shareToken });
+    this.businessType = normalizeBusinessType(options && (options.business_type || options.businessType));
+    this.setData({ shareToken: this.shareToken, businessType: this.businessType });
     if (api.isProduction()) {
       if (!this.shareToken) {
         wx.showToast({ title: '助力链接无效', icon: 'none' });
         return;
       }
-      api.getAssistSession(this.shareToken, BUSINESS_TYPE).then((result) => {
+      api.getAssistSession(this.shareToken, this.businessType).then((result) => {
         const session = toLocalSession(result.data, this.shareToken);
         this.setData({ session });
         this.applyRewards(session);
@@ -88,7 +93,7 @@ Page({
       return;
     }
     if (api.isProduction()) {
-      api.helpAssist(this.shareToken, BUSINESS_TYPE).then((result) => {
+      api.helpAssist(this.shareToken, this.businessType).then((result) => {
         const next = toLocalSession(result.data, this.shareToken);
         this.setData({ session: next });
         this.applyRewards(next);

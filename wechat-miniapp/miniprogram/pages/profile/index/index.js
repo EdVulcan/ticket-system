@@ -25,6 +25,32 @@ Page({
 
   onShow() { this.loadProfile(); },
 
+  loadCoupons() {
+    const read = () => {
+      const businesses = typeof api.getAuthorizedBusinesses === 'function' ? api.getAuthorizedBusinesses() : [];
+      const types = businesses.map(item => String(item && (item.businessType || item.business_type) || '').toLowerCase()).filter((item, index, values) => (item === 'restaurant' || item === 'retail') && values.indexOf(item) === index);
+      if (!types.length) return api.getCoupons();
+      return Promise.all(types.map(type => api.getCoupons(type))).then(results => {
+        const merged = [];
+        const byID = new Map();
+        results.forEach(result => (result && result.data || []).forEach(coupon => {
+          const key = String(coupon && coupon.id || '');
+          if (!key || !byID.has(key)) {
+            if (key) byID.set(key, coupon);
+            merged.push(coupon);
+            return;
+          }
+          const existing = byID.get(key);
+          const scopes = new Set([].concat(existing.businessTypes || existing.business_types || [], coupon.businessTypes || coupon.business_types || []).filter(Boolean));
+          if (scopes.size) existing.businessTypes = Array.from(scopes);
+        }));
+        return { data: merged };
+      });
+    };
+    if (api.isProduction() && typeof api.ensureSession === 'function' && (!api.getAuthorizedBusinesses || !api.getAuthorizedBusinesses().length)) return api.ensureSession().then(read);
+    return Promise.resolve().then(read);
+  },
+
   loadProfile() {
     const app = getApp();
     if (api.isProduction()) {
@@ -42,7 +68,7 @@ Page({
           this.setData({ memberError: '', memberProfile: Object.assign({}, this.data.memberProfile, { membershipStatus: 'provisional', phoneVerified: false }) });
         });
       }
-      Promise.all([api.getCoupons(), api.getOrders()]).then(([couponResult, orderResult]) => {
+      Promise.all([this.loadCoupons(), api.getOrders()]).then(([couponResult, orderResult]) => {
         const coupons = couponResult.data || [];
         const orders = orderResult.data || [];
         storage.saveCoupons(coupons);

@@ -1,5 +1,5 @@
 @import "../../../styles/common.wxss";
-.profile-page { padding-top: 42rpx; }
+.profile-page { padding-top: 28rpx; }
 .profile-header { display: flex; align-items: center; gap: 22rpx; }
 .avatar { width: 100rpx; height: 100rpx; background: var(--green-soft); border-radius: 50%; display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0; }
 .profile-copy { min-width: 0; }
@@ -30,7 +30,7 @@
 .menu-copy { flex: 1; min-width: 0; }
 .menu-copy view:first-child { font-size: 28rpx; }
 .menu-copy view:last-child { font-size: 22rpx; color: var(--muted); margin-top: 6rpx; }
-.profile-theme { display: flex; align-items: center; gap: 22rpx; margin: 30rpx 0; padding: 24rpx; background: #eeeee3; border-radius: 18rpx; }
+.profile-theme { display: flex; align-items: center; gap: 22rpx; margin: 22rpx 0; padding: 22rpx 24rpx; background: #eeeee3; border-radius: 18rpx; }
 .profile-brand-name { font-family: "Songti SC", "SimSun", serif; color: var(--ink); font-size: 32rpx; font-weight: 600; letter-spacing: 2rpx; }
 .profile-brand-tagline { color: var(--muted); font-size: 22rpx; margin-top: 6rpx; }
 .profile-rabbits { width: 86rpx; height: 78rpx; }

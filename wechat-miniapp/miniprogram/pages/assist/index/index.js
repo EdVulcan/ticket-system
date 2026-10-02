@@ -4,6 +4,22 @@ const api = require('../../../services/api');
 
 const BUSINESS_TYPE = 'restaurant';
 
+function normalizeBusinessType(value) {
+  const type = String(value || '').toLowerCase();
+  return type === 'retail' ? 'retail' : BUSINESS_TYPE;
+}
+
+function hasReward(reward) {
+  const amount = Number(reward && reward.discountAmount);
+  return Boolean(reward && Number.isFinite(amount) && amount > 0);
+}
+
+function isAvailableCampaign(campaign, businessType) {
+  if (!campaign || !campaign.id || String(campaign.status || '').toLowerCase() !== 'active') return false;
+  const campaignType = String(campaign.businessType || campaign.business_type || '').toLowerCase();
+  return (!campaignType || campaignType === businessType) && hasReward(campaign.starterReward) && hasReward(campaign.helperReward);
+}
+
 function amountText(cents) {
   const amount = Number(cents);
   if (!Number.isFinite(amount)) return '';
@@ -63,7 +79,8 @@ Page({
     helperDiscountText: '—',
     starterRewardText: '以到账券规则为准',
     helperRewardText: '以到账券规则为准',
-    campaignAvailable: false
+    campaignAvailable: false,
+    businessType: BUSINESS_TYPE
   },
 
   applyRewards(source) {
@@ -79,9 +96,9 @@ Page({
   },
 
   loadCampaign() {
-    api.getAssistCampaigns(BUSINESS_TYPE).then((result) => {
+    api.getAssistCampaigns(this.businessType || BUSINESS_TYPE).then((result) => {
       const campaigns = Array.isArray(result.data) ? result.data : [];
-      const campaign = campaigns.find(item => item && item.status === 'active') || campaigns[0] || null;
+      const campaign = campaigns.find(item => isAvailableCampaign(item, this.businessType || BUSINESS_TYPE)) || null;
       this.currentCampaign = campaign;
       this.setData({ campaign, campaignAvailable: Boolean(campaign && campaign.id) });
       this.applyRewards(campaign);
@@ -95,7 +112,7 @@ Page({
   loadCachedSession() {
     const cached = toLocalSession(storage.getAssist());
     if (!cached || !cached.token) return;
-    api.getAssistSession(cached.token, BUSINESS_TYPE).then((result) => {
+    api.getAssistSession(cached.token, this.businessType || BUSINESS_TYPE).then((result) => {
       const session = toLocalSession(result.data);
       storage.saveAssist(session);
       this.setData({ session });
@@ -106,8 +123,13 @@ Page({
   onShow() {
     const demo = !api.isProduction();
     const session = demo ? toLocalSession(storage.getAssist()) : null;
-    this.setData({ session, isDemo: demo });
+    this.setData({ session, isDemo: demo, businessType: this.businessType || BUSINESS_TYPE });
     if (demo) {
+      if ((this.businessType || BUSINESS_TYPE) !== BUSINESS_TYPE) {
+        this.currentCampaign = null;
+        this.setData({ campaign: null, campaignAvailable: false, benefitText: '当前业务暂无可用活动' });
+        return;
+      }
       this.currentCampaign = {
         id: 'campaign_demo_001',
         title: '好友助力，双方得券',
@@ -134,7 +156,7 @@ Page({
     if (api.isProduction()) {
       this.setData({ creating: true });
       const idempotencyKey = storage.makeId('assist_create');
-      api.createAssistSession(campaign.id, idempotencyKey, BUSINESS_TYPE).then((result) => {
+      api.createAssistSession(campaign.id, idempotencyKey, this.businessType || BUSINESS_TYPE).then((result) => {
         const session = toLocalSession(result.data);
         storage.saveAssist(session);
         this.setData({ session, creating: false });
@@ -192,8 +214,20 @@ Page({
 
   goHome() { wx.switchTab({ url: '/pages/index/index' }); },
 
+  onLoad(options) {
+    const requestedType = options && (options.business_type || options.businessType);
+    this.businessType = normalizeBusinessType(requestedType);
+    if (!requestedType && typeof api.getAuthorizedBusinesses === 'function') {
+      const businesses = api.getAuthorizedBusinesses();
+      if (businesses.length === 1) this.businessType = normalizeBusinessType(businesses[0] && (businesses[0].businessType || businesses[0].business_type));
+    }
+    this.setData({ businessType: this.businessType });
+  },
+
   onShareAppMessage() {
     const token = this.data.session && this.data.session.token ? this.data.session.token : '';
-    return { title: brand.assistShareTitle, path: `/pages/assist/detail/index?token=${encodeURIComponent(token)}` };
+    const type = this.businessType || BUSINESS_TYPE;
+    const typeQuery = type === BUSINESS_TYPE ? '' : `&business_type=${encodeURIComponent(type)}`;
+    return { title: brand.assistShareTitle, path: `/pages/assist/detail/index?token=${encodeURIComponent(token)}${typeQuery}` };
   }
 });

@@ -1186,7 +1186,11 @@ module.exports = {
   saveCouponTemplate() { return Promise.reject(apiError('MERCHANT_API_UNAVAILABLE', '商家工作台接口暂未接入')); },
   updateStoreSettings() { return Promise.reject(apiError('MERCHANT_API_UNAVAILABLE', '商家工作台接口暂未接入')); },
   getAssistCampaigns(businessType) {
-    if (!productionMode()) return Promise.resolve({ data: mock.campaign ? [normalizeAssistCampaign(Object.assign({}, mock.campaign, { businessType: 'restaurant', status: 'active' }))] : [] });
+    if (!productionMode()) {
+      const type = String(businessType || 'restaurant').toLowerCase();
+      if (type !== 'restaurant') return Promise.resolve({ data: [] });
+      return Promise.resolve({ data: mock.campaign ? [normalizeAssistCampaign(Object.assign({}, mock.campaign, { businessType: 'restaurant', status: 'active' }))] : [] });
+    }
     const type = assertBusinessSelector(businessType || (authorizedBusinessTypes().length === 1 ? authorizedBusinessTypes()[0] : ''));
     return productionRequest('/assist-campaigns', { businessType: type }).then((result) => {
       const root = unwrap(result);
