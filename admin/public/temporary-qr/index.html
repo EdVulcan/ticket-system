@@ -21,21 +21,9 @@
 </head>
 <body>
   <main id="app" class="shell">
-    <section id="lockScreen" class="panel lock-panel">
-      <div class="eyebrow">TEMPORARY TICKET TOOL</div>
-      <h1>票券二维码</h1>
-      <p class="muted">请输入访问密码</p>
-      <form id="loginForm" class="stack">
-        <label>访问密码<input id="passwordInput" type="password" autocomplete="current-password" required></label>
-        <button class="primary" type="submit">进入管理页</button>
-        <p id="loginError" class="error" hidden>密码不正确</p>
-      </form>
-    </section>
-
-    <section id="manager" hidden>
+    <section id="manager">
       <header class="topbar">
         <div class="brand-lockup"><div class="brand-mark">QR</div><div><div class="eyebrow">TICKET DESK</div><h1>票券二维码</h1></div></div>
-        <button id="logoutButton" class="ghost" type="button">锁定</button>
       </header>
       <section class="panel controls">
         <label>票名<input id="titleInput" type="text" maxlength="80" placeholder="例如：周末门票"></label>

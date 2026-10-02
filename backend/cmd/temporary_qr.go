@@ -1,12 +1,7 @@
 package main
 
 import (
-	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
-	"github.com/gin-gonic/gin"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,7 +9,8 @@ import (
 	"sync"
 	"ticket-backend/internal/config"
 	"ticket-backend/internal/middleware"
-	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 type temporaryQRTicket struct {
@@ -27,67 +23,18 @@ type temporaryQRState struct {
 	Revision uint64              `json:"revision"`
 }
 type temporaryQRStore struct {
-	mu       sync.Mutex
-	sessions map[string]time.Time
+	mu sync.Mutex
 }
 
 func registerTemporaryQRAPI(engine *gin.Engine) {
 	if _, err := os.Stat(filepath.Join(config.GlobalConfig.Server.AdminStaticDir, "temporary-qr", "index.html")); err != nil {
 		return
 	}
-	store := &temporaryQRStore{sessions: map[string]time.Time{}}
+	store := &temporaryQRStore{}
 	group := engine.Group("/api/temporary-qr")
 	group.Use(middleware.RequestBodyLimit(2<<20), func(c *gin.Context) { c.Header("Cache-Control", "no-store"); c.Next() })
-	group.POST("/login", middleware.MiniappLoginRateLimit(), store.login)
-	group.GET("/state", store.authenticated, store.getState)
-	group.PUT("/state", store.authenticated, store.putState)
-}
-
-func (s *temporaryQRStore) login(c *gin.Context) {
-	var request struct {
-		Password string `json:"password"`
-	}
-	password := os.Getenv("TICKET_SERVER_TEMPORARY_QR_PASSWORD")
-	if password == "" {
-		password = "cbw123456"
-	}
-	expected := sha256.Sum256([]byte(password))
-	if c.ShouldBindJSON(&request) != nil {
-		c.JSON(401, gin.H{"error": "invalid password"})
-		return
-	}
-	actual := sha256.Sum256([]byte(request.Password))
-	if subtle.ConstantTimeCompare(actual[:], expected[:]) != 1 {
-		c.JSON(401, gin.H{"error": "invalid password"})
-		return
-	}
-	bytes := make([]byte, 24)
-	if _, err := rand.Read(bytes); err != nil {
-		c.JSON(500, gin.H{"error": "session unavailable"})
-		return
-	}
-	token := hex.EncodeToString(bytes)
-	s.mu.Lock()
-	for key, expiry := range s.sessions {
-		if !expiry.After(time.Now()) {
-			delete(s.sessions, key)
-		}
-	}
-	s.sessions[token] = time.Now().Add(12 * time.Hour)
-	s.mu.Unlock()
-	c.JSON(200, gin.H{"token": token})
-}
-
-func (s *temporaryQRStore) authenticated(c *gin.Context) {
-	token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
-	s.mu.Lock()
-	expiry := s.sessions[token]
-	s.mu.Unlock()
-	if !expiry.After(time.Now()) {
-		c.AbortWithStatusJSON(401, gin.H{"error": "unauthorized"})
-		return
-	}
-	c.Next()
+	group.GET("/state", store.getState)
+	group.PUT("/state", store.putState)
 }
 
 func temporaryQRPath() string {

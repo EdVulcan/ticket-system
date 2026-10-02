@@ -1,23 +1,13 @@
 (function () {
   'use strict';
-  const accessKey = 'temporary-qr-ticket-token-v1';
   const $ = (id) => document.getElementById(id);
   let tickets = [], revision = 0, filter = 'all', busy = false, signature = '';
-  const token = () => sessionStorage.getItem(accessKey) || '';
-
-  function lock() {
-    sessionStorage.removeItem(accessKey);
-    $('manager').hidden = true;
-    $('lockScreen').hidden = false;
-    $('passwordInput').value = '';
-  }
   async function api(path, options = {}) {
     const response = await fetch('/api/temporary-qr/' + path, {
       ...options,
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token() },
+      headers: { 'Content-Type': 'application/json' },
       cache: 'no-store'
     });
-    if (response.status === 401) { lock(); throw new Error('密码错误或登录已失效，请重新登录。'); }
     if (response.status === 409) throw new Error('其他终端已修改数据，已刷新，请重新操作。');
     if (!response.ok) throw new Error('服务器保存或读取失败，请稍后重试。');
     return response.json();
@@ -30,7 +20,7 @@
     if (next !== signature) { signature = next; render(); }
   }
   async function refresh() {
-    if (busy || !token()) return;
+    if (busy) return;
     const state = await api('state');
     apply(state);
   }
@@ -43,9 +33,7 @@
       apply(state);
     } catch (error) {
       alert(error.message);
-      if (token()) {
-        try { apply(await api('state')); } catch (_) { lock(); }
-      }
+      try { apply(await api('state')); } catch (_) { /* The next refresh will retry. */ }
     } finally { busy = false; }
   }
   function render() {
@@ -93,25 +81,6 @@
     } catch (_) { alert('图片生成失败，请重试。'); }
     finally { ticketExport.classList.remove('exporting'); button.disabled = false; button.textContent = '保存票据图片'; }
   }
-  async function initManager() {
-    try {
-      apply(await api('state'));
-      $('lockScreen').hidden = true; $('manager').hidden = false;
-    } catch (error) {
-      lock(); $('loginError').hidden = false; $('loginError').textContent = error.message;
-    }
-  }
-  $('loginForm').onsubmit = async (event) => {
-    event.preventDefault();
-    const button = event.submitter; button.disabled = true;
-    try {
-      const result = await api('login', { method: 'POST', body: JSON.stringify({ password: $('passwordInput').value }) });
-      sessionStorage.setItem(accessKey, result.token);
-      await initManager();
-    } catch (error) { $('loginError').hidden = false; $('loginError').textContent = error.message; }
-    finally { button.disabled = false; }
-  };
-  $('logoutButton').onclick = lock;
   $('importButton').onclick = () => mutate(() => {
     const known = new Set(tickets.map((t) => t.code));
     $('codesInput').value.split(/\r?\n/).map((v) => v.trim()).filter(Boolean).forEach((code) => {
@@ -132,5 +101,5 @@
   $('ticketDialog').onclick = (event) => { if (event.target === $('ticketDialog')) $('ticketDialog').close(); };
   setInterval(() => { if (!document.hidden && document.activeElement !== $('titleInput')) refresh().catch(() => {}); }, 5000);
   window.addEventListener('focus', () => refresh().catch(() => {}));
-  if (token()) initManager();
+  refresh().catch((error) => alert(error.message));
 })();

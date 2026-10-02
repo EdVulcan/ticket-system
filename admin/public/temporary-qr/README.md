@@ -6,10 +6,10 @@
 
 ## 部署前配置
 
-1. 服务端校验密码，当前初始化值为 `cbw123456`，生产环境可用 `TICKET_SERVER_TEMPORARY_QR_PASSWORD` 覆盖。登录会话有效期为 12 小时，服务重启后需重新登录。
+1. 此工具不设置访问密码，打开页面即可管理二维码。请仅通过不公开该网址的方式控制访问范围。
 2. 重新执行管理端和后端构建，后端会自动托管该目录。
 
-票据初始数据在 `tickets.json`，只能通过登录后的接口读取，静态路由不公开该文件。状态保存在服务端 `data/temporary-qr.json`，可用 `TICKET_SERVER_TEMPORARY_QR_STORE_PATH` 覆盖。现有 CI 将 data 链接到 `/var/lib/ticket-system`，状态保留跨部署。所有终端每 5 秒同步，写入时版本校验避免旧数据覆盖。
+票据初始数据在 `tickets.json`，静态路由不公开该文件。状态保存在服务端 `data/temporary-qr.json`，可用 `TICKET_SERVER_TEMPORARY_QR_STORE_PATH` 覆盖。现有 CI 将 data 链接到 `/var/lib/ticket-system`，状态保留跨部署。所有终端每 5 秒同步，写入时版本校验避免旧数据覆盖。
 
 ## 完整移除
 

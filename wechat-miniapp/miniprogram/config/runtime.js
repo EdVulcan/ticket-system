@@ -3,6 +3,6 @@
 module.exports = Object.freeze({
   deploymentMode: 'production',
   apiBaseUrl: 'https://ymsq.edvulcan.top/api/v1',
-  appId: 'wxff2677e498bce360',
+  appId: 'wx773349253c56db94',
   requestTimeoutMs: 10000
 });
