@@ -5,7 +5,7 @@ const api = require('../../../services/api');
 const addressTypes = [{ id: 'DELIVERY', name: '配送地址' }, { id: 'SHIPPING', name: '快递地址' }];
 
 Page({
-  data: { addressId: '', production: false, addressTypes, typeIndex: 0, zones: [], zoneIndex: -1, regionValue: [], saving: false, form: { addressType: 'DELIVERY', campusName: '', zoneName: '', zoneId: '', building: '', room: '', province: '', city: '', district: '', detailAddress: '', contactName: '', contactPhone: '', remark: '', deliveryFee: 0, isDefault: false } },
+  data: { addressId: '', production: false, addressTypes, typeIndex: 0, zones: [], zoneIndex: -1, regionValue: [], regionText: '', saving: false, form: { addressType: 'DELIVERY', campusName: '', zoneName: '', zoneId: '', building: '', room: '', province: '', city: '', district: '', detailAddress: '', contactName: '', contactPhone: '', remark: '', deliveryFee: 0, isDefault: false } },
 
   onLoad(options) {
     const addressId = options.id || '';
@@ -17,7 +17,8 @@ Page({
       const form = existing || Object.assign({}, type === 'SHIPPING' ? mock.defaultShippingAddress : mock.defaultAddress, { id: '', addressType: type, isDefault: false });
       const types = type === 'CAMPUS' ? addressTypes.concat([{ id: 'CAMPUS', name: '历史配送地址' }]) : addressTypes;
       const typeIndex = types.findIndex(item => item.id === type);
-      this.setData({ form, addressTypes: types, typeIndex: typeIndex < 0 ? 0 : typeIndex, zones, regionValue: form.province && form.city && form.district ? [form.province, form.city, form.district] : [], zoneIndex: (type === 'DELIVERY' || type === 'CAMPUS') && form.zoneId ? zones.findIndex(zone => zone.id === form.zoneId) : -1 });
+      const regionValue = form.province && form.city && form.district ? [form.province, form.city, form.district] : [];
+      this.setData({ form, addressTypes: types, typeIndex: typeIndex < 0 ? 0 : typeIndex, zones, regionValue, regionText: regionValue.join(' / '), zoneIndex: (type === 'DELIVERY' || type === 'CAMPUS') && form.zoneId ? zones.findIndex(zone => zone.id === form.zoneId) : -1 });
     };
     if (api.isProduction()) {
       api.getAddresses().then((result) => {
@@ -33,7 +34,7 @@ Page({
   onInput(event) { this.setData({ [`form.${event.currentTarget.dataset.field}`]: event.detail.value }); },
   selectRegion(event) {
     const value = event.detail.value || [];
-    this.setData({ regionValue: value, 'form.province': value[0] || '', 'form.city': value[1] || '', 'form.district': value[2] || '' });
+    this.setData({ regionValue: value, regionText: value.join(' / '), 'form.province': value[0] || '', 'form.city': value[1] || '', 'form.district': value[2] || '' });
   },
   selectType(event) {
     const typeIndex = Number(event.detail.value);
