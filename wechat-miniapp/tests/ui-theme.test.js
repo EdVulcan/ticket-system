@@ -37,7 +37,7 @@ test('home promotion uses live business information without fixed campus or coup
   const source = read('pages/index/index.wxml');
   assert.ok(source.includes("store.name || brand.name"));
   assert.ok(source.includes('{{store.announcement}}'));
-  assert.ok(read('services/catalog-page.js').includes('配送费用以结算页为准'));
+  assert.ok(read('services/catalog-page.js').includes('配送费以结算页为准'));
   assert.ok(!source.includes('东校区'));
   assert.ok(!/满\s*25\s*减\s*3/.test(source));
 });

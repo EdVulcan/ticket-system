@@ -13,22 +13,22 @@ function extraPrice(value) {
 function pageCopy(channel) {
   return channel === commerce.FULFILLMENT.COURIER ? {
     channelName: '零售',
-    channelKicker: '商品寄送 · 快递到家',
-    heroLine1: '把喜欢的',
-    heroLine2: '商品寄到你手中。',
-    heroSubtitle: '精选商品，按规则配送到家',
+    channelKicker: '商品快递到家',
+    heroLine1: '商品',
+    heroLine2: '快递到家',
+    heroSubtitle: '按快递规则发货',
     menuTitle: '零售商品',
-    serviceTitle: '门店打包，快递送达',
-    serviceText: '快递费用按结算页规则计算'
+    serviceTitle: '快递发货',
+    serviceText: '快递费以结算页为准'
   } : {
     channelName: '餐饮',
-    channelKicker: '门店制作 · 配送到家',
-    heroLine1: '一份热乎的',
-    heroLine2: '餐食，正在路上。',
-    heroSubtitle: '门店现制，可配送或到店自取',
+    channelKicker: '配送或到店自取',
+    heroLine1: '现点现做',
+    heroLine2: '配送或自取',
+    heroSubtitle: '支持配送和到店自取',
     menuTitle: '餐饮菜单',
-    serviceTitle: '门店制作，配送或到店自取',
-    serviceText: '配送费用以结算页为准'
+    serviceTitle: '配送 / 到店自取',
+    serviceText: '配送费以结算页为准'
   };
 }
 
@@ -203,7 +203,7 @@ function createCatalogPage(channel) {
     goCoupons() { wx.switchTab({ url: '/pages/profile/index/index' }); },
     goTakeaway() { wx.switchTab({ url: '/pages/index/index' }); },
     goCold() { wx.switchTab({ url: '/pages/cold/index' }); },
-    onShareAppMessage() { return { title: channel === commerce.FULFILLMENT.COURIER ? `${brand.name}｜精选商品，快递到家` : brand.shareTitle, path: channel === commerce.FULFILLMENT.COURIER ? '/pages/cold/index' : '/pages/index/index' }; }
+    onShareAppMessage() { return { title: channel === commerce.FULFILLMENT.COURIER ? `${brand.name}｜商品快递到家` : brand.shareTitle, path: channel === commerce.FULFILLMENT.COURIER ? '/pages/cold/index' : '/pages/index/index' }; }
   };
 }
 

@@ -58,7 +58,7 @@ Page({
     const selectedValues = {};
     (product.options || []).forEach((group) => { if (group.required !== false && group.values.length) selectedValues[group.id] = group.values[0]; });
     const selectedSku = activeSkus.find(sku => String(sku.id || sku.skuId || sku.sku_id) === String(selectedSkuId)) || activeSkus[0] || product.sku || {};
-    const deliveryText = fulfillmentType === commerce.FULFILLMENT.COURIER ? store.shippingText || '快递费用以结算页为准' : store.deliveryText || '配送费用以结算页为准';
+    const deliveryText = fulfillmentType === commerce.FULFILLMENT.COURIER ? store.shippingText || '快递费以结算页为准' : store.deliveryText || '配送费以结算页为准';
     this.setData({ product, selectedValues, skuChoices, selectedSkuId, fulfillmentType, deliveryText, unavailable: !open, priceText: format.yuan(Number(selectedSku.priceCents !== undefined ? selectedSku.priceCents : selectedSku.price_cents !== undefined ? selectedSku.price_cents : product.price)), originalPriceText: format.yuan(Number(selectedSku.originalPriceCents !== undefined ? selectedSku.originalPriceCents : selectedSku.original_price_cents !== undefined ? selectedSku.original_price_cents : product.originalPrice)) });
     this.refreshTotal();
   },

@@ -135,7 +135,7 @@ Page({
     couponsUnavailable: false,
     paying: false,
     paymentModeText: '当前为演示支付模式',
-    pricingNote: '费用按不同履约分别核算'
+    pricingNote: '餐饮和零售费用分别计算'
   },
 
   onLoad() {
@@ -143,7 +143,7 @@ Page({
     const store = api.normalizeStore(storage.getStore());
     const activeBusinessType = String(store.activeBusinessType || store.businessType || '').toLowerCase();
     const bindingText = activeBusinessType === 'restaurant' ? '当前门店为餐饮业务绑定，金额由云端核算' : activeBusinessType === 'retail' ? '当前门店为零售业务绑定，金额由云端核算' : '金额由云端核算';
-    this.setData({ store, production: api.isProduction(), takeawayDeliveryMethod: 'DELIVERY', paymentModeText: api.isProduction() ? bindingText : '当前为演示支付模式，提交只写入本地演示数据', pricingNote: api.isProduction() ? '配送费与优惠以服务端报价为准' : '费用按不同履约分别核算' });
+    this.setData({ store, production: api.isProduction(), takeawayDeliveryMethod: 'DELIVERY', paymentModeText: api.isProduction() ? bindingText : '当前为演示支付模式，提交只写入本地演示数据', pricingNote: api.isProduction() ? '配送费与优惠以服务端报价为准' : '餐饮和零售费用分别计算' });
   },
 
   onShow() {

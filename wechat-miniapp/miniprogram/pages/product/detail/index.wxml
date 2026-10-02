@@ -1,7 +1,6 @@
 <view class="page-shell product-detail-page">
   <view class="detail-visual" style="background: {{product.color}};">
     <image wx:if="{{product.coverImageUrl}}" class="food-photo" mode="aspectFill" src="{{product.coverImageUrl}}" /><view wx:else class="detail-placeholder"><image class="detail-placeholder-icon" src="/images/theme/rabbit-pair.svg" /><view>{{brand.name}}</view></view>
-    <view wx:if="{{!product.coverImageUrl}}" class="visual-tag">{{brand.tagline}}</view>
   </view>
 
   <view class="detail-intro">
@@ -13,7 +12,7 @@
     <view class="detail-price-row"><text class="price">{{priceText}}</text><text wx:if="{{product.originalPrice > product.price}}" class="old-price">{{originalPriceText}}</text></view>
   </view>
 
-  <view class="fulfillment-note card"><image class="ui-icon" src="{{fulfillmentType === 'COURIER' ? '/images/theme/truck.svg' : '/images/theme/pin.svg'}}" /><view><view>{{fulfillmentType === 'COURIER' ? '快递寄送' : '配送到家 / 门店自取'}}</view><text>{{deliveryText || '配送费用以结算页为准'}}</text></view></view>
+  <view class="fulfillment-note card"><image class="ui-icon" src="{{fulfillmentType === 'COURIER' ? '/images/theme/truck.svg' : '/images/theme/pin.svg'}}" /><view><view>{{fulfillmentType === 'COURIER' ? '快递寄送' : '配送 / 到店自取'}}</view><text>{{deliveryText || '费用以结算页为准'}}</text></view></view>
 
   <view wx:if="{{skuChoices.length}}" class="option-card card"><view class="option-group"><view class="option-title">规格 <text>必选</text></view><view class="option-values"><view wx:for="{{skuChoices}}" wx:key="id" class="option-value {{selectedSkuId === item.id ? 'option-value--selected' : ''}}" data-id="{{item.id}}" bindtap="selectSku">{{item.name}} · ¥{{item.price / 100}}</view></view></view></view>
 

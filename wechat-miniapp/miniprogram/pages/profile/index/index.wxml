@@ -1,5 +1,5 @@
 <view class="page-shell profile-page">
-  <view class="profile-header"><view class="avatar"><image wx:if="{{profile.avatarUrl}}" class="food-photo" src="{{profile.avatarUrl}}" mode="aspectFill" /><image wx:else class="profile-rabbits" src="/images/theme/rabbit-pair.svg" /></view><view class="profile-copy"><view class="profile-name">{{profile.nickname || '朋友'}}，你好</view><view class="profile-sub">今天的偏爱，也留一份给自己</view></view></view>
+  <view class="profile-header"><view class="avatar"><image wx:if="{{profile.avatarUrl}}" class="food-photo" src="{{profile.avatarUrl}}" mode="aspectFill" /><image wx:else class="profile-rabbits" src="/images/theme/rabbit-pair.svg" /></view><view class="profile-copy"><view class="profile-name">{{profile.nickname || '朋友'}}，你好</view><view class="profile-sub">查看订单、优惠券和地址</view></view></view>
   <view class="profile-theme"><view class="brand-seal brand-seal--red">琑</view><view class="profile-brand-copy"><view class="profile-brand-name">{{brand.name}}</view><view class="profile-brand-tagline">{{brand.tagline}}</view></view></view>
 
   <view wx:if="{{membershipEnabled}}" class="member-card">
@@ -11,7 +11,7 @@
   </view>
 
   <view class="coupon-banner" bindtap="toggleCoupons" role="button" aria-label="我的优惠券，{{couponCount}}张可用">
-    <view class="coupon-banner-copy"><view>我的优惠券</view><view>给这一餐，加一点小确幸</view></view>
+    <view class="coupon-banner-copy"><view>我的优惠券</view><view>查看可用优惠券</view></view>
     <view class="coupon-banner-number">{{couponCount}}<text>张</text></view><image class="ui-icon ui-icon--small" src="/images/theme/arrow-white.svg" />
   </view>
   <view wx:if="{{showCoupons}}" class="coupon-panel card">
@@ -28,10 +28,10 @@
 
   <view class="profile-menu">
     <view class="menu-row" bindtap="goAddress"><image class="menu-icon" src="/images/theme/pin.svg" /><view class="menu-copy"><view>收货地址</view><view>配送区域、详细地址与联系电话</view></view><image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view>
-    <view class="menu-row" bindtap="goAssist"><image class="menu-icon" src="/images/theme/rabbit-pair.svg" /><view class="menu-copy"><view>好友助力</view><view>邀请同好，分享一份优惠</view></view><image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view>
-    <view wx:if="{{contact.available}}" class="menu-row" bindtap="openContact"><image class="menu-icon" src="/images/icons/customer-service.svg" /><view class="menu-copy"><view>联系商家</view><view>{{contact.contactName || '微信客服'}} · 查看二维码与微信号</view></view><image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view>
+    <view class="menu-row" bindtap="goAssist"><image class="menu-icon" src="/images/theme/rabbit-pair.svg" /><view class="menu-copy"><view>好友助力</view><view>发起助力，领取优惠券</view></view><image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view>
+    <view wx:if="{{contact.available}}" class="menu-row" bindtap="openContact"><image class="menu-icon" src="/images/icons/customer-service.svg" /><view class="menu-copy"><view>联系商家</view><view>{{contact.contactName || '微信客服'}} · 查看联系方式</view></view><image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view>
   </view>
-  <view class="theme-signature">在琑遇，好好吃饭</view>
+  <view class="theme-signature">{{brand.name}}</view>
 </view>
 
 <view wx:if="{{showContact}}" class="contact-overlay" bindtap="closeContact">
