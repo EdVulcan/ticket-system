@@ -23,6 +23,10 @@ for (const page of app.pages) {
   for (const extension of ['js', 'json', 'wxml', 'wxss']) if (!fs.existsSync(`${base}.${extension}`)) throw new Error(`Missing page file ${page}.${extension}`);
   const source = fs.readFileSync(`${base}.wxml`, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
   const code = fs.readFileSync(`${base}.js`, 'utf8');
+  // WXML expressions are deliberately limited. Calling JavaScript methods
+  // such as `array.join()` may compile but render an empty value in DevTools.
+  // Keep display strings prepared in Page data instead.
+  if (/\{\{[\s\S]*?\.[A-Za-z_$][\w$]*\s*\(/.test(source)) throw new Error(`${page}: WXML expressions must not call JavaScript methods`);
   // Catalog tabs share their Page definition through a factory module.
   const handlerCode = code.includes('createCatalogPage') ? `${code}\n${fs.readFileSync(path.join(root, 'miniprogram/services/catalog-page.js'), 'utf8')}` : code;
   const config = JSON.parse(fs.readFileSync(`${base}.json`, 'utf8'));
