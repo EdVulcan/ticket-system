@@ -74,6 +74,36 @@ textarea { resize: vertical; min-height: 98px; }
 .ticket-preview.exporting .ticket-code { display: none; }
 dialog { border: 0; padding: 0; background: transparent; max-width: calc(100vw - 20px); }
 dialog::backdrop { background: #10213bb3; backdrop-filter: blur(4px); }
+
+/* Sold-out celebration. Kept here with the temporary QR page so it can be removed as one module later. */
+.celebration { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; padding: 20px; overflow: hidden; background: radial-gradient(circle at 50% 42%, #7048c9 0, #30216e 38%, #11142f 100%); opacity: 0; pointer-events: none; transition: opacity .35s ease; }
+.celebration.show { opacity: 1; pointer-events: auto; }
+.celebration::before, .celebration::after { content: ""; position: absolute; width: 46vw; height: 46vw; max-width: 630px; max-height: 630px; border: 1px solid #9fd4ff55; border-radius: 50%; animation: celebration-orbit 4.8s ease-out infinite; }
+.celebration::after { width: 72vw; height: 72vw; max-width: 960px; max-height: 960px; animation-delay: .65s; }
+.celebration-card { position: relative; z-index: 2; width: min(450px, 100%); overflow: hidden; padding: 31px 28px 27px; border: 4px solid #fff; border-radius: 34px 27px 38px 24px; text-align: center; background: linear-gradient(160deg, #fff 0%, #f5faff 100%); box-shadow: 0 26px 100px #020c27b3, 0 0 0 8px #ffffff12; transform: translateY(35px) scale(.72) rotate(-7deg); transition: transform .65s cubic-bezier(.2, 1.45, .35, 1); }
+.celebration.show .celebration-card { transform: translateY(0) scale(1) rotate(2deg); }
+.celebration-card::before { content: ""; position: absolute; width: 260px; height: 260px; left: 50%; top: -172px; transform: translateX(-50%); border-radius: 50%; background: #75c7ff66; filter: blur(3px); }
+.celebration-card::after { content: "✦  ✧  ✦  ✧  ✦"; position: absolute; left: 0; right: 0; bottom: 9px; color: #2563eb30; font-size: 18px; letter-spacing: 17px; animation: celebration-shimmer 1.4s ease-in-out infinite alternate; }
+.celebration-ribbon { position: absolute; top: 17px; right: -38px; padding: 6px 42px; color: #fff; background: #f03f75; font-size: 11px; font-weight: 900; letter-spacing: .08em; transform: rotate(13deg); box-shadow: 0 5px 13px #c1396140; }
+.celebration-icon { position: relative; display: grid; place-items: center; width: 104px; height: 104px; margin: 5px auto 16px; border: 7px solid #fff; border-radius: 31px 31px 35px 35px; color: #fff; font-size: 31px; font-weight: 900; background: linear-gradient(145deg, #ff7b35, #f03f75 52%, #7548d8); box-shadow: 0 13px 25px #8b3eaa55, 0 0 0 8px #f03f7530; animation: celebration-mascot .95s .12s both; }
+.celebration-icon::before, .celebration-icon::after { content: ""; position: absolute; top: -25px; width: 23px; height: 34px; border: 6px solid #fff; border-radius: 16px 16px 5px 5px; background: #12aeb1; }
+.celebration-icon::before { left: 9px; transform: rotate(-22deg); }
+.celebration-icon::after { right: 9px; transform: rotate(22deg); }
+.celebration-kicker { position: relative; color: #1d5fc8; font-size: 11px; font-weight: 900; letter-spacing: .2em; }
+.celebration-title { position: relative; margin: 8px 0 10px; font-size: 36px; letter-spacing: -.09em; background: linear-gradient(110deg, #ef3f70, #fa7c27, #7548d8); color: transparent; background-clip: text; }
+.celebration-desc { position: relative; margin: 0 auto 22px; color: #667991; line-height: 1.7; font-size: 15px; }
+.celebration-card .primary { position: relative; min-width: 145px; }
+.confetti { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.confetti i { position: absolute; left: var(--left); top: -8%; width: 13px; height: 31px; border-radius: 4px 8px 3px 7px; background: var(--color); box-shadow: 0 0 9px var(--color); transform: rotate(var(--rotate)); animation: celebration-fall 2.35s var(--delay) cubic-bezier(.15,.7,.25,1) both; }
+.playfield { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; pointer-events: none; }
+@keyframes celebration-orbit { 0% { opacity: .8; transform: scale(.25); } 100% { opacity: 0; transform: scale(1.35); } }
+@keyframes celebration-shimmer { from { transform: translateX(-5px); opacity: .35; } to { transform: translateX(5px); opacity: .9; } }
+@keyframes celebration-mascot { 0% { opacity: 0; transform: translateY(25px) rotate(-18deg) scale(.35); } 65% { transform: translateY(-9px) rotate(7deg) scale(1.1); } 100% { opacity: 1; transform: translateY(0) rotate(0) scale(1); } }
+@keyframes celebration-fall { 0% { opacity: 0; transform: translate(0, -30px) rotate(0) scale(.5); } 10% { opacity: 1; } 100% { opacity: 0; transform: translate(var(--x), var(--y)) rotate(var(--spin)) scale(1.15); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .celebration *, .celebration::before, .celebration::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+}
 @media (max-width: 520px) {
   .shell { padding: 16px 10px 38px; }
   .lock-panel { padding: 29px 21px; margin-top: 9vh; }
@@ -91,6 +121,9 @@ dialog::backdrop { background: #10213bb3; backdrop-filter: blur(4px); }
   .dialog-actions { padding: 10px 2px 0; }
   .ticket-preview { padding-left: 18px; padding-right: 18px; }
   .dialog-qr { width: min(175px, 70vw); height: min(175px, 70vw); }
+  .celebration { padding: 14px; }
+  .celebration-title { font-size: 27px; }
+  .celebration-card { padding: 27px 19px 24px; }
 }
 @media (max-width: 380px) {
   .shell { padding-left: 8px; padding-right: 8px; }
