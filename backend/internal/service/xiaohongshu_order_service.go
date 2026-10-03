@@ -79,6 +79,13 @@ func xiaohongshuProviderStatus(orderID, tenantID uint) (string, error) {
 }
 
 func summarizeXiaohongshuProviderStatuses(statuses []string) string {
+	return summarizeProviderStatuses(statuses)
+}
+
+// summarizeProviderStatuses gives list and storefront projections one stable
+// meaning when an order has multiple supplier-backed items. The order remains
+// paid/completed in its core status; this value only describes supplier use.
+func summarizeProviderStatuses(statuses []string) string {
 	if len(statuses) == 0 {
 		return ""
 	}

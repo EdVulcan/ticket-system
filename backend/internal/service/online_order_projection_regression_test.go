@@ -47,3 +47,32 @@ func TestOnlineXiaohongshuSourceLabelDoesNotImplyOneAccount(t *testing.T) {
 		t.Fatalf("shared channel label = %q", got)
 	}
 }
+
+func TestOnlineOrderProjectionIncludesSupplierUsageStatus(t *testing.T) {
+	order := seedUpstreamWorkerOrder(t, "https://example.invalid")
+	if err := model.DB.Model(&model.Order{}).Where("id = ?", order.ID).Update("status", "paid").Error; err != nil {
+		t.Fatalf("mark order paid: %v", err)
+	}
+	var snapshot model.OrderItemSupplySnapshot
+	if err := model.DB.Where("order_id = ?", order.ID).First(&snapshot).Error; err != nil {
+		t.Fatalf("load supplier status projection: %v", err)
+	}
+	if err := model.DB.Model(&snapshot).Updates(map[string]interface{}{
+		"provider_status": "checked",
+	}).Error; err != nil {
+		t.Fatalf("update supplier status projection: %v", err)
+	}
+
+	orders, total, err := (&OrderService{}).ListWithSalesScope(1, 10, order.TenantID, "", "", "online", "", "", order.OrderNo)
+	if err != nil || total != 1 || len(orders) != 1 {
+		t.Fatalf("online order projection=%+v total=%d err=%v", orders, total, err)
+	}
+	if orders[0].Status != "paid" || orders[0].ProviderStatus != "checked" {
+		t.Fatalf("payment status=%q provider status=%q snapshot=%+v", orders[0].Status, orders[0].ProviderStatus, snapshot)
+	}
+
+	detail, err := (&OrderService{}).GetByOrderNo(order.OrderNo, order.TenantID)
+	if err != nil || detail.ProviderStatus != "checked" {
+		t.Fatalf("detail provider status=%q err=%v", detail.ProviderStatus, err)
+	}
+}

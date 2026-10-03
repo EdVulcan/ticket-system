@@ -1179,6 +1179,9 @@ func (s *OrderService) ListWithSalesScope(page, pageSize int, tenantID uint, sta
 	if err := hydrateOrderSaleAttribution(model.DB, tenantID, orders); err != nil {
 		return nil, 0, err
 	}
+	if err := hydrateOrderProviderStatus(model.DB, tenantID, orders); err != nil {
+		return nil, 0, err
+	}
 	return orders, total, nil
 }
 
@@ -1283,7 +1286,48 @@ func (s *OrderService) GetByOrderNo(orderNo string, tenantID uint) (*model.Order
 	if err := hydrateOrderSaleAttribution(model.DB, tenantID, orders); err != nil {
 		return nil, err
 	}
+	if err := hydrateOrderProviderStatus(model.DB, tenantID, orders); err != nil {
+		return nil, err
+	}
 	return &orders[0], nil
+}
+
+// hydrateOrderProviderStatus adds supplier usage as a read-only projection for
+// order list/detail views. It intentionally never mutates orders.status: paid
+// is still the payment fact, while provider_status reflects an independent
+// supplier check-in fact.
+func hydrateOrderProviderStatus(db *gorm.DB, tenantID uint, orders []model.Order) error {
+	if db == nil || tenantID == 0 || len(orders) == 0 {
+		return nil
+	}
+	orderIDs := make([]uint, 0, len(orders))
+	for _, order := range orders {
+		if order.ID != 0 {
+			orderIDs = append(orderIDs, order.ID)
+		}
+	}
+	if len(orderIDs) == 0 {
+		return nil
+	}
+	type providerStatusRow struct {
+		OrderID        uint   `gorm:"column:order_id"`
+		ProviderStatus string `gorm:"column:provider_status"`
+	}
+	var rows []providerStatusRow
+	if err := db.Model(&model.OrderItemSupplySnapshot{}).
+		Select("order_id, provider_status").
+		Where("sales_tenant_id = ? AND order_id IN ? AND mode = 'upstream'", tenantID, orderIDs).
+		Order("id ASC").Find(&rows).Error; err != nil {
+		return err
+	}
+	statuses := make(map[uint][]string, len(rows))
+	for _, row := range rows {
+		statuses[row.OrderID] = append(statuses[row.OrderID], row.ProviderStatus)
+	}
+	for i := range orders {
+		orders[i].ProviderStatus = summarizeProviderStatuses(statuses[orders[i].ID])
+	}
+	return nil
 }
 
 func hydrateOrderSaleAttribution(db *gorm.DB, tenantID uint, orders []model.Order) error {

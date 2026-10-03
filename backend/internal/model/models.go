@@ -224,6 +224,10 @@ type Order struct {
 	SaleShiftID           uint   `gorm:"-" json:"sale_shift_id,omitempty"`
 	SaleShiftNo           string `gorm:"-" json:"sale_shift_no,omitempty"`
 	HasUpstreamSupply     bool   `gorm:"-" json:"has_upstream_supply,omitempty"`
+	// ProviderStatus is a read-only projection of the supplier usage state.
+	// It deliberately does not replace Status, which remains the payment/order
+	// lifecycle fact used by refund and settlement workflows.
+	ProviderStatus string `gorm:"-" json:"provider_status,omitempty"`
 }
 
 // OrderItem 订单明细 (按产品聚合)

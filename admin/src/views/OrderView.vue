@@ -63,7 +63,7 @@
       </el-table-column>
       <el-table-column prop="status" label="状态" width="100" align="center">
         <template #default="{ row }">
-          <el-tag :type="hasPendingRefund(row) ? 'warning' : getStatusType(row.status)">{{ hasPendingRefund(row) ? '退款处理中' : getStatusText(row.status) }}</el-tag>
+          <el-tag :type="hasPendingRefund(row) ? 'warning' : getStatusType(displayStatus(row))">{{ hasPendingRefund(row) ? '退款处理中' : getStatusText(displayStatus(row)) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column prop="created_at" label="下单时间" width="180">
@@ -100,7 +100,7 @@
         <el-descriptions title="基本信息" :column="2" border>
           <el-descriptions-item label="订单号">{{ currentOrder.order_no }}</el-descriptions-item>
           <el-descriptions-item label="状态">
-            <el-tag :type="hasPendingRefund(currentOrder) ? 'warning' : getStatusType(currentOrder.status)">{{ hasPendingRefund(currentOrder) ? '退款处理中' : getStatusText(currentOrder.status) }}</el-tag>
+            <el-tag :type="hasPendingRefund(currentOrder) ? 'warning' : getStatusType(displayStatus(currentOrder))">{{ hasPendingRefund(currentOrder) ? '退款处理中' : getStatusText(displayStatus(currentOrder)) }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="联系人">{{ currentOrder.contact_name }}</el-descriptions-item>
           <el-descriptions-item label="手机号">{{ currentOrder.contact_phone }}</el-descriptions-item>
@@ -397,13 +397,23 @@ const handleRefund = (row: any) => {
 }
 
 const getStatusType = (status: string) => {
-  const map: any = { paid: 'success', unpaid: 'warning', refunded: 'info', completed: 'success' }
+  const map: any = { paid: 'success', unpaid: 'warning', refunded: 'info', completed: 'success', used: 'info', checking: 'warning', supplier_refunded: 'info', supplier_partial_refunded: 'warning', supplier_unknown: 'warning' }
   return map[status] || 'info'
 }
 
 const getStatusText = (status: string) => {
-  const map: any = { paid: '已支付', unpaid: '待支付', cancelled: '已取消', partial_refunded: '部分退款', refunded: '已退款', completed: '已完成' }
+  const map: any = { paid: '已支付', unpaid: '待支付', cancelled: '已取消', partial_refunded: '部分退款', refunded: '已退款', completed: '已完成', used: '已使用', checking: '部分使用', supplier_refunded: '供应商已退票', supplier_partial_refunded: '供应商部分退票', supplier_unknown: '供应商状态待核实' }
   return map[status] || '未知状态'
+}
+
+const displayStatus = (order: any) => {
+  if (['refunded', 'partial_refunded', 'cancelled'].includes(order?.status)) return order.status
+  if (order?.provider_status === 'checked') return 'used'
+  if (order?.provider_status === 'checking') return 'checking'
+  if (order?.provider_status === 'refunded') return 'supplier_refunded'
+  if (order?.provider_status === 'partial_refunded') return 'supplier_partial_refunded'
+  if (order?.provider_status === 'unknown') return 'supplier_unknown'
+  return order?.status || ''
 }
 
 const centsToYuan = (value: number) => ((value || 0) / 100).toFixed(2)
