@@ -2,6 +2,14 @@ const brand = require('../../../config/brand');
 const mock = require('../../../data/mock');
 const storage = require('../../../services/storage');
 const api = require('../../../services/api');
+const commerce = require('../../../config/commerce');
+
+function assistCampaignAvailable(campaign) {
+  if (!campaign || !campaign.id || String(campaign.status || '').toLowerCase() !== 'active') return false;
+  const starterAmount = Number(campaign.starterReward && campaign.starterReward.discountAmount);
+  const helperAmount = Number(campaign.helperReward && campaign.helperReward.discountAmount);
+  return Number.isFinite(starterAmount) && starterAmount > 0 && Number.isFinite(helperAmount) && helperAmount > 0;
+}
 
 Page({
   data: {
@@ -16,6 +24,7 @@ Page({
     // part of the current customized storefront.
     membershipEnabled: false,
     showContact: false,
+    assistAvailable: false,
     memberProfile: { memberNo: '', status: 'active', membershipStatus: 'provisional', phoneMasked: '', phoneVerified: false, membershipConsentGranted: false, sourceCount: 0 },
     memberConsentGranted: false,
     verifyingMemberPhone: false,
@@ -24,6 +33,24 @@ Page({
   },
 
   onShow() { this.loadProfile(); },
+
+  loadAssistAvailability() {
+    if (typeof api.getAssistCampaigns !== 'function') {
+      this.setData({ assistAvailable: false });
+      return;
+    }
+    const businesses = typeof api.getAuthorizedBusinesses === 'function' ? api.getAuthorizedBusinesses() : [];
+    const types = businesses.map(item => String(item && (item.businessType || item.business_type) || '').toLowerCase()).filter((item, index, values) => (item === 'restaurant' || item === 'retail') && values.indexOf(item) === index);
+    const requestedTypes = types.length ? types : (api.isProduction() ? [] : ['restaurant']);
+    if (!requestedTypes.length) {
+      this.setData({ assistAvailable: false });
+      return;
+    }
+    Promise.all(requestedTypes.map(type => api.getAssistCampaigns(type).catch(() => ({ data: [] })))).then(results => {
+      const available = results.some(result => (result && result.data || []).some(assistCampaignAvailable));
+      this.setData({ assistAvailable: available });
+    });
+  },
 
   loadCoupons() {
     const read = () => {
@@ -73,6 +100,7 @@ Page({
         const orders = orderResult.data || [];
         storage.saveCoupons(coupons);
         this.renderProfile(app, coupons, orders);
+        this.loadAssistAvailability();
       }).catch((error) => { console.error('load profile data failed', error); this.renderProfile(app, [], []); });
       return;
     }
@@ -80,6 +108,7 @@ Page({
     const orders = storage.getOrders();
     if (this.data.membershipEnabled) this.setMemberProfile({ membership_status: 'provisional', status: 'active', phone_verified: false, membership_consent_granted: false, source_count: 1 });
     this.renderProfile(app, coupons, orders);
+    this.loadAssistAvailability();
   },
 
   setMemberProfile(profile) {
@@ -132,7 +161,9 @@ Page({
 
   renderProfile(app, allCoupons, orders) {
     const coupons = allCoupons.filter((coupon) => coupon.status === 'AVAILABLE');
-    this.setData({ profile: app.globalData.user, store: storage.getStore(), coupons, couponCount: coupons.length, orderStats: { waitPay: orders.filter((item) => item.status === 'WAIT_PAY').length, processing: orders.filter((item) => ['PAID', 'PREPARING'].indexOf(item.status) > -1).length, delivering: orders.filter((item) => item.status === 'DELIVERING').length, completed: orders.filter((item) => item.status === 'COMPLETED').length } });
+    const normalizedOrders = orders.map(item => typeof api.normalizeOrder === 'function' ? api.normalizeOrder(item) : item);
+    const restaurantOrders = normalizedOrders.filter(item => item.fulfillmentType !== commerce.FULFILLMENT.COURIER);
+    this.setData({ profile: app.globalData.user, store: storage.getStore(), coupons, couponCount: coupons.length, orderStats: { waitPay: normalizedOrders.filter((item) => item.status === 'WAIT_PAY').length, processing: restaurantOrders.filter((item) => ['PAID', 'PREPARING'].indexOf(item.status) > -1).length, delivering: restaurantOrders.filter((item) => item.status === 'DELIVERING').length, completed: normalizedOrders.filter((item) => item.status === 'COMPLETED').length } });
   },
 
   toggleCoupons() { this.setData({ showCoupons: !this.data.showCoupons }); },

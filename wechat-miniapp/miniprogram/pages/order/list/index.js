@@ -21,7 +21,7 @@ Page({
     tabs: [
       { id: 'ALL', name: '全部' },
       { id: 'WAIT_PAY', name: '待付款' },
-      { id: 'PROCESSING', name: '制作中' },
+      { id: 'PROCESSING', name: '处理中' },
       { id: 'WAIT_SHIP', name: '待发货' },
       { id: 'SHIPPED', name: '待收货' },
       { id: 'DELIVERING', name: '配送中' },
