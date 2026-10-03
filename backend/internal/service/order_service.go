@@ -1155,7 +1155,34 @@ func (s *OrderService) ListWithSalesScope(page, pageSize int, tenantID uint, sta
 	query := model.DB.Model(&model.Order{}).Preload("Items").Preload("Items.Tickets").Preload("Items.VisitorRecords").Where("orders.tenant_id = ?", tenantID)
 	query = applyOrderSalesScope(query, salesScope)
 	if status != "" {
-		query = query.Where("orders.status = ?", status)
+		if status == "completed" {
+			// Completion is a display-level fact for the workbench: an order is
+			// complete when its core lifecycle is completed or either the local
+			// ticket or an upstream supplier ticket has been used. Refund and
+			// cancellation states remain visible under their own filters even if
+			// they retain historical usage.
+			query = query.Where(`(
+				orders.status = ? OR (
+					orders.status NOT IN (?, ?, ?) AND (
+						EXISTS (
+							SELECT 1 FROM order_item_supply_snapshots AS completed_supply
+							WHERE completed_supply.order_id = orders.id
+							  AND completed_supply.sales_tenant_id = ?
+							  AND completed_supply.mode = 'upstream'
+							  AND completed_supply.provider_status IN (?, ?, ?, ?)
+						)
+						OR EXISTS (
+							SELECT 1 FROM tickets AS completed_ticket
+							WHERE completed_ticket.order_id = orders.id
+							  AND completed_ticket.tenant_id = ?
+							  AND (completed_ticket.check_in_count > 0 OR completed_ticket.status = 'used')
+						)
+					)
+				)
+			)`, "completed", "refunded", "partial_refunded", "cancelled", tenantID, "checked", "used", "checking", "partial_used", tenantID)
+		} else {
+			query = query.Where("orders.status = ?", status)
+		}
 	}
 	if channel != "" {
 		query = query.Where("orders.channel = ?", channel)

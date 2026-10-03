@@ -69,6 +69,21 @@ func TestOrderControllerListUsesOnlineSalesScopeAndTenantScopedFilters(t *testin
 		t.Fatalf("create linked team group: %v", err)
 	}
 	createOrder(model.Order{OrderNo: "API-FILTER-FOREIGN", TenantID: foreignTenantID, Status: "paid", Channel: "online"}, baseDate)
+	var usedOrder model.Order
+	if err := db.Where("order_no = ?", "API-FILTER-ONLINE-PAID").First(&usedOrder).Error; err != nil {
+		t.Fatal(err)
+	}
+	usedItem := model.OrderItem{OrderID: usedOrder.ID, ProductName: "已核销票", Quantity: 1, Price: 10, SettlementPrice: 10}
+	if err := db.Create(&usedItem).Error; err != nil {
+		t.Fatalf("create used order item: %v", err)
+	}
+	if err := db.Create(&model.OrderItemSupplySnapshot{
+		OrderItemID: usedItem.ID, SalesTenantID: tenantID, OrderID: usedOrder.ID, Mode: "upstream",
+		FulfillmentTenantID: tenantID, ScenicAreaID: 1, ProductID: 1, ProductRevisionID: 1,
+		Provider: "zhiyoubao", Environment: "production", IssueStatus: "ready", ProviderStatus: "checked",
+	}).Error; err != nil {
+		t.Fatalf("create used supplier snapshot: %v", err)
+	}
 
 	query := url.Values{"sales_scope": {"online"}, "page": {"1"}, "page_size": {"2"}}
 	status, body := invokeOrderList(t, tenantID, query)
@@ -128,6 +143,21 @@ func TestOrderControllerListUsesOnlineSalesScopeAndTenantScopedFilters(t *testin
 	}
 	if response.Total != 1 || len(response.Data) != 1 || response.Data[0].OrderNo != "API-FILTER-XHS-REFUNDED" {
 		t.Fatalf("status filter total=%d rows=%+v", response.Total, response.Data)
+	}
+
+	status, body = invokeOrderList(t, tenantID, url.Values{"sales_scope": {"online"}, "status": {"completed"}})
+	if status != http.StatusOK {
+		t.Fatalf("completed status response=%d body=%s", status, body)
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		t.Fatal(err)
+	}
+	completedOrders := make(map[string]bool, len(response.Data))
+	for _, order := range response.Data {
+		completedOrders[order.OrderNo] = true
+	}
+	if response.Total != 2 || len(response.Data) != 2 || !completedOrders["API-FILTER-ONLINE-PAID"] || !completedOrders["API-FILTER-OTA-COMPLETE"] {
+		t.Fatalf("completed status total=%d rows=%+v", response.Total, response.Data)
 	}
 
 	status, body = invokeOrderList(t, tenantID, url.Values{"sales_scope": {"online"}, "start_date": {"2026-08-11"}, "end_date": {"2026-08-13"}})
