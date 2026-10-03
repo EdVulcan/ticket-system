@@ -214,7 +214,7 @@ func invokeOrderList(t *testing.T, tenantID uint, query url.Values) (int, []byte
 func openOrderControllerDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db := testdb.Open(t)
-	if err := db.AutoMigrate(&model.Order{}, &model.OrderItem{}, &model.Ticket{}, &model.OrderVisitor{}, &model.ChannelAccount{}, &model.TourGroup{}); err != nil {
+	if err := db.AutoMigrate(&model.Order{}, &model.OrderItem{}, &model.Ticket{}, &model.OrderVisitor{}, &model.ChannelAccount{}, &model.TourGroup{}, &model.OrderItemSupplySnapshot{}); err != nil {
 		t.Fatal(err)
 	}
 	model.DB = db
