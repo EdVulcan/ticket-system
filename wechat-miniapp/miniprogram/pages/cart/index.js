@@ -16,6 +16,39 @@ function coverImageOf(item, product) {
   return imageValue(item && item.imageFileId);
 }
 
+function skuPrice(product, skuId) {
+  const skus = Array.isArray(product && product.activeSkus) ? product.activeSkus : [];
+  const selected = skus.find(sku => String(sku.id || sku.skuId || sku.sku_id) === String(skuId || '')) || (skus.length === 1 ? skus[0] : null);
+  const value = selected ? (selected.priceCents !== undefined ? selected.priceCents : selected.price_cents) : product && product.price;
+  const price = Number(value);
+  return Number.isFinite(price) ? price : null;
+}
+
+function optionExtra(options) {
+  return (options || []).reduce((sum, option) => {
+    const label = typeof option === 'string' ? option : option && (option.label || option.name);
+    const match = String(label || '').match(/\+(\d+(?:\.\d{1,2})?)元$/);
+    return sum + (match ? Math.round(Number(match[1]) * 100) : 0);
+  }, 0);
+}
+
+function syncCartPrices(cart) {
+  let changed = false;
+  const next = cart.map(item => {
+    const businessType = commerce.businessTypeOf(item);
+    const products = storage.getProducts(businessType);
+    const product = products.find(entry => String(entry.id || entry._id) === String(item.productId));
+    const basePrice = skuPrice(product, item.skuId);
+    if (!product || basePrice === null) return item;
+    const unitPrice = basePrice + optionExtra(item.selectedOptions);
+    if (Number(item.unitPrice) === unitPrice) return item;
+    changed = true;
+    return Object.assign({}, item, { unitPrice, name: product.name || item.name, coverImageUrl: product.coverImageUrl || item.coverImageUrl || '' });
+  });
+  if (changed) storage.saveCart(next);
+  return next;
+}
+
 function decorate(item, product) {
   const fulfillmentType = item.fulfillmentType || commerce.fulfillmentOf(product);
   return Object.assign({}, item, {
@@ -30,10 +63,19 @@ function decorate(item, product) {
 Page({
   data: { groups: [], cart: [], cartCount: 0, goodsAmountText: '0.00', totalText: '0.00', takeawayGoodsText: '0.00', courierGoodsText: '0.00', hasTakeaway: false, hasCourier: false, businessBindingMismatch: false },
 
-  onShow() { this.loadCart(); },
+  onShow() {
+    this.loadCart();
+    if (!api.isProduction() || typeof api.getCatalog !== 'function') return;
+    const types = [];
+    storage.getCart().forEach(item => {
+      const type = commerce.businessTypeOf(item);
+      if (types.indexOf(type) < 0) types.push(type);
+    });
+    Promise.all(types.map(type => api.getCatalog(type).catch(error => { console.error('refresh cart catalog failed', error); return null; }))).then(() => this.loadCart());
+  },
 
   loadCart() {
-    const cart = storage.getCart().map(item => {
+    const cart = syncCartPrices(storage.getCart()).map(item => {
       const businessType = commerce.businessTypeOf(item);
       const products = storage.getProducts(businessType);
       return decorate(item, products.find(product => product.id === item.productId || product._id === item.productId));

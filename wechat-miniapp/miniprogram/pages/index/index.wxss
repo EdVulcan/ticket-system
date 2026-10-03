@@ -45,7 +45,7 @@
 .delivery-strip > view { flex: 1; min-width: 0; }
 .delivery-title { font-size: 25rpx; color: var(--green); }
 .delivery-text { font-size: 21rpx; color: var(--muted); margin-top: 6rpx; }
-.cart-float { position: fixed; z-index: 20; left: 24rpx; right: 24rpx; bottom: calc(112rpx + env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 18rpx; background: var(--ink); color: #fff; border-radius: 18rpx; padding: 18rpx 22rpx; box-shadow: 0 8rpx 28rpx rgba(35,62,53,.16); }
+.cart-float { position: fixed; z-index: 20; left: 24rpx; right: 24rpx; bottom: calc(16rpx + env(safe-area-inset-bottom)); display: flex; align-items: center; gap: 18rpx; background: var(--ink); color: #fff; border-radius: 18rpx; padding: 18rpx 22rpx; box-shadow: 0 8rpx 28rpx rgba(35,62,53,.16); }
 .cart-float-icon { position: relative; }
 .cart-count { position: absolute; right: -10rpx; top: -8rpx; min-width: 28rpx; padding: 0 6rpx; height: 28rpx; line-height: 28rpx; text-align: center; font-size: 18rpx; color: #fff; background: var(--red); border-radius: 20rpx; }
 .cart-float-copy { flex: 1; min-width: 0; }

@@ -69,6 +69,31 @@ function isAssistCampaignAvailable(campaign, businessType) {
   return hasAssistCoupon(campaign.starterReward) && hasAssistCoupon(campaign.helperReward);
 }
 
+function skuPrice(product, skuId) {
+  const skus = Array.isArray(product && product.activeSkus) ? product.activeSkus : [];
+  const selected = skus.find(sku => String(sku.id || sku.skuId || sku.sku_id) === String(skuId || '')) || (skus.length === 1 ? skus[0] : null);
+  const value = selected ? (selected.priceCents !== undefined ? selected.priceCents : selected.price_cents) : product && product.price;
+  const price = Number(value);
+  return Number.isFinite(price) ? price : null;
+}
+
+function syncCartPrice(product, businessType) {
+  if (!product || !product.id || !storage.saveCart) return;
+  const cart = storage.getCart();
+  let changed = false;
+  const next = cart.map(item => {
+    if (String(item.productId) !== String(product.id) || commerce.businessTypeOf(item) !== businessType) return item;
+    const basePrice = skuPrice(product, item.skuId);
+    if (basePrice === null) return item;
+    const optionExtra = (item.selectedOptions || []).reduce((sum, option) => sum + extraPrice(typeof option === 'string' ? option : option.label || option.name), 0);
+    const unitPrice = basePrice + optionExtra;
+    if (Number(item.unitPrice) === unitPrice) return item;
+    changed = true;
+    return Object.assign({}, item, { unitPrice, name: product.name, coverImageUrl: product.coverImageUrl || item.coverImageUrl || '' });
+  });
+  if (changed) storage.saveCart(next);
+}
+
 function createCatalogPage(channel) {
   const copy = pageCopy(channel);
   const businessType = commerce.businessTypeForFulfillment(channel);
@@ -138,6 +163,7 @@ function createCatalogPage(channel) {
         storage.saveStore(remoteStore, businessType);
         const activeBusinessType = String(remoteStore.activeBusinessType || remoteStore.businessType || '').toLowerCase();
         this.catalogProducts = catalogProducts.filter(product => commerce.fulfillmentOf(product) === channel && (!api.isProduction() || (product.catalogReady && activeBusinessType && commerce.fulfillmentForBusinessType(activeBusinessType) === channel)));
+        catalogProducts.forEach(product => syncCartPrice(product, businessType));
         this.setData({ store: remoteStore, serviceText: serviceText(channel, remoteStore), categories, channelOpen: this.isChannelOpen(remoteStore), visibleProducts: this.filterProducts(this.catalogProducts, this.data.activeCategory) });
       }).catch(error => {
         console.error('load catalog failed', error);
@@ -188,7 +214,12 @@ function createCatalogPage(channel) {
       const cartKey = `${businessType}_${product.id}_${skuId}_${options.map(item => typeof item === 'string' ? item : item.optionId || item.id || item.name).join('_') || 'default'}`;
       const current = cart.find(item => item.cartKey === cartKey);
       const optionExtra = options.reduce((sum, item) => sum + extraPrice(typeof item === 'string' ? item : item.label || item.name), 0);
-      if (current) current.quantity = Math.min(limit, current.quantity + 1);
+      if (current) {
+        current.quantity = Math.min(limit, current.quantity + 1);
+        current.unitPrice = product.price + optionExtra;
+        current.name = product.name;
+        current.coverImageUrl = product.coverImageUrl || current.coverImageUrl || '';
+      }
       else cart.push({ cartKey, productId: product.id, skuId, name: product.name, emoji: product.emoji, color: product.color, coverImageUrl: product.coverImageUrl || '', unitPrice: product.price + optionExtra, quantity: 1, selectedOptions: options, fulfillmentType: commerce.fulfillmentOf(product), businessType: commerce.businessTypeOf(product), remark: '' });
       storage.saveCart(cart);
       this.refreshCart();

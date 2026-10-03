@@ -740,6 +740,25 @@ test('catalog quick add stores the product cover instead of an arbitrary image e
   assert.notEqual(savedCart[0].coverImageUrl, 'https://cdn.example/detail.jpg');
 });
 
+test('catalog quick add refreshes a changed price before increasing quantity', () => {
+  const cart = [{ cartKey: 'restaurant_meal-1__default', productId: 'meal-1', businessType: 'restaurant', fulfillmentType: 'TAKEAWAY', unitPrice: 10000, quantity: 1 }];
+  let savedCart;
+  const createCatalogPage = load('miniprogram/services/catalog-page.js', {
+    '../config/brand': {},
+    '../data/mock': { categories: [] },
+    './storage': { getCart: () => cart, saveCart: value => { savedCart = value; } },
+    '../utils/format': { yuan: value => String(Number(value || 0) / 100) },
+    './api': { isProduction: () => false },
+  }, { wx: { showToast() {} } });
+  const page = createCatalogPage('TAKEAWAY');
+  page.setData = change => { page.data = Object.assign({}, page.data, change); };
+  page.data.channelOpen = true;
+  page.catalogProducts = [{ id: 'meal-1', name: '套餐', businessType: 'restaurant', fulfillmentType: 'TAKEAWAY', stockMode: 'UNLIMITED', stock: 99, isOnSale: true, isSoldOut: false, price: 100 }];
+  page.addQuick({ currentTarget: { dataset: { id: 'meal-1' } } });
+  assert.equal(savedCart[0].unitPrice, 100);
+  assert.equal(savedCart[0].quantity, 2);
+});
+
 test('order normalization uses immutable media_snapshot cover and never promotes detail media', () => {
   const api = load('miniprogram/services/api.js', {
     './storage': {},
@@ -805,6 +824,27 @@ test('cart and checkout backfill missing legacy images from the current catalog 
   checkoutPage.applyData([], []);
   assert.equal(checkoutPage.data.takeawayItems[0].coverImageUrl, 'https://cdn.example/current-cover.jpg');
   assert.equal(cart[0].coverImageUrl, undefined);
+});
+
+test('cart refreshes a stored line price from the current catalog', () => {
+  const cart = [{ cartKey: 'restaurant_meal-1__default', productId: 'meal-1', businessType: 'restaurant', fulfillmentType: 'TAKEAWAY', unitPrice: 10000, quantity: 2 }];
+  let savedCart;
+  const storage = {
+    getCart: () => cart,
+    saveCart: value => { savedCart = value; },
+    getProducts: () => [{ id: 'meal-1', businessType: 'restaurant', fulfillmentType: 'TAKEAWAY', price: 100, stockMode: 'UNLIMITED', stock: 99 }],
+    getStore: () => ({ businessStatus: 'OPEN', courierStatus: 'OPEN', catalogOpen: true })
+  };
+  let cartPage;
+  load('miniprogram/pages/cart/index.js', {
+    '../../services/storage': storage,
+    '../../utils/format': { yuan: value => String(Number(value || 0) / 100) },
+    '../../services/api': { isProduction: () => false, isBusinessAvailable: () => true, normalizeStore: value => value },
+  }, { Page: value => { cartPage = value; }, wx: {} });
+  cartPage.setData = change => { cartPage.data = Object.assign({}, cartPage.data, change); };
+  cartPage.loadCart();
+  assert.equal(savedCart[0].unitPrice, 100);
+  assert.equal(cartPage.data.cart[0].subtotalText, '2');
 });
 
 test('rebuy keeps the order-time cover and order surfaces render stable cover thumbnails', () => {

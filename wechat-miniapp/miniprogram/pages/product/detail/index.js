@@ -117,7 +117,12 @@ Page({
     const productCount = cart.filter(item => item.productId === product.id && commerce.businessTypeOf(item) === commerce.businessTypeOf(product)).reduce((sum, item) => sum + item.quantity, 0);
     if (productCount + this.data.quantity > stockLimit) { wx.showToast({ title: '库存不足', icon: 'none' }); return; }
     if (stockLimit < 1 || (current && current.quantity >= stockLimit) || (!current && this.data.quantity > stockLimit)) { wx.showToast({ title: '库存不足', icon: 'none' }); return; }
-    if (current) current.quantity = Math.min(stockLimit, current.quantity + this.data.quantity);
+    if (current) {
+      current.quantity = Math.min(stockLimit, current.quantity + this.data.quantity);
+      current.unitPrice = Number(basePrice) + optionExtra;
+      current.name = product.name;
+      current.coverImageUrl = product.coverImageUrl || current.coverImageUrl || '';
+    }
     else cart.push({ cartKey, productId: product.id, skuId, name: product.name, emoji: product.emoji, color: product.color, coverImageUrl: product.coverImageUrl || '', unitPrice: Number(basePrice) + optionExtra, quantity: this.data.quantity, selectedOptions, fulfillmentType: commerce.fulfillmentOf(product), businessType: commerce.businessTypeOf(product), remark: this.data.remark });
     storage.saveCart(cart);
     wx.showToast({ title: '已加入购物车', icon: 'success' });
