@@ -203,6 +203,59 @@ const verificationIncomeExpression = `CASE
 
 const verificationCountExpression = `CASE WHEN COALESCE(NULLIF(t.code_mode, ''), p.code_mode) = 'order' THEN oi.quantity ELSE 1 END`
 
+// Provider usage is an independent fulfillment fact. A supplier status is
+// included only after the upstream item was issued and has reported usage;
+// successful/overridden cancellation and returned states are excluded so a
+// refunded supplier item cannot continue contributing to reports.
+const providerVerificationStatusCondition = `s.provider_status IN ('checked', 'used', 'checking', 'partial_used', 'partially_used')
+  AND s.provider_status NOT IN ('refunded', 'partial_refunded')
+  AND s.cancel_status NOT IN ('succeeded', 'override')`
+
+// verificationFactsCTE presents local and upstream usage through one shape.
+// The NOT EXISTS predicate makes the local check-in the canonical row when
+// both systems have recorded usage for the same ticket.
+func verificationFactsCTE() string {
+	return fmt.Sprintf(`
+WITH verification_facts AS (
+	SELECT c.id AS record_id, c.check_in_time, c.scenic_area_id, sa.name AS scenic_area_name,
+	       oi.product_name, t.ticket_code, o.order_no, seller.name AS seller_name, o.channel,
+	       %s AS verified_count, %s AS income_cents, t.visitor_name, t.visitor_phone,
+	       COALESCE(cp.name, '') AS check_point_name
+	FROM check_in_records c
+	JOIN tickets t ON t.id = c.ticket_id AND t.status != 'refunded'
+	JOIN order_items oi ON oi.id = t.order_item_id AND oi.fulfillment_tenant_id = ?
+	JOIN orders o ON o.id = oi.order_id AND o.environment = 'production'
+	LEFT JOIN products p ON p.id = oi.product_id
+	JOIN scenic_areas sa ON sa.id = c.scenic_area_id AND sa.tenant_id = ?
+	JOIN tenants seller ON seller.id = o.tenant_id
+	LEFT JOIN check_points cp ON cp.id = c.check_point_id AND cp.tenant_id = ?
+	WHERE c.tenant_id = ? AND c.result = 'success' AND c.reversed_at IS NULL
+	  AND c.id = (SELECT MIN(first.id) FROM check_in_records first
+	              WHERE first.ticket_id = c.ticket_id AND first.result = 'success' AND first.reversed_at IS NULL)
+
+	UNION ALL
+
+	SELECT s.id AS record_id, COALESCE(s.provider_first_used_at, s.last_synced_at) AS check_in_time,
+	       s.scenic_area_id, sa.name AS scenic_area_name,
+	       oi.product_name, t.ticket_code, o.order_no, seller.name AS seller_name, o.channel,
+	       %s AS verified_count, %s AS income_cents, t.visitor_name, t.visitor_phone,
+	       '' AS check_point_name
+	FROM order_item_supply_snapshots s
+	JOIN order_items oi ON oi.id = s.order_item_id AND oi.fulfillment_tenant_id = s.fulfillment_tenant_id
+	JOIN orders o ON o.id = s.order_id AND o.tenant_id = s.sales_tenant_id AND o.environment = 'production'
+	JOIN tickets t ON t.order_id = o.id AND t.order_item_id = oi.id AND t.status != 'refunded'
+	LEFT JOIN products p ON p.id = oi.product_id
+	JOIN scenic_areas sa ON sa.id = s.scenic_area_id AND sa.tenant_id = s.fulfillment_tenant_id
+	JOIN tenants seller ON seller.id = o.tenant_id
+	WHERE s.mode = 'upstream' AND s.fulfillment_tenant_id = ? AND s.issue_status = 'ready'
+	  AND %s
+	  AND NOT EXISTS (SELECT 1 FROM check_in_records local_check
+	                  WHERE local_check.ticket_id = t.id AND local_check.tenant_id = s.fulfillment_tenant_id
+	                    AND local_check.result = 'success' AND local_check.reversed_at IS NULL)
+)`, verificationCountExpression, verificationIncomeExpression,
+		verificationCountExpression, verificationIncomeExpression, providerVerificationStatusCondition)
+}
+
 func (s *ReportService) GetVerificationSummary(tenantID uint, filter FormalReportFilter) ([]VerificationSummaryRow, error) {
 	if tenantID == 0 {
 		return nil, errors.New("tenant is required")
@@ -215,27 +268,18 @@ func (s *ReportService) GetVerificationSummary(tenantID uint, filter FormalRepor
 		return nil, err
 	}
 	rows := make([]VerificationSummaryRow, 0)
-	query := fmt.Sprintf(`
-		SELECT DATE(c.check_in_time) AS date, c.scenic_area_id, sa.name AS scenic_area_name,
-		       oi.product_name, seller.name AS seller_name, o.channel,
-		       SUM(%s) AS verified_count, SUM(%s) AS income_cents
-		FROM check_in_records c
-		JOIN tickets t ON t.id = c.ticket_id AND t.status != 'refunded'
-		JOIN order_items oi ON oi.id = t.order_item_id AND oi.fulfillment_tenant_id = ?
-		JOIN orders o ON o.id = oi.order_id
-		LEFT JOIN products p ON p.id = oi.product_id
-		JOIN scenic_areas sa ON sa.id = c.scenic_area_id AND sa.tenant_id = ?
-		JOIN tenants seller ON seller.id = o.tenant_id
-		WHERE c.tenant_id = ? AND o.environment = 'production' AND c.result = 'success' AND c.reversed_at IS NULL
-		  AND c.check_in_time BETWEEN ? AND ?
-		  AND c.id = (SELECT MIN(first.id) FROM check_in_records first
-		              WHERE first.ticket_id = c.ticket_id AND first.result = 'success' AND first.reversed_at IS NULL)
-		  AND (? = 0 OR c.scenic_area_id = ?) AND (? = '' OR o.channel = ?)
-		  AND (? = '' OR oi.product_name LIKE ?)
-		GROUP BY DATE(c.check_in_time), c.scenic_area_id, sa.name, oi.product_name, seller.name, o.channel
-		ORDER BY date DESC, sa.name, oi.product_name, seller.name`, verificationCountExpression, verificationIncomeExpression)
+	query := verificationFactsCTE() + `
+	SELECT DATE(check_in_time) AS date, scenic_area_id, scenic_area_name,
+	       product_name, seller_name, channel,
+	       SUM(verified_count) AS verified_count, SUM(income_cents) AS income_cents
+	FROM verification_facts
+	WHERE check_in_time BETWEEN ? AND ?
+	  AND (? = 0 OR scenic_area_id = ?) AND (? = '' OR channel = ?)
+	  AND (? = '' OR product_name LIKE ?)
+	GROUP BY DATE(check_in_time), scenic_area_id, scenic_area_name, product_name, seller_name, channel
+	ORDER BY date DESC, scenic_area_name, product_name, seller_name`
 	productLike := likeReportValue(filter.ProductName)
-	if err := model.DB.Raw(query, tenantID, tenantID, tenantID, start, end,
+	if err := model.DB.Raw(query, tenantID, tenantID, tenantID, tenantID, tenantID, start, end,
 		filter.ScenicAreaID, filter.ScenicAreaID, filter.Channel, filter.Channel, productLike, productLike).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -255,31 +299,21 @@ func (s *ReportService) GetVerificationDetails(tenantID uint, filter FormalRepor
 	}
 	page, pageSize = reportPage(page, pageSize)
 	productLike := likeReportValue(filter.ProductName)
-	base := `
-		FROM check_in_records c
-		JOIN tickets t ON t.id = c.ticket_id AND t.status != 'refunded'
-		JOIN order_items oi ON oi.id = t.order_item_id AND oi.fulfillment_tenant_id = ?
-		JOIN orders o ON o.id = oi.order_id
-		LEFT JOIN products p ON p.id = oi.product_id
-		JOIN scenic_areas sa ON sa.id = c.scenic_area_id AND sa.tenant_id = ?
-		JOIN tenants seller ON seller.id = o.tenant_id
-		LEFT JOIN check_points cp ON cp.id = c.check_point_id AND cp.tenant_id = ?
-		WHERE c.tenant_id = ? AND o.environment = 'production' AND c.result = 'success' AND c.reversed_at IS NULL
-		  AND c.check_in_time BETWEEN ? AND ?
-		  AND c.id = (SELECT MIN(first.id) FROM check_in_records first
-		              WHERE first.ticket_id = c.ticket_id AND first.result = 'success' AND first.reversed_at IS NULL)
-		  AND (? = 0 OR c.scenic_area_id = ?) AND (? = '' OR o.channel = ?)
-		  AND (? = '' OR oi.product_name LIKE ?)`
-	args := []interface{}{tenantID, tenantID, tenantID, tenantID, start, end,
+	base := verificationFactsCTE() + `
+		SELECT * FROM verification_facts
+		WHERE check_in_time BETWEEN ? AND ?
+		  AND (? = 0 OR scenic_area_id = ?) AND (? = '' OR channel = ?)
+		  AND (? = '' OR product_name LIKE ?)`
+	args := []interface{}{tenantID, tenantID, tenantID, tenantID, tenantID, start, end,
 		filter.ScenicAreaID, filter.ScenicAreaID, filter.Channel, filter.Channel, productLike, productLike}
 	var total int64
-	if err := model.DB.Raw(`SELECT COUNT(*) `+base, args...).Scan(&total).Error; err != nil {
+	if err := model.DB.Raw(`SELECT COUNT(*) FROM (`+base+`) report_rows`, args...).Scan(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	selectQuery := fmt.Sprintf(`SELECT c.id AS record_id, c.check_in_time, c.scenic_area_id, sa.name AS scenic_area_name,
-		oi.product_name, t.ticket_code, o.order_no, seller.name AS seller_name, o.channel,
-		%s AS verified_count, %s AS income_cents, t.visitor_name, t.visitor_phone,
-		COALESCE(cp.name, '') AS check_point_name `+base+` ORDER BY c.check_in_time DESC, c.id DESC LIMIT ? OFFSET ?`, verificationCountExpression, verificationIncomeExpression)
+	selectQuery := `SELECT record_id, check_in_time, scenic_area_id, scenic_area_name,
+		product_name, ticket_code, order_no, seller_name, channel,
+		verified_count, income_cents, visitor_name, visitor_phone, check_point_name
+		FROM (` + base + `) report_rows ORDER BY check_in_time DESC, record_id DESC LIMIT ? OFFSET ?`
 	rows := make([]VerificationDetailRow, 0)
 	if err := model.DB.Raw(selectQuery, append(args, pageSize, (page-1)*pageSize)...).Scan(&rows).Error; err != nil {
 		return nil, 0, err

@@ -238,6 +238,117 @@ func TestUsedTicketRefundRequiresInitialSupplierAdminAndRemovesVerificationFact(
 	}
 }
 
+func TestVerificationReportsIncludeProviderUsageWithoutLocalCheckIn(t *testing.T) {
+	order, ticket := seedReadyUpstreamRefund(t)
+	usedAt := time.Now().Add(-2 * time.Minute)
+	if err := model.DB.Model(&model.OrderItemSupplySnapshot{}).
+		Where("order_id = ?", order.ID).
+		Updates(map[string]interface{}{
+			"provider_status":        "checked",
+			"provider_first_used_at": usedAt,
+			"last_synced_at":         usedAt,
+		}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	filter := FormalReportFilter{StartDate: usedAt.Format("2006-01-02"), EndDate: usedAt.Format("2006-01-02")}
+	service := &ReportService{}
+	summary, err := service.GetVerificationSummary(order.TenantID, filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summary) != 1 || summary[0].VerifiedCount != 1 || summary[0].IncomeCents != 9950 {
+		t.Fatalf("provider verification summary=%+v, want one admission and 9950 cents", summary)
+	}
+	details, total, err := service.GetVerificationDetails(order.TenantID, filter, 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(details) != 1 || details[0].TicketCode != ticket.TicketCode {
+		t.Fatalf("provider verification details total=%d rows=%+v", total, details)
+	}
+	daily, err := service.GetDailyReport(order.TenantID, filter.StartDate, filter.EndDate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(daily.CheckIns) != 1 || daily.CheckIns[0].SuccessCount != 1 || daily.CheckIns[0].FailureCount != 0 {
+		t.Fatalf("provider daily check-ins=%+v, want one success", daily.CheckIns)
+	}
+}
+
+func TestVerificationReportsDoNotDoubleCountLocalAndProviderUsage(t *testing.T) {
+	order, ticket := seedReadyUpstreamRefund(t)
+	usedAt := time.Now().Add(-2 * time.Minute)
+	if err := model.DB.Model(&model.OrderItemSupplySnapshot{}).
+		Where("order_id = ?", order.ID).
+		Updates(map[string]interface{}{
+			"provider_status":        "checked",
+			"provider_first_used_at": usedAt,
+			"last_synced_at":         usedAt,
+		}).Error; err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint model.CheckPoint
+	if err := model.DB.Where("tenant_id = ?", order.TenantID).First(&checkpoint).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := (&TicketService{}).Verify(ticket.TicketCode, checkpoint.ID, verificationDeviceID(t, order.TenantID, checkpoint.ID), order.TenantID); err != nil {
+		t.Fatal(err)
+	}
+
+	filter := FormalReportFilter{StartDate: usedAt.Format("2006-01-02"), EndDate: usedAt.Format("2006-01-02")}
+	summary, err := (&ReportService{}).GetVerificationSummary(order.TenantID, filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	for _, row := range summary {
+		count += row.VerifiedCount
+	}
+	if count != 1 {
+		t.Fatalf("local and provider usage were double-counted: %+v", summary)
+	}
+	details, total, err := (&ReportService{}).GetVerificationDetails(order.TenantID, filter, 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(details) != 1 {
+		t.Fatalf("local and provider detail rows total=%d rows=%+v", total, details)
+	}
+}
+
+func TestVerificationReportsExcludeCancelledProviderUsage(t *testing.T) {
+	order, _ := seedReadyUpstreamRefund(t)
+	usedAt := time.Now().Add(-2 * time.Minute)
+	if err := model.DB.Model(&model.OrderItemSupplySnapshot{}).
+		Where("order_id = ?", order.ID).
+		Updates(map[string]interface{}{
+			"provider_status":        "refunded",
+			"provider_first_used_at": usedAt,
+			"last_synced_at":         usedAt,
+			"cancel_status":          "succeeded",
+		}).Error; err != nil {
+		t.Fatal(err)
+	}
+	filter := FormalReportFilter{StartDate: usedAt.Format("2006-01-02"), EndDate: usedAt.Format("2006-01-02")}
+	service := &ReportService{}
+	summary, err := service.GetVerificationSummary(order.TenantID, filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	details, total, err := service.GetVerificationDetails(order.TenantID, filter, 1, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	daily, err := service.GetDailyReport(order.TenantID, filter.StartDate, filter.EndDate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summary) != 0 || total != 0 || len(details) != 0 || len(daily.CheckIns) != 0 {
+		t.Fatalf("cancelled provider usage remained in reports: summary=%+v total=%d details=%+v daily=%+v", summary, total, details, daily.CheckIns)
+	}
+}
+
 func TestLaterUsedTicketRefundRestatesOriginalVerificationPeriod(t *testing.T) {
 	resetBusinessData(t)
 	tenantID, productID := seedSellableProduct(t, "unlimited", 0)

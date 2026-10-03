@@ -171,11 +171,27 @@ func (s *ReportService) GetDailyReport(tenantID uint, startDate, endDate string)
 		Group("DATE(order_items.use_date)").Order("date ASC").Scan(&report.Visits).Error; err != nil {
 		return nil, err
 	}
-	if err := model.DB.Table("check_in_records").Select(`DATE(check_in_time) AS date,
-		SUM(CASE WHEN result = 'success' THEN 1 ELSE 0 END) AS success_count,
-		SUM(CASE WHEN result != 'success' THEN 1 ELSE 0 END) AS failure_count`).
-		Where("tenant_id = ? AND reversed_at IS NULL AND check_in_time BETWEEN ? AND ?", tenantID, start, end).
-		Group("DATE(check_in_time)").Order("date ASC").Scan(&report.CheckIns).Error; err != nil {
+	// Include both local check-in records and upstream supplier usage. The
+	// shared facts CTE suppresses a provider row when the same ticket already
+	// has an effective local check-in, preventing double counting.
+	checkInQuery := verificationFactsCTE() + `,
+	check_in_facts AS (
+		SELECT DATE(check_in_time) AS date, verified_count AS success_count, 0 AS failure_count
+		FROM verification_facts
+		WHERE check_in_time BETWEEN ? AND ?
+		UNION ALL
+		SELECT DATE(check_in_time) AS date, 0 AS success_count, 1 AS failure_count
+		FROM check_in_records
+		WHERE tenant_id = ? AND reversed_at IS NULL AND result != 'success'
+		  AND check_in_time BETWEEN ? AND ?
+	)
+	SELECT date, COALESCE(SUM(success_count), 0) AS success_count,
+	       COALESCE(SUM(failure_count), 0) AS failure_count
+	FROM check_in_facts
+	GROUP BY date ORDER BY date ASC`
+	if err := model.DB.Raw(checkInQuery,
+		tenantID, tenantID, tenantID, tenantID, tenantID,
+		start, end, tenantID, start, end).Scan(&report.CheckIns).Error; err != nil {
 		return nil, err
 	}
 	if err := model.DB.Table("settlement_statements").Select(`DATE(COALESCE(paid_at, confirmed_at, created_at)) AS date, COUNT(id) AS statement_count,
