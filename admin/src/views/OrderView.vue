@@ -397,19 +397,20 @@ const handleRefund = (row: any) => {
 }
 
 const getStatusType = (status: string) => {
-  const map: any = { paid: 'success', unpaid: 'warning', refunded: 'info', completed: 'success', used: 'info', checking: 'warning', supplier_refunded: 'info', supplier_partial_refunded: 'warning', supplier_unknown: 'warning' }
+  const map: any = { paid: 'success', unpaid: 'warning', refunded: 'info', completed: 'success', used: 'info', checking: 'warning', supplier_unchecked: 'info', supplier_refunded: 'info', supplier_partial_refunded: 'warning', supplier_unknown: 'warning' }
   return map[status] || 'info'
 }
 
 const getStatusText = (status: string) => {
-  const map: any = { paid: '已支付', unpaid: '待支付', cancelled: '已取消', partial_refunded: '部分退款', refunded: '已退款', completed: '已完成', used: '已使用', checking: '部分使用', supplier_refunded: '供应商已退票', supplier_partial_refunded: '供应商部分退票', supplier_unknown: '供应商状态待核实' }
+  const map: any = { paid: '已支付', unpaid: '待支付', cancelled: '已取消', partial_refunded: '部分退款', refunded: '已退款', completed: '已完成', used: '已使用', checking: '部分使用', supplier_unchecked: '供应商未使用', supplier_refunded: '供应商已退票', supplier_partial_refunded: '供应商部分退票', supplier_unknown: '供应商状态待核实' }
   return map[status] || '未知状态'
 }
 
 const displayStatus = (order: any) => {
   if (['refunded', 'partial_refunded', 'cancelled'].includes(order?.status)) return order.status
-  if (order?.provider_status === 'checked') return 'used'
-  if (order?.provider_status === 'checking') return 'checking'
+  if (order?.provider_status === 'checked' || order?.provider_status === 'used') return 'used'
+  if (order?.provider_status === 'checking' || order?.provider_status === 'partial_used' || order?.provider_status === 'partially_used') return 'checking'
+  if (order?.provider_status === 'un_check' || order?.provider_status === 'unused') return 'supplier_unchecked'
   if (order?.provider_status === 'refunded') return 'supplier_refunded'
   if (order?.provider_status === 'partial_refunded') return 'supplier_partial_refunded'
   if (order?.provider_status === 'unknown') return 'supplier_unknown'
