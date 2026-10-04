@@ -32,7 +32,17 @@ Page({
     orderStats: { waitPay: 0, processing: 0, delivering: 0, completed: 0 }
   },
 
-  onShow() { this.loadProfile(); },
+  onShow() {
+    // Reset any stale modal state left by a hot reload or a tab switch.
+    this.setData({ showContact: false });
+    this.loadProfile();
+  },
+
+  onHide() {
+    // The contact sheet must never remain as a fixed touch-blocking layer
+    // when the tab page is left and later shown again.
+    if (this.data.showContact) this.setData({ showContact: false });
+  },
 
   loadAssistAvailability() {
     if (typeof api.getAssistCampaigns !== 'function') {
@@ -173,9 +183,7 @@ Page({
   },
   goAddress() { wx.navigateTo({ url: '/pages/address/list/index' }); },
   goAssist() { wx.navigateTo({ url: '/pages/assist/index/index' }); },
-  openContact() {
-    if (this.data.contact && this.data.contact.available) this.setData({ showContact: true });
-  },
+  openContact() { this.setData({ showContact: true }); },
   closeContact() { this.setData({ showContact: false }); },
   keepContactOpen() {},
   previewContactQRCode() {

@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>临时票券 · 售罄彩蛋原型</title>
+  <style>
+    :root { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: #172033; background: #eef4fb; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 12% 0%, #dcecff, #eef4fb 44%, #f7faff 100%); }
+    .page { width: min(960px, 100%); margin: auto; padding: 28px 16px 56px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+    .brand { display: flex; align-items: center; gap: 12px; }
+    .mark { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 15px; color: white; font-weight: 900; background: linear-gradient(145deg, #2563eb, #0ea5e9); box-shadow: 0 9px 22px #2563eb3b; }
+    .eyebrow { color: #6c7d95; font-size: 11px; font-weight: 800; letter-spacing: .15em; }
+    h1 { margin: 3px 0 0; font-size: 25px; letter-spacing: -.03em; }
+    .demo-badge { padding: 8px 11px; border-radius: 999px; color: #1d5fc8; background: #e3efff; font-size: 12px; font-weight: 800; }
+    .panel { padding: 22px; border: 1px solid #dfe8f3; border-radius: 18px; background: #fff; box-shadow: 0 12px 30px #335b8614; }
+    .panel h2 { margin: 0 0 7px; font-size: 18px; }
+    .panel p { margin: 0; color: #68788f; line-height: 1.7; }
+    .ticket-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; margin: 18px 0; }
+    .ticket { display: grid; justify-items: center; gap: 10px; padding: 14px 10px; border: 1px solid #dfe8f3; border-radius: 15px; background: #fff; transition: .2s; }
+    .ticket.sold { opacity: .58; transform: scale(.97); }
+    .qr { width: 100%; aspect-ratio: 1; padding: 9px; border-radius: 10px; background: repeating-linear-gradient(45deg, #172033 0 3px, #fff 3px 6px); box-shadow: inset 0 0 0 8px #fff; }
+    .ticket-code { max-width: 100%; overflow: hidden; color: #50627b; font: 700 11px/1.3 ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
+    .ticket-status { padding: 6px 10px; border-radius: 999px; color: #16804a; background: #e9f9f0; font-size: 11px; font-weight: 800; }
+    .ticket.sold .ticket-status { color: #bd3b38; background: #fff0f1; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+    button { border: 0; cursor: pointer; font: inherit; font-weight: 800; }
+    .primary { padding: 12px 17px; border-radius: 11px; color: #fff; background: linear-gradient(135deg, #2563eb, #1677d2); box-shadow: 0 8px 15px #2563eb2e; }
+    .ghost { padding: 11px 16px; border-radius: 11px; color: #3b4b62; background: #edf3fa; }
+    .note { margin-top: 14px; color: #8190a6; font-size: 12px; }
+
+    .celebration { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; padding: 20px; overflow: hidden; background: radial-gradient(circle at 50% 42%, #7048c9 0, #30216e 38%, #11142f 100%); opacity: 0; pointer-events: none; transition: opacity .35s ease; }
+    .celebration.show { opacity: 1; pointer-events: auto; }
+    .celebration::before, .celebration::after { content: ""; position: absolute; width: 46vw; height: 46vw; max-width: 630px; max-height: 630px; border: 1px solid #9fd4ff55; border-radius: 50%; animation: orbit 4.8s ease-out infinite; }
+    .celebration::after { width: 72vw; height: 72vw; max-width: 960px; max-height: 960px; animation-delay: .65s; }
+    .celebration-card { position: relative; z-index: 2; width: min(450px, 100%); overflow: hidden; padding: 31px 28px 27px; border: 4px solid #fff; border-radius: 34px 27px 38px 24px; text-align: center; background: linear-gradient(160deg, #fff 0%, #f5faff 100%); box-shadow: 0 26px 100px #020c27b3, 0 0 0 8px #ffffff12; transform: translateY(35px) scale(.72) rotate(-7deg); transition: transform .65s cubic-bezier(.2, 1.45, .35, 1); }
+    .celebration.show .celebration-card { transform: translateY(0) scale(1) rotate(2deg); }
+    .celebration-card::before { content: ""; position: absolute; width: 260px; height: 260px; left: 50%; top: -172px; transform: translateX(-50%); border-radius: 50%; background: #75c7ff66; filter: blur(3px); }
+    .celebration-card::after { content: "✦  ✧  ✦  ✧  ✦"; position: absolute; left: 0; right: 0; bottom: 9px; color: #2563eb30; font-size: 18px; letter-spacing: 17px; animation: shimmer 1.4s ease-in-out infinite alternate; }
+    .celebration-ribbon { position: absolute; top: 17px; right: -38px; padding: 6px 42px; color: #fff; background: #f03f75; font-size: 11px; font-weight: 900; letter-spacing: .08em; transform: rotate(13deg); box-shadow: 0 5px 13px #c1396140; }
+    .celebration-icon { position: relative; display: grid; place-items: center; width: 104px; height: 104px; margin: 5px auto 16px; border: 7px solid #fff; border-radius: 31px 31px 35px 35px; color: #fff; font-size: 31px; font-weight: 900; background: linear-gradient(145deg, #ff7b35, #f03f75 52%, #7548d8); box-shadow: 0 13px 25px #8b3eaa55, 0 0 0 8px #f03f7530; animation: mascot .95s .12s both; }
+    .celebration-icon::before, .celebration-icon::after { content: ""; position: absolute; top: -25px; width: 23px; height: 34px; border: 6px solid #fff; border-radius: 16px 16px 5px 5px; background: #12aeb1; }
+    .celebration-icon::before { left: 9px; transform: rotate(-22deg); }
+    .celebration-icon::after { right: 9px; transform: rotate(22deg); }
+    .celebration-kicker { position: relative; color: #1d5fc8; font-size: 11px; font-weight: 900; letter-spacing: .2em; }
+    .celebration-title { position: relative; margin: 8px 0 10px; font-size: 36px; letter-spacing: -.09em; background: linear-gradient(110deg, #ef3f70, #fa7c27, #7548d8); color: transparent; background-clip: text; }
+    .celebration-desc { position: relative; margin: 0 auto 22px; color: #667991; line-height: 1.7; font-size: 15px; }
+    .celebration-card .primary { position: relative; min-width: 145px; }
+    .dancers { position: absolute; inset: 0; z-index: 3; overflow: hidden; pointer-events: none; }
+    .dancer { position: absolute; left: -15vw; bottom: var(--bottom); font-size: 82px; line-height: 1; filter: drop-shadow(0 7px 4px #050b2480); animation: parade var(--duration) var(--delay) linear infinite; }
+    .dancer-icon { display: block; text-shadow: 0 0 4px #fff, 0 0 16px #fff8; animation: spin 1.2s linear infinite; will-change: transform; }
+    .dancer:nth-child(2) { font-size: 74px; }
+    .dancer:nth-child(3) { font-size: 91px; }
+    .dancer:nth-child(even) { left: auto; right: -15vw; animation-name: parade-reverse; }
+    @keyframes parade { 0% { opacity: 0; transform: translateX(0) translateY(35px) scale(.72); } 8% { opacity: 1; } 20% { transform: translateX(25vw) translateY(-45px) scale(1); } 42% { transform: translateX(56vw) translateY(18px) scale(1.08); } 66% { transform: translateX(87vw) translateY(-52px) scale(1); } 92% { opacity: 1; } 100% { opacity: 0; transform: translateX(125vw) translateY(25px) scale(.86); } }
+    @keyframes parade-reverse { 0% { opacity: 0; transform: translateX(0) translateY(25px) scale(.82); } 8% { opacity: 1; } 20% { transform: translateX(-25vw) translateY(-48px) scale(1); } 42% { transform: translateX(-56vw) translateY(15px) scale(1.08); } 66% { transform: translateX(-87vw) translateY(-55px) scale(1); } 92% { opacity: 1; } 100% { opacity: 0; transform: translateX(-125vw) translateY(22px) scale(.86); } }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    .playfield { position: absolute; inset: 0; z-index: 3; width: 100%; height: 100%; pointer-events: none; }
+    @keyframes orbit { 0% { opacity: .8; transform: scale(.25); } 100% { opacity: 0; transform: scale(1.35); } }
+    @keyframes shimmer { from { transform: translateX(-5px); opacity: .35; } to { transform: translateX(5px); opacity: .9; } }
+    @keyframes mascot { 0% { opacity: 0; transform: translateY(25px) rotate(-18deg) scale(.35); } 65% { transform: translateY(-9px) rotate(7deg) scale(1.1); } 100% { opacity: 1; transform: translateY(0) rotate(0) scale(1); } }
+    .confetti { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+    .confetti i { position: absolute; left: var(--left); top: -8%; width: 13px; height: 31px; border-radius: 4px 8px 3px 7px; background: var(--color); box-shadow: 0 0 9px var(--color); transform: rotate(var(--rotate)); animation: fall 2.35s var(--delay) cubic-bezier(.15,.7,.25,1) both; }
+    @keyframes fall { 0% { opacity: 0; transform: translate(0, -30px) rotate(0) scale(.5); } 10% { opacity: 1; } 100% { opacity: 0; transform: translate(var(--x), var(--y)) rotate(var(--spin)) scale(1.15); } }
+    @keyframes pop { 0% { opacity: 0; transform: scale(.4) rotate(-12deg); } 70% { transform: scale(1.12) rotate(4deg); } 100% { opacity: 1; transform: scale(1) rotate(0); } }
+    @media (max-width: 620px) { .topbar { align-items: flex-start; } .demo-badge { font-size: 11px; } .ticket-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; } .panel { padding: 17px; } .celebration-title { font-size: 27px; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="topbar"><div class="brand"><div class="mark">QR</div><div><div class="eyebrow">TICKET DESK</div><h1>票券二维码</h1></div></div><div class="demo-badge">彩蛋动画原型</div></header>
+    <section class="panel">
+      <h2>全部售出祝贺动画</h2>
+      <p>这是独立演示页。点击下方按钮模拟所有二维码变成“已销售”，查看弹窗、彩带和卡片进场效果。</p>
+      <div id="ticketGrid" class="ticket-grid"></div>
+      <div class="actions"><button id="sellAll" class="primary" type="button">模拟全部售出</button><button id="reset" class="ghost" type="button">恢复未销售</button></div>
+      <div class="note">原型不会保存状态，也不会调用 temporary-qr 的接口。</div>
+    </section>
+  </main>
+
+  <section id="celebration" class="celebration" aria-hidden="true">
+    <div id="confetti" class="confetti"></div>
+    <canvas id="playfield" class="playfield" aria-hidden="true"></canvas>
+    <div class="celebration-card" role="dialog" aria-modal="true" aria-labelledby="celebrationTitle">
+      <div class="celebration-ribbon">票子去哪了？</div><div class="celebration-icon">ヽ(°〇°)ﾉ</div><div class="celebration-kicker">TICKET DESK · 啪！没票啦</div><h2 id="celebrationTitle" class="celebration-title">一张都没剩！</h2><p class="celebration-desc">咻——门票全部找到主人。<br>这波可以，老板请放烟花。</p><button id="close" class="primary" type="button">好耶！</button>
+    </div>
+  </section>
+
+  <script>
+    const tickets = [1, 2, 3, 4].map((number) => ({ code: `DEMO-${String(number).padStart(2, '0')}`, sold: false }));
+    const grid = document.getElementById('ticketGrid');
+    const celebration = document.getElementById('celebration');
+    const confetti = document.getElementById('confetti');
+    let celebrationTimer = null;
+    let physicsFrame = 0;
+    let sprites = [];
+    let fieldWidth = 0;
+    let fieldHeight = 0;
+    let fieldRatio = 1;
+    const spriteCache = new Map();
+    const playfield = document.getElementById('playfield');
+    const context = playfield.getContext('2d');
+    function render() {
+      grid.replaceChildren();
+      tickets.forEach((ticket) => {
+        const card = document.createElement('article'); card.className = `ticket${ticket.sold ? ' sold' : ''}`;
+        card.innerHTML = `<div class="qr"></div><div class="ticket-code">${ticket.code}</div><div class="ticket-status">${ticket.sold ? '已销售' : '未销售'}</div>`;
+        grid.append(card);
+      });
+    }
+    function burst() {
+      confetti.replaceChildren();
+      const colors = ['#2563eb', '#12b7a6', '#f59e0b', '#ef6680', '#8b5cf6'];
+      for (let i = 0; i < 38; i += 1) {
+        const piece = document.createElement('i');
+        piece.style.setProperty('--color', colors[i % colors.length]);
+        piece.style.setProperty('--left', `${Math.random() * 100}%`);
+        piece.style.setProperty('--x', `${(Math.random() - .5) * 240}px`);
+        piece.style.setProperty('--y', `${window.innerHeight * .95 + Math.random() * 260}px`);
+        piece.style.setProperty('--rotate', `${Math.random() * 90 - 45}deg`);
+        piece.style.setProperty('--spin', `${Math.random() * 800 - 400}deg`);
+        piece.style.setProperty('--delay', `${Math.random() * .18}s`);
+        confetti.append(piece);
+      }
+    }
+    function resizePlayfield() {
+      const ratio = window.devicePixelRatio || 1;
+      const width = celebration.clientWidth;
+      const height = celebration.clientHeight;
+      if (width !== fieldWidth || height !== fieldHeight || ratio !== fieldRatio) {
+        if (ratio !== fieldRatio) spriteCache.clear();
+        fieldWidth = width;
+        fieldHeight = height;
+        fieldRatio = ratio;
+        playfield.width = Math.round(width * ratio);
+        playfield.height = Math.round(height * ratio);
+        context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      }
+      return { width, height };
+    }
+    function getSpriteImage(icon, radius) {
+      const key = `${icon}:${radius}:${fieldRatio}`;
+      const cached = spriteCache.get(key);
+      if (cached) return cached;
+      const padding = 12;
+      const cssSize = radius * 2 + padding * 2;
+      const image = document.createElement('canvas');
+      image.width = Math.ceil(cssSize * fieldRatio);
+      image.height = Math.ceil(cssSize * fieldRatio);
+      const imageContext = image.getContext('2d');
+      imageContext.scale(fieldRatio, fieldRatio);
+      imageContext.font = `${radius * 1.85}px "Apple Color Emoji", "Segoe UI Emoji", sans-serif`;
+      imageContext.textAlign = 'center';
+      imageContext.textBaseline = 'middle';
+      imageContext.shadowColor = '#ffffff';
+      imageContext.shadowBlur = 8;
+      imageContext.fillText(icon, cssSize / 2, cssSize / 2);
+      const result = { canvas: image, cssSize };
+      spriteCache.set(key, result);
+      return result;
+    }
+    function createSprites() {
+      const { width, height } = resizePlayfield();
+      const icons = ['🐰', '🐱', '🐶', '🐰', '🐰', '🐶', '🐰'];
+      sprites = icons.map((icon, index) => {
+        const radius = 27 + (index % 3) * 5;
+        return { icon, radius, image: getSpriteImage(icon, radius), x: radius + Math.random() * Math.max(1, width - radius * 2), y: radius + Math.random() * Math.max(1, height - radius * 2), vx: (index % 2 ? -1 : 1) * (75 + Math.random() * 55), vy: (index % 3 ? 1 : -1) * (55 + Math.random() * 65), angle: Math.random() * Math.PI * 2, spin: (index % 2 ? -1 : 1) * (1.5 + Math.random() * 1.5) };
+      });
+    }
+    function collideSprites(left, right) {
+      const dx = right.x - left.x;
+      const dy = right.y - left.y;
+      const distance = Math.hypot(dx, dy) || 0.01;
+      const minimum = left.radius + right.radius;
+      if (distance >= minimum) return;
+      const nx = dx / distance;
+      const ny = dy / distance;
+      const overlap = minimum - distance;
+      left.x -= nx * overlap / 2; left.y -= ny * overlap / 2;
+      right.x += nx * overlap / 2; right.y += ny * overlap / 2;
+      const relative = (right.vx - left.vx) * nx + (right.vy - left.vy) * ny;
+      if (relative > 0) return;
+      left.vx += relative * nx; left.vy += relative * ny;
+      right.vx -= relative * nx; right.vy -= relative * ny;
+    }
+    function drawSprites(timestamp) {
+      const width = fieldWidth;
+      const height = fieldHeight;
+      const now = timestamp / 1000;
+      const previous = drawSprites.lastTime || now;
+      const delta = Math.min(now - previous, 0.035);
+      drawSprites.lastTime = now;
+      context.clearRect(0, 0, width, height);
+      sprites.forEach((sprite) => {
+        sprite.x += sprite.vx * delta;
+        sprite.y += sprite.vy * delta;
+        sprite.angle += sprite.spin * delta;
+        if (sprite.x - sprite.radius < 0) { sprite.x = sprite.radius; sprite.vx = Math.abs(sprite.vx); }
+        if (sprite.x + sprite.radius > width) { sprite.x = width - sprite.radius; sprite.vx = -Math.abs(sprite.vx); }
+        if (sprite.y - sprite.radius < 0) { sprite.y = sprite.radius; sprite.vy = Math.abs(sprite.vy); }
+        if (sprite.y + sprite.radius > height) { sprite.y = height - sprite.radius; sprite.vy = -Math.abs(sprite.vy); }
+      });
+      for (let left = 0; left < sprites.length; left += 1) for (let right = left + 1; right < sprites.length; right += 1) collideSprites(sprites[left], sprites[right]);
+      sprites.forEach((sprite) => {
+        context.save();
+        context.translate(sprite.x, sprite.y);
+        context.rotate(sprite.angle);
+        context.shadowBlur = 0;
+        context.drawImage(sprite.image.canvas, -sprite.image.cssSize / 2, -sprite.image.cssSize / 2, sprite.image.cssSize, sprite.image.cssSize);
+        context.restore();
+      });
+      physicsFrame = window.requestAnimationFrame(drawSprites);
+    }
+    function startPhysics() { window.cancelAnimationFrame(physicsFrame); drawSprites.lastTime = 0; createSprites(); physicsFrame = window.requestAnimationFrame(drawSprites); }
+    function stopPhysics() { window.cancelAnimationFrame(physicsFrame); physicsFrame = 0; sprites = []; context.clearRect(0, 0, playfield.width, playfield.height); }
+    window.addEventListener('resize', () => { if (celebration.classList.contains('show')) resizePlayfield(); });
+    function showCelebration() { burst(); startPhysics(); window.clearInterval(celebrationTimer); celebrationTimer = window.setInterval(burst, 2600); celebration.classList.add('show'); celebration.setAttribute('aria-hidden', 'false'); }
+    function closeCelebration() { window.clearInterval(celebrationTimer); celebrationTimer = null; stopPhysics(); celebration.classList.remove('show'); celebration.setAttribute('aria-hidden', 'true'); }
+    document.getElementById('sellAll').onclick = () => { tickets.forEach((ticket) => { ticket.sold = true; }); render(); showCelebration(); };
+    document.getElementById('reset').onclick = () => { tickets.forEach((ticket) => { ticket.sold = false; }); render(); closeCelebration(); };
+    document.getElementById('close').onclick = closeCelebration;
+    celebration.onclick = (event) => { if (event.target === celebration) closeCelebration(); };
+    render();
+  </script>
+</body>
+</html>

@@ -24,22 +24,71 @@ function scoped(key) {
   return `production_${app.globalData.env || 'unconfigured'}_${key}`;
 }
 
+function customerToken() {
+  try {
+    const app = getApp();
+    const appSession = app && app.globalData && app.globalData.session;
+    if (appSession && appSession.token) return String(appSession.token);
+    // Load lazily to avoid a module cycle during app startup. The HTTP layer
+    // owns the persisted session created from wx.login.
+    const http = require('./http');
+    const session = http && typeof http.getSession === 'function' ? http.getSession() : null;
+    return session && session.token ? String(session.token) : '';
+  } catch (error) {
+    return '';
+  }
+}
+
+function tokenFingerprint(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function customerScoped(key) {
+  if (!production()) return key;
+  const app = getApp();
+  const token = customerToken();
+  // Do not read or write a shared anonymous cart. Pages wait for ensureSession
+  // before loading customer data, so a missing token fails closed here too.
+  if (!token) return '';
+  return `production_${app.globalData.env || 'unconfigured'}_customer_${tokenFingerprint(token)}_${key}`;
+}
+
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function get(key, fallback) {
+function read(key, fallback) {
   try {
-    const value = wx.getStorageSync(scoped(key));
+    const value = wx.getStorageSync(key);
     return value === '' || typeof value === 'undefined' ? clone(fallback) : value;
   } catch (error) {
     return clone(fallback);
   }
 }
 
-function set(key, value) {
-  wx.setStorageSync(scoped(key), value);
+function write(key, value) {
+  if (!key) return value;
+  wx.setStorageSync(key, value);
   return value;
+}
+
+function get(key, fallback) {
+  return read(scoped(key), fallback);
+}
+
+function set(key, value) {
+  return write(scoped(key), value);
+}
+
+function customerGet(key, fallback) {
+  const storageKey = customerScoped(key);
+  return storageKey ? read(storageKey, fallback) : clone(fallback);
+}
+
+function customerSet(key, value) {
+  return write(customerScoped(key), value);
 }
 
 function makeId(prefix) {
@@ -48,14 +97,14 @@ function makeId(prefix) {
 
 module.exports = {
   keys: KEYS,
-  getCart() { return get(KEYS.cart, []); },
-  saveCart(value) { return set(KEYS.cart, value); },
-  getOrders() { return get(KEYS.orders, []); },
-  saveOrders(value) { return set(KEYS.orders, value); },
-  getAddresses() { return get(KEYS.addresses, production() ? [] : [mock.defaultAddress, mock.defaultShippingAddress]); },
-  saveAddresses(value) { return set(KEYS.addresses, value); },
-  getCoupons() { return get(KEYS.coupons, production() ? [] : mock.coupons); },
-  saveCoupons(value) { return set(KEYS.coupons, value); },
+  getCart() { return customerGet(KEYS.cart, []); },
+  saveCart(value) { return customerSet(KEYS.cart, value); },
+  getOrders() { return customerGet(KEYS.orders, []); },
+  saveOrders(value) { return customerSet(KEYS.orders, value); },
+  getAddresses() { return customerGet(KEYS.addresses, production() ? [] : [mock.defaultAddress, mock.defaultShippingAddress]); },
+  saveAddresses(value) { return customerSet(KEYS.addresses, value); },
+  getCoupons() { return customerGet(KEYS.coupons, production() ? [] : mock.coupons); },
+  saveCoupons(value) { return customerSet(KEYS.coupons, value); },
   getProducts(businessType) {
     const type = String(businessType || '').toLowerCase();
     if (type === 'restaurant' || type === 'retail') {
@@ -98,14 +147,14 @@ module.exports = {
     }
     return set(KEYS.store, value);
   },
-  getProfile() { return get(KEYS.profile, null); },
-  saveProfile(value) { return set(KEYS.profile, value); },
-  getAssist() { return get(KEYS.assist, null); },
-  saveAssist(value) { return set(KEYS.assist, value); },
-  getCheckoutAttempt() { return get(KEYS.checkoutAttempt, null); },
-  saveCheckoutAttempt(value) { return set(KEYS.checkoutAttempt, value); },
-  getCheckoutBatchAttempt() { return get(KEYS.checkoutBatchAttempt, null); },
-  saveCheckoutBatchAttempt(value) { return set(KEYS.checkoutBatchAttempt, value); },
+  getProfile() { return customerGet(KEYS.profile, null); },
+  saveProfile(value) { return customerSet(KEYS.profile, value); },
+  getAssist() { return customerGet(KEYS.assist, null); },
+  saveAssist(value) { return customerSet(KEYS.assist, value); },
+  getCheckoutAttempt() { return customerGet(KEYS.checkoutAttempt, null); },
+  saveCheckoutAttempt(value) { return customerSet(KEYS.checkoutAttempt, value); },
+  getCheckoutBatchAttempt() { return customerGet(KEYS.checkoutBatchAttempt, null); },
+  saveCheckoutBatchAttempt(value) { return customerSet(KEYS.checkoutBatchAttempt, value); },
   saveOrderListFilter(value) { return set(KEYS.orderListFilter, value || 'ALL'); },
   consumeOrderListFilter() {
     const key = scoped(KEYS.orderListFilter);

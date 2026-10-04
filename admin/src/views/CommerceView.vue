@@ -1237,11 +1237,16 @@ async function loadOrders(searchOverride?: string) {
   orderLoading.value = true
   try {
     const search = searchOverride === undefined ? orderSearch.value.trim() : searchOverride.trim()
+    const selectedFulfillmentStatus = orderFulfillmentStatus.value
+    const fulfillmentStatus = fulfillmentStatusOptions.value.some(option => option.value === selectedFulfillmentStatus)
+      ? selectedFulfillmentStatus
+      : ''
+    if (selectedFulfillmentStatus && !fulfillmentStatus) orderFulfillmentStatus.value = ''
     const response = await request.get('/commerce/orders', silentConfig({
       business_type: currentDomain.value,
       search,
       payment_status: orderPaymentStatus.value,
-      fulfillment_status: orderFulfillmentStatus.value,
+      fulfillment_status: fulfillmentStatus,
       refund_status: orderRefundStatus.value,
       page: orderPage.value,
       page_size: orderPageSize,
@@ -1249,7 +1254,7 @@ async function loadOrders(searchOverride?: string) {
     orders.value = response.data?.data || []
     orderTotal.value = Number(response.data?.total || 0)
   } catch (error) {
-    if (statusCode(error) !== 403) loadError.value = '订单暂时无法加载'
+    if (statusCode(error) !== 403) loadError.value = (error as any)?.response?.data?.error || '订单暂时无法加载'
   } finally {
     orderLoading.value = false
   }
@@ -2031,6 +2036,13 @@ watch(() => [route.params.businessType, route.query.tab, route.query.order], asy
     activeTab.value = 'products'
     productSearch.value = ''
     productStatus.value = ''
+    orderSearch.value = ''
+    orderPaymentStatus.value = ''
+    orderFulfillmentStatus.value = ''
+    orderRefundStatus.value = ''
+    orderPage.value = 1
+    orders.value = []
+    orderTotal.value = 0
     detailProduct.value = null
     productDetailVisible.value = false
     user.value = readStoredUser()

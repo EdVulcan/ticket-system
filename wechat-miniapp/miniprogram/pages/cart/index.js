@@ -64,14 +64,19 @@ Page({
   data: { groups: [], cart: [], cartCount: 0, goodsAmountText: '0.00', totalText: '0.00', takeawayGoodsText: '0.00', courierGoodsText: '0.00', hasTakeaway: false, hasCourier: false, businessBindingMismatch: false },
 
   onShow() {
-    this.loadCart();
-    if (!api.isProduction() || typeof api.getCatalog !== 'function') return;
-    const types = [];
-    storage.getCart().forEach(item => {
-      const type = commerce.businessTypeOf(item);
-      if (types.indexOf(type) < 0) types.push(type);
+    const ready = api.isProduction() && typeof api.ensureSession === 'function'
+      ? api.ensureSession().catch(error => { console.error('storefront session unavailable', error); return null; })
+      : Promise.resolve();
+    ready.then(() => {
+      this.loadCart();
+      if (!api.isProduction() || typeof api.getCatalog !== 'function') return;
+      const types = [];
+      storage.getCart().forEach(item => {
+        const type = commerce.businessTypeOf(item);
+        if (types.indexOf(type) < 0) types.push(type);
+      });
+      Promise.all(types.map(type => api.getCatalog(type).catch(error => { console.error('refresh cart catalog failed', error); return null; }))).then(() => this.loadCart());
     });
-    Promise.all(types.map(type => api.getCatalog(type).catch(error => { console.error('refresh cart catalog failed', error); return null; }))).then(() => this.loadCart());
   },
 
   loadCart() {

@@ -38,16 +38,18 @@
   <view class="contact-sheet" catchtap="keepContactOpen">
     <view class="contact-sheet-handle"></view>
     <view class="contact-sheet-head">
-      <view><view class="contact-sheet-title">联系商家</view><view class="contact-sheet-sub">{{contact.contactName || (contact.contactType === 'enterprise_wechat' ? '企业微信客服' : '微信客服')}}</view></view>
+      <view class="contact-heading"><view class="contact-sheet-eyebrow"><view class="contact-eyebrow-dot"></view>店铺客服</view><view class="contact-sheet-title">扫码联系商家</view><view class="contact-sheet-sub">{{brand.name}} · 有事直接找我们</view><image class="contact-rabbits" src="/images/theme/rabbit-pair.svg" mode="aspectFit" /></view>
       <view class="contact-close" bindtap="closeContact" role="button" aria-label="关闭"><image src="/images/icons/close.png" /></view>
     </view>
-    <view class="contact-qr-wrap" bindtap="previewContactQRCode" role="button" aria-label="查看微信二维码大图">
-      <image class="contact-qr" src="{{contact.qrCodeUrl}}" mode="aspectFit" show-menu-by-longpress />
+    <view class="contact-qr-card">
+      <view class="contact-qr-card-head"><view class="contact-qr-label">扫码添加微信</view><view class="contact-qr-hint">长按识别</view></view>
+      <view class="contact-qr-wrap" bindtap="previewContactQRCode" role="button" aria-label="查看微信二维码大图">
+        <image class="contact-qr" src="{{contact.qrCodeUrl}}" mode="aspectFit" show-menu-by-longpress />
+      </view>
+      <view class="contact-tip">点击二维码可查看大图</view>
     </view>
-    <view class="contact-tip">长按识别二维码，或点击查看大图</view>
-    <view wx:if="{{contact.wechatId}}" class="contact-wechat-row">
-      <view class="contact-wechat-copy"><text>微信号</text><view>{{contact.wechatId}}</view></view>
-      <button class="contact-copy-button" bindtap="copyWechatID"><image src="/images/icons/copy.png" />复制</button>
+    <view wx:if="{{contact.wechatId}}" class="contact-wechat-row" bindtap="copyWechatID" role="button" aria-label="复制微信号">
+      <text class="contact-wechat-value">微信号：{{contact.wechatId}}</text><text class="contact-wechat-copy-hint">点击复制</text>
     </view>
   </view>
 </view>

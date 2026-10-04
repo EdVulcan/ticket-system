@@ -66,7 +66,8 @@ test('consumer copy stays neutral while legacy campus addresses remain supported
   assert.doesNotMatch(orderDetail, /跑腿费/);
   assert.match(addressEdit, /addressType === 'CAMPUS'/);
   assert.match(addressEdit, /请补充配送区域信息/);
-  assert.match(addressList, /配送地址/);
+  assert.match(addressList, /收货地址/);
+  assert.match(addressList, /配送和快递共用同一套收货地址/);
   assert.doesNotMatch(addressEdit, /请填写校区和配送区域/);
 });
 
@@ -106,6 +107,9 @@ test('page actions are distinct and narrow layouts have explicit safeguards', ()
   for (const tab of ['ALL', 'WAIT_PAY', 'PROCESSING', 'DELIVERING', 'COMPLETED']) assert.match(profile, new RegExp(`data-tab="${tab}"`));
   assert.doesNotMatch(checkout, /sheet-confirm/);
   assert.match(checkout, /class="sheet-close"[^>]+aria-label="关闭"/);
+  assert.match(checkout, /takeawayDeliveryMethod === 'DELIVERY' && production/);
+  assert.match(checkout, /门店暂未配置/);
+  assert.match(checkout, /配送区域由收货地址自动匹配/);
   assert.doesNotMatch(merchant, /item\.status === 'REFUNDING'[^\n]+bindtap="refundOrder"/);
   assert.match(merchant, /item\.status === 'REFUNDING'[^\n]+bindtap="queryRefund"/);
   assert.match(productEdit, /class="option-editor-fields"/);

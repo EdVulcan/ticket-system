@@ -890,13 +890,13 @@ func (s *CommerceStorefrontService) saveAddress(token string, raw CommerceStoref
 		}
 		if address.IsDefault {
 			if err := tx.Model(&model.CommerceAddress{}).
-				Where("tenant_id = ? AND customer_id = ? AND address_type = ? AND id <> ?", context.Session.TenantID, context.CustomerID, address.AddressType, address.ID).
+				Where("tenant_id = ? AND customer_id = ? AND id <> ?", context.Session.TenantID, context.CustomerID, address.ID).
 				Update("is_default", false).Error; err != nil {
 				return err
 			}
 		} else {
 			var count int64
-			if err := tx.Model(&model.CommerceAddress{}).Where("tenant_id = ? AND customer_id = ? AND address_type = ?", context.Session.TenantID, context.CustomerID, address.AddressType).Count(&count).Error; err != nil {
+			if err := tx.Model(&model.CommerceAddress{}).Where("tenant_id = ? AND customer_id = ?", context.Session.TenantID, context.CustomerID).Count(&count).Error; err != nil {
 				return err
 			}
 			if count == 1 {
@@ -927,14 +927,34 @@ func (s *CommerceStorefrontService) DeleteAddress(token string, addressID uint) 
 	if addressID == 0 {
 		return fmt.Errorf("%w: address id is required", ErrCommerceStorefrontAddressInvalid)
 	}
-	result := s.db().Where("id = ? AND tenant_id = ? AND customer_id = ?", addressID, context.Session.TenantID, context.CustomerID).Delete(&model.CommerceAddress{})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected != 1 {
-		return gorm.ErrRecordNotFound
-	}
-	return nil
+	return s.db().Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("id = ? AND tenant_id = ? AND customer_id = ?", addressID, context.Session.TenantID, context.CustomerID).Delete(&model.CommerceAddress{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		var defaultCount int64
+		if err := tx.Model(&model.CommerceAddress{}).
+			Where("tenant_id = ? AND customer_id = ? AND is_default = ?", context.Session.TenantID, context.CustomerID, true).
+			Count(&defaultCount).Error; err != nil {
+			return err
+		}
+		if defaultCount > 0 {
+			return nil
+		}
+		var replacement model.CommerceAddress
+		err := tx.Where("tenant_id = ? AND customer_id = ?", context.Session.TenantID, context.CustomerID).
+			Order("created_at DESC, id DESC").First(&replacement).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return tx.Model(&replacement).Update("is_default", true).Error
+	})
 }
 
 func (s *CommerceStorefrontService) SetDefaultAddress(token string, addressID uint) (*CommerceStorefrontAddressView, error) {
@@ -952,7 +972,7 @@ func (s *CommerceStorefrontService) SetDefaultAddress(token string, addressID ui
 			return err
 		}
 		if err := tx.Model(&model.CommerceAddress{}).
-			Where("tenant_id = ? AND customer_id = ? AND address_type = ?", context.Session.TenantID, context.CustomerID, address.AddressType).
+			Where("tenant_id = ? AND customer_id = ?", context.Session.TenantID, context.CustomerID).
 			Update("is_default", false).Error; err != nil {
 			return err
 		}
@@ -1164,10 +1184,10 @@ func (s *CommerceStorefrontService) CreateCheckoutQuote(token string, raw Commer
 		if loadErr != nil {
 			return nil, loadErr
 		}
-		if context.Binding.BusinessType == "retail" && owned.AddressType != "SHIPPING" {
+		if context.Binding.BusinessType == "retail" && owned.AddressType != "SHIPPING" && owned.AddressType != "DELIVERY" {
 			return nil, fmt.Errorf("%w: retail checkout requires a shipping address", ErrCommerceStorefrontAddressInvalid)
 		}
-		if context.Binding.BusinessType == "restaurant" && owned.AddressType != "DELIVERY" && owned.AddressType != "CAMPUS" {
+		if context.Binding.BusinessType == "restaurant" && owned.AddressType != "DELIVERY" && owned.AddressType != "SHIPPING" && owned.AddressType != "CAMPUS" {
 			return nil, fmt.Errorf("%w: restaurant delivery requires a delivery address", ErrCommerceStorefrontAddressInvalid)
 		}
 		address = CommerceDeliveryAddress{Province: owned.Province, City: owned.City, District: owned.District, Detail: owned.Detail}
@@ -1597,10 +1617,10 @@ func (s *CommerceStorefrontService) checkoutOwnedCart(context *commerceStorefron
 			if addressErr != nil {
 				return addressErr
 			}
-			if context.Binding.BusinessType == "retail" && address.AddressType != "SHIPPING" {
+			if context.Binding.BusinessType == "retail" && address.AddressType != "SHIPPING" && address.AddressType != "DELIVERY" {
 				return fmt.Errorf("%w: retail checkout requires a shipping address", ErrCommerceStorefrontAddressInvalid)
 			}
-			if context.Binding.BusinessType == "restaurant" && address.AddressType != "DELIVERY" && address.AddressType != "CAMPUS" {
+			if context.Binding.BusinessType == "restaurant" && address.AddressType != "DELIVERY" && address.AddressType != "SHIPPING" && address.AddressType != "CAMPUS" {
 				return fmt.Errorf("%w: restaurant delivery requires a delivery address", ErrCommerceStorefrontAddressInvalid)
 			}
 			snapshot, snapshotErr := storefrontAddressSnapshot(address)

@@ -1144,7 +1144,7 @@ module.exports = {
     }
     const value = normalizeAddress(Object.assign({}, address, { id: firstDefined(address && address.id, storage.makeId('address')) }));
     const addresses = storage.getAddresses().filter((item) => String(item.id) !== String(value.id));
-    if (value.isDefault || !addresses.some((item) => commerce.addressTypeOf(item) === value.addressType)) addresses.forEach((item) => { if (commerce.addressTypeOf(item) === value.addressType) item.isDefault = false; });
+    if (value.isDefault || !addresses.length) addresses.forEach((item) => { item.isDefault = false; });
     addresses.push(value);
     storage.saveAddresses(addresses);
     return Promise.resolve({ data: value });
@@ -1158,7 +1158,7 @@ module.exports = {
     if (productionMode()) return productionRequest(`/addresses/${encodeURIComponent(addressId)}/default`, { method: 'POST' });
     const addresses = storage.getAddresses();
     const selected = addresses.find((item) => String(item.id) === String(addressId));
-    if (selected) addresses.forEach((item) => { if (commerce.addressTypeOf(item) === commerce.addressTypeOf(selected)) item.isDefault = String(item.id) === String(addressId); });
+    if (selected) addresses.forEach((item) => { item.isDefault = String(item.id) === String(addressId); });
     storage.saveAddresses(addresses);
     return Promise.resolve({});
   },

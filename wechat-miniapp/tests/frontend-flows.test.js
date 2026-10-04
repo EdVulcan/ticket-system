@@ -611,6 +611,99 @@ test('production checkout does not create a new order when an older attempt has 
   assert.equal(page.data.paying, false);
 });
 
+test('production checkout explains missing delivery configuration instead of asking for hidden choices', () => {
+  let page;
+  load('miniprogram/pages/checkout/index.js', {
+    '../../services/storage': {},
+    '../../services/api': { isProduction: () => true },
+    '../../utils/format': { yuan: value => String(Number(value || 0) / 100) },
+    '../../services/payment': {}
+  }, { Page: value => { page = value; }, wx: {} });
+  page.data = Object.assign({}, page.data, {
+    store: {},
+    hasTakeaway: true,
+    hasCourier: false,
+    takeawayItems: [{ productId: 'meal-1' }],
+    courierItems: [],
+    takeawayDeliveryMethod: 'DELIVERY',
+    takeawayAddress: { addressType: 'DELIVERY', province: '省', city: '市', district: '区', detailAddress: '路1号' },
+    restaurantZones: [],
+    restaurantZoneIndex: -1,
+    restaurantSlots: [],
+    restaurantSlotIndex: -1,
+    restaurantSlotDate: ''
+  });
+  assert.equal(page.validateBeforeSubmit(), '门店暂未配置配送区域，请联系商家');
+  page.data.restaurantZones = [{ id: 'zone-1' }];
+  page.data.restaurantZoneIndex = 0;
+  assert.equal(page.validateBeforeSubmit(), '门店暂未配置配送时段，请联系商家');
+  page.data.restaurantSlots = [{ id: 'slot-1' }];
+  page.data.restaurantSlotIndex = 0;
+  page.data.restaurantSlotDate = '2026-10-04';
+  page.data.store = null;
+  assert.equal(page.validateBeforeSubmit(), '店铺信息加载中');
+});
+
+test('checkout matches delivery area from the address instead of defaulting to the first area', () => {
+  let page;
+  const storage = {
+    getStore: () => ({}),
+    getProducts: () => [],
+    getCart: () => [{ productId: 'meal-1', businessType: 'restaurant', fulfillmentType: 'TAKEAWAY', unitPrice: 1000, quantity: 1 }]
+  };
+  load('miniprogram/pages/checkout/index.js', {
+    '../../services/storage': storage,
+    '../../services/api': { isProduction: () => true, normalizeStore: value => value },
+    '../../utils/format': { yuan: value => String(Number(value || 0) / 100) },
+    '../../services/payment': {}
+  }, { Page: value => { page = value; }, wx: { getStorageSync: () => '' } });
+  page.data = Object.assign({}, page.data, { takeawayDeliveryMethod: 'DELIVERY', couponTarget: 'TAKEAWAY' });
+  page.setData = (change, callback) => { page.data = Object.assign({}, page.data, change); if (callback) callback(); };
+  const options = {
+    restaurant: {
+      config: {},
+      zones: [
+        { id: 'zone-other', name: '其他区域', province: '省', city: '市', district: '其他区' },
+        { id: 'zone-match', name: '当前区域', province: '省', city: '市', district: '区' }
+      ],
+      slots: [{ id: 'slot-match', zoneId: 'zone-match', dayOfWeek: new Date().getDay(), startMinute: 0, endMinute: 1439 }]
+    },
+    retail: null
+  };
+  const address = { id: 'address-1', addressType: 'DELIVERY', contactName: '顾客', contactPhone: '13800000000', province: '省', city: '市', district: '区', detailAddress: '路1号' };
+  page.applyData([address], [], options);
+  assert.equal(page.data.restaurantZoneIndex, 1);
+  assert.equal(page.data.restaurantSlots[0].id, 'slot-match');
+  page.applyData([Object.assign({}, address, { district: '未覆盖区' })], [], options);
+  assert.equal(page.data.restaurantZoneIndex, -1);
+  assert.equal(page.data.restaurantSlots.length, 0);
+});
+
+test('successful checkout can show a compact merchant contact prompt before opening the order', async () => {
+  let page;
+  let openedOrder = '';
+  load('miniprogram/pages/checkout/index.js', {
+    '../../services/storage': {},
+    '../../services/api': {
+      isProduction: () => true,
+      getStorefrontContact: async () => ({ available: true, contactName: '门店客服', wechatId: 'shop-service', qrCodeUrl: 'https://example.com/contact.png' })
+    },
+    '../../utils/format': { yuan: value => String(Number(value || 0) / 100) },
+    '../../services/payment': {}
+  }, { Page: value => { page = value; }, wx: {} });
+  page.setData = (change, callback) => { page.data = Object.assign({}, page.data, change); if (callback) callback(); };
+  page.openCreatedOrder = orderId => { openedOrder = orderId; };
+  assert.equal(await page.showOrderContactPrompt('order-1', '订单已提交'), true);
+  assert.equal(page.data.showOrderContact, true);
+  assert.equal(page.data.orderContact.qrCodeUrl, 'https://example.com/contact.png');
+  page.closeOrderContact();
+  assert.equal(openedOrder, 'order-1');
+  await page.testOrderContact();
+  assert.equal(page.data.showOrderContact, true);
+  page.closeOrderContact();
+  assert.equal(openedOrder, 'order-1');
+});
+
 test('product detail does not substitute the first product for a missing ID', () => {
   let page; let result;
   load('miniprogram/pages/product/detail/index.js', { '../../../services/storage': { getProducts: () => [{ id: 'other', isOnSale: true }] }, '../../../services/api': { isProduction: () => false } }, { Page: value => { page = value; }, wx: { showToast() {} } });
@@ -949,7 +1042,7 @@ test('refund submission uses one deterministic key and reconciles an ambiguous P
   assert.equal(toasts.some(item => item.title === '退款申请未提交，请刷新订单后重试'), false);
 });
 
-test('legacy CAMPUS addresses remain selectable under the neutral delivery label', () => {
+test('legacy CAMPUS addresses remain selectable in the shared address book', () => {
   let page;
   const addresses = [
     { id: 'legacy-campus', addressType: 'CAMPUS', campusName: '园区东区', zoneName: '配送区域', building: '1号楼', room: '101' },
@@ -962,6 +1055,21 @@ test('legacy CAMPUS addresses remain selectable under the neutral delivery label
   page.setData = change => { page.data = Object.assign({}, page.data, change); };
   page.onLoad({ type: 'CAMPUS' });
   page.onShow();
-  assert.equal(page.data.title, '配送地址');
-  assert.deepEqual(page.data.addresses.map(item => item.id), ['legacy-campus']);
+  assert.equal(page.data.title, '收货地址');
+  assert.deepEqual(page.data.addresses.map(item => item.id), ['legacy-campus', 'shipping']);
+});
+
+test('shared address book keeps restaurant and retail checkout selections independent', () => {
+  let page;
+  const writes = [];
+  const addresses = [{ id: 'delivery', addressType: 'SHIPPING', province: '四川省', city: '成都市', district: '武侯区', detailAddress: '科华北路' }];
+  load('miniprogram/pages/address/list/index.js', {
+    '../../../services/storage': { getAddresses: () => addresses, saveAddresses() {} },
+    '../../../services/api': { isProduction: () => false }
+  }, { Page: value => { page = value; }, wx: { setStorageSync: (key, value) => writes.push([key, value]), navigateBack() {} } });
+  page.setData = change => { page.data = Object.assign({}, page.data, change); };
+  page.onLoad({ from: 'checkout', type: 'DELIVERY', business: 'restaurant' });
+  page.onShow();
+  page.selectAddress({ currentTarget: { dataset: { id: 'delivery' } } });
+  assert.deepEqual(writes, [['checkout_takeaway_address_id', 'delivery'], ['checkout_address_id', 'delivery']]);
 });

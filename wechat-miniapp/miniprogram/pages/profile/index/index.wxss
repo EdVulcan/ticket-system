@@ -46,24 +46,31 @@
 .member-action[disabled] { background: #aebcaf; color: #f7faf5; }
 .member-action::after { border: 0; }
 .member-error { color: #b34836; font-size: 21rpx; line-height: 1.45; margin-top: 14rpx; }
-.contact-overlay { align-items: flex-end; background: rgba(25, 31, 28, .46); bottom: 0; display: flex; left: 0; position: fixed; right: 0; top: 0; z-index: 80; }
-.contact-sheet { background: #fbfaf6; border-radius: 28rpx 28rpx 0 0; box-sizing: border-box; padding: 16rpx 36rpx calc(34rpx + env(safe-area-inset-bottom)); width: 100%; }
-.contact-sheet-handle { background: #d9d8d1; border-radius: 999rpx; height: 8rpx; margin: 0 auto 26rpx; width: 72rpx; }
-.contact-sheet-head { align-items: flex-start; display: flex; justify-content: space-between; gap: 24rpx; }
-.contact-sheet-title { color: var(--ink); font-size: 34rpx; font-weight: 700; }
-.contact-sheet-sub { color: var(--muted); font-size: 23rpx; margin-top: 7rpx; }
-.contact-close { align-items: center; background: #efeee8; border-radius: 50%; display: flex; flex: 0 0 64rpx; height: 64rpx; justify-content: center; width: 64rpx; }
-.contact-close image { height: 28rpx; width: 28rpx; }
-.contact-qr-wrap { background: #fff; border: 1rpx solid var(--line); border-radius: 16rpx; box-shadow: 0 12rpx 36rpx rgba(35, 62, 53, .08); box-sizing: border-box; height: 440rpx; margin: 28rpx auto 0; padding: 22rpx; width: 440rpx; }
+.contact-overlay { align-items: flex-end; animation: contact-overlay-in 220ms ease-out both; background: rgba(25, 31, 28, .46); bottom: 0; display: flex; left: 0; position: fixed; right: 0; top: 0; z-index: 80; }
+.contact-sheet { animation: contact-sheet-in 260ms cubic-bezier(.22, .8, .28, 1) both; background: #fafbf7; border-radius: 32rpx 32rpx 0 0; box-sizing: border-box; padding: 12rpx 36rpx calc(30rpx + env(safe-area-inset-bottom)); width: 100%; }
+
+@keyframes contact-overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes contact-sheet-in { from { opacity: .92; transform: translateY(100%); } to { opacity: 1; transform: translateY(0); } }
+.contact-sheet-handle { background: #d7d9d1; border-radius: 999rpx; height: 8rpx; margin: 0 auto 24rpx; width: 68rpx; }
+.contact-sheet-head { align-items: flex-start; display: flex; justify-content: center; min-height: 188rpx; position: relative; }
+.contact-heading { min-width: 0; text-align: center; }
+.contact-sheet-eyebrow { align-items: center; color: #27654b; display: flex; font-size: 20rpx; font-weight: 600; justify-content: center; letter-spacing: 3rpx; }
+.contact-eyebrow-dot { background: #27654b; border-radius: 50%; height: 12rpx; margin-right: 10rpx; width: 12rpx; }
+.contact-sheet-title { color: var(--ink); font-size: 40rpx; font-weight: 700; line-height: 1.2; margin-top: 10rpx; }
+.contact-sheet-sub { color: #7d8a82; font-size: 22rpx; margin-top: 8rpx; }
+.contact-rabbits { display: block; height: 76rpx; margin: 12rpx auto 0; width: 104rpx; }
+.contact-close { align-items: center; background: #eff0eb; border: 0; border-radius: 50%; display: flex; flex: 0 0 64rpx; height: 64rpx; justify-content: center; position: absolute; right: 0; top: 0; width: 64rpx; }
+.contact-close image { height: 26rpx; opacity: .55; width: 26rpx; }
+.contact-qr-card { background: #fff; border: 1rpx solid #e8eadf; border-radius: 20rpx; box-shadow: 0 8rpx 24rpx rgba(35, 62, 53, .06); box-sizing: border-box; margin-top: 10rpx; padding: 24rpx 22rpx 18rpx; }
+.contact-qr-card-head { align-items: center; display: flex; justify-content: space-between; padding: 0 6rpx 16rpx; }
+.contact-qr-label { color: #1e2b25; font-size: 25rpx; font-weight: 700; }
+.contact-qr-hint { background: #eaf0ec; border: 1rpx solid rgba(39, 101, 75, .1); border-radius: 999rpx; color: #27654b; font-size: 19rpx; padding: 7rpx 13rpx; }
+.contact-qr-wrap { background: #fafcf9; border: 1rpx solid #e8eadd; border-radius: 16rpx; box-sizing: border-box; height: 392rpx; margin: 0 auto; padding: 18rpx; width: 392rpx; }
 .contact-qr { display: block; height: 100%; width: 100%; }
-.contact-tip { color: var(--muted); font-size: 22rpx; margin-top: 16rpx; text-align: center; }
-.contact-wechat-row { align-items: center; background: #f0f1e9; border-radius: 14rpx; display: flex; gap: 20rpx; justify-content: space-between; margin-top: 26rpx; min-width: 0; padding: 20rpx 22rpx; }
-.contact-wechat-copy { min-width: 0; }
-.contact-wechat-copy text { color: var(--muted); display: block; font-size: 20rpx; }
-.contact-wechat-copy view { color: var(--ink); font-size: 27rpx; margin-top: 4rpx; overflow-wrap: anywhere; }
-.contact-copy-button { align-items: center; background: var(--green); border: 0; border-radius: 10rpx; color: #fff; display: flex; flex: 0 0 auto; font-size: 23rpx; gap: 8rpx; line-height: 1; margin: 0; padding: 18rpx 22rpx; }
-.contact-copy-button::after { border: 0; }
-.contact-copy-button image { filter: brightness(0) invert(1); height: 24rpx; width: 24rpx; }
+.contact-tip { color: var(--muted); font-size: 21rpx; margin-top: 14rpx; text-align: center; }
+.contact-wechat-row { align-items: center; background: var(--green-soft); border: 1rpx solid rgba(39, 101, 75, .1); border-radius: 10rpx; color: var(--green); display: flex; gap: 12rpx; justify-content: space-between; margin-top: 16rpx; min-width: 0; padding: 12rpx 16rpx; text-align: left; }
+.contact-wechat-value { flex: 1; font-size: 21rpx; min-width: 0; overflow-wrap: anywhere; }
+.contact-wechat-copy-hint { color: var(--green); flex: 0 0 auto; font-size: 19rpx; font-weight: 600; }
 @media (max-width: 340px) {
-  .contact-qr-wrap { height: 380rpx; width: 380rpx; }
+  .contact-qr-wrap { height: 330rpx; width: 330rpx; }
 }

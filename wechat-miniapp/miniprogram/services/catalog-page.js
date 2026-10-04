@@ -115,9 +115,14 @@ function createCatalogPage(channel) {
     onLoad() { this.catalogProducts = []; },
 
     onShow() {
-      this.refreshCart();
-      this.loadCatalog();
-      this.loadAssistCampaign();
+      const ready = api.isProduction() && typeof api.ensureSession === 'function'
+        ? api.ensureSession().catch(error => { console.error('storefront session unavailable', error); return null; })
+        : Promise.resolve();
+      ready.then(() => {
+        this.refreshCart();
+        this.loadCatalog();
+        this.loadAssistCampaign();
+      });
     },
 
     loadAssistCampaign() {

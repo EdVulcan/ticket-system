@@ -25,6 +25,20 @@ function slotLabel(slot) {
   return `${minuteLabel(slot.startMinute)} - ${minuteLabel(slot.endMinute)}`;
 }
 
+function addressZoneParts(address) {
+  const value = address || {};
+  return {
+    province: value.province || value.campusName || '',
+    city: value.city || value.campusName || '',
+    district: value.district || value.zoneName || ''
+  };
+}
+
+function zoneMatchesAddress(zone, address) {
+  const parts = addressZoneParts(address);
+  return zone && String(zone.province || '').trim().toLowerCase() === String(parts.province).trim().toLowerCase() && String(zone.city || '').trim().toLowerCase() === String(parts.city).trim().toLowerCase() && String(zone.district || '').trim().toLowerCase() === String(parts.district).trim().toLowerCase();
+}
+
 function itemOptions(item) {
   return (item.selectedOptions || []).map(option => typeof option === 'string' ? option : option.label || option.name).join(' · ');
 }
@@ -132,7 +146,15 @@ Page({
     customerRemark: '',
     courierRemark: '',
     showCouponSheet: false,
+    couponSheetClosing: false,
     couponsUnavailable: false,
+    showOrderContact: false,
+    orderContactClosing: false,
+    orderContact: { available: false, contactName: '', wechatId: '', qrCodeUrl: '' },
+    orderContactOrderId: '',
+    orderContactTitle: '订单已提交',
+    orderContactTestMode: false,
+    showContactTestButton: true,
     paying: false,
     paymentModeText: '当前为演示支付模式',
     pricingNote: '餐饮和零售费用分别计算'
@@ -148,7 +170,30 @@ Page({
 
   onShow() {
     if (this.data.paying) return;
-    this.loadData();
+    const ready = api.isProduction() && typeof api.ensureSession === 'function'
+      ? api.ensureSession().catch(error => { console.error('storefront session unavailable', error); return null; })
+      : Promise.resolve();
+    ready.then(() => this.loadData());
+  },
+
+  onHide() {
+    // Fixed sheets belong to this page. Clear them before the page is kept
+    // in the navigation stack so they cannot intercept taps on the next page.
+    if (this.couponSheetCloseTimer) {
+      clearTimeout(this.couponSheetCloseTimer);
+      this.couponSheetCloseTimer = null;
+    }
+    if (this.orderContactCloseTimer) {
+      clearTimeout(this.orderContactCloseTimer);
+      this.orderContactCloseTimer = null;
+    }
+    this.setData({
+      showCouponSheet: false,
+      couponSheetClosing: false,
+      showOrderContact: false,
+      orderContactClosing: false,
+      orderContactTestMode: false,
+    });
   },
 
   loadData() {
@@ -190,10 +235,11 @@ Page({
     const selectedTakeawayId = wx.getStorageSync('checkout_takeaway_address_id') || wx.getStorageSync('checkout_address_id');
     const selectedCourierId = wx.getStorageSync('checkout_courier_address_id');
     const displayAddresses = addresses.map(address => Object.assign({}, address, { displayText: addressLabel(address) }));
-    const delivery = displayAddresses.filter(address => (address.addressType || 'DELIVERY') === 'DELIVERY' || address.addressType === 'CAMPUS');
-    const shipping = displayAddresses.filter(address => address.addressType === 'SHIPPING');
-    const takeawayAddress = delivery.find(address => address.id === selectedTakeawayId) || delivery.find(address => address.isDefault) || delivery[0] || null;
-    const courierAddress = shipping.find(address => address.id === selectedCourierId) || shipping.find(address => address.isDefault) || shipping[0] || null;
+    // One address book is shared by restaurant delivery and retail shipping.
+    const delivery = displayAddresses;
+    const shipping = displayAddresses;
+    const takeawayAddress = delivery.find(address => String(address.id) === String(selectedTakeawayId)) || delivery.find(address => address.isDefault) || delivery[0] || null;
+    const courierAddress = shipping.find(address => String(address.id) === String(selectedCourierId)) || shipping.find(address => address.isDefault) || shipping[0] || null;
     const takeawayGoodsAmount = takeawayItems.reduce((sum, item) => sum + Number(item.unitPrice || 0) * Number(item.quantity || 0), 0);
     const courierGoodsAmount = courierItems.reduce((sum, item) => sum + Number(item.unitPrice || 0) * Number(item.quantity || 0), 0);
     const coupons = couponList.filter(coupon => String(coupon.status || '').toUpperCase() === 'AVAILABLE' && ((coupon.scope || 'UNIVERSAL') === 'UNIVERSAL' || (coupon.scope || '') === (takeawayItems.length && !courierItems.length ? 'TAKEAWAY' : courierItems.length && !takeawayItems.length ? 'COURIER' : (coupon.scope || 'UNIVERSAL'))));
@@ -203,16 +249,16 @@ Page({
     if (!courierItems.length) couponTarget = commerce.FULFILLMENT.TAKEAWAY;
     if (!selectedCoupon || !this.isCouponForTarget(selectedCoupon, couponTarget)) selectedCoupon = coupons.find(coupon => this.isCouponForTarget(coupon, couponTarget) && coupon.minGoodsAmount <= (couponTarget === commerce.FULFILLMENT.COURIER ? courierGoodsAmount : takeawayGoodsAmount)) || null;
     const restaurantOptions = deliveryOptions && deliveryOptions.restaurant || null;
-    const restaurantZones = restaurantOptions && restaurantOptions.zones || [];
+    const restaurantZones = (restaurantOptions && restaurantOptions.zones || []).filter(zone => !zone.status || ['active', 'open', 'enabled'].indexOf(String(zone.status).toLowerCase()) >= 0);
     const restaurantConfig = restaurantOptions && restaurantOptions.config || {};
     let takeawayDeliveryMethod = this.data.takeawayDeliveryMethod;
     if (api.isProduction() && restaurantOptions) {
       if (takeawayDeliveryMethod === 'DELIVERY' && restaurantConfig.deliveryEnabled === false && restaurantConfig.pickupEnabled !== false) takeawayDeliveryMethod = 'PICKUP';
       if (takeawayDeliveryMethod === 'PICKUP' && restaurantConfig.pickupEnabled === false && restaurantConfig.deliveryEnabled !== false) takeawayDeliveryMethod = 'DELIVERY';
     }
-    const matchingZone = takeawayAddress && restaurantZones.find(zone => zone.province === takeawayAddress.province && zone.city === takeawayAddress.city && zone.district === takeawayAddress.district) || restaurantZones[0];
+    const matchingZone = takeawayAddress && restaurantZones.find(zone => zoneMatchesAddress(zone, takeawayAddress));
     const restaurantZoneIndex = matchingZone ? Math.max(0, restaurantZones.findIndex(zone => String(zone.id) === String(matchingZone.id))) : -1;
-    const restaurantSlots = restaurantOptions && restaurantOptions.slots ? restaurantOptions.slots.filter(slot => !matchingZone || !slot.zoneId || String(slot.zoneId) === String(matchingZone.id)) : [];
+    const restaurantSlots = matchingZone && restaurantOptions && restaurantOptions.slots ? restaurantOptions.slots.filter(slot => !slot.zoneId || String(slot.zoneId) === String(matchingZone.id)) : [];
     const restaurantSlotIndex = restaurantSlots.length ? 0 : -1;
     const restaurantSlotDate = restaurantSlots.length ? this.nextSlotDate(restaurantSlots[restaurantSlotIndex]) : '';
     const restaurantZoneNames = restaurantZones.map(zone => zone.name || '配送区域');
@@ -227,7 +273,12 @@ Page({
   nextSlotDate(slot) {
     if (!slot || slot.dayOfWeek === undefined || slot.dayOfWeek === null) return '';
     const date = new Date();
-    const delta = (Number(slot.dayOfWeek) - date.getDay() + 7) % 7;
+    let delta = (Number(slot.dayOfWeek) - date.getDay() + 7) % 7;
+    if (delta === 0) {
+      const nowMinutes = date.getHours() * 60 + date.getMinutes();
+      const cutoffMinutes = Number(slot.startMinute || 0) - Number(slot.orderCutoffMinutes || 0);
+      if (nowMinutes >= cutoffMinutes) delta = 7;
+    }
     date.setDate(date.getDate() + delta);
     return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
   },
@@ -264,7 +315,8 @@ Page({
 
   chooseAddress(event) {
     const type = event.currentTarget.dataset.type;
-    wx.navigateTo({ url: `/pages/address/list/index?from=checkout&type=${type}` });
+    const businessType = type === 'SHIPPING' ? 'retail' : 'restaurant';
+    wx.navigateTo({ url: `/pages/address/list/index?from=checkout&type=${type}&business=${businessType}` });
   },
 
   toggleDeliveryMethod(event) {
@@ -291,28 +343,46 @@ Page({
   selectSlotDate(event) { this.setData({ restaurantSlotDate: event.detail.value }); },
 
   onRemarkInput(event) { this.setData({ [event.currentTarget.dataset.field]: event.detail.value }); },
-  openCouponSheet() { if (this.data.couponsUnavailable) { wx.showToast({ title: '优惠券功能暂未开放', icon: 'none' }); return; } this.setData({ showCouponSheet: true }); },
-  closeCouponSheet() { this.setData({ showCouponSheet: false }); },
+  openCouponSheet() {
+    if (this.data.couponsUnavailable) { wx.showToast({ title: '优惠券功能暂未开放', icon: 'none' }); return; }
+    if (this.couponSheetCloseTimer) clearTimeout(this.couponSheetCloseTimer);
+    this.setData({ showCouponSheet: true, couponSheetClosing: false });
+  },
+  closeCouponSheet() {
+    if (!this.data.showCouponSheet && !this.data.couponSheetClosing) return;
+    if (this.couponSheetCloseTimer) clearTimeout(this.couponSheetCloseTimer);
+    this.setData({ showCouponSheet: false, couponSheetClosing: true });
+    this.couponSheetCloseTimer = setTimeout(() => {
+      this.couponSheetCloseTimer = null;
+      this.setData({ couponSheetClosing: false });
+    }, 280);
+  },
   stopPropagation() {},
   chooseCouponTarget(event) { this.setData({ couponTarget: event.currentTarget.dataset.target }, () => this.calculate()); },
 
   chooseCoupon(event) {
     this.couponChoice = event.currentTarget.dataset.id || '';
     const selectedCoupon = this.data.coupons.find(item => item.id === event.currentTarget.dataset.id) || null;
-    this.setData({ selectedCoupon, showCouponSheet: false }, () => this.calculate());
+    this.setData({ selectedCoupon }, () => { this.calculate(); this.closeCouponSheet(); });
   },
 
   validateBeforeSubmit() {
     if (!this.data.store) return '店铺信息加载中';
-    if (this.data.hasTakeaway && this.data.takeawayDeliveryMethod === 'DELIVERY' && (!this.data.takeawayAddress || this.data.takeawayAddress.addressType === 'SHIPPING' || (this.data.takeawayAddress.addressType !== 'CAMPUS' && (!this.data.takeawayAddress.province || !this.data.takeawayAddress.city || !this.data.takeawayAddress.district || !this.data.takeawayAddress.detailAddress)))) return '请先选择完整配送地址';
-    if (this.data.hasCourier && (!this.data.courierAddress || this.data.courierAddress.addressType !== 'SHIPPING')) return '请先选择普通快递地址';
+    const completeAddress = address => Boolean(address && ((address.province && address.city && address.district && address.detailAddress) || (address.addressType === 'CAMPUS' && address.campusName && address.zoneName && address.building && address.room)));
+    if (this.data.hasTakeaway && this.data.takeawayDeliveryMethod === 'DELIVERY' && !completeAddress(this.data.takeawayAddress)) return '请先选择完整收货地址';
+    if (this.data.hasCourier && (!completeAddress(this.data.courierAddress) || this.data.courierAddress.addressType === 'CAMPUS')) return '请先选择完整收货地址';
     const restaurantStore = this.data.businessStores && this.data.businessStores.restaurant || this.data.store;
     const retailStore = this.data.businessStores && this.data.businessStores.retail || this.data.store;
     if (this.data.hasTakeaway && !api.isProduction() && this.data.takeawayGoodsAmount < Number(this.data.takeawayAddress && this.data.takeawayAddress.minGoodsAmount || restaurantStore.minGoodsAmount || 0)) return `餐饮满${format.yuan(this.data.takeawayAddress && this.data.takeawayAddress.minGoodsAmount || restaurantStore.minGoodsAmount)}元起送`;
     if (this.data.hasCourier && !api.isProduction() && this.data.courierGoodsAmount < Number(retailStore.courierMinGoodsAmount || 0)) return `零售满${format.yuan(retailStore.courierMinGoodsAmount)}元起购`;
     if (!this.data.takeawayItems.length && !this.data.courierItems.length) return '购物车为空';
     if (api.isProduction()) {
-      if (this.data.hasTakeaway && this.data.takeawayDeliveryMethod === 'DELIVERY' && (!this.data.restaurantZones.length || this.data.restaurantZoneIndex < 0 || this.data.restaurantSlotIndex < 0 || !this.data.restaurantSlotDate)) return '请选择配送区域和时间';
+      if (this.data.hasTakeaway && this.data.takeawayDeliveryMethod === 'DELIVERY') {
+        if (!this.data.restaurantZones.length) return '门店暂未配置配送区域，请联系商家';
+        if (this.data.restaurantZoneIndex < 0) return '当前地址不在配送范围内，请更换配送地址';
+        if (!this.data.restaurantSlots.length) return '门店暂未配置配送时段，请联系商家';
+        if (this.data.restaurantSlotIndex < 0 || !this.data.restaurantSlotDate) return '请选择配送时段和日期';
+      }
       const requested = [];
       if (this.data.hasTakeaway) requested.push('restaurant');
       if (this.data.hasCourier) requested.push('retail');
@@ -344,6 +414,59 @@ Page({
 
   openCreatedOrder(orderId) { if (orderId) wx.redirectTo({ url: `/pages/order/detail/index?id=${orderId}` }); },
 
+  keepOrderContactOpen() {},
+
+  previewOrderContactQRCode() {
+    const url = this.data.orderContact && this.data.orderContact.qrCodeUrl;
+    if (url) wx.previewImage({ current: url, urls: [url] });
+  },
+
+  copyOrderContactWechat() {
+    const wechatId = this.data.orderContact && this.data.orderContact.wechatId;
+    if (!wechatId) return;
+    wx.setClipboardData({
+      data: wechatId,
+      success: () => wx.showToast({ title: '微信号已复制', icon: 'success' })
+    });
+  },
+
+  closeOrderContact() {
+    if (!this.data.showOrderContact && !this.data.orderContactClosing) return;
+    const orderId = this.data.orderContactOrderId;
+    const testMode = this.data.orderContactTestMode;
+    this.setData({ showOrderContact: false, orderContactClosing: testMode, orderContactTestMode: false }, () => {
+      if (!testMode) {
+        this.openCreatedOrder(orderId);
+        return;
+      }
+      if (this.orderContactCloseTimer) clearTimeout(this.orderContactCloseTimer);
+      this.orderContactCloseTimer = setTimeout(() => {
+        this.orderContactCloseTimer = null;
+        this.setData({ orderContactClosing: false });
+      }, 220);
+    });
+  },
+
+  async showOrderContactPrompt(orderId, title, options) {
+    const testMode = Boolean(options && options.testMode);
+    if ((!orderId && !testMode) || typeof api.getStorefrontContact !== 'function') return false;
+    try {
+      const contact = await api.getStorefrontContact();
+      if (!contact || !contact.available || !contact.qrCodeUrl) return false;
+      if (this.orderContactCloseTimer) clearTimeout(this.orderContactCloseTimer);
+      this.setData({ showOrderContact: true, orderContactClosing: false, orderContact: contact, orderContactOrderId: orderId || '', orderContactTitle: title || '订单已提交', orderContactTestMode: testMode });
+      return true;
+    } catch (error) {
+      console.error('load order contact failed', error);
+      return false;
+    }
+  },
+
+  async testOrderContact() {
+    const shown = await this.showOrderContactPrompt('', '联系商家测试', { testMode: true });
+    if (!shown) wx.showToast({ title: '商家二维码暂未配置', icon: 'none' });
+  },
+
   async submitProductionOrder() {
     this.setData({ paying: true });
     const groups = this.buildGroups();
@@ -367,6 +490,7 @@ Page({
     });
     storage.saveCheckoutBatchAttempt(attempt);
     let firstOrderId = '';
+    let contactPromptShown = false;
     try {
       for (const entry of attempt.attempts) {
         if (!entry.orderId) {
@@ -383,7 +507,11 @@ Page({
         if (!paymentFlow.isSettled(payment.status)) { firstOrderId = entry.orderId; break; }
       }
       const complete = attempt.attempts.every(entry => paymentFlow.isSettled(entry.status));
-      if (complete) { storage.saveCart([]); storage.saveCheckoutBatchAttempt(null); wx.showToast({ title: `已完成${attempt.attempts.length}个关联订单`, icon: 'success' }); }
+      if (complete) {
+        storage.saveCart([]); storage.saveCheckoutBatchAttempt(null); wx.showToast({ title: `已完成${attempt.attempts.length}个关联订单`, icon: 'success' });
+        const completedOrderId = firstOrderId || attempt.attempts[0] && attempt.attempts[0].orderId;
+        contactPromptShown = await this.showOrderContactPrompt(completedOrderId, '订单已完成');
+      }
       else wx.showToast({ title: '首个订单待核实，请在订单详情继续', icon: 'none' });
     } catch (error) {
       console.error('production order payment failed', error);
@@ -395,7 +523,7 @@ Page({
       this.setData({ paying: false });
       const pending = storage.getCheckoutBatchAttempt();
       const orderId = firstOrderId || pending && pending.attempts.find(entry => entry.orderId && !paymentFlow.isSettled(entry.status)) && pending.attempts.find(entry => entry.orderId && !paymentFlow.isSettled(entry.status)).orderId;
-      if (orderId) this.openCreatedOrder(orderId);
+      if (orderId && !contactPromptShown) this.openCreatedOrder(orderId);
     }
   },
 
@@ -421,6 +549,12 @@ Page({
     const couponOrder = created.find(order => order.couponSnapshot && order.couponSnapshot.id === (this.data.selectedCoupon && this.data.selectedCoupon.id));
     if (this.data.selectedCoupon && couponOrder) { const coupons = storage.getCoupons().map(coupon => coupon.id === this.data.selectedCoupon.id ? Object.assign({}, coupon, { status: 'USED', usedOrderId: couponOrder.id, usedAt: now }) : coupon); storage.saveCoupons(coupons); }
     storage.saveCart([]);
-    setTimeout(() => { this.setData({ paying: false }); wx.showToast({ title: `已生成${created.length}个关联订单`, icon: 'success' }); this.openCreatedOrder(created[0] && created[0].id); }, 500);
+    setTimeout(async () => {
+      this.setData({ paying: false });
+      wx.showToast({ title: `已生成${created.length}个关联订单`, icon: 'success' });
+      const orderId = created[0] && created[0].id;
+      const contactPromptShown = await this.showOrderContactPrompt(orderId, '订单已提交');
+      if (!contactPromptShown) this.openCreatedOrder(orderId);
+    }, 500);
   }
 });

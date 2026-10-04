@@ -7,6 +7,7 @@
 .form-row { display: flex; justify-content: space-between; }
 .form-group--half { width: 47%; }
 .save-tip { color: var(--muted); font-size: 21rpx; line-height: 34rpx; margin: 24rpx 6rpx; }
+.legacy-address-tip { background: var(--paper); border-radius: 12rpx; color: var(--muted); font-size: 21rpx; line-height: 32rpx; margin: -6rpx 0 24rpx; padding: 16rpx 18rpx; }
 .save-address { margin-top: 18rpx; width: 100%; }
 .form-group--third { flex: 1; min-width: 0; width: auto; margin-right: 10rpx; }
 .form-group--third:last-child { margin-right: 0; }
