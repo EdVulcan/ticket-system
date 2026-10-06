@@ -275,6 +275,9 @@ func TestMemberServiceOrderSummaryUsesNetPaidFactsAndCanonicalProjection(t *test
 	if err := model.DB.Create(&model.Order{TenantID: tenantID, MemberID: &canonical.ID, OrderNo: "MEMBER-SPEND-REFUNDED-" + fmt.Sprint(time.Now().UnixNano()), Status: "refunded", TotalAmount: 50, Channel: "online"}).Error; err != nil {
 		t.Fatalf("create refunded ticket order: %v", err)
 	}
+	if err := model.DB.Create(&model.Order{TenantID: tenantID, MemberID: &canonical.ID, OrderNo: "MEMBER-SPEND-PARTIAL-UNUSED-" + fmt.Sprint(time.Now().UnixNano()), Status: "partial_refunded", TotalAmount: 40, Channel: "online"}).Error; err != nil {
+		t.Fatalf("create incomplete partial-refund ticket order: %v", err)
+	}
 	location := model.CommerceFulfillmentLocation{TenantID: tenantID, BusinessType: "retail", Name: "Member spend warehouse", LocationType: "warehouse", Status: "active"}
 	if err := model.DB.Create(&location).Error; err != nil {
 		t.Fatalf("create commerce location: %v", err)
@@ -290,8 +293,8 @@ func TestMemberServiceOrderSummaryUsesNetPaidFactsAndCanonicalProjection(t *test
 	if detail.ID != canonical.ID {
 		t.Fatalf("member detail did not project canonical record: got %d want %d", detail.ID, canonical.ID)
 	}
-	if detail.Orders.PaidOrderCount != 3 {
-		t.Fatalf("paid order count=%d want 3 historical paid orders", detail.Orders.PaidOrderCount)
+	if detail.Orders.PaidOrderCount != 4 {
+		t.Fatalf("paid order count=%d want 4 historical paid orders", detail.Orders.PaidOrderCount)
 	}
 	if detail.Orders.TotalSpendCents != 11000 {
 		t.Fatalf("total spend=%d want 11000 cents", detail.Orders.TotalSpendCents)

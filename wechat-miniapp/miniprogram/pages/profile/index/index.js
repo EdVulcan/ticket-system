@@ -20,9 +20,12 @@ Page({
     couponCount: 0,
     showCoupons: false,
     contact: { available: false, contactType: '', contactName: '', wechatId: '', qrCodeUrl: '' },
-    // Membership is retained for a later platform-wide upgrade and is not
-    // part of the current customized storefront.
-    membershipEnabled: false,
+    // The server-side channel member-mode gate remains authoritative. The
+    // page is enabled so approved first-party storefronts can show member
+    // status and phone authorization; disabled channels receive no member
+    // association from the backend.
+    membershipEnabled: true,
+    memberAvailable: false,
     showContact: false,
     assistAvailable: false,
     memberProfile: { memberNo: '', status: 'active', membershipStatus: 'provisional', phoneMasked: '', phoneVerified: false, membershipConsentGranted: false, sourceCount: 0 },
@@ -99,10 +102,11 @@ Page({
       });
       if (this.data.membershipEnabled) {
         api.getMemberProfile().then((profile) => {
+          this.setData({ memberAvailable: true });
           this.setMemberProfile(profile);
         }).catch((error) => {
           console.error('load member profile failed', error);
-          this.setData({ memberError: '', memberProfile: Object.assign({}, this.data.memberProfile, { membershipStatus: 'provisional', phoneVerified: false }) });
+          this.setData({ memberAvailable: false, memberError: '', memberProfile: Object.assign({}, this.data.memberProfile, { membershipStatus: 'provisional', phoneVerified: false }) });
         });
       }
       Promise.all([this.loadCoupons(), api.getOrders()]).then(([couponResult, orderResult]) => {
@@ -116,7 +120,10 @@ Page({
     }
     const coupons = storage.getCoupons().filter((coupon) => coupon.status === 'AVAILABLE');
     const orders = storage.getOrders();
-    if (this.data.membershipEnabled) this.setMemberProfile({ membership_status: 'provisional', status: 'active', phone_verified: false, membership_consent_granted: false, source_count: 1 });
+    if (this.data.membershipEnabled) {
+      this.setData({ memberAvailable: true });
+      this.setMemberProfile({ membership_status: 'provisional', status: 'active', phone_verified: false, membership_consent_granted: false, source_count: 1 });
+    }
     this.renderProfile(app, coupons, orders);
     this.loadAssistAvailability();
   },

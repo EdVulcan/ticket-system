@@ -131,6 +131,31 @@ func (c *ChannelController) SetStatus(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"status": body.Status})
 }
 
+func (c *ChannelController) SetMemberMode(ctx *gin.Context) {
+	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
+	if err != nil || id == 0 {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "invalid channel id"})
+		return
+	}
+	var body struct {
+		MemberMode string `json:"member_mode" binding:"required"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	memberMode := strings.TrimSpace(body.MemberMode)
+	if err := c.Service.SetMemberModeAudited(ctx.GetUint("tenant_id"), uint(id), memberMode, ctx.GetUint("user_id"), ctx.GetString("role")); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			status = http.StatusNotFound
+		}
+		ctx.JSON(status, gin.H{"error": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"member_mode": memberMode})
+}
+
 func (c *ChannelController) RotateSecret(ctx *gin.Context) {
 	id, err := strconv.ParseUint(ctx.Param("id"), 10, 32)
 	if err != nil {

@@ -1126,12 +1126,21 @@ func (s *MemberService) memberOrderSpendSummaryTx(tx *gorm.DB, tenantID uint, me
 		Status        string
 		TotalAmount   float64
 		RefundedCents int64
+		SpendEligible bool
 	}
 	var ticketOrders []ticketOrderSpendRow
 	if err := tx.Table("orders AS ord").Select(`
 		ord.id AS order_id,
 		ord.status,
 		ord.total_amount,
+		CASE WHEN ord.status IN ('completed', 'refunded') OR EXISTS (
+			SELECT 1
+			FROM tickets AS eligibility_ticket
+			LEFT JOIN check_in_records AS eligibility_check_in ON eligibility_check_in.ticket_id = eligibility_ticket.id
+				AND eligibility_check_in.result = 'success' AND eligibility_check_in.reversed_at IS NULL AND eligibility_check_in.deleted_at IS NULL
+			WHERE eligibility_ticket.order_id = ord.id AND eligibility_ticket.deleted_at IS NULL
+				AND (eligibility_ticket.status = 'used' OR eligibility_check_in.id IS NOT NULL)
+		) THEN TRUE ELSE FALSE END AS spend_eligible,
 		COALESCE((
 			SELECT SUM(CASE WHEN refund.amount_cents <> 0 THEN refund.amount_cents
 				ELSE CAST(ROUND(refund.amount * 100.0) AS BIGINT) END)
@@ -1148,7 +1157,7 @@ func (s *MemberService) memberOrderSpendSummaryTx(tx *gorm.DB, tenantID uint, me
 	}
 	for _, order := range ticketOrders {
 		summary.PaidOrderCount++
-		if order.Status == "paid" {
+		if order.Status == "paid" || !order.SpendEligible {
 			continue
 		}
 		net := moneyCents(order.TotalAmount) - order.RefundedCents

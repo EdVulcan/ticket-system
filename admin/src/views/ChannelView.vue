@@ -15,6 +15,7 @@
       <el-table-column prop="code" label="渠道编码" width="180" />
       <el-table-column label="适配器类型" width="140"><template #default="{row}">{{ adapterTypeText(row.type) }}</template></el-table-column>
       <el-table-column label="接口参数" width="120"><template #default="{row}"><el-tag v-if="['ctrip', 'xiaohongshu', 'wechat_miniapp'].includes(row.type)" :type="row.protocol_configured ? 'success' : 'danger'" effect="plain">{{ row.protocol_configured ? '已配置' : '待配置' }}</el-tag><span v-else>-</span></template></el-table-column>
+      <el-table-column label="会员身份" width="120"><template #default="{row}"><el-tag v-if="['wechat_miniapp', 'xiaohongshu', 'app', 'web'].includes(row.type)" :type="row.member_mode === 'first_party' ? 'success' : 'info'" effect="plain">{{ row.member_mode === 'first_party' ? '已启用' : '未启用' }}</el-tag><span v-else>-</span></template></el-table-column>
       <el-table-column prop="status" label="状态" width="120"><template #default="{row}"><el-tag :type="row.status === 'active' ? 'success' : row.status === 'sandbox' ? 'warning' : 'info'">{{ accountStatusText(row.status) }}</el-tag></template></el-table-column>
       <el-table-column prop="rate_limit_per_min" label="限流/分钟" width="120" />
       <el-table-column prop="permissions_json" label="权限" min-width="220" show-overflow-tooltip />
@@ -33,6 +34,7 @@
                 <el-dropdown-item v-if="canActiveWrite && row.type === 'xiaohongshu'" command="xiaohongshu-config" divided>小红书参数</el-dropdown-item>
                 <el-dropdown-item v-if="canActiveWrite && row.type === 'ctrip'" command="ctrip-config">携程参数</el-dropdown-item>
                 <el-dropdown-item v-if="canCommercialChannelWrite && row.type === 'wechat_miniapp'" command="wechat-config" divided>微信小程序参数</el-dropdown-item>
+                <el-dropdown-item v-if="canChannelWrite && ['wechat_miniapp', 'xiaohongshu', 'app', 'web'].includes(row.type)" command="toggle-member-mode">{{ row.member_mode === 'first_party' ? '停用会员身份' : '启用会员身份' }}</el-dropdown-item>
                 <el-dropdown-item v-if="row.type === 'xiaohongshu'" command="diagnose">连接测试</el-dropdown-item>
                 <el-dropdown-item v-if="row.type !== 'wechat_miniapp'" command="requests" :divided="['ctrip', 'xiaohongshu'].includes(row.type)">请求日志</el-dropdown-item>
                 <el-dropdown-item v-if="row.type !== 'wechat_miniapp'" command="reconciliations">账单对账</el-dropdown-item>
@@ -708,6 +710,14 @@ const simulateCtripSandboxConsumption = async () => {
   } finally { ctripSandboxConsuming.value = false }
 }
 const toggleStatus = async (row: any) => { const status = row.status === 'disabled' ? (row.environment === 'sandbox' ? 'sandbox' : 'active') : 'disabled'; await request.patch(`/channel-accounts/${row.id}/status`, { status }); row.status = status; ElMessage.success('状态已更新') }
+const toggleMemberMode = async (row: any) => {
+  const memberMode = row.member_mode === 'first_party' ? 'disabled' : 'first_party'
+  const action = memberMode === 'first_party' ? '启用' : '停用'
+  await ElMessageBox.confirm(`${action}后将${memberMode === 'first_party' ? '为该自营渠道的新登录用户建立会员身份，并纳入消费统计' : '停止该渠道的新会员归属；历史订单和会员记录保留'}，确认继续？`, `${action}会员身份`, { type: memberMode === 'first_party' ? 'warning' : 'info' })
+  await request.patch(`/channel-accounts/${row.id}/member-mode`, { member_mode: memberMode })
+  row.member_mode = memberMode
+  ElMessage.success(`会员身份已${action}`)
+}
 const switchXiaohongshuEnvironment = async (row: any) => {
   const status = row.status === 'sandbox' ? 'active' : 'sandbox'
   const label = status === 'sandbox' ? '测试环境' : '正式环境'
@@ -730,6 +740,7 @@ const handleAccountCommand = async (command: string, row: any) => {
   if (command === 'requests') await openRequests(row)
   if (command === 'reconciliations') await openReconciliations(row)
   if (command === 'toggle-status') await toggleStatus(row)
+  if (command === 'toggle-member-mode') await toggleMemberMode(row)
   if (command === 'rotate-secret') await rotate(row)
 }
 const productName = (id: number) => products.value.find((product: any) => Number(product.id) === Number(id))?.name || '已下架或不可见产品'

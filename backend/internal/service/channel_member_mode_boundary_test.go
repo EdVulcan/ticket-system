@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"ticket-backend/internal/model"
@@ -51,6 +52,27 @@ func TestCommerceStorefrontMemberModeFailsClosedAndCanBePlatformApproved(t *test
 	}
 	if authenticated.MemberID != nil {
 		t.Fatalf("disabled channel exposed stale session member: %v", *authenticated.MemberID)
+	}
+}
+
+func TestCommerceStorefrontLegacySessionIsRefreshedAfterMemberModeApproval(t *testing.T) {
+	fixture := newCommerceStorefrontServiceFixture(t)
+	memberService := newMemberServiceForTest(t)
+	fixture.service.Member = memberService
+	login := storefrontLogin(t, fixture.service, fixture.account.AppID, "legacy-session-subject")
+	if err := model.DB.Model(&model.CommerceCustomerSession{}).
+		Where("token_hash = ?", storefrontHash(login.Token)).Update("member_id", nil).Error; err != nil {
+		t.Fatalf("simulate legacy session: %v", err)
+	}
+	if _, err := fixture.service.Authenticate(login.Token); !errors.Is(err, ErrCommerceStorefrontUnauthenticated) {
+		t.Fatalf("legacy first-party session error=%v, want unauthenticated", err)
+	}
+	var session model.CommerceCustomerSession
+	if err := model.DB.Where("token_hash = ?", storefrontHash(login.Token)).First(&session).Error; err != nil {
+		t.Fatal(err)
+	}
+	if session.Status != "revoked" {
+		t.Fatalf("legacy session status=%q, want revoked", session.Status)
 	}
 }
 

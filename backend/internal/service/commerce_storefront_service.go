@@ -474,9 +474,16 @@ func (s *CommerceStorefrontService) Login(ctx context.Context, input CommerceSto
 	expiresAt := now.Add(s.sessionTTL())
 	var memberID *uint
 	if s.Member != nil && ChannelAllowsMemberIdentity(account) {
-		if member, memberErr := s.Member.ResolveSelfHostedIdentity(SelfHostedIdentityInput{
+		member, memberErr := s.Member.ResolveSelfHostedIdentity(SelfHostedIdentityInput{
 			TenantID: account.TenantID, ChannelAccountID: account.ID, Provider: "wechat_miniapp", Subject: subject,
-		}); memberErr == nil && member != nil {
+		})
+		if memberErr != nil {
+			// A first-party session without a server-resolved member cannot be
+			// used for member APIs or order attribution. Do not mint a session
+			// that will fail on its first authenticated request.
+			return nil, fmt.Errorf("%w: member identity resolution failed: %v", ErrCommerceStorefrontUnavailable, memberErr)
+		}
+		if member != nil {
 			memberID = &member.ID
 		}
 	}
@@ -597,6 +604,14 @@ func (s *CommerceStorefrontService) authenticate(token string) (*commerceStorefr
 	var tenant model.Tenant
 	if err := s.db().Select("id", "status").Where("id = ? AND status = ?", session.TenantID, "active").First(&tenant).Error; err != nil {
 		return nil, ErrCommerceStorefrontUnavailable
+	}
+	if ChannelAllowsMemberIdentity(&account) && s.Member != nil && session.MemberID == nil {
+		// Sessions created before member identity was enabled (or by an
+		// interrupted migration) cannot be safely repaired: the persisted
+		// subject is a one-way hash. Force the client through wx.login so the
+		// provider subject can be resolved by the member service.
+		_ = s.db().Model(&session).Where("status = ?", "active").Updates(map[string]interface{}{"status": "revoked", "revoked_at": now})
+		return nil, ErrCommerceStorefrontUnauthenticated
 	}
 	if err := s.db().Model(&session).Where("status = ? AND expires_at > ?", "active", now).Update("last_seen_at", now).Error; err != nil {
 		return nil, err

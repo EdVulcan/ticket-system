@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"ticket-backend/internal/model"
 
 	"gorm.io/gorm"
@@ -29,26 +30,54 @@ func (s *ChannelService) SetMemberMode(tenantID, accountID uint, mode string) er
 		return ErrChannelMemberModeInvalid
 	}
 	return model.Write(func(tx *gorm.DB) error {
+		return setMemberModeTx(tx, tenantID, accountID, mode)
+	})
+}
+
+// SetMemberModeAudited applies the same tenant-scoped policy as SetMemberMode
+// and records the operator-visible transition in the tenant audit stream.
+// The caller must derive tenantID and actorID from the authenticated context.
+func (s *ChannelService) SetMemberModeAudited(tenantID, accountID uint, mode string, actorID uint, actorRole string) error {
+	if tenantID == 0 || accountID == 0 || actorID == 0 || !validChannelMemberMode(mode) {
+		return ErrChannelMemberModeInvalid
+	}
+	return model.Write(func(tx *gorm.DB) error {
 		var account model.ChannelAccount
 		if err := tx.Select("id", "type", "member_mode").Where("id = ? AND tenant_id = ?", accountID, tenantID).First(&account).Error; err != nil {
 			return err
 		}
-		if mode == model.ChannelMemberModeFirstParty {
-			switch account.Type {
-			case "wechat_miniapp", "xiaohongshu", "app", "web":
-			default:
-				return errors.New("channel type is not an approved first-party member source")
-			}
+		previous := account.MemberMode
+		if err := setMemberModeTx(tx, tenantID, accountID, mode); err != nil {
+			return err
 		}
-		result := tx.Model(&model.ChannelAccount{}).
-			Where("id = ? AND tenant_id = ?", accountID, tenantID).
-			Update("member_mode", mode)
-		if result.Error != nil {
-			return result.Error
+		if previous == mode {
+			return nil
 		}
-		if result.RowsAffected == 0 {
-			return gorm.ErrRecordNotFound
-		}
-		return nil
+		return recordAuditTx(tx, actorID, tenantID, actorRole, "tenant", "channel.member_mode.update", "channel_account", accountID,
+			"tenant-controlled first-party member source setting", fmt.Sprintf(`{"member_mode":%q}`, previous), fmt.Sprintf(`{"member_mode":%q}`, mode))
 	})
+}
+
+func setMemberModeTx(tx *gorm.DB, tenantID, accountID uint, mode string) error {
+	var account model.ChannelAccount
+	if err := tx.Select("id", "type", "member_mode").Where("id = ? AND tenant_id = ?", accountID, tenantID).First(&account).Error; err != nil {
+		return err
+	}
+	if mode == model.ChannelMemberModeFirstParty {
+		switch account.Type {
+		case "wechat_miniapp", "xiaohongshu", "app", "web":
+		default:
+			return errors.New("channel type is not an approved first-party member source")
+		}
+	}
+	result := tx.Model(&model.ChannelAccount{}).
+		Where("id = ? AND tenant_id = ?", accountID, tenantID).
+		Update("member_mode", mode)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
