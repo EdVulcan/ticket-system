@@ -103,6 +103,7 @@ type CommerceStorefrontCatalog struct {
 	BusinessType     string                            `json:"business_type"`
 	Location         model.CommerceFulfillmentLocation `json:"location"`
 	Products         []model.CommerceProduct           `json:"products"`
+	Hero             CommerceStorefrontHeroView        `json:"hero"`
 }
 
 type CommerceStorefrontCartItemInput struct {
@@ -732,6 +733,7 @@ func (s *CommerceStorefrontService) ListCatalog(token string, businessTypes ...s
 	return &CommerceStorefrontCatalog{
 		TenantID: context.Session.TenantID, ChannelAccountID: context.Session.ChannelAccountID,
 		BusinessType: context.Binding.BusinessType, Location: context.Location, Products: filtered,
+		Hero: storefrontHeroView(&context.Binding),
 	}, nil
 }
 

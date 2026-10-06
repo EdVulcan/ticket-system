@@ -45,6 +45,16 @@ type CommerceStorefrontBinding struct {
 	BusinessType     string `gorm:"size:20;not null;uniqueIndex:idx_commerce_storefront_bindings_account_domain,priority:3;check:chk_commerce_storefront_bindings_business_type,business_type IN ('restaurant','retail')" json:"business_type"`
 	LocationID       uint   `gorm:"not null" json:"location_id"`
 	Status           string `gorm:"size:20;not null;default:'active';index;check:chk_commerce_storefront_bindings_status,status IN ('active','disabled')" json:"status"`
+	// Hero fields are independent storefront presentation for this tenant,
+	// channel and business binding. They deliberately do not live on a
+	// product, so changing product order or media cannot silently change the
+	// storefront's top banner.
+	HeroEnabled         bool   `gorm:"not null;default:false" json:"-"`
+	HeroImageURL        string `gorm:"size:500;not null;default:''" json:"-"`
+	HeroTitle           string `gorm:"size:120;not null;default:''" json:"-"`
+	HeroSubtitle        string `gorm:"size:240;not null;default:''" json:"-"`
+	HeroTargetType      string `gorm:"size:20;not null;default:'none'" json:"-"`
+	HeroTargetProductID uint   `gorm:"not null;default:0" json:"-"`
 }
 
 // CommerceStorefrontConfig is kept as a descriptive alias for callers that

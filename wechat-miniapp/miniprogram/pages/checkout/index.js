@@ -148,13 +148,9 @@ Page({
     showCouponSheet: false,
     couponSheetClosing: false,
     couponsUnavailable: false,
-    showOrderContact: false,
-    orderContactClosing: false,
-    orderContact: { available: false, contactName: '', wechatId: '', qrCodeUrl: '' },
-    orderContactOrderId: '',
-    orderContactTitle: '订单已提交',
-    orderContactTestMode: false,
-    showContactTestButton: true,
+    showPreOrderContact: false,
+    preOrderContactClosing: false,
+    preOrderContact: null,
     paying: false,
     paymentModeText: '当前为演示支付模式',
     pricingNote: '餐饮和零售费用分别计算'
@@ -173,7 +169,7 @@ Page({
     const ready = api.isProduction() && typeof api.ensureSession === 'function'
       ? api.ensureSession().catch(error => { console.error('storefront session unavailable', error); return null; })
       : Promise.resolve();
-    ready.then(() => this.loadData());
+    ready.then(() => { this.loadData(); this.loadPreOrderContact(); });
   },
 
   onHide() {
@@ -183,16 +179,15 @@ Page({
       clearTimeout(this.couponSheetCloseTimer);
       this.couponSheetCloseTimer = null;
     }
-    if (this.orderContactCloseTimer) {
-      clearTimeout(this.orderContactCloseTimer);
-      this.orderContactCloseTimer = null;
+    if (this.preOrderContactCloseTimer) {
+      clearTimeout(this.preOrderContactCloseTimer);
+      this.preOrderContactCloseTimer = null;
     }
     this.setData({
       showCouponSheet: false,
       couponSheetClosing: false,
-      showOrderContact: false,
-      orderContactClosing: false,
-      orderContactTestMode: false,
+      showPreOrderContact: false,
+      preOrderContactClosing: false,
     });
   },
 
@@ -214,6 +209,17 @@ Page({
       return;
     }
     this.applyData(storage.getAddresses(), storage.getCoupons(), { restaurant: null, retail: null });
+  },
+
+  loadPreOrderContact() {
+    if (typeof api.getStorefrontContact !== 'function') return;
+    api.getStorefrontContact().then(contact => {
+      const available = contact && contact.available && contact.qrCodeUrl ? contact : null;
+      this.setData({ preOrderContact: available });
+    }).catch(error => {
+      console.error('load pre-order contact failed', error);
+      this.setData({ preOrderContact: null });
+    });
   },
 
   applyData(addresses, couponList, deliveryOptions) {
@@ -414,15 +420,23 @@ Page({
 
   openCreatedOrder(orderId) { if (orderId) wx.redirectTo({ url: `/pages/order/detail/index?id=${orderId}` }); },
 
-  keepOrderContactOpen() {},
+  keepPreOrderContactOpen() {},
 
-  previewOrderContactQRCode() {
-    const url = this.data.orderContact && this.data.orderContact.qrCodeUrl;
+  openPreOrderContact() {
+    const contact = this.data.preOrderContact;
+    if (!contact) return;
+    if (this.preOrderContactCloseTimer) clearTimeout(this.preOrderContactCloseTimer);
+    this.preOrderContactCloseTimer = null;
+    this.setData({ showPreOrderContact: true, preOrderContactClosing: false });
+  },
+
+  previewPreOrderContactQRCode() {
+    const url = this.data.preOrderContact && this.data.preOrderContact.qrCodeUrl;
     if (url) wx.previewImage({ current: url, urls: [url] });
   },
 
-  copyOrderContactWechat() {
-    const wechatId = this.data.orderContact && this.data.orderContact.wechatId;
+  copyPreOrderContactWechat() {
+    const wechatId = this.data.preOrderContact && this.data.preOrderContact.wechatId;
     if (!wechatId) return;
     wx.setClipboardData({
       data: wechatId,
@@ -430,41 +444,13 @@ Page({
     });
   },
 
-  closeOrderContact() {
-    if (!this.data.showOrderContact && !this.data.orderContactClosing) return;
-    const orderId = this.data.orderContactOrderId;
-    const testMode = this.data.orderContactTestMode;
-    this.setData({ showOrderContact: false, orderContactClosing: testMode, orderContactTestMode: false }, () => {
-      if (!testMode) {
-        this.openCreatedOrder(orderId);
-        return;
-      }
-      if (this.orderContactCloseTimer) clearTimeout(this.orderContactCloseTimer);
-      this.orderContactCloseTimer = setTimeout(() => {
-        this.orderContactCloseTimer = null;
-        this.setData({ orderContactClosing: false });
-      }, 220);
-    });
-  },
-
-  async showOrderContactPrompt(orderId, title, options) {
-    const testMode = Boolean(options && options.testMode);
-    if ((!orderId && !testMode) || typeof api.getStorefrontContact !== 'function') return false;
-    try {
-      const contact = await api.getStorefrontContact();
-      if (!contact || !contact.available || !contact.qrCodeUrl) return false;
-      if (this.orderContactCloseTimer) clearTimeout(this.orderContactCloseTimer);
-      this.setData({ showOrderContact: true, orderContactClosing: false, orderContact: contact, orderContactOrderId: orderId || '', orderContactTitle: title || '订单已提交', orderContactTestMode: testMode });
-      return true;
-    } catch (error) {
-      console.error('load order contact failed', error);
-      return false;
-    }
-  },
-
-  async testOrderContact() {
-    const shown = await this.showOrderContactPrompt('', '联系商家测试', { testMode: true });
-    if (!shown) wx.showToast({ title: '商家二维码暂未配置', icon: 'none' });
+  closePreOrderContact() {
+    if (!this.data.showPreOrderContact) return;
+    this.setData({ showPreOrderContact: false, preOrderContactClosing: true });
+    this.preOrderContactCloseTimer = setTimeout(() => {
+      this.preOrderContactCloseTimer = null;
+      this.setData({ preOrderContactClosing: false });
+    }, 220);
   },
 
   async submitProductionOrder() {
@@ -490,7 +476,6 @@ Page({
     });
     storage.saveCheckoutBatchAttempt(attempt);
     let firstOrderId = '';
-    let contactPromptShown = false;
     try {
       for (const entry of attempt.attempts) {
         if (!entry.orderId) {
@@ -509,8 +494,7 @@ Page({
       const complete = attempt.attempts.every(entry => paymentFlow.isSettled(entry.status));
       if (complete) {
         storage.saveCart([]); storage.saveCheckoutBatchAttempt(null); wx.showToast({ title: `已完成${attempt.attempts.length}个关联订单`, icon: 'success' });
-        const completedOrderId = firstOrderId || attempt.attempts[0] && attempt.attempts[0].orderId;
-        contactPromptShown = await this.showOrderContactPrompt(completedOrderId, '订单已完成');
+        firstOrderId = firstOrderId || attempt.attempts[0] && attempt.attempts[0].orderId;
       }
       else wx.showToast({ title: '首个订单待核实，请在订单详情继续', icon: 'none' });
     } catch (error) {
@@ -523,7 +507,7 @@ Page({
       this.setData({ paying: false });
       const pending = storage.getCheckoutBatchAttempt();
       const orderId = firstOrderId || pending && pending.attempts.find(entry => entry.orderId && !paymentFlow.isSettled(entry.status)) && pending.attempts.find(entry => entry.orderId && !paymentFlow.isSettled(entry.status)).orderId;
-      if (orderId && !contactPromptShown) this.openCreatedOrder(orderId);
+      if (orderId) this.openCreatedOrder(orderId);
     }
   },
 
@@ -549,12 +533,11 @@ Page({
     const couponOrder = created.find(order => order.couponSnapshot && order.couponSnapshot.id === (this.data.selectedCoupon && this.data.selectedCoupon.id));
     if (this.data.selectedCoupon && couponOrder) { const coupons = storage.getCoupons().map(coupon => coupon.id === this.data.selectedCoupon.id ? Object.assign({}, coupon, { status: 'USED', usedOrderId: couponOrder.id, usedAt: now }) : coupon); storage.saveCoupons(coupons); }
     storage.saveCart([]);
-    setTimeout(async () => {
+    setTimeout(() => {
       this.setData({ paying: false });
       wx.showToast({ title: `已生成${created.length}个关联订单`, icon: 'success' });
       const orderId = created[0] && created[0].id;
-      const contactPromptShown = await this.showOrderContactPrompt(orderId, '订单已提交');
-      if (!contactPromptShown) this.openCreatedOrder(orderId);
+      this.openCreatedOrder(orderId);
     }, 500);
   }
 });

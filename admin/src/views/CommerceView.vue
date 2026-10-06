@@ -331,6 +331,11 @@
                   </el-tag>
                 </template>
               </el-table-column>
+              <el-table-column label="首页头图" width="110" align="center">
+                <template #default="{ row }">
+                  <el-tag :type="row.hero?.enabled ? 'success' : 'info'" effect="plain">{{ row.hero?.enabled ? '已启用' : '未配置' }}</el-tag>
+                </template>
+              </el-table-column>
               <el-table-column label="操作" width="178" fixed="right" align="right">
                 <template #default="{ row }">
                   <template v-if="canWrite">
@@ -722,6 +727,36 @@
             <el-radio value="disabled">停用</el-radio>
           </el-radio-group>
         </el-form-item>
+        <el-divider content-position="left">首页头图（可选）</el-divider>
+        <el-form-item label="启用首页头图">
+          <el-switch v-model="storefrontForm.hero_enabled" active-text="启用" inactive-text="关闭" />
+          <div class="form-help">头图独立于商品封面，按当前租户和业务渠道生效。</div>
+        </el-form-item>
+        <template v-if="storefrontForm.hero_enabled">
+          <el-form-item label="图片地址" required>
+            <el-input v-model="storefrontForm.hero_image_url" maxlength="500" placeholder="填写已配置媒体地址（http/https）" />
+            <div class="form-help">建议使用现有媒体服务返回的图片地址，图片比例建议 2:1。</div>
+          </el-form-item>
+          <div class="form-grid">
+            <el-form-item label="头图标题">
+              <el-input v-model="storefrontForm.hero_title" maxlength="120" placeholder="例如：现点现做，招牌菜推荐" />
+            </el-form-item>
+            <el-form-item label="头图副标题">
+              <el-input v-model="storefrontForm.hero_subtitle" maxlength="240" placeholder="可选，用一句话说明特色" />
+            </el-form-item>
+          </div>
+          <el-form-item label="点击跳转">
+            <el-radio-group v-model="storefrontForm.hero_target_type">
+              <el-radio value="none">不跳转</el-radio>
+              <el-radio value="product">商品详情</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item v-if="storefrontForm.hero_target_type === 'product'" label="跳转商品" required>
+            <el-select v-model="storefrontForm.hero_target_product_id" class="full-width" filterable placeholder="选择当前业务的商品">
+              <el-option v-for="product in products" :key="product.id" :label="product.name" :value="product.id" />
+            </el-select>
+          </el-form-item>
+        </template>
         <el-form-item label="操作原因" required>
           <el-input v-model="storefrontForm.reason" type="textarea" :rows="3" maxlength="255" show-word-limit placeholder="例如：首次发布餐饮小程序、切换履约门店" />
         </el-form-item>
@@ -875,6 +910,12 @@ const storefrontForm = reactive({
   location_id: 0,
   status: 'active',
   reason: '',
+  hero_enabled: false,
+  hero_image_url: '',
+  hero_title: '',
+  hero_subtitle: '',
+  hero_target_type: 'none',
+  hero_target_product_id: 0,
 })
 const storefrontContactForm = reactive({
   channel_account_id: 0,
@@ -1302,6 +1343,12 @@ function openStorefrontBinding(row?: any) {
     location_id: Number(row?.location_id || activeLocations.value[0]?.id || 0),
     status: row?.status || 'active',
     reason: '',
+    hero_enabled: Boolean(row?.hero?.enabled),
+    hero_image_url: row?.hero?.image_url || '',
+    hero_title: row?.hero?.title || '',
+    hero_subtitle: row?.hero?.subtitle || '',
+    hero_target_type: row?.hero?.target_type || 'none',
+    hero_target_product_id: Number(row?.hero?.target_product_id || 0),
   })
   storefrontDialogVisible.value = true
 }
@@ -1312,6 +1359,14 @@ async function saveStorefrontBinding() {
     ElMessage.warning('请选择微信账号、履约地点并填写操作原因')
     return
   }
+  if (storefrontForm.hero_enabled && !storefrontForm.hero_image_url.trim()) {
+    ElMessage.warning('启用首页头图时，请填写图片地址')
+    return
+  }
+  if (storefrontForm.hero_enabled && storefrontForm.hero_target_type === 'product' && !storefrontForm.hero_target_product_id) {
+    ElMessage.warning('请选择头图跳转商品')
+    return
+  }
   storefrontSaving.value = true
   try {
     const payload = {
@@ -1320,6 +1375,12 @@ async function saveStorefrontBinding() {
       location_id: storefrontForm.location_id,
       status: storefrontForm.status,
       reason: storefrontForm.reason.trim(),
+      hero_enabled: storefrontForm.hero_enabled,
+      hero_image_url: storefrontForm.hero_image_url.trim(),
+      hero_title: storefrontForm.hero_title.trim(),
+      hero_subtitle: storefrontForm.hero_subtitle.trim(),
+      hero_target_type: storefrontForm.hero_target_type,
+      hero_target_product_id: storefrontForm.hero_target_type === 'product' ? storefrontForm.hero_target_product_id : 0,
     }
     if (storefrontForm.id) {
       await request.put(`/commerce/storefront-bindings/${storefrontForm.id}`, payload)

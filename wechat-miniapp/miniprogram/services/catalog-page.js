@@ -104,6 +104,8 @@ function createCatalogPage(channel) {
       categories: [],
       activeCategory: 'all',
       visibleProducts: [],
+      heroProduct: null,
+      heroBanner: null,
       cartCount: 0,
       cartAmountText: '0.00',
       channelOpen: false,
@@ -151,13 +153,14 @@ function createCatalogPage(channel) {
     loadCatalog() {
       const store = api.normalizeStore(storage.getStore());
       if (api.isProduction() && !api.isCloudEnabled()) {
-        this.setData({ visibleProducts: [], store: Object.assign({}, store, { businessStatus: 'PAUSED', courierStatus: 'PAUSED' }), channelOpen: false });
+        this.setData({ visibleProducts: [], heroProduct: null, heroBanner: null, store: Object.assign({}, store, { businessStatus: 'PAUSED', courierStatus: 'PAUSED' }), channelOpen: false });
         return;
       }
       const localProducts = api.isProduction() ? [] : storage.getProducts(businessType).map((item, index) => decorate(item, index, businessType));
       const localCategories = api.isProduction() ? [] : channelCategories(mock.categories, channel);
       this.catalogProducts = localProducts.filter(product => commerce.fulfillmentOf(product) === channel);
-      this.setData({ store, serviceText: serviceText(channel, store), categories: localCategories, channelOpen: this.isChannelOpen(store), visibleProducts: this.filterProducts(this.catalogProducts, this.data.activeCategory) });
+      const localVisibleProducts = this.filterProducts(this.catalogProducts, this.data.activeCategory);
+      this.setData({ store, heroBanner: null, serviceText: serviceText(channel, store), categories: localCategories, channelOpen: this.isChannelOpen(store), visibleProducts: localVisibleProducts, heroProduct: this.featuredProduct(localVisibleProducts) });
       if (!api.isCloudEnabled()) return;
       api.getCatalog(businessType).then(result => {
         const remoteProducts = (result.products || []).map((item, index) => decorate(item, index, businessType));
@@ -169,11 +172,12 @@ function createCatalogPage(channel) {
         const activeBusinessType = String(remoteStore.activeBusinessType || remoteStore.businessType || '').toLowerCase();
         this.catalogProducts = catalogProducts.filter(product => commerce.fulfillmentOf(product) === channel && (!api.isProduction() || (product.catalogReady && activeBusinessType && commerce.fulfillmentForBusinessType(activeBusinessType) === channel)));
         catalogProducts.forEach(product => syncCartPrice(product, businessType));
-        this.setData({ store: remoteStore, serviceText: serviceText(channel, remoteStore), categories, channelOpen: this.isChannelOpen(remoteStore), visibleProducts: this.filterProducts(this.catalogProducts, this.data.activeCategory) });
+        const remoteVisibleProducts = this.filterProducts(this.catalogProducts, this.data.activeCategory);
+        this.setData({ store: remoteStore, heroBanner: result.hero || null, serviceText: serviceText(channel, remoteStore), categories, channelOpen: this.isChannelOpen(remoteStore), visibleProducts: remoteVisibleProducts, heroProduct: this.featuredProduct(remoteVisibleProducts) });
       }).catch(error => {
         console.error('load catalog failed', error);
         if (api.isProduction()) {
-          this.setData({ visibleProducts: [], channelOpen: false, store: Object.assign({}, store, { businessStatus: 'PAUSED', courierStatus: 'PAUSED' }) });
+          this.setData({ visibleProducts: [], heroProduct: null, heroBanner: null, channelOpen: false, store: Object.assign({}, store, { businessStatus: 'PAUSED', courierStatus: 'PAUSED' }) });
           const message = error && error.statusCode === 409 && error.userMessage ? error.userMessage : '当前业务暂不可用，请稍后重试';
           wx.showToast({ title: message, icon: 'none' });
         }
@@ -186,9 +190,14 @@ function createCatalogPage(channel) {
       return categoryId === 'all' ? onSale : onSale.filter(product => product.categoryId === categoryId);
     },
 
+    featuredProduct(products) {
+      return (products || []).find(product => product.coverImageUrl) || (products || [])[0] || null;
+    },
+
     selectCategory(event) {
       const activeCategory = event.currentTarget.dataset.id;
-      this.setData({ activeCategory, visibleProducts: this.filterProducts(this.catalogProducts, activeCategory) });
+      const visibleProducts = this.filterProducts(this.catalogProducts, activeCategory);
+      this.setData({ activeCategory, visibleProducts, heroProduct: this.featuredProduct(visibleProducts) });
     },
 
     refreshCart() {
@@ -199,6 +208,18 @@ function createCatalogPage(channel) {
     },
 
     openProduct(event) { wx.navigateTo({ url: `/pages/product/detail/index?id=${event.currentTarget.dataset.id}` }); },
+
+    openHero(event) {
+      const hero = this.data.heroBanner;
+      const productID = hero && hero.targetType === 'product' ? hero.targetProductId : '';
+      if (productID) this.openProduct({ currentTarget: { dataset: { id: productID } } });
+    },
+
+    onHeroImageError() {
+      // A stale or unreachable configured image should never leave a blank
+      // first screen. The product cover fallback remains data-driven.
+      this.setData({ heroBanner: null });
+    },
 
     addQuick(event) {
       const product = this.catalogProducts.find(item => item.id === event.currentTarget.dataset.id);

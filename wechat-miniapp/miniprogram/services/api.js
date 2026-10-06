@@ -330,7 +330,16 @@ function normalizeCatalog(payload, businessTypeHint) {
   const storeInput = Object.assign({}, root.location || {}, root.store || {});
   if (catalogBusinessType) storeInput.businessType = catalogBusinessType;
   const store = normalizeStore(Object.assign({}, storeInput, { activeBusinessType: catalogBusinessType || storeInput.activeBusinessType }), locations);
-  return Object.assign({}, root, { data: root.data || root, businessType: catalogBusinessType, products, categories, locations, store });
+  const rawHero = root.hero || root.hero_banner || {};
+  const hero = {
+    enabled: Boolean(firstDefined(rawHero.enabled, rawHero.is_enabled, false)),
+    imageUrl: String(firstDefined(rawHero.imageUrl, rawHero.image_url, '') || ''),
+    title: String(firstDefined(rawHero.title, '') || ''),
+    subtitle: String(firstDefined(rawHero.subtitle, '') || ''),
+    targetType: String(firstDefined(rawHero.targetType, rawHero.target_type, 'none') || 'none'),
+    targetProductId: firstDefined(rawHero.targetProductId, rawHero.target_product_id, '')
+  };
+  return Object.assign({}, root, { data: root.data || root, businessType: catalogBusinessType, products, categories, locations, store, hero });
 }
 
 function parseJSON(value) {

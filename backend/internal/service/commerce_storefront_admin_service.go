@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"ticket-backend/internal/model"
@@ -17,32 +18,48 @@ import (
 // Credentials remain owned by ChannelService; this input only selects an
 // existing account, business capability and fulfillment location.
 type CommerceStorefrontBindingInput struct {
-	ID               uint   `json:"id,omitempty"`
-	ChannelAccountID uint   `json:"channel_account_id"`
-	BusinessType     string `json:"business_type"`
-	LocationID       uint   `json:"location_id"`
-	Status           string `json:"status"`
-	Reason           string `json:"reason"`
+	ID                  uint   `json:"id,omitempty"`
+	ChannelAccountID    uint   `json:"channel_account_id"`
+	BusinessType        string `json:"business_type"`
+	LocationID          uint   `json:"location_id"`
+	Status              string `json:"status"`
+	Reason              string `json:"reason"`
+	HeroEnabled         bool   `json:"hero_enabled"`
+	HeroImageURL        string `json:"hero_image_url"`
+	HeroTitle           string `json:"hero_title"`
+	HeroSubtitle        string `json:"hero_subtitle"`
+	HeroTargetType      string `json:"hero_target_type"`
+	HeroTargetProductID uint   `json:"hero_target_product_id"`
+}
+
+type CommerceStorefrontHeroView struct {
+	Enabled         bool   `json:"enabled"`
+	ImageURL        string `json:"image_url,omitempty"`
+	Title           string `json:"title,omitempty"`
+	Subtitle        string `json:"subtitle,omitempty"`
+	TargetType      string `json:"target_type"`
+	TargetProductID uint   `json:"target_product_id,omitempty"`
 }
 
 type CommerceStorefrontBindingView struct {
-	ID               uint   `json:"id"`
-	TenantID         uint   `json:"tenant_id"`
-	ChannelAccountID uint   `json:"channel_account_id"`
-	ChannelCode      string `json:"channel_code"`
-	AppID            string `json:"app_id"`
-	AccountStatus    string `json:"account_status"`
-	Environment      string `json:"environment"`
-	CredentialsReady bool   `json:"credentials_ready"`
-	BusinessType     string `json:"business_type"`
-	LocationID       uint   `json:"location_id"`
-	LocationName     string `json:"location_name"`
-	Status           string `json:"status"`
-	ContactType      string `json:"contact_type"`
-	ContactName      string `json:"contact_name"`
-	WechatID         string `json:"wechat_id"`
-	ContactQRCodeURL string `json:"contact_qr_code_url"`
-	ContactStatus    string `json:"contact_status"`
+	ID               uint                       `json:"id"`
+	TenantID         uint                       `json:"tenant_id"`
+	ChannelAccountID uint                       `json:"channel_account_id"`
+	ChannelCode      string                     `json:"channel_code"`
+	AppID            string                     `json:"app_id"`
+	AccountStatus    string                     `json:"account_status"`
+	Environment      string                     `json:"environment"`
+	CredentialsReady bool                       `json:"credentials_ready"`
+	BusinessType     string                     `json:"business_type"`
+	LocationID       uint                       `json:"location_id"`
+	LocationName     string                     `json:"location_name"`
+	Status           string                     `json:"status"`
+	ContactType      string                     `json:"contact_type"`
+	ContactName      string                     `json:"contact_name"`
+	WechatID         string                     `json:"wechat_id"`
+	ContactQRCodeURL string                     `json:"contact_qr_code_url"`
+	ContactStatus    string                     `json:"contact_status"`
+	Hero             CommerceStorefrontHeroView `json:"hero"`
 }
 
 // CommerceStorefrontChannelView is the safe account selector exposed to a
@@ -131,17 +148,53 @@ func (s *CommerceStorefrontService) storefrontBindingView(tx *gorm.DB, binding *
 		ContactType: account.StorefrontContactType, ContactName: account.StorefrontContactName,
 		WechatID: account.StorefrontWechatID, ContactQRCodeURL: account.StorefrontContactQRCodeURL,
 		ContactStatus: account.StorefrontContactStatus,
+		Hero:          storefrontHeroView(binding),
 	}, nil
+}
+
+func storefrontHeroView(binding *model.CommerceStorefrontBinding) CommerceStorefrontHeroView {
+	if binding == nil {
+		return CommerceStorefrontHeroView{TargetType: "none"}
+	}
+	targetType := strings.TrimSpace(binding.HeroTargetType)
+	if targetType != "product" {
+		targetType = "none"
+	}
+	return CommerceStorefrontHeroView{
+		Enabled:  binding.HeroEnabled && strings.TrimSpace(binding.HeroImageURL) != "",
+		ImageURL: strings.TrimSpace(binding.HeroImageURL), Title: strings.TrimSpace(binding.HeroTitle),
+		Subtitle: strings.TrimSpace(binding.HeroSubtitle), TargetType: targetType,
+		TargetProductID: binding.HeroTargetProductID,
+	}
 }
 
 func normalizeCommerceStorefrontBindingInput(input CommerceStorefrontBindingInput) (CommerceStorefrontBindingInput, error) {
 	input.BusinessType = strings.TrimSpace(input.BusinessType)
 	input.Status = strings.TrimSpace(input.Status)
 	input.Reason = strings.TrimSpace(input.Reason)
+	input.HeroImageURL = strings.TrimSpace(input.HeroImageURL)
+	input.HeroTitle = strings.TrimSpace(input.HeroTitle)
+	input.HeroSubtitle = strings.TrimSpace(input.HeroSubtitle)
+	input.HeroTargetType = strings.TrimSpace(input.HeroTargetType)
+	if input.HeroTargetType == "" {
+		input.HeroTargetType = "none"
+	}
 	if input.Status == "" {
 		input.Status = "active"
 	}
-	if input.ChannelAccountID == 0 || input.LocationID == 0 || !validTenantBusinessType(input.BusinessType) || (input.Status != "active" && input.Status != "disabled") || input.Reason == "" || len([]rune(input.Reason)) > 255 {
+	if input.ChannelAccountID == 0 || input.LocationID == 0 || !validTenantBusinessType(input.BusinessType) || (input.Status != "active" && input.Status != "disabled") || input.Reason == "" || len([]rune(input.Reason)) > 255 || input.HeroTargetType != "none" && input.HeroTargetType != "product" || len([]rune(input.HeroImageURL)) > 500 || len([]rune(input.HeroTitle)) > 120 || len([]rune(input.HeroSubtitle)) > 240 {
+		return input, ErrCommerceStorefrontBindingInvalid
+	}
+	if input.HeroEnabled && input.HeroImageURL == "" {
+		return input, ErrCommerceStorefrontBindingInvalid
+	}
+	if input.HeroEnabled && input.HeroImageURL != "" {
+		parsed, parseErr := url.ParseRequestURI(input.HeroImageURL)
+		if parseErr != nil || parsed.Host == "" || parsed.Scheme != "https" {
+			return input, ErrCommerceStorefrontBindingInvalid
+		}
+	}
+	if input.HeroEnabled && input.HeroTargetType == "product" && input.HeroTargetProductID == 0 {
 		return input, ErrCommerceStorefrontBindingInvalid
 	}
 	return input, nil
@@ -182,6 +235,12 @@ func (s *CommerceStorefrontService) SaveBinding(tenantID uint, input CommerceSto
 		if input.Status == "active" && location.Status != "active" {
 			return ErrCommerceStorefrontBindingInvalid
 		}
+		if input.HeroEnabled && input.HeroTargetType == "product" {
+			var product model.CommerceProduct
+			if err := tx.Where("id = ? AND tenant_id = ? AND business_type = ?", input.HeroTargetProductID, tenantID, input.BusinessType).First(&product).Error; err != nil {
+				return ErrCommerceStorefrontBindingInvalid
+			}
+		}
 
 		var before *CommerceStorefrontBindingView
 		var binding model.CommerceStorefrontBinding
@@ -196,14 +255,21 @@ func (s *CommerceStorefrontService) SaveBinding(tenantID uint, input CommerceSto
 			if err := tx.Model(&binding).Updates(map[string]interface{}{
 				"channel_account_id": input.ChannelAccountID, "business_type": input.BusinessType,
 				"location_id": input.LocationID, "status": input.Status,
+				"hero_enabled": input.HeroEnabled, "hero_image_url": input.HeroImageURL,
+				"hero_title": input.HeroTitle, "hero_subtitle": input.HeroSubtitle,
+				"hero_target_type": input.HeroTargetType, "hero_target_product_id": input.HeroTargetProductID,
 			}).Error; err != nil {
 				return err
 			}
 			binding.ChannelAccountID, binding.BusinessType, binding.LocationID, binding.Status = input.ChannelAccountID, input.BusinessType, input.LocationID, input.Status
+			binding.HeroEnabled, binding.HeroImageURL, binding.HeroTitle, binding.HeroSubtitle = input.HeroEnabled, input.HeroImageURL, input.HeroTitle, input.HeroSubtitle
+			binding.HeroTargetType, binding.HeroTargetProductID = input.HeroTargetType, input.HeroTargetProductID
 		} else {
 			binding = model.CommerceStorefrontBinding{
 				TenantID: tenantID, ChannelAccountID: input.ChannelAccountID, BusinessType: input.BusinessType,
-				LocationID: input.LocationID, Status: input.Status,
+				LocationID: input.LocationID, Status: input.Status, HeroEnabled: input.HeroEnabled,
+				HeroImageURL: input.HeroImageURL, HeroTitle: input.HeroTitle, HeroSubtitle: input.HeroSubtitle,
+				HeroTargetType: input.HeroTargetType, HeroTargetProductID: input.HeroTargetProductID,
 			}
 			if err := tx.Create(&binding).Error; err != nil {
 				return err

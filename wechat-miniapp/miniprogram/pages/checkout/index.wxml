@@ -1,5 +1,13 @@
 <view class="page-shell checkout-page">
-  <view class="checkout-title"><view class="section-title">确认订单</view><view class="muted-text">餐饮和零售会分别下单</view><button wx:if="{{showContactTestButton}}" class="contact-test-button" bindtap="testOrderContact">测试联系商家弹窗</button></view>
+  <view class="checkout-title"><view class="section-title">确认订单</view><view class="muted-text">餐饮和零售会分别下单</view></view>
+  <view wx:if="{{preOrderContact}}" class="private-domain-card" bindtap="openPreOrderContact" role="button" aria-label="添加店家微信">
+    <view class="private-domain-avatar"><image src="/images/theme/rabbit-pair.svg" mode="aspectFit" /></view>
+    <view class="private-domain-copy">
+      <view class="private-domain-title">加店家微信</view>
+      <view class="private-domain-sub">了解新品和店铺活动</view>
+    </view>
+    <view class="private-domain-action">添加 <text>›</text></view>
+  </view>
 
   <view wx:if="{{hasTakeaway}}" class="fulfillment-block"><view class="fulfillment-heading"><view><view class="fulfillment-title">餐饮订单</view><view class="fulfillment-subtitle">配送或到店自取</view></view><view class="fulfillment-badge">餐饮</view></view>
     <view class="method-switch"><view wx:if="{{!production || !deliveryOptions.restaurant || deliveryOptions.restaurant.config.deliveryEnabled}}" class="method-item {{takeawayDeliveryMethod === 'DELIVERY' ? 'method-item--active' : ''}}" data-method="DELIVERY" bindtap="toggleDeliveryMethod">配送到家</view><view wx:if="{{!production || !deliveryOptions.restaurant || deliveryOptions.restaurant.config.pickupEnabled}}" class="method-item {{takeawayDeliveryMethod === 'PICKUP' ? 'method-item--active' : ''}}" data-method="PICKUP" bindtap="toggleDeliveryMethod">门店自提</view></view>
@@ -16,5 +24,15 @@
   <view class="pay-note"><text>●</text> {{paymentModeText}}</view><view class="bottom-space"></view><view class="pay-bar"><view><view class="pay-label">应付 <text>¥{{payableText}}</text></view><view class="pay-sub">{{pricingNote}}</view></view><button class="primary-button pay-button" bindtap="submitOrder" disabled="{{paying}}">{{paying ? '提交中…' : '提交并支付'}}</button></view>
 
   <view wx:if="{{showCouponSheet || couponSheetClosing}}" class="sheet-mask {{showCouponSheet ? 'sheet-mask--visible' : 'sheet-mask--closing'}}" catchtap="closeCouponSheet"><view class="coupon-sheet" catchtap="stopPropagation"><view class="sheet-header"><view class="sheet-title">选择优惠券</view><view class="sheet-close" bindtap="closeCouponSheet" role="button" aria-label="关闭">×</view></view><view wx:if="{{hasTakeaway && hasCourier}}" class="coupon-target"><view class="coupon-target-label">优惠券用于</view><view class="coupon-target-row"><view class="coupon-target-item {{couponTarget === 'TAKEAWAY' ? 'coupon-target-item--active' : ''}}" data-target="TAKEAWAY" bindtap="chooseCouponTarget">餐饮订单</view><view class="coupon-target-item {{couponTarget === 'COURIER' ? 'coupon-target-item--active' : ''}}" data-target="COURIER" bindtap="chooseCouponTarget">零售订单</view></view></view><view class="coupon-option coupon-option--plain {{!selectedCoupon ? 'coupon-option--selected' : ''}}" data-id="" bindtap="chooseCoupon"><view class="coupon-copy"><view>暂不使用优惠券</view><view>按订单原价结算</view></view><view class="coupon-check">{{!selectedCoupon ? '✓' : ''}}</view></view><view wx:for="{{coupons}}" wx:key="id" class="coupon-option {{selectedCoupon && selectedCoupon.id === item.id ? 'coupon-option--selected' : ''}}" data-id="{{item.id}}" bindtap="chooseCoupon"><view class="coupon-amount"><text>¥</text>{{item.discountAmount / 100}}</view><view class="coupon-copy"><view>{{item.name}}</view><view>{{item.description}}</view></view><view class="coupon-check">{{selectedCoupon && selectedCoupon.id === item.id ? '✓' : ''}}</view></view><view wx:if="{{!coupons.length}}" class="sheet-empty">暂无可用优惠券</view></view></view>
-  <view wx:if="{{showOrderContact || orderContactClosing}}" class="order-contact-overlay {{showOrderContact ? 'order-contact-overlay--visible' : 'order-contact-overlay--closing'}}" bindtap="closeOrderContact"><view class="order-contact-card" catchtap="keepOrderContactOpen"><view class="order-contact-close" bindtap="closeOrderContact" role="button" aria-label="关闭">×</view><view class="order-contact-success"><text>✓</text>{{orderContactTitle}}</view><view class="order-contact-title">需要帮助？联系商家</view><view class="order-contact-sub">扫码添加微信，订单问题直接沟通</view><view class="order-contact-qr-wrap" bindtap="previewOrderContactQRCode" role="button" aria-label="查看商家二维码大图"><image class="order-contact-qr" src="{{orderContact.qrCodeUrl}}" mode="aspectFit" show-menu-by-longpress /></view><view wx:if="{{orderContact.wechatId}}" class="order-contact-wechat" bindtap="copyOrderContactWechat" role="button" aria-label="复制微信号"><text>微信号：{{orderContact.wechatId}}</text><text class="order-contact-copy-hint">点击复制</text></view><view class="order-contact-actions"><button class="order-contact-later" bindtap="closeOrderContact">稍后查看</button><button class="primary-button order-contact-primary" bindtap="closeOrderContact">查看订单</button></view></view></view>
+  <view wx:if="{{preOrderContact && (showPreOrderContact || preOrderContactClosing)}}" class="pre-contact-overlay {{showPreOrderContact ? 'pre-contact-overlay--visible' : 'pre-contact-overlay--closing'}}" bindtap="closePreOrderContact">
+    <view class="pre-contact-card" catchtap="keepPreOrderContactOpen">
+      <view class="pre-contact-close" bindtap="closePreOrderContact" role="button" aria-label="关闭">×</view>
+      <view class="pre-contact-title">加店家微信</view>
+      <view class="pre-contact-sub">了解新品与店铺活动</view>
+      <view class="pre-contact-qr-wrap" bindtap="previewPreOrderContactQRCode" role="button" aria-label="查看店家二维码大图"><image class="pre-contact-qr" src="{{preOrderContact.qrCodeUrl}}" mode="aspectFit" show-menu-by-longpress /></view>
+      <view class="pre-contact-sub">长按二维码识别添加</view>
+      <view wx:if="{{preOrderContact.wechatId}}" class="pre-contact-wechat" bindtap="copyPreOrderContactWechat" role="button" aria-label="复制微信号"><text>微信号：{{preOrderContact.wechatId}}</text><text class="pre-contact-copy-hint">点击复制</text></view>
+      <view class="pre-contact-actions"><button class="pre-contact-later" bindtap="closePreOrderContact">知道了</button></view>
+    </view>
+  </view>
 </view>

@@ -679,9 +679,14 @@ test('checkout matches delivery area from the address instead of defaulting to t
   assert.equal(page.data.restaurantSlots.length, 0);
 });
 
-test('successful checkout can show a compact merchant contact prompt before opening the order', async () => {
+test('checkout pre-order contact card opens without an order-completion prompt', async () => {
   let page;
-  let openedOrder = '';
+  const checkoutWxml = fs.readFileSync(path.resolve(__dirname, '..', 'miniprogram/pages/checkout/index.wxml'), 'utf8');
+  assert.doesNotMatch(checkoutWxml, /测试联系商家弹窗/);
+  assert.doesNotMatch(checkoutWxml, /查看订单/);
+  assert.match(checkoutWxml, /加店家微信/);
+  let previewed = '';
+  let copied = '';
   load('miniprogram/pages/checkout/index.js', {
     '../../services/storage': {},
     '../../services/api': {
@@ -690,18 +695,20 @@ test('successful checkout can show a compact merchant contact prompt before open
     },
     '../../utils/format': { yuan: value => String(Number(value || 0) / 100) },
     '../../services/payment': {}
-  }, { Page: value => { page = value; }, wx: {} });
+  }, { Page: value => { page = value; }, wx: { previewImage: ({ current }) => { previewed = current; }, setClipboardData: ({ data, success }) => { copied = data; success(); }, showToast() {} } });
   page.setData = (change, callback) => { page.data = Object.assign({}, page.data, change); if (callback) callback(); };
-  page.openCreatedOrder = orderId => { openedOrder = orderId; };
-  assert.equal(await page.showOrderContactPrompt('order-1', '订单已提交'), true);
-  assert.equal(page.data.showOrderContact, true);
-  assert.equal(page.data.orderContact.qrCodeUrl, 'https://example.com/contact.png');
-  page.closeOrderContact();
-  assert.equal(openedOrder, 'order-1');
-  await page.testOrderContact();
-  assert.equal(page.data.showOrderContact, true);
-  page.closeOrderContact();
-  assert.equal(openedOrder, 'order-1');
+  page.data.preOrderContact = { available: true, contactName: '门店客服', wechatId: 'shop-service', qrCodeUrl: 'https://example.com/contact.png' };
+  page.openPreOrderContact();
+  assert.equal(page.data.showPreOrderContact, true);
+  page.previewPreOrderContactQRCode();
+  assert.equal(previewed, 'https://example.com/contact.png');
+  page.copyPreOrderContactWechat();
+  assert.equal(copied, 'shop-service');
+  page.closePreOrderContact();
+  assert.equal(page.data.preOrderContactClosing, true);
+  await new Promise(resolve => setTimeout(resolve, 240));
+  assert.equal(page.data.preOrderContactClosing, false);
+  assert.equal(page.data.showPreOrderContact, false);
 });
 
 test('product detail does not substitute the first product for a missing ID', () => {

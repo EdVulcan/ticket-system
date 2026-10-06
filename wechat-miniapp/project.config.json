@@ -11,7 +11,7 @@
     "coverView": true,
     "nodeModules": false,
     "autoAudits": false,
-    "showShadowRootInWxmlPanel": true,
+    "showShadowRootInWxmlPanel": false,
     "scopeDataCheck": false,
     "uglifyFileName": false,
     "checkInvalidKey": true,
@@ -45,7 +45,7 @@
   },
   "appid": "wx773349253c56db94",
   "projectname": "wechat-commerce-storefront",
-  "libVersion": "2.20.1",
+  "libVersion": "3.17.3",
   "condition": {
     "search": {
       "list": []

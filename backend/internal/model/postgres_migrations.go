@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 149
+const CurrentPostgresSchemaVersion = 150
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -784,6 +784,9 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateCommerceStorefrontContact(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateCommerceStorefrontHero(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	if err := migrateTenantMemberCenter(db, previousSchemaVersion); err != nil {
 		return err
 	}
@@ -978,6 +981,27 @@ func migrateCommerceStorefrontContact(db *gorm.DB, previous int) error {
 			CHECK (storefront_contact_status IN ('active','disabled'));
 	`).Error; err != nil {
 		return fmt.Errorf("register commerce storefront contact configuration: %w", err)
+	}
+	return nil
+}
+
+// migrateCommerceStorefrontHero adds independent per-business storefront
+// presentation. Existing bindings stay disabled until an operator configures
+// an image and explicitly enables the hero.
+func migrateCommerceStorefrontHero(db *gorm.DB, previous int) error {
+	if previous >= 150 {
+		return nil
+	}
+	if err := db.Exec(`
+		ALTER TABLE commerce_storefront_bindings ADD COLUMN IF NOT EXISTS hero_enabled boolean NOT NULL DEFAULT false;
+		ALTER TABLE commerce_storefront_bindings ADD COLUMN IF NOT EXISTS hero_image_url varchar(500) NOT NULL DEFAULT '';
+		ALTER TABLE commerce_storefront_bindings ADD COLUMN IF NOT EXISTS hero_title varchar(120) NOT NULL DEFAULT '';
+		ALTER TABLE commerce_storefront_bindings ADD COLUMN IF NOT EXISTS hero_subtitle varchar(240) NOT NULL DEFAULT '';
+		ALTER TABLE commerce_storefront_bindings ADD COLUMN IF NOT EXISTS hero_target_type varchar(20) NOT NULL DEFAULT 'none';
+		ALTER TABLE commerce_storefront_bindings ADD COLUMN IF NOT EXISTS hero_target_product_id bigint NOT NULL DEFAULT 0;
+		UPDATE commerce_storefront_bindings SET hero_target_type = 'none' WHERE hero_target_type IS NULL OR hero_target_type NOT IN ('none','product');
+	`).Error; err != nil {
+		return fmt.Errorf("register commerce storefront hero configuration: %w", err)
 	}
 	return nil
 }
