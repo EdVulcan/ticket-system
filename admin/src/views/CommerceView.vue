@@ -733,9 +733,32 @@
           <div class="form-help">头图独立于商品封面，按当前租户和业务渠道生效。</div>
         </el-form-item>
         <template v-if="storefrontForm.hero_enabled">
-          <el-form-item label="图片地址" required>
-            <el-input v-model="storefrontForm.hero_image_url" maxlength="500" placeholder="填写已配置媒体地址（http/https）" />
-            <div class="form-help">建议使用现有媒体服务返回的图片地址，图片比例建议 2:1。</div>
+          <el-form-item label="首页头图" required>
+            <div class="storefront-hero-upload">
+              <el-image
+                v-if="storefrontForm.hero_image_url"
+                :src="storefrontForm.hero_image_url"
+                :preview-src-list="[storefrontForm.hero_image_url]"
+                fit="cover"
+                class="storefront-hero-preview"
+                preview-teleported
+              />
+              <div v-else class="storefront-hero-placeholder">尚未上传首页头图</div>
+              <div class="storefront-hero-upload-actions">
+                <el-upload
+                  :auto-upload="false"
+                  :show-file-list="false"
+                  accept="image/jpeg,image/png"
+                  :disabled="!storefrontForm.id || storefrontHeroUploading"
+                  :on-change="uploadStorefrontHeroImage"
+                >
+                  <el-button :icon="UploadFilled" :loading="storefrontHeroUploading">
+                    {{ storefrontForm.hero_image_url ? '更换头图' : '上传头图' }}
+                  </el-button>
+                </el-upload>
+                <div class="form-help">支持 JPG、PNG，单张不超过 5 MB；建议尺寸 750 × 360 px（约 2:1）。{{ storefrontForm.id ? '上传后请点击保存配置。' : '请先保存发布配置，再上传头图。' }}</div>
+              </div>
+            </div>
           </el-form-item>
           <div class="form-grid">
             <el-form-item label="头图标题">
@@ -895,6 +918,7 @@ const deliveryOrder = ref<any | null>(null)
 const deliveryForm = reactive({ delivery_provider: 'merchant', courier_platform_name: '', courier_order_no: '', courier_contact: '', delivery_note: '' })
 const storefrontLoading = ref(false)
 const storefrontSaving = ref(false)
+const storefrontHeroUploading = ref(false)
 const storefrontDialogVisible = ref(false)
 const storefrontContactSaving = ref(false)
 const storefrontContactDialogVisible = ref(false)
@@ -1351,6 +1375,29 @@ function openStorefrontBinding(row?: any) {
     hero_target_product_id: Number(row?.hero?.target_product_id || 0),
   })
   storefrontDialogVisible.value = true
+}
+
+async function uploadStorefrontHeroImage(uploadFile: any) {
+  if (!storefrontForm.id || storefrontHeroUploading.value || !uploadFile?.raw) return
+  const file = uploadFile.raw as File
+  if (!['image/jpeg', 'image/png'].includes(file.type)) {
+    ElMessage.warning('首页头图仅支持 JPG 或 PNG 格式')
+    return
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    ElMessage.warning('首页头图不能超过 5 MB')
+    return
+  }
+  storefrontHeroUploading.value = true
+  try {
+    const form = new FormData()
+    form.append('image', file)
+    const response = await request.post(`/commerce/storefront-bindings/${storefrontForm.id}/hero-image`, form, { timeout: 30000 })
+    storefrontForm.hero_image_url = response.data?.image_url || ''
+    ElMessage.success('首页头图已上传，请保存配置')
+  } finally {
+    storefrontHeroUploading.value = false
+  }
 }
 
 async function saveStorefrontBinding() {
@@ -2198,6 +2245,11 @@ onBeforeUnmount(() => {
 .form-help { margin-top: 6px; color: var(--ui-text-secondary); font-size: 12px; line-height: 1.5; }
 .select-option-stack { display: flex; flex-direction: column; gap: 2px; line-height: 1.3; }
 .storefront-contact-alert { margin-bottom: 16px; }
+.storefront-hero-upload { display: flex; align-items: flex-start; gap: 18px; width: 100%; }
+.storefront-hero-preview, .storefront-hero-placeholder { box-sizing: border-box; width: 240px; height: 116px; flex: 0 0 240px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface-soft); }
+.storefront-hero-placeholder { display: grid; place-items: center; padding: 16px; color: var(--ui-text-secondary); font-size: 12px; text-align: center; }
+.storefront-hero-upload-actions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.storefront-hero-upload-actions .form-help { width: 100%; margin-top: 0; }
 .storefront-contact-upload { display: flex; align-items: center; gap: 18px; width: 100%; }
 .storefront-contact-preview, .storefront-contact-placeholder { box-sizing: border-box; width: 148px; height: 148px; flex: 0 0 148px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface-soft); }
 .storefront-contact-placeholder { display: grid; place-items: center; padding: 16px; color: var(--ui-text-secondary); font-size: 12px; text-align: center; }
@@ -2226,5 +2278,7 @@ onBeforeUnmount(() => {
   .option-row-actions { grid-column: 1 / -1; justify-content: flex-start; }
   .storefront-contact-upload { align-items: flex-start; flex-direction: column; }
   .storefront-contact-preview, .storefront-contact-placeholder { width: min(100%, 220px); height: auto; aspect-ratio: 1; flex-basis: auto; }
+  .storefront-hero-upload { flex-direction: column; }
+  .storefront-hero-preview, .storefront-hero-placeholder { width: min(100%, 300px); height: auto; aspect-ratio: 2 / 1; flex-basis: auto; }
 }
 </style>

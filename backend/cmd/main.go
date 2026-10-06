@@ -530,6 +530,10 @@ func servePublicUploads(engine *gin.Engine, directory string, contactDB *gorm.DB
 		logger.Log.Error(fmt.Sprintf("Failed to create commercial storefront contact upload directory: %v", err))
 		return
 	}
+	if err := os.MkdirAll(filepath.Join(absDirectory, "commerce-storefront-heroes"), 0750); err != nil {
+		logger.Log.Error(fmt.Sprintf("Failed to create commercial storefront hero upload directory: %v", err))
+		return
+	}
 	engine.GET("/api/v1/public/channel-product-images/:tenant/:account/:filename", func(ctx *gin.Context) {
 		if _, err := strconv.ParseUint(ctx.Param("tenant"), 10, 32); err != nil {
 			ctx.Status(http.StatusNotFound)
@@ -611,6 +615,29 @@ func servePublicUploads(engine *gin.Engine, directory string, contactDB *gorm.DB
 		// let a browser or CDN retain the old QR code for a year.
 		ctx.Header("Cache-Control", "no-store")
 		ctx.File(filepath.Join(absDirectory, "commerce-storefront-contacts", ctx.Param("tenant"), ctx.Param("account"), filename))
+	})
+	engine.GET("/api/v1/public/commerce-storefront-hero-images/:tenant/:binding/:filename", func(ctx *gin.Context) {
+		if _, err := strconv.ParseUint(ctx.Param("tenant"), 10, 32); err != nil {
+			ctx.Status(http.StatusNotFound)
+			return
+		}
+		if _, err := strconv.ParseUint(ctx.Param("binding"), 10, 32); err != nil {
+			ctx.Status(http.StatusNotFound)
+			return
+		}
+		filename := ctx.Param("filename")
+		extension := strings.ToLower(filepath.Ext(filename))
+		stem := strings.TrimSuffix(filename, extension)
+		if (extension != ".jpg" && extension != ".png") || len(stem) != 32 {
+			ctx.Status(http.StatusNotFound)
+			return
+		}
+		if _, err := hex.DecodeString(stem); err != nil {
+			ctx.Status(http.StatusNotFound)
+			return
+		}
+		ctx.Header("Cache-Control", "public, max-age=31536000, immutable")
+		ctx.File(filepath.Join(absDirectory, "commerce-storefront-heroes", ctx.Param("tenant"), ctx.Param("binding"), filename))
 	})
 }
 

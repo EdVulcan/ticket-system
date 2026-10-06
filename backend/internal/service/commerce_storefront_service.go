@@ -196,6 +196,7 @@ type CommerceStorefrontService struct {
 	// additive member schema is being rolled out.
 	Member        *MemberService
 	ContactImages *CommerceStorefrontContactImageStore
+	HeroImages    *CommerceStorefrontHeroImageStore
 	LoginAdapter  WechatMiniappLoginAdapter
 	PhoneAuth     WechatPhoneAuthAdapter
 	// WechatLoginAdapter is an alias field for dependency injection in callers

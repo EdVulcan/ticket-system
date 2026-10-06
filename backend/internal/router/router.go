@@ -81,6 +81,10 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 			Directory:     config.GlobalConfig.Server.UploadDirectory,
 			PublicBaseURL: config.GlobalConfig.Server.PublicBaseURL,
 		},
+		HeroImages: &service.CommerceStorefrontHeroImageStore{
+			Directory:     config.GlobalConfig.Server.UploadDirectory,
+			PublicBaseURL: config.GlobalConfig.Server.PublicBaseURL,
+		},
 	}
 	commercePaymentService := service.CommercePaymentService{Storefront: commerceStorefrontService}
 	commerceStorefrontController := &api.CommerceStorefrontController{Service: *commerceStorefrontService, Payment: commercePaymentService}
@@ -519,6 +523,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	commerceStorefrontBindingWriteGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite))
 	commerceStorefrontBindingWriteGroup.POST("", commerceStorefrontController.SaveBinding)
 	commerceStorefrontBindingWriteGroup.PUT("/:bindingID", commerceStorefrontController.SaveBinding)
+	commerceStorefrontBindingWriteGroup.POST("/:bindingID/hero-image", commerceStorefrontController.UploadHeroImage)
 	commerceStorefrontChannelGroup := protected.Group("/commerce/storefront-channels")
 	commerceStorefrontChannelGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionCatalogRead))
 	commerceStorefrontChannelGroup.GET("", commerceStorefrontController.ListChannelAccounts)

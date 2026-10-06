@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"strings"
 
 	"ticket-backend/internal/model"
@@ -188,16 +187,45 @@ func normalizeCommerceStorefrontBindingInput(input CommerceStorefrontBindingInpu
 	if input.HeroEnabled && input.HeroImageURL == "" {
 		return input, ErrCommerceStorefrontBindingInvalid
 	}
-	if input.HeroEnabled && input.HeroImageURL != "" {
-		parsed, parseErr := url.ParseRequestURI(input.HeroImageURL)
-		if parseErr != nil || parsed.Host == "" || parsed.Scheme != "https" {
-			return input, ErrCommerceStorefrontBindingInvalid
-		}
+	if !input.HeroEnabled {
+		// A disabled hero has no public image. Clearing the URL also lets an
+		// older manually-entered URL be retired safely when the setting is
+		// turned off.
+		input.HeroImageURL = ""
 	}
 	if input.HeroEnabled && input.HeroTargetType == "product" && input.HeroTargetProductID == 0 {
 		return input, ErrCommerceStorefrontBindingInvalid
 	}
 	return input, nil
+}
+
+// UploadHeroImage stores a managed image for an existing storefront binding.
+// The binding ID is resolved inside the tenant scope before the file is
+// written, so an operator cannot upload into another tenant's namespace.
+func (s *CommerceStorefrontService) UploadHeroImage(tenantID, bindingID uint, data []byte) (string, error) {
+	if tenantID == 0 || bindingID == 0 {
+		return "", ErrTenantUnavailable
+	}
+	if s.HeroImages == nil {
+		return "", fmt.Errorf("%w: hero image store is unavailable", ErrCommerceStorefrontBindingInvalid)
+	}
+	var binding model.CommerceStorefrontBinding
+	if err := s.db().Where("id = ? AND tenant_id = ?", bindingID, tenantID).First(&binding).Error; err != nil {
+		return "", err
+	}
+	var account model.ChannelAccount
+	if err := s.db().Where("id = ? AND tenant_id = ? AND type = ?", binding.ChannelAccountID, tenantID, "wechat_miniapp").First(&account).Error; err != nil {
+		return "", ErrCommerceStorefrontBindingAccount
+	}
+	var location model.CommerceFulfillmentLocation
+	if err := s.db().Where("id = ? AND tenant_id = ? AND business_type = ?", binding.LocationID, tenantID, binding.BusinessType).First(&location).Error; err != nil {
+		return "", ErrCommerceStorefrontBindingInvalid
+	}
+	imageURL, err := s.HeroImages.Save(tenantID, bindingID, data)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrCommerceStorefrontBindingInvalid, err)
+	}
+	return imageURL, nil
 }
 
 // SaveBinding creates or updates one published binding. The caller supplies
@@ -213,6 +241,7 @@ func (s *CommerceStorefrontService) SaveBinding(tenantID uint, input CommerceSto
 		return nil, err
 	}
 	var result *CommerceStorefrontBindingView
+	var oldHeroImageURL string
 	err = s.db().Transaction(func(tx *gorm.DB) error {
 		if input.Status == "active" {
 			if err := RequireActiveTenantBusinessCapability(tx, tenantID, input.BusinessType); err != nil {
@@ -241,6 +270,13 @@ func (s *CommerceStorefrontService) SaveBinding(tenantID uint, input CommerceSto
 				return ErrCommerceStorefrontBindingInvalid
 			}
 		}
+		if input.HeroImageURL != "" {
+			// Uploads are binding-scoped and can only be attached after the
+			// binding exists. This also prevents arbitrary external URLs.
+			if input.ID == 0 || s.HeroImages == nil || s.HeroImages.ValidateOwnedURL(tenantID, input.ID, input.HeroImageURL) != nil {
+				return ErrCommerceStorefrontBindingInvalid
+			}
+		}
 
 		var before *CommerceStorefrontBindingView
 		var binding model.CommerceStorefrontBinding
@@ -252,6 +288,7 @@ func (s *CommerceStorefrontService) SaveBinding(tenantID uint, input CommerceSto
 			if err != nil {
 				return err
 			}
+			oldHeroImageURL = binding.HeroImageURL
 			if err := tx.Model(&binding).Updates(map[string]interface{}{
 				"channel_account_id": input.ChannelAccountID, "business_type": input.BusinessType,
 				"location_id": input.LocationID, "status": input.Status,
@@ -292,6 +329,9 @@ func (s *CommerceStorefrontService) SaveBinding(tenantID uint, input CommerceSto
 			return nil, fmt.Errorf("%w: channel account already has a storefront binding for this business", ErrCommerceStorefrontBindingInvalid)
 		}
 		return nil, err
+	}
+	if oldHeroImageURL != "" && oldHeroImageURL != input.HeroImageURL && s.HeroImages != nil {
+		_ = s.HeroImages.RemoveOwnedURL(tenantID, input.ID, oldHeroImageURL)
 	}
 	return result, nil
 }

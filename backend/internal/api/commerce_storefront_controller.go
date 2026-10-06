@@ -67,6 +67,45 @@ func (c *CommerceStorefrontController) SaveBinding(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"data": row})
 }
 
+// UploadHeroImage accepts a managed header image for an existing storefront
+// binding. The image URL is returned to the admin form and is attached to the
+// binding only when the operator saves the rest of the configuration.
+func (c *CommerceStorefrontController) UploadHeroImage(ctx *gin.Context) {
+	bindingID, err := parseStorefrontPathID(ctx, "bindingID", "无效的小程序发布配置编号")
+	if err != nil {
+		return
+	}
+	if err := ctx.Request.ParseMultipartForm(service.MaxCommerceStorefrontHeroImageBytes + (1 << 20)); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "首页头图上传格式不正确"})
+		return
+	}
+	file, header, fileErr := ctx.Request.FormFile("image")
+	if fileErr != nil {
+		if errors.Is(fileErr, http.ErrMissingFile) {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "请选择首页头图"})
+		} else {
+			ctx.JSON(http.StatusBadRequest, gin.H{"error": "首页头图读取失败"})
+		}
+		return
+	}
+	defer file.Close()
+	if header != nil && header.Size > service.MaxCommerceStorefrontHeroImageBytes {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "首页头图不能超过 5 MB"})
+		return
+	}
+	data, readErr := io.ReadAll(io.LimitReader(file, service.MaxCommerceStorefrontHeroImageBytes+1))
+	if readErr != nil || len(data) > service.MaxCommerceStorefrontHeroImageBytes {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "首页头图读取失败或文件过大"})
+		return
+	}
+	imageURL, saveErr := c.Service.UploadHeroImage(ctx.GetUint("tenant_id"), bindingID, data)
+	if saveErr != nil {
+		commerceStorefrontAdminError(ctx, saveErr)
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"image_url": imageURL})
+}
+
 func (c *CommerceStorefrontController) GetChannelContact(ctx *gin.Context) {
 	channelID, err := parseStorefrontPathID(ctx, "channelID", "无效的微信小程序账号编号")
 	if err != nil {
