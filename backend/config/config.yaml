@@ -64,10 +64,10 @@ backup:
   postgres_bin_dir: ""
 
 features:
-  # Customer membership and its future discount benefits stay disabled for
-  # the current customized storefront. Enable only after the full product,
-  # privacy, and operational acceptance is complete.
-  customer_membership_enabled: false
+  # Customer membership is available to all active tenants that use an
+  # approved first-party channel. Channel-level approval still controls which
+  # self-owned WeChat/Xiaohongshu account may create member identities.
+  customer_membership_enabled: true
 
 maintenance:
   # Disabled until a reverse proxy/WSS endpoint and a dedicated gate-client

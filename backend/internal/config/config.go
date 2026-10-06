@@ -116,9 +116,8 @@ type MaintenanceConfig struct {
 }
 
 // FeatureConfig contains deployment-level switches for optional product
-// modules. Customer membership is kept disabled until its full product and
-// operational contract is ready; enabling it is an explicit deployment
-// decision rather than an accidental side effect of database state.
+// modules. Customer membership is enabled for the current platform rollout;
+// first-party channel approval remains the per-channel authorization gate.
 type FeatureConfig struct {
 	CustomerMembershipEnabled bool `mapstructure:"customer_membership_enabled"`
 }
@@ -223,7 +222,7 @@ func InitConfig() error {
 	viper.SetDefault("maintenance.path", "/api/v1/hardware/maintenance/ws")
 	viper.SetDefault("maintenance.session_ttl_seconds", 900)
 	viper.SetDefault("maintenance.max_session_ttl_seconds", 1800)
-	viper.SetDefault("features.customer_membership_enabled", false)
+	viper.SetDefault("features.customer_membership_enabled", true)
 	viper.SetDefault("upstream_scheduling.request_interval_ms", defaultUpstreamRequestIntervalMS)
 	viper.SetDefault("upstream_scheduling.cooldown_seconds", defaultUpstreamCooldownSeconds)
 	viper.SetDefault("upstream_scheduling.max_cooldown_seconds", defaultUpstreamMaxCooldown)

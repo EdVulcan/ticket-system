@@ -16,7 +16,7 @@
     <section class="benefit-panel">
       <div>
         <div class="section-label">统一会员权益</div>
-        <p class="muted">正式会员可享受商品金额减免，配送费、打包费和快递费不参与折扣；优惠券可继续叠加。</p>
+        <p class="muted">会员折扣只作用于商品金额，优惠券可以叠加。消费统计按已完成订单的最终实付总额计算，包含配送费、快递费和打包费，退款后按净额扣减。</p>
       </div>
       <div class="benefit-control">
         <el-input-number v-model="benefitPercent" :min="0" :max="100" :step="1" controls-position="right" />
@@ -96,9 +96,9 @@
           <el-descriptions-item label="住宿订单">{{ detail.orders?.hotel_count || 0 }} 笔</el-descriptions-item>
           <el-descriptions-item label="餐饮/电商订单">{{ detail.orders?.commerce_count || 0 }} 笔</el-descriptions-item>
           <el-descriptions-item label="历史支付订单">{{ detail.orders?.paid_order_count || 0 }} 笔</el-descriptions-item>
-          <el-descriptions-item label="累计实付">
+          <el-descriptions-item label="累计消费（最终实付）">
             <span class="spend-value">¥{{ formatCents(detail.orders?.total_spend_cents) }}</span>
-            <span class="muted spend-note">已扣除确认完成的退款，含已退款订单的历史记录</span>
+            <span class="muted spend-note">按已完成订单统计，含配送、快递和打包费；已扣除确认完成的退款</span>
           </el-descriptions-item>
         </el-descriptions>
         <div class="identity-list">
