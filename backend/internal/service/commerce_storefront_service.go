@@ -98,6 +98,7 @@ type CommerceStorefrontPhoneVerificationInput struct {
 }
 
 type CommerceStorefrontCatalog struct {
+	DisplayName      string                            `json:"display_name"`
 	TenantID         uint                              `json:"tenant_id"`
 	ChannelAccountID uint                              `json:"channel_account_id"`
 	BusinessType     string                            `json:"business_type"`
@@ -747,7 +748,8 @@ func (s *CommerceStorefrontService) ListCatalog(token string, businessTypes ...s
 		filtered = []model.CommerceProduct{}
 	}
 	return &CommerceStorefrontCatalog{
-		TenantID: context.Session.TenantID, ChannelAccountID: context.Session.ChannelAccountID,
+		DisplayName: context.Account.StorefrontDisplayName,
+		TenantID:    context.Session.TenantID, ChannelAccountID: context.Session.ChannelAccountID,
 		BusinessType: context.Binding.BusinessType, Location: context.Location, Products: filtered,
 		Hero: storefrontHeroView(&context.Binding),
 	}, nil

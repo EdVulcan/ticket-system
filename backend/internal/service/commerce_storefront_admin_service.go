@@ -45,6 +45,7 @@ type CommerceStorefrontBindingView struct {
 	TenantID         uint                       `json:"tenant_id"`
 	ChannelAccountID uint                       `json:"channel_account_id"`
 	ChannelCode      string                     `json:"channel_code"`
+	DisplayName      string                     `json:"display_name"`
 	AppID            string                     `json:"app_id"`
 	AccountStatus    string                     `json:"account_status"`
 	Environment      string                     `json:"environment"`
@@ -67,6 +68,7 @@ type CommerceStorefrontBindingView struct {
 type CommerceStorefrontChannelView struct {
 	ID               uint   `json:"id"`
 	Code             string `json:"code"`
+	DisplayName      string `json:"display_name"`
 	AppID            string `json:"app_id"`
 	Status           string `json:"status"`
 	Environment      string `json:"environment"`
@@ -91,6 +93,7 @@ func (s *CommerceStorefrontService) ListChannelAccounts(tenantID uint) ([]Commer
 	for _, account := range accounts {
 		result = append(result, CommerceStorefrontChannelView{
 			ID: account.ID, Code: account.Code, AppID: account.AppID, Status: account.Status,
+			DisplayName: account.StorefrontDisplayName,
 			Environment: account.Environment, MemberMode: account.MemberMode,
 			CredentialsReady: strings.TrimSpace(account.AppID) != "" && strings.TrimSpace(account.SecretCiphertext) != "",
 		})
@@ -140,6 +143,7 @@ func (s *CommerceStorefrontService) storefrontBindingView(tx *gorm.DB, binding *
 	return &CommerceStorefrontBindingView{
 		ID: binding.ID, TenantID: binding.TenantID, ChannelAccountID: account.ID,
 		ChannelCode: account.Code, AppID: account.AppID, AccountStatus: account.Status,
+		DisplayName:      account.StorefrontDisplayName,
 		Environment:      account.Environment,
 		CredentialsReady: strings.TrimSpace(account.AppID) != "" && strings.TrimSpace(account.SecretCiphertext) != "",
 		BusinessType:     binding.BusinessType, LocationID: location.ID, LocationName: location.Name,

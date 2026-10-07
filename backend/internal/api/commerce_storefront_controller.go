@@ -106,6 +106,24 @@ func (c *CommerceStorefrontController) UploadHeroImage(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"image_url": imageURL})
 }
 
+func (c *CommerceStorefrontController) SaveChannelDisplayName(ctx *gin.Context) {
+	channelID, err := parseStorefrontPathID(ctx, "channelID", "无效的微信小程序账号编号")
+	if err != nil {
+		return
+	}
+	var input service.CommerceStorefrontDisplayNameInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "展示店名设置格式不正确"})
+		return
+	}
+	row, err := c.Service.SaveChannelDisplayName(ctx.GetUint("tenant_id"), channelID, input, ctx.GetUint("user_id"), ctx.GetString("role"))
+	if err != nil {
+		commerceStorefrontAdminError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"data": row})
+}
+
 func (c *CommerceStorefrontController) GetChannelContact(ctx *gin.Context) {
 	channelID, err := parseStorefrontPathID(ctx, "channelID", "无效的微信小程序账号编号")
 	if err != nil {
@@ -644,6 +662,8 @@ func commerceStorefrontAdminError(ctx *gin.Context, err error) {
 		status, message = http.StatusBadRequest, "小程序渠道账号、业务能力或履约地点配置不正确"
 	case errors.Is(err, service.ErrCommerceStorefrontContactInvalid):
 		status, message = http.StatusBadRequest, "联系商家设置不正确，请检查二维码、联系方式和操作原因"
+	case errors.Is(err, service.ErrCommerceStorefrontDisplayNameInvalid):
+		status, message = http.StatusBadRequest, "展示店名必填且最多 120 个字符，变更原因必填且最多 255 个字符，店名不能包含换行或控制字符"
 	}
 	ctx.JSON(status, gin.H{"error": message})
 }

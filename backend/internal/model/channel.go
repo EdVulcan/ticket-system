@@ -41,6 +41,9 @@ type ChannelAccount struct {
 	// writable through the dedicated Xiaohongshu storefront endpoint so generic
 	// channel-account create/update bindings cannot inject it.
 	StorefrontImageURL string `gorm:"size:500;not null;default:''" json:"-"`
+	// Display name is shared by the account's commercial storefronts and is
+	// written only through the tenant-scoped storefront configuration service.
+	StorefrontDisplayName string `gorm:"size:120;not null;default:''" json:"-"`
 	// Storefront contact details belong to the WeChat channel account rather
 	// than one commercial business binding. A single mini-program can publish
 	// restaurant and retail at the same time, and both surfaces must resolve the

@@ -45,7 +45,7 @@
   <view class="contact-sheet" catchtap="keepContactOpen">
     <view class="contact-sheet-handle"></view>
     <view class="contact-sheet-head">
-      <view class="contact-heading"><view class="contact-sheet-eyebrow"><view class="contact-eyebrow-dot"></view>店铺客服</view><view class="contact-sheet-title">扫码联系商家</view><view class="contact-sheet-sub">{{brand.name}} · 有事直接找我们</view><image class="contact-rabbits" src="/images/theme/rabbit-pair.svg" mode="aspectFit" /></view>
+      <view class="contact-heading"><view class="contact-sheet-eyebrow"><view class="contact-eyebrow-dot"></view>店铺客服</view><view class="contact-sheet-title">扫码联系商家</view><view class="contact-sheet-sub">{{store.name || brand.name}} · 有事直接找我们</view><image class="contact-rabbits" src="/images/theme/rabbit-pair.svg" mode="aspectFit" /></view>
       <view class="contact-close" bindtap="closeContact" role="button" aria-label="关闭"><image src="/images/icons/close.png" /></view>
     </view>
     <view class="contact-qr-card">

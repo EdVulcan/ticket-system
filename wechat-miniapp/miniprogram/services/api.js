@@ -281,7 +281,9 @@ function normalizeStore(item, locations) {
   const store = Object.assign({}, defaults, activeLocation, item);
   store.id = firstDefined(item.id, item.locationId, item.location_id, activeLocation.id, store.id, '');
   store.locationId = firstDefined(item.locationId, item.location_id, activeLocation.id, store.locationId, store.id, '');
-  store.name = firstDefined(item.name, item.storeName, item.store_name, store.name, '');
+  store.displayName = String(firstDefined(item.displayName, item.display_name, '') || '').trim();
+  store.locationName = firstDefined(item.locationName, item.location_name, item.name, item.storeName, item.store_name, activeLocation.name, defaults.name, '');
+  store.name = store.displayName || store.locationName;
   store.minGoodsAmount = priceText(firstDefined(item.defaultMinGoodsAmount, item.default_min_goods_amount, item.minGoodsAmount, item.min_goods_amount, store.minGoodsAmount));
   store.defaultDeliveryFee = priceText(firstDefined(item.defaultDeliveryFee, item.default_delivery_fee, item.deliveryFee, item.delivery_fee, store.defaultDeliveryFee));
   store.courierMinGoodsAmount = priceText(firstDefined(item.courierMinGoodsAmount, item.courier_min_goods_amount, store.courierMinGoodsAmount, 0));
@@ -328,6 +330,10 @@ function normalizeCatalog(payload, businessTypeHint) {
     return Object.assign({}, product, { categoryId: categoryByName[name] || product.categoryId || 'all' });
   });
   const storeInput = Object.assign({}, root.location || {}, root.store || {});
+  if (Object.prototype.hasOwnProperty.call(root, 'display_name')) {
+    storeInput.displayName = root.display_name;
+    storeInput.display_name = root.display_name;
+  }
   if (catalogBusinessType) storeInput.businessType = catalogBusinessType;
   const store = normalizeStore(Object.assign({}, storeInput, { activeBusinessType: catalogBusinessType || storeInput.activeBusinessType }), locations);
   const rawHero = root.hero || root.hero_banner || {};

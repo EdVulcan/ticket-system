@@ -318,6 +318,9 @@
               <el-table-column label="凭据" width="110" align="center">
                 <template #default="{ row }"><el-tag :type="row.credentials_ready ? 'success' : 'warning'" effect="plain">{{ row.credentials_ready ? '已配置' : '待配置' }}</el-tag></template>
               </el-table-column>
+              <el-table-column label="展示店名" min-width="160">
+                <template #default="{ row }">{{ row.display_name || '未配置' }}</template>
+              </el-table-column>
               <el-table-column :label="locationNoun" min-width="170">
                 <template #default="{ row }">{{ row.location_name }}</template>
               </el-table-column>
@@ -336,9 +339,10 @@
                   <el-tag :type="row.hero?.enabled ? 'success' : 'info'" effect="plain">{{ row.hero?.enabled ? '已启用' : '未配置' }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="178" fixed="right" align="right">
+              <el-table-column label="操作" width="250" fixed="right" align="right">
                 <template #default="{ row }">
                   <template v-if="canWrite">
+                    <el-button link type="primary" @click="openStorefrontDisplayName(row)">店名设置</el-button>
                     <el-button link type="primary" @click="openStorefrontContact(row)">联系设置</el-button>
                     <el-button link type="primary" @click="openStorefrontBinding(row)">编辑发布</el-button>
                   </template>
@@ -850,6 +854,30 @@
         <el-button type="primary" :loading="storefrontContactSaving" @click="saveStorefrontContact">保存设置</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="storefrontDisplayNameDialogVisible" title="展示店名设置" width="min(520px, calc(100vw - 32px))" destroy-on-close>
+      <el-form :model="storefrontDisplayNameForm" label-position="top" class="commerce-form">
+        <el-form-item label="微信小程序账号">
+          <el-input :model-value="storefrontDisplayNameForm.channel_code" readonly />
+        </el-form-item>
+        <el-alert
+          type="info"
+          :closable="false"
+          title="同一个小程序的餐饮和零售页面共用此名称"
+          class="capability-alert storefront-contact-alert"
+        />
+        <el-form-item label="展示店名" required>
+          <el-input v-model="storefrontDisplayNameForm.display_name" maxlength="120" show-word-limit placeholder="请输入小程序中展示的店名" />
+        </el-form-item>
+        <el-form-item label="变更原因" required>
+          <el-input v-model="storefrontDisplayNameForm.reason" type="textarea" :rows="3" maxlength="255" show-word-limit placeholder="请填写变更原因" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="storefrontDisplayNameSaving" @click="storefrontDisplayNameDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="storefrontDisplayNameSaving" @click="saveStorefrontDisplayName">保存设置</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
@@ -928,6 +956,8 @@ const storefrontHeroUploading = ref(false)
 const storefrontDialogVisible = ref(false)
 const storefrontContactSaving = ref(false)
 const storefrontContactDialogVisible = ref(false)
+const storefrontDisplayNameSaving = ref(false)
+const storefrontDisplayNameDialogVisible = ref(false)
 const storefrontContactImage = ref<File | null>(null)
 const storefrontContactPreviewURL = ref('')
 const storefrontContactObjectURL = ref('')
@@ -957,6 +987,12 @@ const storefrontContactForm = reactive({
   status: 'disabled',
   reason: '',
   clear_qr_code: false,
+})
+const storefrontDisplayNameForm = reactive({
+  channel_account_id: 0,
+  channel_code: '',
+  display_name: '',
+  reason: '',
 })
 
 const productDialogVisible = ref(false)
@@ -1383,6 +1419,43 @@ function openStorefrontBinding(row?: any) {
     hero_target_product_id: Number(row?.hero?.target_product_id || 0),
   })
   storefrontDialogVisible.value = true
+}
+
+function openStorefrontDisplayName(row: any) {
+  if (!canWrite.value || !row?.channel_account_id) return
+  Object.assign(storefrontDisplayNameForm, {
+    channel_account_id: Number(row.channel_account_id),
+    channel_code: row.channel_code || '',
+    display_name: row.display_name || '',
+    reason: '',
+  })
+  storefrontDisplayNameDialogVisible.value = true
+}
+
+async function saveStorefrontDisplayName() {
+  if (!canWrite.value || storefrontDisplayNameSaving.value || !storefrontDisplayNameForm.channel_account_id) return
+  const displayName = storefrontDisplayNameForm.display_name.trim()
+  const reason = storefrontDisplayNameForm.reason.trim()
+  if (!displayName || !reason) {
+    ElMessage.warning('请填写展示店名和变更原因')
+    return
+  }
+  if (displayName.length > 120 || reason.length > 255) {
+    ElMessage.warning('展示店名最多 120 个字符，变更原因最多 255 个字符')
+    return
+  }
+  storefrontDisplayNameSaving.value = true
+  try {
+    await request.put(`/commerce/storefront-channels/${storefrontDisplayNameForm.channel_account_id}/display-name`, {
+      display_name: displayName,
+      reason,
+    })
+    ElMessage.success('展示店名已保存')
+    await loadStorefrontData()
+    storefrontDisplayNameDialogVisible.value = false
+  } finally {
+    storefrontDisplayNameSaving.value = false
+  }
 }
 
 async function uploadStorefrontHeroImage(uploadFile: any) {

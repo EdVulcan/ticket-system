@@ -531,6 +531,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	commerceStorefrontChannelWriteGroup := protected.Group("/commerce/storefront-channels")
 	commerceStorefrontChannelWriteGroup.Use(middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"), middleware.RequireTenantPermission(authz.PermissionCatalogWrite))
 	commerceStorefrontChannelWriteGroup.PUT("/:channelID/contact", commerceStorefrontController.SaveChannelContact)
+	commerceStorefrontChannelWriteGroup.PUT("/:channelID/display-name", commerceStorefrontController.SaveChannelDisplayName)
 
 	printTemplateController := &api.PrintTemplateController{Service: service.PrintTemplateService{}}
 	printTemplateGroup := protected.Group("/print-templates")
