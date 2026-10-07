@@ -62,7 +62,6 @@
         <view wx:if="{{index === 0 && item.tag}}" class="featured-tag">{{item.tag}}</view>
       </view>
       <view class="product-main">
-        <view wx:if="{{index === 0}}" class="product-featured-kicker">招牌推荐</view>
         <view class="product-name">{{item.name || '未命名商品'}}</view>
         <view wx:if="{{item.description}}" class="product-description">{{item.description}}</view>
         <view class="product-meta"><text wx:if="{{item.tag && index !== 0}}" class="tag">{{item.tag}}</text><text>{{item.isSoldOut || (item.stockMode !== 'UNLIMITED' && item.stock <= 0) ? '今日售罄' : (item.soldText || '销量待同步')}}</text></view>

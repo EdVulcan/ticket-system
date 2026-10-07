@@ -44,6 +44,7 @@ type CreateCommerceProductInput struct {
 	BusinessType string                   `json:"business_type"`
 	Name         string                   `json:"name"`
 	ShortTitle   string                   `json:"short_title"`
+	Tag          string                   `json:"tag"`
 	Description  string                   `json:"description"`
 	CategoryName string                   `json:"category_name"`
 	Status       string                   `json:"status"`
@@ -59,6 +60,7 @@ type CreateCommerceProductInput struct {
 type UpdateCommerceProductInput struct {
 	Name         string     `json:"name"`
 	ShortTitle   string     `json:"short_title"`
+	Tag          *string    `json:"tag"`
 	Description  string     `json:"description"`
 	CategoryName string     `json:"category_name"`
 	SaleStartsAt *time.Time `json:"sale_starts_at,omitempty"`
@@ -87,6 +89,10 @@ func normalizeCommerceProductInput(input CreateCommerceProductInput) (CreateComm
 	input.BusinessType = strings.TrimSpace(input.BusinessType)
 	input.Name = strings.TrimSpace(input.Name)
 	input.ShortTitle = strings.TrimSpace(input.ShortTitle)
+	input.Tag = strings.TrimSpace(input.Tag)
+	if len([]rune(input.Tag)) > 12 {
+		return input, fmt.Errorf("%w: tag must be at most 12 characters", ErrCommerceProductInvalid)
+	}
 	input.CategoryName = strings.TrimSpace(input.CategoryName)
 	input.Status = strings.TrimSpace(input.Status)
 	if input.BusinessType != "restaurant" && input.BusinessType != "retail" {
@@ -186,7 +192,7 @@ func (s *CommerceCatalogService) CreateProduct(tenantID uint, input CreateCommer
 		}
 		product := model.CommerceProduct{
 			TenantID: tenantID, BusinessType: input.BusinessType, Name: input.Name, ShortTitle: input.ShortTitle,
-			Description: input.Description, CategoryName: input.CategoryName, Status: input.Status,
+			Description: input.Description, Tag: input.Tag, CategoryName: input.CategoryName, Status: input.Status,
 			SaleStartsAt: input.SaleStartsAt, SaleEndsAt: input.SaleEndsAt, CurrentVersion: 1,
 		}
 		if err := tx.Create(&product).Error; err != nil {
@@ -292,6 +298,13 @@ func (s *CommerceCatalogService) GetProduct(tenantID, productID uint) (*model.Co
 }
 
 func normalizeCommerceProductUpdateInput(input UpdateCommerceProductInput) (UpdateCommerceProductInput, error) {
+	if input.Tag != nil {
+		tag := strings.TrimSpace(*input.Tag)
+		if len([]rune(tag)) > 12 {
+			return input, fmt.Errorf("%w: tag must be at most 12 characters", ErrCommerceProductInvalid)
+		}
+		input.Tag = &tag
+	}
 	input.Name = strings.TrimSpace(input.Name)
 	input.ShortTitle = strings.TrimSpace(input.ShortTitle)
 	input.Description = strings.TrimSpace(input.Description)
@@ -322,11 +335,17 @@ func (s *CommerceCatalogService) UpdateProduct(tenantID, productID uint, input U
 		if err := requireActiveCommerceCapability(tx, tenantID, product.BusinessType); err != nil {
 			return err
 		}
-		if err := tx.Model(&product).Updates(map[string]interface{}{
+		updates := map[string]interface{}{
 			"name": input.Name, "short_title": input.ShortTitle, "description": input.Description,
 			"category_name": input.CategoryName, "sale_starts_at": input.SaleStartsAt, "sale_ends_at": input.SaleEndsAt,
 			"current_version": gorm.Expr("current_version + 1"),
-		}).Error; err != nil {
+		}
+		// Older editors omit tag. Preserve the configured label unless the
+		// request explicitly supplies a value (including empty to clear it).
+		if input.Tag != nil {
+			updates["tag"] = *input.Tag
+		}
+		if err := tx.Model(&product).Updates(updates).Error; err != nil {
 			return err
 		}
 		if err := tx.Preload("SKUs").Preload("OptionGroups.Options").Preload("Media", "tenant_id = ?", tenantID).First(&product, product.ID).Error; err != nil {

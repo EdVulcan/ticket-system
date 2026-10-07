@@ -233,7 +233,7 @@ function normalizeProduct(item, index, defaultBusinessType) {
     coverImageUrl,
     detailImageUrls,
     imageFileIds,
-    tag: displayText(item.tag, index === 0 ? '本店招牌' : ''),
+    tag: displayText(item.tag, ''),
     fulfillmentType,
     businessType: businessType || (fulfillmentType === commerce.FULFILLMENT.COURIER ? 'retail' : 'restaurant'),
     skuId,

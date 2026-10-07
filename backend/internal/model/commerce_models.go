@@ -22,6 +22,7 @@ type CommerceProduct struct {
 	BusinessType   string                 `gorm:"size:20;not null;index:idx_commerce_products_tenant_domain;check:chk_commerce_products_business_type,business_type IN ('restaurant','retail')" json:"business_type"`
 	Name           string                 `gorm:"size:160;not null" json:"name"`
 	ShortTitle     string                 `gorm:"size:80" json:"short_title,omitempty"`
+	Tag            string                 `gorm:"size:12;not null;default:''" json:"tag,omitempty"`
 	Description    string                 `gorm:"type:text" json:"description,omitempty"`
 	CategoryName   string                 `gorm:"size:80;index" json:"category_name,omitempty"`
 	Status         string                 `gorm:"size:20;not null;default:'draft';index;check:chk_commerce_products_status,status IN ('draft','online','offline')" json:"status"`

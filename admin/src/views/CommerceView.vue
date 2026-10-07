@@ -373,6 +373,9 @@
           <el-form-item :label="shortTitleLabel">
             <el-input v-model="productForm.short_title" maxlength="80" :placeholder="shortTitlePlaceholder" />
           </el-form-item>
+          <el-form-item label="商品标签（选填）">
+            <el-input v-model="productForm.tag" maxlength="12" placeholder="例如：本店招牌；留空不显示" clearable />
+          </el-form-item>
           <el-form-item label="初始状态">
             <el-select v-model="productForm.status" class="full-width">
               <el-option label="草稿" value="draft" />
@@ -426,6 +429,9 @@
           </el-form-item>
           <el-form-item :label="shortTitleLabel">
             <el-input v-model="productEditForm.short_title" maxlength="80" :placeholder="shortTitlePlaceholder" />
+          </el-form-item>
+          <el-form-item label="商品标签（选填）">
+            <el-input v-model="productEditForm.tag" maxlength="12" placeholder="例如：本店招牌；留空不显示" clearable />
           </el-form-item>
           <el-form-item :label="categoryLabel">
             <el-input v-model="productEditForm.category_name" maxlength="80" :placeholder="categoryPlaceholder" />
@@ -966,6 +972,7 @@ const adjustmentDialogVisible = ref(false)
 
 const productForm = reactive({
   name: '',
+  tag: '',
   short_title: '',
   description: '',
   category_name: '',
@@ -974,6 +981,7 @@ const productForm = reactive({
 })
 const productEditForm = reactive({
   id: 0,
+  tag: '',
   name: '',
   short_title: '',
   description: '',
@@ -1712,7 +1720,7 @@ function handleIdentityRefresh(event: Event) {
 }
 
 function openProductDialog() {
-  Object.assign(productForm, { name: '', short_title: '', description: '', category_name: '', status: 'draft' })
+  Object.assign(productForm, { name: '', tag: '', short_title: '', description: '', category_name: '', status: 'draft' })
   productForm.skus = [newSkuForm()]
   productDialogVisible.value = true
 }
@@ -1744,6 +1752,7 @@ async function saveProduct() {
     await request.post('/commerce/products', {
       business_type: currentDomain.value,
       name: productForm.name.trim(),
+      tag: productForm.tag.trim(),
       short_title: productForm.short_title.trim(),
       description: productForm.description.trim(),
       category_name: productForm.category_name.trim(),
@@ -1801,6 +1810,7 @@ function openProductEditDialog() {
   Object.assign(productEditForm, {
     id: Number(product.id || 0),
     name: product.name || '',
+    tag: product.tag || '',
     short_title: product.short_title || '',
     description: product.description || '',
     category_name: product.category_name || '',
@@ -1820,6 +1830,7 @@ async function saveProductEdit() {
   try {
     const response = await request.put(`/commerce/products/${productEditForm.id}`, {
       name: productEditForm.name.trim(),
+      tag: productEditForm.tag.trim(),
       short_title: productEditForm.short_title.trim(),
       description: productEditForm.description.trim(),
       category_name: productEditForm.category_name.trim(),

@@ -55,7 +55,6 @@
 .product-row--compact .product-description { -webkit-line-clamp: 1; font-size: 22rpx; margin-top: 5rpx; }
 .product-row--compact .product-meta { margin-top: 7rpx; }
 .product-row--compact .product-bottom { margin-top: 8rpx; }
-.product-featured-kicker { color: #d33124; font-size: 21rpx; font-weight: 600; line-height: 30rpx; margin-bottom: 4rpx; }
 .featured-tag { background: rgba(29, 69, 54, .86); border-radius: 8rpx; bottom: 14rpx; color: #fff; font-size: 20rpx; left: 14rpx; line-height: 30rpx; max-width: calc(100% - 28rpx); overflow: hidden; padding: 3rpx 10rpx; position: absolute; text-overflow: ellipsis; white-space: nowrap; }
 .product-row--featured .product-image { position: relative; }
 .menu-placeholder { align-items: center; background: #eaf0e7; color: #536b54; display: flex; flex-direction: column; gap: 5rpx; height: 100%; justify-content: center; width: 100%; }
