@@ -1,37 +1,44 @@
 <view class="page-shell profile-page">
-  <view class="profile-header"><view class="avatar"><image wx:if="{{profile.avatarUrl}}" class="food-photo" src="{{profile.avatarUrl}}" mode="aspectFill" /><image wx:else class="profile-rabbits" src="/images/theme/rabbit-pair.svg" /></view><view class="profile-copy"><view class="profile-name">{{profile.nickname || '朋友'}}，你好</view><view class="profile-sub">查看订单、优惠券和地址</view></view></view>
-  <view class="profile-theme"><view class="brand-seal brand-seal--red">琑</view><view class="profile-brand-copy"><view class="profile-brand-name">{{brand.name}}</view><view class="profile-brand-tagline">{{brand.tagline}}</view></view></view>
-
-  <view wx:if="{{membershipEnabled && memberAvailable}}" class="member-card">
-    <view class="member-card-head"><view><view class="member-card-title">{{memberProfile.membershipStatus === 'active' ? '正式会员' : '完善会员认证'}}</view><view class="member-card-sub">{{memberProfile.phoneVerified ? '手机号已验证，可在自营入口统一查看订单' : '验证手机号后，可在自营入口统一查看订单'}}</view></view><view wx:if="{{memberProfile.phoneVerified}}" class="member-card-status">已认证</view></view>
-    <view wx:if="{{memberProfile.phoneMasked}}" class="member-phone">{{memberProfile.phoneMasked}}</view>
-    <checkbox-group wx:if="{{!memberProfile.phoneVerified}}" bindchange="onMemberConsentChange"><label class="member-consent"><checkbox value="member" checked="{{memberConsentGranted}}" color="#27654B" />我已阅读并同意会员服务说明</label></checkbox-group>
-    <button wx:if="{{!memberProfile.phoneVerified}}" class="member-action" open-type="getPhoneNumber" bindgetphonenumber="onGetPhoneNumber" disabled="{{verifyingMemberPhone || !memberConsentGranted}}">{{verifyingMemberPhone ? '认证中…' : '完成会员认证'}}</button>
-    <view wx:if="{{memberError}}" class="member-error">{{memberError}}</view>
+  <view class="profile-account">
+    <view class="profile-header">
+      <view class="avatar"><image wx:if="{{profile.avatarUrl}}" class="food-photo" src="{{profile.avatarUrl}}" mode="aspectFill" /><image wx:else class="profile-rabbits" src="/images/theme/rabbit-pair.svg" /></view>
+      <view class="profile-copy"><view class="profile-name">{{profile.nickname || '朋友'}}，你好</view><view class="profile-sub">{{store.name || brand.name}}</view></view>
+    </view>
+    <view wx:if="{{membershipEnabled && memberAvailable}}" class="member-section">
+      <view class="member-summary">
+        <view class="member-copy">
+          <view class="member-title">{{memberProfile.membershipStatus === 'active' ? '正式会员' : '会员认证'}}</view>
+          <view class="member-sub">{{memberProfile.phoneVerified ? (memberProfile.phoneMasked || '手机号已验证') : '授权手机号，绑定会员身份'}}</view>
+        </view>
+        <view wx:if="{{memberProfile.phoneVerified}}" class="member-status">已认证</view>
+        <button wx:else class="member-action" open-type="getPhoneNumber" bindgetphonenumber="onGetPhoneNumber" disabled="{{verifyingMemberPhone || !memberConsentGranted}}">{{verifyingMemberPhone ? '认证中…' : '认证会员'}}</button>
+      </view>
+      <checkbox-group wx:if="{{!memberProfile.phoneVerified}}" bindchange="onMemberConsentChange"><label class="member-consent"><checkbox value="member" checked="{{memberConsentGranted}}" color="#27654B" /><text>我已阅读并同意会员服务说明</text></label></checkbox-group>
+      <view wx:if="{{memberError}}" class="member-error">{{memberError}}</view>
+    </view>
   </view>
 
-  <view class="coupon-banner" bindtap="toggleCoupons" role="button" aria-label="我的优惠券，{{couponCount}}张可用">
-    <view class="coupon-banner-copy"><view>我的优惠券</view><view>查看可用优惠券</view></view>
-    <view class="coupon-banner-number">{{couponCount}}<text>张</text></view><image class="ui-icon ui-icon--small" src="/images/theme/arrow-white.svg" />
+  <view class="profile-services">
+    <view class="quick-orders">
+      <view class="quick-orders-head"><view class="detail-card-title">我的订单</view><view class="section-link" data-tab="ALL" bindtap="goOrders" role="button" aria-label="查看全部订单">查看全部<image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view></view>
+      <view class="quick-order-grid">
+        <view class="quick-order-item" data-tab="WAIT_PAY" bindtap="goOrders" role="button" aria-label="待付款订单"><image class="quick-order-icon" src="/images/theme/clock.svg" /><view>待付款</view><text wx:if="{{orderStats.waitPay}}">{{orderStats.waitPay}}</text></view>
+        <view class="quick-order-item" data-tab="PROCESSING" bindtap="goOrders" role="button" aria-label="处理中订单"><image class="quick-order-icon" src="/images/theme/bowl.svg" /><view>处理中</view><text wx:if="{{orderStats.processing}}">{{orderStats.processing}}</text></view>
+        <view class="quick-order-item" data-tab="DELIVERING" bindtap="goOrders" role="button" aria-label="配送中订单"><image class="quick-order-icon" src="/images/theme/truck.svg" /><view>配送中</view><text wx:if="{{orderStats.delivering}}">{{orderStats.delivering}}</text></view>
+        <view class="quick-order-item" data-tab="COMPLETED" bindtap="goOrders" role="button" aria-label="已完成订单"><image class="quick-order-icon" src="/images/theme/check.svg" /><view>已完成</view></view>
+      </view>
+    </view>
+    <view class="menu-row coupon-row" bindtap="toggleCoupons" role="button" aria-label="我的优惠券，{{couponCount}}张可用">
+      <image class="menu-icon" src="/images/theme/ticket.svg" /><view class="menu-title">我的优惠券</view><view class="coupon-count">{{couponCount}}<text>张可用</text></view><image class="ui-icon ui-icon--small coupon-chevron {{showCoupons ? 'coupon-chevron--open' : ''}}" src="/images/theme/chevron.svg" />
+    </view>
+    <view wx:if="{{showCoupons}}" class="coupon-panel">
+      <view wx:for="{{coupons}}" wx:key="id" class="profile-coupon"><view class="profile-coupon-amount">¥{{item.discountAmount / 100}}</view><view class="profile-coupon-copy"><view>{{item.name}}</view><view>{{item.description}}</view><view>有效期至 {{item.expireAt}}</view></view></view>
+      <view wx:if="{{!coupons.length}}" class="muted-text coupon-empty">暂无可用优惠券</view>
+    </view>
+    <view class="menu-row" bindtap="goAddress" role="button" aria-label="收货地址"><image class="menu-icon" src="/images/theme/pin.svg" /><view class="menu-title">收货地址</view><image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view>
+    <view wx:if="{{assistAvailable}}" class="menu-row" bindtap="goAssist" role="button" aria-label="发起好友助力领券"><image class="menu-icon" src="/images/theme/rabbit-pair.svg" /><view class="menu-title">好友助力</view><text class="menu-note">领券</text><image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view>
+    <view wx:if="{{contact.available}}" class="menu-row" bindtap="openContact" role="button" aria-label="联系商家"><image class="menu-icon" src="/images/icons/customer-service.svg" /><view class="menu-title">联系商家</view><image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view>
   </view>
-  <view wx:if="{{showCoupons}}" class="coupon-panel card">
-    <view wx:for="{{coupons}}" wx:key="id" class="profile-coupon"><view class="profile-coupon-amount">¥{{item.discountAmount / 100}}</view><view class="profile-coupon-copy"><view>{{item.name}}</view><view>{{item.description}}</view><view>有效期至 {{item.expireAt}}</view></view></view>
-    <view wx:if="{{!coupons.length}}" class="muted-text coupon-empty">暂无可用优惠券</view>
-  </view>
-
-  <view class="quick-orders"><view class="quick-orders-head"><view class="detail-card-title">我的订单</view><view class="section-link" data-tab="ALL" bindtap="goOrders">查看全部<image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view></view><view class="quick-order-grid">
-    <view class="quick-order-item" data-tab="WAIT_PAY" bindtap="goOrders"><image class="quick-order-icon" src="/images/theme/clock.svg" /><view>待付款</view><text wx:if="{{orderStats.waitPay}}">{{orderStats.waitPay}}</text></view>
-    <view class="quick-order-item" data-tab="PROCESSING" bindtap="goOrders"><image class="quick-order-icon" src="/images/theme/bowl.svg" /><view>处理中</view><text wx:if="{{orderStats.processing}}">{{orderStats.processing}}</text></view>
-    <view class="quick-order-item" data-tab="DELIVERING" bindtap="goOrders"><image class="quick-order-icon" src="/images/theme/truck.svg" /><view>配送中</view><text wx:if="{{orderStats.delivering}}">{{orderStats.delivering}}</text></view>
-    <view class="quick-order-item" data-tab="COMPLETED" bindtap="goOrders"><image class="quick-order-icon" src="/images/theme/check.svg" /><view>已完成</view></view>
-  </view></view>
-
-  <view class="profile-menu">
-    <view class="menu-row" bindtap="goAddress"><image class="menu-icon" src="/images/theme/pin.svg" /><view class="menu-copy"><view>收货地址</view><view>餐饮配送和零售快递地址</view></view><image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view>
-    <view wx:if="{{assistAvailable}}" class="menu-row" bindtap="goAssist"><image class="menu-icon" src="/images/theme/rabbit-pair.svg" /><view class="menu-copy"><view>好友助力</view><view>发起助力，领取优惠券</view></view><image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view>
-    <view wx:if="{{contact.available}}" class="menu-row" bindtap="openContact"><image class="menu-icon" src="/images/icons/customer-service.svg" /><view class="menu-copy"><view>联系商家</view><view>{{contact.contactName || '微信客服'}} · 查看联系方式</view></view><image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view>
-  </view>
-  <view class="theme-signature">{{brand.name}}</view>
 </view>
 
 <view wx:if="{{showContact}}" class="contact-overlay" bindtap="closeContact">

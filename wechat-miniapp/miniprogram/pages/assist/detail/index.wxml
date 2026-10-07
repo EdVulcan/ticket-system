@@ -1,7 +1,9 @@
 <view class="page-shell assist-detail-page">
-  <view class="friend-card card"><image class="friend-avatar" src="/images/theme/rabbit-pair.svg" mode="aspectFit" /><view class="friend-title">好友邀请你助力</view><view class="friend-desc">发起者优惠券：{{starterRewardText}}</view><view class="friend-desc">你的优惠券：{{helperRewardText}}</view></view>
-  <view class="friend-ticket"><view class="ticket-label">{{brand.name}} · 好友助力券</view><view class="ticket-money">¥{{helperDiscountText}}</view><view class="ticket-condition">{{helperRewardText}}</view></view>
-  <view wx:if="{{session && (session.status === 'success' || session.status === 'completed')}}" class="help-result card"><view class="result-icon"><image class="ui-icon" src="/images/theme/check.svg" /></view><view>助力已完成</view><view class="muted-text">发起者优惠券：{{starterRewardText}}</view><view class="muted-text">你的优惠券：{{helperRewardText}}</view></view>
-  <view wx:else class="help-action card"><button class="primary-button" bindtap="help" disabled="{{!session || session.status !== 'active'}}">确认助力</button></view>
-  <view class="assist-detail-note">每人每期可助力 1 位好友，优惠券有效期以页面显示为准</view>
+  <view class="assist-content">
+    <view class="friend-card card"><image class="friend-avatar" src="/images/theme/rabbit-pair.svg" mode="aspectFit" /><view class="friend-title">好友邀请你助力</view><view class="friend-desc">发起者优惠券：{{starterRewardText}}</view><view class="friend-desc">你的优惠券：{{helperRewardText}}</view></view>
+    <view class="friend-ticket"><view class="ticket-label">{{brand.name}} · 好友助力券</view><view class="ticket-money">¥{{helperDiscountText}}</view><view class="ticket-condition">{{helperRewardText}}</view></view>
+    <view wx:if="{{session && (session.status === 'success' || session.status === 'completed')}}" class="help-result card"><view class="result-icon"><image class="ui-icon" src="/images/theme/check.svg" /></view><view>助力已完成</view><view class="muted-text">发起者优惠券：{{starterRewardText}}</view><view class="muted-text">你的优惠券：{{helperRewardText}}</view></view>
+    <view wx:else class="help-action card"><button class="primary-button" bindtap="help" disabled="{{!session || session.status !== 'active'}}">确认助力</button></view>
+    <view class="assist-detail-note">每人每期可助力 1 位好友，优惠券有效期以页面显示为准</view>
+  </view>
 </view>

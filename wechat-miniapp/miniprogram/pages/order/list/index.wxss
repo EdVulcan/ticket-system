@@ -1,6 +1,7 @@
 @import "../../../styles/common.wxss";
 
-.order-heading { margin-bottom: 26rpx; }
+.order-list-page { padding: 28rpx 30rpx 48rpx; }
+.order-heading { margin-bottom: 20rpx; }
 .order-heading .section-title { margin-bottom: 8rpx; }
 .order-tabs { margin: 0 -32rpx; white-space: nowrap; }
 .order-tabs-row { display: flex; padding: 0 32rpx; }
@@ -9,7 +10,7 @@
 .order-tab--active::after { background: var(--green); border-radius: 99rpx; bottom: 0; content: ''; height: 6rpx; left: 50%; position: absolute; transform: translateX(-50%); width: 30rpx; }
 .order-tab text { background: var(--paper); border-radius: 999rpx; color: var(--green); font-size: 18rpx; margin-left: 6rpx; padding: 3rpx 7rpx; }
 .orders { margin-top: 20rpx; }
-.order-card { margin-bottom: 18rpx; padding: 24rpx; }
+.order-card { border-radius: 24rpx; margin-bottom: 18rpx; padding: 24rpx; }
 .order-card-head { align-items: center; display: flex; justify-content: space-between; }
 .order-kind { color: var(--green); font-size: 20rpx; font-weight: 600; margin-bottom: 4rpx; }
 .order-time { color: var(--muted); font-size: 22rpx; }
@@ -34,7 +35,7 @@
 .order-tabs-row { padding: 0; gap: 32rpx; }
 .order-tab { flex-shrink: 0; margin-right: 0; padding: 16rpx 0 20rpx; }
 .order-tab--active::after { left: 0; transform: none; width: 100%; border-radius: 0; height: 4rpx; }
-.order-card { border-left: 5rpx solid #b8c7ba; padding: 24rpx; }
+.order-card { padding: 24rpx; }
 .order-card-head { gap: 12rpx; }
 .order-card-head > view:first-child { flex: 1; min-width: 0; }
 .order-time { line-height: 1.45; overflow-wrap: anywhere; }

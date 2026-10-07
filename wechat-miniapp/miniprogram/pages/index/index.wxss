@@ -1,17 +1,17 @@
 @import "../../styles/common.wxss";
 
-.home-page { background: #f6f7f2; padding-top: 18rpx; }
-.home-header { align-items: center; display: flex; gap: 16rpx; margin-bottom: 8rpx; }
+.home-page { background: var(--paper); padding: 28rpx 30rpx 48rpx; }
+.home-header { align-items: center; display: flex; gap: 16rpx; margin-bottom: 20rpx; }
 .brand-copy { flex: 1; min-width: 0; }
-.brand-name { font-size: 32rpx; font-weight: 700; letter-spacing: 1rpx; line-height: 1.35; }
+.brand-name { font-size: 34rpx; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
 .brand-subtitle { color: var(--muted); font-size: 21rpx; margin-top: 4rpx; }
-.open-status { color: var(--green); font-size: 21rpx; display: flex; align-items: center; white-space: nowrap; }
+.open-status { color: var(--green); flex-shrink: 0; font-size: 21rpx; display: flex; align-items: center; white-space: nowrap; }
 .open-status--off { color: var(--red); }
 .open-status--off .status-dot { background: var(--red); }
-.store-context { align-items: center; color: #7a857d; display: flex; font-size: 21rpx; gap: 10rpx; line-height: 30rpx; margin: 0 0 20rpx 86rpx; }
-.store-context-dot { color: #c1c8c1; font-size: 25rpx; }
+.store-context { color: var(--muted); font-size: 21rpx; line-height: 1.5; margin: -12rpx 0 20rpx; overflow-wrap: anywhere; }
+
 .hero-card { min-height: 280rpx; padding: 28rpx 26rpx; background: #eeeee3; border: 1rpx solid #e3e5d8; border-radius: 22rpx; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: space-between; gap: 16rpx; }
-.hero-card--food { border: 1rpx solid rgba(226, 230, 220, .85); border-radius: 30rpx; box-shadow: 0 5rpx 22rpx -2rpx rgba(29, 69, 54, .14), 0 1rpx 3rpx rgba(0, 0, 0, .04); box-sizing: border-box; height: 320rpx; min-height: 0; padding: 0; align-items: flex-end; justify-content: flex-start; }
+.hero-card--food { border: 1rpx solid rgba(226, 230, 220, .85); border-radius: 24rpx; box-shadow: 0 5rpx 22rpx -2rpx rgba(29, 69, 54, .14), 0 1rpx 3rpx rgba(0, 0, 0, .04); box-sizing: border-box; height: 320rpx; min-height: 0; padding: 0; align-items: flex-end; justify-content: flex-start; }
 .hero-food { height: 100%; left: 0; position: absolute; top: 0; width: 100%; }
 .hero-food-placeholder { align-items: center; background-image: radial-gradient(circle at 75% 25%, rgba(255, 255, 255, .35), transparent 34%), linear-gradient(135deg, rgba(255, 255, 255, .12), transparent 58%); display: flex; height: 100%; justify-content: center; left: 0; position: absolute; top: 0; width: 100%; }
 .hero-food-placeholder text { filter: drop-shadow(0 8rpx 8rpx rgba(22, 35, 27, .2)); font-size: 150rpx; opacity: .88; }
@@ -27,10 +27,12 @@
 .hero-title { font-family: "Songti SC", "STSong", "SimSun", serif; font-size: 52rpx; font-weight: 600; line-height: 1.32; letter-spacing: 1rpx; overflow-wrap: anywhere; }
 .hero-title > view { color: var(--green); }
 .hero-subtitle { font-size: 25rpx; color: var(--ink); line-height: 1.5; margin-top: 22rpx; overflow-wrap: anywhere; }
-.benefit-row { display: flex; align-items: center; justify-content: space-between; gap: 12rpx; margin-top: 16rpx; padding: 18rpx 22rpx; background: #f6ede6; border-radius: 14rpx; }
-.benefit-title { display: flex; align-items: center; flex: 1; gap: 12rpx; font-size: 24rpx; color: #705746; line-height: 1.45; min-width: 0; }
-.benefit-action { display: flex; align-items: center; gap: 8rpx; font-size: 22rpx; color: #fff; background: var(--green); border-radius: 10rpx; padding: 12rpx 16rpx; flex-shrink: 0; }
-.notice-row { display: flex; align-items: flex-start; gap: 12rpx; color: var(--muted); font-size: 22rpx; line-height: 1.65; margin: 22rpx 0 0; }
+.store-info { background: var(--surface); border: 1rpx solid #efefe8; border-radius: 24rpx; margin-top: 20rpx; padding: 0 24rpx; }
+.benefit-row { display: flex; align-items: center; justify-content: space-between; gap: 12rpx; min-height: 92rpx; padding: 20rpx 0; }
+.benefit-title { display: flex; align-items: center; flex: 1; gap: 12rpx; font-size: 24rpx; color: var(--ink); line-height: 1.45; min-width: 0; }
+.benefit-action { display: flex; align-items: center; gap: 6rpx; font-size: 22rpx; color: var(--green); flex-shrink: 0; }
+.notice-row { display: flex; align-items: flex-start; gap: 12rpx; color: var(--muted); font-size: 22rpx; line-height: 1.65; padding: 20rpx 0; }
+.benefit-row + .notice-row { border-top: 1rpx solid var(--line); }
 .notice-row .ui-icon { margin-top: 5rpx; }
 .section-head { align-items: center; display: flex; justify-content: space-between; margin: 30rpx 0 12rpx; }
 .section-head .section-title { display: flex; font-size: 38rpx; align-items: center; gap: 10rpx; }
@@ -41,7 +43,7 @@
 .category-item--active { color: #1d4536; font-weight: 700; }
 .category-item--active::after { background: #1d4536; border-radius: 4rpx; bottom: 0; content: ''; height: 5rpx; left: 0; position: absolute; right: 0; }
 .product-row { align-items: center; border-bottom: 1rpx solid var(--line); display: flex; gap: 18rpx; padding: 20rpx 0; }
-.product-row--featured { background: #fff; border: 1rpx solid rgba(226, 230, 220, .9); border-radius: 30rpx; box-shadow: 0 5rpx 20rpx -2rpx rgba(29, 69, 54, .09), 0 1rpx 3rpx rgba(0, 0, 0, .03); display: block; margin-top: 20rpx; overflow: hidden; padding: 0; }
+.product-row--featured { background: #fff; border: 1rpx solid rgba(226, 230, 220, .9); border-radius: 24rpx; box-shadow: 0 5rpx 20rpx -2rpx rgba(29, 69, 54, .09), 0 1rpx 3rpx rgba(0, 0, 0, .03); display: block; margin-top: 20rpx; overflow: hidden; padding: 0; }
 .product-row--featured .product-image { border-radius: 0; height: 320rpx; width: 100%; }
 .product-row--featured .product-main { padding: 20rpx 22rpx 22rpx; }
 .product-row--featured .product-name { font-size: 34rpx; }
@@ -70,7 +72,7 @@
 .add-button--disabled { background: #acb3a8; color: #fff; font-size: 20rpx; }
 .empty-menu { text-align: center; padding: 70rpx 0; color: var(--ink); font-size: 26rpx; }
 .empty-menu view { font-size: 22rpx; color: var(--muted); margin-top: 12rpx; }
-.delivery-strip { display: flex; gap: 16rpx; align-items: center; margin-top: 30rpx; padding: 22rpx 0; border-bottom: 1rpx solid var(--line); }
+.delivery-strip { display: flex; gap: 16rpx; align-items: center; margin-top: 24rpx; padding: 20rpx 4rpx; }
 .delivery-strip > view { flex: 1; min-width: 0; }
 .delivery-title { font-size: 25rpx; color: var(--green); }
 .delivery-text { font-size: 21rpx; color: var(--muted); margin-top: 6rpx; }

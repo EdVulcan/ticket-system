@@ -2,3 +2,5 @@
 
 .home-page--cold .hero-card { background: #f4e9df; border-color: #eadbd0; }
 .menu-placeholder--cold { background: #f7ece5; color: #8b6255; }
+.home-page--cold .product-list { background: var(--surface); border: 1rpx solid #efefe8; border-radius: 24rpx; margin-top: 20rpx; padding: 0 24rpx; }
+.home-page--cold .product-row:last-child { border-bottom: 0; }

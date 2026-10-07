@@ -1,13 +1,12 @@
 <view class="page-shell home-page">
   <view class="home-header">
-    <view class="brand-seal" aria-hidden="true">琑</view>
     <view class="brand-copy">
       <view class="brand-name">{{store.name || brand.name}}</view>
       <view class="brand-subtitle">{{channelKicker}}</view>
     </view>
     <view class="open-status {{channelOpen ? '' : 'open-status--off'}}"><text class="status-dot"></text>{{channelOpen ? '可下单' : '暂停接单'}}</view>
   </view>
-  <view class="store-context"><text>{{channelKicker}}</text><text class="store-context-dot">·</text><text>{{store.businessHours || '营业时间以店铺状态为准'}}</text></view>
+  <view wx:if="{{store.businessHours}}" class="store-context">{{store.businessHours}}</view>
   <view wx:if="{{heroBanner && heroBanner.enabled}}" class="hero-card hero-card--food" data-id="{{heroBanner.targetProductId}}" bindtap="openHero" role="button" aria-label="{{heroBanner.title || '查看店铺推荐'}}">
     <image class="hero-food" src="{{heroBanner.imageUrl}}" mode="aspectFill" binderror="onHeroImageError" />
     <view class="hero-shade"></view>
@@ -38,11 +37,13 @@
     <view class="hero-brand" aria-hidden="true"><image class="hero-rabbits" src="/images/theme/rabbit-pair.svg" mode="aspectFit" /><view class="hero-brand-caption">二 两 兔</view></view>
   </view>
 
-  <view wx:if="{{assistAvailable}}" class="benefit-row" bindtap="goAssist" role="button" aria-label="发起好友助力领券">
-    <view class="benefit-title"><image class="ui-icon" src="/images/theme/ticket.svg" />好友助力领券</view>
-    <view class="benefit-action">发起助力<image class="ui-icon ui-icon--small" src="/images/theme/arrow-white.svg" /></view>
+  <view wx:if="{{assistAvailable || store.announcement}}" class="store-info">
+    <view wx:if="{{assistAvailable}}" class="benefit-row" bindtap="goAssist" role="button" aria-label="发起好友助力领券">
+      <view class="benefit-title"><image class="ui-icon" src="/images/theme/ticket.svg" />好友助力领券</view>
+      <view class="benefit-action">发起助力<image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view>
+    </view>
+    <view wx:if="{{store.announcement}}" class="notice-row"><image class="ui-icon ui-icon--small" src="/images/theme/notice.svg" /><view>{{store.announcement}}</view></view>
   </view>
-  <view wx:if="{{store.announcement}}" class="notice-row"><image class="ui-icon ui-icon--small" src="/images/theme/notice.svg" /><view>{{store.announcement}}</view></view>
 
   <view class="section-head">
     <view class="section-title">{{menuTitle}}<view class="heading-dot"></view></view>
@@ -75,7 +76,6 @@
   </view>
 
   <view class="delivery-strip"><image class="ui-icon" src="/images/theme/pin.svg" /><view><view class="delivery-title">{{serviceTitle}}</view><view class="delivery-text">{{serviceText}}</view></view></view>
-  <view class="theme-signature">餐饮订单 · 配送或自取</view>
   <view class="bottom-space"></view>
   <view wx:if="{{cartCount > 0}}" class="cart-float" bindtap="goCart" role="button" aria-label="购物车，已选{{cartCount}}件，去结算">
     <view class="cart-float-icon"><image class="ui-icon ui-icon--large" src="/images/theme/bag-white.svg" /><view class="cart-count">{{cartCount}}</view></view>

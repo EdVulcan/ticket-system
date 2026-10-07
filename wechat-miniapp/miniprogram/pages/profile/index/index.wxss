@@ -1,51 +1,50 @@
 @import "../../../styles/common.wxss";
-.profile-page { padding-top: 28rpx; }
-.profile-header { display: flex; align-items: center; gap: 22rpx; }
+.profile-page { padding: 28rpx 30rpx 48rpx; }
+.profile-account, .profile-services { background: var(--surface); border: 1rpx solid #efefe8; border-radius: 24rpx; }
+.profile-account { padding: 32rpx; }
+.profile-header { display: flex; align-items: center; gap: 24rpx; }
 .avatar { width: 100rpx; height: 100rpx; background: var(--green-soft); border-radius: 50%; display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0; }
-.profile-copy { min-width: 0; }
-.profile-name { font-size: 38rpx; font-weight: 700; }
-.profile-sub { font-size: 22rpx; color: var(--muted); margin-top: 8rpx; }
-.coupon-banner { display: flex; align-items: center; gap: 20rpx; background: var(--green); border-radius: 16rpx; padding: 30rpx 26rpx; color: #fff; }
-.coupon-banner-copy { flex: 1; min-width: 0; }
-.coupon-banner-copy view:first-child { font-size: 30rpx; font-weight: 600; }
-.coupon-banner-copy view:last-child { color: #d2dfd0; font-size: 21rpx; margin-top: 8rpx; }
-.coupon-banner-number { flex-shrink: 0; font-size: 66rpx; line-height: 1; font-family: "DIN Alternate", sans-serif; }
-.coupon-banner-number text { font-size: 23rpx; margin-left: 8rpx; }
-.coupon-panel { margin-top: 14rpx; padding: 8rpx 24rpx; }
+.profile-rabbits { width: 86rpx; height: 78rpx; }
+.profile-copy { flex: 1; min-width: 0; }
+.profile-name { font-size: 36rpx; font-weight: 700; line-height: 1.4; overflow-wrap: anywhere; }
+.profile-sub { font-size: 23rpx; color: var(--muted); margin-top: 8rpx; overflow-wrap: anywhere; }
+.member-section { border-top: 1rpx solid var(--line); margin-top: 28rpx; padding-top: 24rpx; }
+.member-summary { align-items: center; display: flex; gap: 16rpx; }
+.member-copy { flex: 1; min-width: 0; }
+.member-title { color: var(--ink); font-size: 27rpx; font-weight: 600; }
+.member-sub { color: var(--muted); font-size: 22rpx; line-height: 1.5; margin-top: 5rpx; overflow-wrap: anywhere; }
+.member-status { color: var(--green); flex-shrink: 0; font-size: 23rpx; }
+.member-action { align-items: center; background: var(--green); border: 0; border-radius: 12rpx; box-sizing: border-box; color: #fff; display: flex; flex: 0 0 164rpx; font-size: 24rpx; justify-content: center; line-height: 1.4; margin: 0; min-height: 72rpx; padding: 16rpx 12rpx; }
+.member-action[disabled] { background: #aebcaf; color: #f7faf5; }
+.member-action::after { border: 0; }
+.member-consent { align-items: center; color: var(--muted); display: flex; font-size: 21rpx; line-height: 1.5; margin-top: 18rpx; min-height: 52rpx; }
+.member-consent checkbox { flex-shrink: 0; transform: scale(.72); transform-origin: left center; width: 44rpx; }
+.member-consent text { min-width: 0; }
+.member-error { color: #b34836; font-size: 21rpx; line-height: 1.45; margin-top: 14rpx; }
+.profile-services { margin-top: 24rpx; padding: 0 30rpx; }
+.coupon-panel { background: #fafbf7; border-bottom: 1rpx solid var(--line); padding: 0 20rpx; }
 .profile-coupon { display: flex; align-items: center; padding: 24rpx 0; border-bottom: 1rpx dashed var(--line); gap: 20rpx; }
 .profile-coupon:last-child { border: 0; }
 .profile-coupon-amount { color: var(--red); font-size: 46rpx; font-weight: 700; min-width: 92rpx; }
-.profile-coupon-copy { font-size: 26rpx; min-width: 0; }
+.profile-coupon-copy { flex: 1; font-size: 26rpx; min-width: 0; overflow-wrap: anywhere; }
 .profile-coupon-copy view:not(:first-child) { color: var(--muted); font-size: 21rpx; margin-top: 5rpx; }
 .coupon-empty { padding: 24rpx 0; text-align: center; }
-.quick-orders { padding: 32rpx 0; border-bottom: 1rpx solid var(--line); }
+.quick-orders { padding: 24rpx 0 28rpx; border-bottom: 1rpx solid var(--line); }
 .quick-orders-head { display: flex; justify-content: space-between; align-items: center; }
-.detail-card-title { font-size: 30rpx; font-weight: 600; }
-.quick-order-grid { display: flex; margin-top: 26rpx; }
+.detail-card-title { font-size: 29rpx; font-weight: 600; }
+.quick-orders-head .section-link { color: var(--muted); font-size: 22rpx; }
+.quick-order-grid { display: flex; margin-top: 24rpx; }
 .quick-order-item { box-sizing: border-box; flex: 1; min-width: 0; text-align: center; font-size: 23rpx; color: var(--muted); position: relative; padding: 8rpx 4rpx; }
-.quick-order-icon { width: 48rpx; height: 48rpx; margin-bottom: 12rpx; }
+.quick-order-icon { display: block; width: 44rpx; height: 44rpx; margin: 0 auto 14rpx; }
 .quick-order-item text { position: absolute; top: 0; right: 30rpx; background: var(--red); color: #fff; border-radius: 20rpx; font-size: 18rpx; min-width: 28rpx; padding: 0 6rpx; }
-.menu-row { display: flex; align-items: center; gap: 20rpx; padding: 30rpx 0; border-bottom: 1rpx solid var(--line); }
-.menu-icon { width: 44rpx; height: 44rpx; flex-shrink: 0; }
-.menu-copy { flex: 1; min-width: 0; }
-.menu-copy view:first-child { font-size: 28rpx; }
-.menu-copy view:last-child { font-size: 22rpx; color: var(--muted); margin-top: 6rpx; }
-.profile-theme { display: flex; align-items: center; gap: 22rpx; margin: 22rpx 0; padding: 22rpx 24rpx; background: #eeeee3; border-radius: 18rpx; }
-.profile-brand-name { font-family: "Songti SC", "SimSun", serif; color: var(--ink); font-size: 32rpx; font-weight: 600; letter-spacing: 2rpx; }
-.profile-brand-tagline { color: var(--muted); font-size: 22rpx; margin-top: 6rpx; }
-.profile-rabbits { width: 86rpx; height: 78rpx; }
-.member-card { background: #f0f5ef; border: 1rpx solid #d9e6d9; border-radius: 18rpx; box-sizing: border-box; margin-bottom: 22rpx; padding: 24rpx; }
-.member-card-head { align-items: flex-start; display: flex; gap: 16rpx; justify-content: space-between; }
-.member-card-title { color: var(--ink); font-size: 30rpx; font-weight: 700; }
-.member-card-sub { color: var(--muted); font-size: 21rpx; line-height: 1.5; margin-top: 8rpx; }
-.member-card-status { background: #dcebdc; border-radius: 999rpx; color: var(--green); flex-shrink: 0; font-size: 20rpx; padding: 8rpx 14rpx; }
-.member-phone { color: var(--ink); font-size: 27rpx; letter-spacing: 1rpx; margin-top: 16rpx; }
-.member-consent { align-items: center; color: var(--muted); display: flex; font-size: 21rpx; line-height: 1.4; margin-top: 18rpx; }
-.member-consent checkbox { transform: scale(.78); transform-origin: left center; }
-.member-action { background: var(--green); border: 0; border-radius: 10rpx; color: #fff; font-size: 25rpx; line-height: 1; margin: 18rpx 0 0; padding: 20rpx 24rpx; width: 100%; }
-.member-action[disabled] { background: #aebcaf; color: #f7faf5; }
-.member-action::after { border: 0; }
-.member-error { color: #b34836; font-size: 21rpx; line-height: 1.45; margin-top: 14rpx; }
+.menu-row { box-sizing: border-box; display: flex; align-items: center; gap: 18rpx; min-height: 110rpx; padding: 24rpx 0; border-bottom: 1rpx solid var(--line); }
+.menu-row:last-child { border-bottom: 0; }
+.menu-icon { width: 36rpx; height: 36rpx; flex-shrink: 0; }
+.menu-title { flex: 1; min-width: 0; font-size: 27rpx; }
+.menu-note { color: var(--muted); flex-shrink: 0; font-size: 22rpx; }
+.coupon-count { color: var(--green); flex-shrink: 0; font-size: 32rpx; font-weight: 600; }
+.coupon-count text { color: var(--muted); font-size: 22rpx; font-weight: 400; margin-left: 8rpx; }
+.coupon-chevron--open { transform: rotate(90deg); }
 .contact-overlay { align-items: flex-end; animation: contact-overlay-in 220ms ease-out both; background: rgba(25, 31, 28, .46); bottom: 0; display: flex; left: 0; position: fixed; right: 0; top: 0; z-index: 80; }
 .contact-sheet { animation: contact-sheet-in 260ms cubic-bezier(.22, .8, .28, 1) both; background: #fafbf7; border-radius: 32rpx 32rpx 0 0; box-sizing: border-box; padding: 12rpx 36rpx calc(30rpx + env(safe-area-inset-bottom)); width: 100%; }
 

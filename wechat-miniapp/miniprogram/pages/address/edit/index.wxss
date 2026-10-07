@@ -1,7 +1,7 @@
 @import "../../../styles/common.wxss";
 
-.address-edit-page { padding-bottom: 50rpx; }
-.form-card { padding: 28rpx; }
+.address-edit-page { padding: 28rpx 30rpx 50rpx; }
+.form-card { border-radius: 24rpx; padding: 28rpx; }
 .form-group { margin-bottom: 24rpx; }
 .form-group:last-child { margin-bottom: 0; }
 .form-row { display: flex; justify-content: space-between; }
