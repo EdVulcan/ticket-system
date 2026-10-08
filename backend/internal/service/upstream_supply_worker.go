@@ -389,6 +389,14 @@ func (w *UpstreamSupplyWorker) syncStatus(ctx context.Context, client *zyb.Clien
 		return err
 	}
 	updates := map[string]interface{}{"provider_status": status, "last_synced_at": time.Now()}
+	total, checked, returned := 0, 0, 0
+	for _, row := range result.SubOrders {
+		needed, _ := strconv.Atoi(row.NeedCheckNum)
+		usedCount, _ := strconv.Atoi(row.AlreadyCheckNum)
+		returnCount, _ := strconv.Atoi(row.ReturnNum)
+		total, checked, returned = total+needed, checked+usedCount, returned+returnCount
+	}
+	updates["provider_usage_quantity"], updates["provider_used_quantity"], updates["provider_returned_quantity"] = total, checked, returned
 	if used && s.ProviderFirstUsedAt == nil {
 		records, e := client.QueryCheckRecords(ctx, fmt.Sprintf("%s_%d", order.OrderNo, s.OrderItemID))
 		if e == nil {
@@ -413,7 +421,7 @@ func (w *UpstreamSupplyWorker) syncStatus(ctx context.Context, client *zyb.Clien
 			}
 		}
 	}
-	return model.Write(func(tx *gorm.DB) error {
+	err = model.Write(func(tx *gorm.DB) error {
 		// A check started before confirmed cancellation must not overwrite its
 		// terminal supplier fact when its response arrives afterwards.
 		updates["provider_status"] = gorm.Expr("CASE WHEN cancel_status = 'succeeded' AND provider_order_code <> '' THEN 'refunded' ELSE ? END", status)
@@ -425,6 +433,12 @@ func (w *UpstreamSupplyWorker) syncStatus(ctx context.Context, client *zyb.Clien
 		}
 		return q.Updates(updates).Error
 	})
+	if err != nil {
+		return err
+	}
+	// Discovery happens after the supplier transaction commits. It must not
+	// hold snapshot locks while acquiring channel-coordinator locks.
+	return enqueueXiaohongshuSupplierVerification(s.ID, time.Now())
 }
 
 func upstreamUsageStatus(rows []zyb.CheckStatusSubOrder) (string, bool, error) {
@@ -434,7 +448,7 @@ func upstreamUsageStatus(rows []zyb.CheckStatusSubOrder) (string, bool, error) {
 		total, a := strconv.Atoi(row.NeedCheckNum)
 		checked, b := strconv.Atoi(row.AlreadyCheckNum)
 		returned, c := strconv.Atoi(row.ReturnNum)
-		if a != nil || b != nil || c != nil || total <= 0 || checked < 0 || returned < 0 || returned > total {
+		if a != nil || b != nil || c != nil || total <= 0 || checked < 0 || checked > total || returned < 0 || returned > total {
 			return "", false, errors.New("供应商核销/退票数量不完整或无效")
 		}
 		allReturned = allReturned && returned == total

@@ -62,6 +62,9 @@ type OrderItemSupplySnapshot struct {
 	ProviderSubOrderCode     string     `gorm:"size:120;not null;default:''" json:"provider_sub_order_code"`
 	ProviderStatus           string     `gorm:"size:40;not null;default:''" json:"provider_status"`
 	ProviderFirstUsedAt      *time.Time `json:"provider_first_used_at,omitempty"`
+	ProviderUsageQuantity    *int       `gorm:"check:chk_supply_snapshot_provider_quantities,provider_usage_quantity IS NULL OR provider_usage_quantity >= 0" json:"provider_usage_quantity,omitempty"`
+	ProviderUsedQuantity     *int       `gorm:"check:chk_supply_snapshot_provider_quantities_used,provider_used_quantity IS NULL OR provider_used_quantity >= 0" json:"provider_used_quantity,omitempty"`
+	ProviderReturnedQuantity *int       `gorm:"check:chk_supply_snapshot_provider_quantities_returned,provider_returned_quantity IS NULL OR provider_returned_quantity >= 0" json:"provider_returned_quantity,omitempty"`
 	LastSyncedAt             *time.Time `json:"last_synced_at,omitempty"`
 	NextAttemptAt            *time.Time `json:"next_attempt_at,omitempty"`
 	SyncRequestedAt          *time.Time `json:"sync_requested_at,omitempty"`

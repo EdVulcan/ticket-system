@@ -338,6 +338,7 @@ func runPaymentReconciliationWorker(ctx context.Context) {
 func runXiaohongshuPaymentWorker(ctx context.Context) {
 	miniapp := service.NewMiniappService()
 	bookingSync := service.NewXiaohongshuBookingService()
+	supplierVerification := service.XiaohongshuSupplierVerificationService{}
 	process := func(now time.Time) {
 		if _, err := miniapp.ProcessPendingXiaohongshuOrders(ctx, now, 20); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Log.Error(fmt.Sprintf("xiaohongshu payment reconciliation failed: %v", err))
@@ -348,6 +349,9 @@ func runXiaohongshuPaymentWorker(ctx context.Context) {
 		deviceService := service.NewDeviceService(model.DB, &service.TicketService{})
 		if _, err := deviceService.ProcessPendingXiaohongshuVoucherVerifications(ctx, now, 20); err != nil && !errors.Is(err, context.Canceled) {
 			logger.Log.Error(fmt.Sprintf("xiaohongshu voucher verification recovery failed: %v", err))
+		}
+		if _, err := supplierVerification.ProcessPending(ctx, now, 20); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Log.Error(fmt.Sprintf("xiaohongshu supplier verification recovery failed: %v", err))
 		}
 		if _, err := (service.PackageFulfillmentLifecycle{}).ExpirePendingEntitlements(now, 100); err != nil {
 			logger.Log.Error(fmt.Sprintf("package entitlement expiry processing failed: %v", err))

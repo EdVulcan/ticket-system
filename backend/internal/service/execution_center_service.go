@@ -16,18 +16,19 @@ import (
 type ExecutionCenterService struct{}
 
 type ExecutionCenterItem struct {
-	Source      string    `json:"source"`
-	Category    string    `json:"category"`
-	ID          uint      `json:"id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description,omitempty"`
-	Status      string    `json:"status"`
-	Severity    string    `json:"severity"`
-	Retryable   bool      `json:"retryable"`
-	ActionRoute string    `json:"action_route,omitempty"`
-	ActionLabel string    `json:"action_label,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Source           string    `json:"source"`
+	Category         string    `json:"category"`
+	ID               uint      `json:"id"`
+	Title            string    `json:"title"`
+	Description      string    `json:"description,omitempty"`
+	Status           string    `json:"status"`
+	Severity         string    `json:"severity"`
+	Retryable        bool      `json:"retryable"`
+	ManualResolution bool      `json:"manual_resolution,omitempty"`
+	ActionRoute      string    `json:"action_route,omitempty"`
+	ActionLabel      string    `json:"action_label,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type ExecutionCenterSummary struct {
@@ -126,6 +127,50 @@ func (s *ExecutionCenterService) List(tenantID uint, category, severity string, 
 			Severity: "critical", Retryable: false,
 			ActionRoute: fmt.Sprintf("/xiaohongshu-voucher-verifications/%d/resolve", row.ID), ActionLabel: "处置渠道核销",
 			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt})
+	}
+
+	// Supplier-side verification is an external fulfillment fact. Surface only
+	// unresolved reports and never expose the encrypted request payload or any
+	// ticket/voucher code in this operational projection.
+	var supplierVerifications []model.XiaohongshuSupplierVerification
+	if err := model.DB.Where("tenant_id = ? AND state IN ?", tenantID, []string{"unknown", "manual_review"}).
+		Order("updated_at DESC").Limit(limit).Find(&supplierVerifications).Error; err != nil {
+		return nil, err
+	}
+	orderIDs := make([]uint, 0, len(supplierVerifications))
+	for _, row := range supplierVerifications {
+		orderIDs = append(orderIDs, row.OrderID)
+	}
+	orderNumbers := make(map[uint]string, len(orderIDs))
+	if len(orderIDs) > 0 {
+		var orders []model.Order
+		if err := model.DB.Select("id, order_no").Where("tenant_id = ? AND id IN ?", tenantID, orderIDs).Find(&orders).Error; err != nil {
+			return nil, err
+		}
+		for _, order := range orders {
+			orderNumbers[order.ID] = order.OrderNo
+		}
+	}
+	for _, row := range supplierVerifications {
+		description := strings.TrimSpace(orderNumbers[row.OrderID])
+		if lastError := strings.TrimSpace(row.LastError); lastError != "" {
+			if description != "" {
+				description += " · "
+			}
+			description += lastError
+		}
+		if description == "" {
+			description = "供应商小红书核销结果需要核对"
+		}
+		canResolve := row.State == "unknown" || (row.State == "manual_review" && row.ReviewReason == "external_not_consumed")
+		item := ExecutionCenterItem{Source: "xiaohongshu_supplier_verification", Category: "渠道核销", ID: row.ID,
+			Title: "小红书供应商核销待处理", Description: description, Status: row.State,
+			Severity: "critical", Retryable: false, ManualResolution: canResolve,
+			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
+		if !canResolve {
+			item.ActionRoute, item.ActionLabel = "/online-order", "查看相关订单"
+		}
+		appendItem(item)
 	}
 
 	// An authenticated Xiaohongshu after-sale callback pauses fulfillment until

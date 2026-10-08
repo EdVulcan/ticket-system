@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 152
+const CurrentPostgresSchemaVersion = 153
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -68,7 +68,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&AfterSaleRequest{}, &AfterSaleEvent{}, &HardwareCommand{}, &HardwareEvent{}, &DeviceRequestNonce{}, &DeviceVerification{}, &DeviceMaintenanceCredential{}, &DeviceMaintenanceSession{}, &DeviceProvisioningLease{}, &MigrationAuditIssue{},
 		&MobileVerificationSession{}, &MobileVerificationPreview{}, &MobileVerificationOperation{},
 		&UpstreamConnection{}, &UpstreamProductMapping{}, &ProductSupplyConfig{},
-		&OrderItemSupplySnapshot{}, &ExternalAdmissionCredential{}, &ExternalAdmissionBinding{},
+		&OrderItemSupplySnapshot{}, &ExternalAdmissionCredential{}, &ExternalAdmissionBinding{}, &XiaohongshuSupplierVerification{},
 		&UpstreamDispatchGate{}, &UpstreamDispatchWaiter{},
 		&TenantBusinessCapability{}, &CommerceProduct{}, &CommerceProductMedia{}, &CommerceSKU{}, &CommerceOptionGroup{}, &CommerceOption{},
 		&CommerceFulfillmentLocation{}, &CommerceInventory{}, &CommerceCart{}, &CommerceCartItem{},
@@ -724,6 +724,9 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateUpstreamSupplyFoundation(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := migrateXiaohongshuSupplierVerification(db, previousSchemaVersion); err != nil {
+		return err
+	}
 	if err := migrateUpstreamDispatch(db, previousSchemaVersion); err != nil {
 		return err
 	}
@@ -810,9 +813,112 @@ func runPostgresMigrations(db *gorm.DB) error {
 	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "merchant configured commerce product labels",
+		Name:      "xiaohongshu supplier verification reports",
 		AppliedAt: time.Now(),
 	}).Error
+}
+
+// migrateXiaohongshuSupplierVerification adds provider usage quantities to
+// immutable supply snapshots and durable supplier verification coordination.
+func migrateXiaohongshuSupplierVerification(db *gorm.DB, previous int) error {
+	if err := db.Exec(`
+		DO $$ BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_supply_snapshot_provider_usage_bounds') THEN
+				ALTER TABLE order_item_supply_snapshots
+					ADD CONSTRAINT chk_supply_snapshot_provider_usage_bounds
+					CHECK (
+						(provider_usage_quantity IS NULL OR provider_usage_quantity >= 0)
+						AND (provider_used_quantity IS NULL OR provider_used_quantity >= 0)
+						AND (provider_returned_quantity IS NULL OR provider_returned_quantity >= 0)
+						AND (provider_usage_quantity IS NULL OR provider_used_quantity IS NULL OR provider_used_quantity <= provider_usage_quantity)
+						AND (provider_usage_quantity IS NULL OR provider_returned_quantity IS NULL OR provider_returned_quantity <= provider_usage_quantity)
+					) NOT VALID;
+			END IF;
+		END $$;
+		ALTER TABLE order_item_supply_snapshots VALIDATE CONSTRAINT chk_supply_snapshot_provider_usage_bounds;
+
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_xhs_supplier_verification_channel_verify
+			ON xiaohongshu_supplier_verifications(channel_account_id, verify_id)
+			WHERE verify_id <> '';
+
+		DO $$ BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_xhs_supplier_verification_facts') THEN
+				ALTER TABLE xiaohongshu_supplier_verifications
+					ADD CONSTRAINT chk_xhs_supplier_verification_facts
+					CHECK (
+						attempt_count >= 0
+						AND (state <> 'confirmed' OR (btrim(verify_id) <> '' AND confirmed_at IS NOT NULL))
+						AND (state <> 'in_flight' OR (
+							external_started_at IS NOT NULL AND btrim(request_payload_ciphertext) <> ''
+							AND length(request_hash) = 64
+						))
+						AND (state <> 'unknown' OR (external_started_at IS NOT NULL AND next_attempt_at IS NULL))
+					) NOT VALID;
+			END IF;
+		END $$;
+		ALTER TABLE xiaohongshu_supplier_verifications VALIDATE CONSTRAINT chk_xhs_supplier_verification_facts;
+
+		CREATE OR REPLACE FUNCTION guard_xhs_supplier_verification() RETURNS trigger AS $$
+		BEGIN
+			IF TG_OP = 'DELETE' THEN
+				RAISE EXCEPTION 'xiaohongshu supplier verification lifecycle is permanent';
+			END IF;
+			IF TG_OP = 'UPDATE' AND (
+				NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+				OR NEW.channel_account_id IS DISTINCT FROM OLD.channel_account_id
+				OR NEW.order_id IS DISTINCT FROM OLD.order_id
+				OR NEW.order_item_id IS DISTINCT FROM OLD.order_item_id
+				OR NEW.supply_snapshot_id IS DISTINCT FROM OLD.supply_snapshot_id
+				OR NEW.ticket_id IS DISTINCT FROM OLD.ticket_id
+				OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
+			) THEN
+				RAISE EXCEPTION 'xiaohongshu supplier verification ownership is immutable';
+			END IF;
+			IF TG_OP = 'UPDATE' AND OLD.external_started_at IS NOT NULL AND (
+				NEW.request_payload_ciphertext IS DISTINCT FROM OLD.request_payload_ciphertext
+				OR NEW.request_hash IS DISTINCT FROM OLD.request_hash
+				OR NEW.external_started_at IS DISTINCT FROM OLD.external_started_at
+				OR NEW.state = 'pending'
+			) THEN RAISE EXCEPTION 'xiaohongshu supplier verification sent request is immutable'; END IF;
+			IF NEW.tenant_id = 0 OR NEW.channel_account_id = 0 OR NEW.order_id = 0
+				OR NEW.order_item_id = 0 OR NEW.supply_snapshot_id = 0 OR NEW.ticket_id = 0
+				OR NEW.attempt_count < 0
+				OR NEW.state NOT IN ('pending','in_flight','confirmed','unknown','manual_review','skipped')
+				OR NOT EXISTS (
+					SELECT 1
+					FROM channel_accounts a
+					JOIN orders o ON o.id = NEW.order_id
+					JOIN order_items i ON i.id = NEW.order_item_id AND i.order_id = o.id
+					JOIN tickets t ON t.id = NEW.ticket_id AND t.order_id = o.id AND t.order_item_id = i.id
+					JOIN order_item_supply_snapshots s ON s.id = NEW.supply_snapshot_id
+					WHERE a.id = NEW.channel_account_id AND a.tenant_id = NEW.tenant_id AND a.type = 'xiaohongshu'
+						AND o.tenant_id = NEW.tenant_id AND o.channel = 'xiaohongshu'
+						AND o.channel_account_id = NEW.channel_account_id
+						AND t.tenant_id = NEW.tenant_id
+						AND s.order_item_id = i.id AND s.order_id = o.id AND s.sales_tenant_id = o.tenant_id
+						AND s.mode = 'upstream' AND s.provider = 'zhiyoubao'
+						AND s.fulfillment_tenant_id = t.fulfillment_tenant_id
+						AND s.scenic_area_id = t.fulfillment_scenic_area_id
+						AND s.product_id = i.fulfillment_product_id AND s.product_revision_id = i.product_revision_id
+				)
+				OR (NEW.state = 'confirmed' AND (btrim(NEW.verify_id) = '' OR NEW.confirmed_at IS NULL))
+				OR (NEW.state = 'in_flight' AND (
+					NEW.external_started_at IS NULL OR btrim(NEW.request_payload_ciphertext) = ''
+					OR length(NEW.request_hash) <> 64
+				))
+				OR (NEW.state = 'unknown' AND (NEW.external_started_at IS NULL OR NEW.next_attempt_at IS NOT NULL)) THEN
+				RAISE EXCEPTION 'xiaohongshu supplier verification ownership or state mismatch';
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		DROP TRIGGER IF EXISTS ownership_guard ON xiaohongshu_supplier_verifications;
+		CREATE TRIGGER ownership_guard BEFORE INSERT OR UPDATE OR DELETE ON xiaohongshu_supplier_verifications
+			FOR EACH ROW EXECUTE FUNCTION guard_xhs_supplier_verification();
+	`).Error; err != nil {
+		return fmt.Errorf("migrate Xiaohongshu supplier verification schema %d: %w", CurrentPostgresSchemaVersion, err)
+	}
+	return nil
 }
 
 // migrateCommerceRestaurantDeliveryExecution adds the merchant/courier

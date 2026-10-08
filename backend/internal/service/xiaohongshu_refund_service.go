@@ -37,6 +37,9 @@ func prepareXiaohongshuRefundTx(tx *gorm.DB, order *model.Order, payment *model.
 		return errors.New("小红书退款票券数量不匹配")
 	}
 	for _, ticket := range lockedTickets {
+		if err := ensureSupplierVerificationAllowsRefundTx(tx, &ticket, refund.AuthorizedUsedRefund); err != nil {
+			return err
+		}
 		usedException := refund.AuthorizedUsedRefund && ticket.CheckInCount > 0 && (ticket.Status == "used" || ticket.Status == "active" || ticket.Status == "unused")
 		unused := ticket.CheckInCount == 0 && (ticket.Status == "unused" || ticket.Status == "pending_provider")
 		if ticket.PendingRefundID != refund.ID || ticket.PendingXiaohongshuVerificationID != 0 || (!unused && !usedException) {

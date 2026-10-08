@@ -314,6 +314,16 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	{
 		xiaohongshuVoucherVerificationGroup.POST("/:id/resolve", xiaohongshuVoucherVerificationController.Resolve)
 	}
+	xiaohongshuSupplierVerificationController := &api.XiaohongshuSupplierVerificationController{}
+	xiaohongshuSupplierVerificationGroup := protected.Group("/xiaohongshu-supplier-verifications")
+	xiaohongshuSupplierVerificationGroup.Use(
+		middleware.RequireTenantPermission(authz.PermissionXiaohongshuVoucherResolve),
+		middleware.RequireAnyTenantCapability("supplier", "distributor"),
+		middleware.RequireAnyRole(authz.RoleTenantAdmin, "super_admin"),
+	)
+	{
+		xiaohongshuSupplierVerificationGroup.POST("/:id/resolve", xiaohongshuSupplierVerificationController.Resolve)
+	}
 	// Authenticated Xiaohongshu after-sale callbacks create a fulfillment hold
 	// until an administrator can reconcile the provider evidence. The route is
 	// available to supplier and distributor tenants because either may own the

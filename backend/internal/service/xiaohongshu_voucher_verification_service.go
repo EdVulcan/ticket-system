@@ -404,6 +404,30 @@ func (s *DeviceService) claimXiaohongshuVoucherExternal(sagaID uint, now time.Ti
 		}
 		switch saga.State {
 		case "prepared":
+			var ticket model.Ticket
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", saga.TicketID, saga.TenantID).First(&ticket).Error; err != nil {
+				return err
+			}
+			if ticket.PendingRefundID != 0 || ticket.PendingXiaohongshuVerificationID != saga.ID {
+				return nil
+			}
+			if err := ensureSupplierVerificationAllowsDeviceTx(tx, &ticket, &saga, false); err != nil {
+				return err
+			}
+			var order model.Order
+			if err := tx.Where("id = ? AND tenant_id = ? AND channel_account_id = ?", ticket.OrderID, saga.TenantID, saga.ChannelAccountID).First(&order).Error; err != nil {
+				return err
+			}
+			if err := EnsureNoXiaohongshuRefundHoldTx(tx, &order); err != nil {
+				return err
+			}
+			var account model.ChannelAccount
+			if err := tx.Where("id = ? AND tenant_id = ? AND type = 'xiaohongshu' AND status IN ? AND environment = ?", saga.ChannelAccountID, saga.TenantID, []string{"active", "sandbox"}, order.Environment).First(&account).Error; err != nil {
+				return err
+			}
+			if err := requireAnyActiveTenantCapability(tx, saga.TenantID, "supplier", "distributor"); err != nil {
+				return err
+			}
 			if err := tx.Model(&saga).Updates(map[string]interface{}{
 				"state": "external_in_flight", "attempt_count": gorm.Expr("attempt_count + 1"), "external_started_at": now, "last_error": "",
 			}).Error; err != nil {

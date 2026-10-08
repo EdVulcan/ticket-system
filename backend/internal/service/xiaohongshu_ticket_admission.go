@@ -31,6 +31,9 @@ func ensureXiaohongshuTicketAdmissionTx(tx *gorm.DB, order *model.Order, ticket 
 			if saga.State != "prepared" {
 				return ErrXiaohongshuVoucherRequiresDevice
 			}
+			if err := ensureSupplierVerificationAllowsDeviceTx(tx, ticket, &saga, true); err != nil {
+				return err
+			}
 		} else if (saga.State != "external_confirmed" && saga.State != "local_pending") || saga.VerifyID == "" || saga.VerifyID != voucher.VerifyID {
 			return ErrXiaohongshuVoucherRequiresDevice
 		}

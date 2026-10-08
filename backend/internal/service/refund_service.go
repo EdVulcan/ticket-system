@@ -713,7 +713,18 @@ func reserveRefundTicketsTx(tx *gorm.DB, selected map[string]*model.Ticket, refu
 	if refundID == 0 {
 		return errors.New("refund reservation requires a refund id")
 	}
+	var refund model.Refund
+	if err := tx.Select("id", "tenant_id", "authorized_used_refund").Where("id = ?", refundID).First(&refund).Error; err != nil {
+		return err
+	}
 	for _, ticket := range selected {
+		var current model.Ticket
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND tenant_id = ?", ticket.ID, ticket.TenantID, refund.TenantID).First(&current).Error; err != nil {
+			return err
+		}
+		if err := ensureSupplierVerificationAllowsRefundTx(tx, &current, refund.AuthorizedUsedRefund); err != nil {
+			return err
+		}
 		result := tx.Model(&model.Ticket{}).
 			Where("id = ? AND status = ? AND check_in_count = ? AND pending_refund_id = 0 AND pending_xiaohongshu_verification_id = 0", ticket.ID, ticket.Status, ticket.CheckInCount).
 			Update("pending_refund_id", refundID)
