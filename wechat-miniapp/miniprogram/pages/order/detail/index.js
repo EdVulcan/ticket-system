@@ -133,7 +133,11 @@ Page({
   cancelOrder() { if (!this.data.canCancelOrder) return; wx.showModal({ title: '取消订单', content: '确定取消这个订单吗？', success: (res) => { if (res.confirm) this.updateOrder('CANCELED'); } }); },
   confirmReceipt() { if (this.data.canConfirmReceipt) this.updateOrder('COMPLETED'); },
   contactStore() { const phoneNumber = storage.getStore().phone; if (phoneNumber) wx.makePhoneCall({ phoneNumber }); else wx.showToast({ title: '门店暂未配置联系电话', icon: 'none' }); },
-  callRunner() { if (this.data.order && this.data.order.delivery && this.data.order.delivery.runnerPhone) wx.makePhoneCall({ phoneNumber: this.data.order.delivery.runnerPhone }); },
+  callRunner() {
+    const delivery = this.data.order && this.data.order.delivery;
+    const phoneNumber = delivery && delivery.contactPhone;
+    if (phoneNumber) wx.makePhoneCall({ phoneNumber });
+  },
 
   refundOrder() {
     if (!this.data.canRequestRefund || this.data.refundSubmitting || this.data.refundQuerying) return;

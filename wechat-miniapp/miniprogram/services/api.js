@@ -365,13 +365,32 @@ function normalizeAvailableActions(value) {
 
 function normalizeFulfillment(value) {
   const row = value || {};
+  const status = String(firstDefined(row.status, row.fulfillmentStatus, row.fulfillment_status, '') || '').toUpperCase();
+  const deliveryProvider = String(firstDefined(row.deliveryProvider, row.delivery_provider, '') || '').toLowerCase();
+  const courierPlatformName = String(firstDefined(row.courierPlatformName, row.courier_platform_name, '') || '');
+  const courierOrderNo = String(firstDefined(row.courierOrderNo, row.courier_order_no, '') || '');
+  const courierContact = String(firstDefined(row.courierContact, row.courier_contact, '') || '');
+  const runnerPhone = String(firstDefined(row.runnerPhone, row.runner_phone, courierContact, '') || '');
+  const deliveryNote = String(firstDefined(row.deliveryNote, row.delivery_note, '') || '');
+  const deliveryProviderText = deliveryProvider === 'merchant' ? '店家自送' : deliveryProvider === 'courier_platform' ? '跑腿平台配送' : '';
+  const deliveryCardTitle = status === 'COMPLETED' ? '配送已完成' : '配送中';
+  const showDeliveryInfo = ['DELIVERING', 'COMPLETED', 'CALLED'].indexOf(status) >= 0 && Boolean(deliveryProviderText || courierPlatformName || courierOrderNo || courierContact || row.runnerName || row.runner_name || deliveryNote);
   return Object.assign({}, row, {
-    status: String(firstDefined(row.status, row.fulfillmentStatus, row.fulfillment_status, '') || '').toUpperCase(),
+    status,
     method: String(firstDefined(row.method, row.fulfillmentMethod, row.fulfillment_method, '') || '').toUpperCase(),
     runnerName: firstDefined(row.runnerName, row.runner_name, ''),
-    runnerPhone: firstDefined(row.runnerPhone, row.runner_phone, ''),
+    runnerPhone,
     carrier: firstDefined(row.carrierName, row.carrier_name, row.carrier, ''),
-    trackingNo: firstDefined(row.trackingNo, row.tracking_no, '')
+    trackingNo: firstDefined(row.trackingNo, row.tracking_no, ''),
+    deliveryProvider,
+    deliveryProviderText,
+    courierPlatformName,
+    courierOrderNo,
+    courierContact,
+    contactPhone: courierContact || runnerPhone,
+    deliveryNote,
+    deliveryCardTitle,
+    showDeliveryInfo
   });
 }
 
