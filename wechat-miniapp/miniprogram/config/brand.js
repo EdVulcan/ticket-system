@@ -1,8 +1,6 @@
-// Brand identity only; store IDs and transaction data remain unchanged.
+// Neutral fallback only. Customer-facing store names come from the SaaS catalog.
 module.exports = Object.freeze({
-  name: '琑遇·二两兔',
+  name: '店铺',
   legacyDemoName: '食光便当',
-  tagline: '餐饮与零售',
-  shareTitle: '琑遇·二两兔｜餐饮配送或自取',
-  assistShareTitle: '琑遇·二两兔｜帮我助力，一起领券'
+  tagline: '餐饮与零售'
 });

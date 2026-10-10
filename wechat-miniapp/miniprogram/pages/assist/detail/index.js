@@ -1,6 +1,7 @@
 const brand = require('../../../config/brand');
 const storage = require('../../../services/storage');
 const api = require('../../../services/api');
+const storefrontBrand = require('../../../services/storefront-brand');
 
 const BUSINESS_TYPE = 'restaurant';
 
@@ -42,6 +43,7 @@ function toLocalSession(session, token) {
 Page({
   data: {
     brand,
+    storeName: brand.name,
     session: null,
     benefitText: '规则加载中',
     starterDiscountText: '—',
@@ -61,6 +63,8 @@ Page({
       helperRewardText: rewardSummary(helperReward)
     });
   },
+
+  onShow() { storefrontBrand.refresh(this, this.businessType || BUSINESS_TYPE); },
 
   onLoad(options) {
     this.shareToken = String((options && (options.token || options.share_token)) || '').trim();

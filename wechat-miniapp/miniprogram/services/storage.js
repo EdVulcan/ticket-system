@@ -10,10 +10,12 @@ const KEYS = {
   catalogs: 'food_catalogs_v1',
   store: 'food_store_v1',
   stores: 'food_stores_v1',
+  storefrontName: 'food_storefront_name_v1',
   profile: 'food_profile_v1',
   assist: 'food_assist_v1',
   checkoutAttempt: 'food_checkout_attempt_v1',
   checkoutBatchAttempt: 'food_checkout_batch_attempt_v1',
+  directCheckout: 'food_direct_checkout_v1',
   orderListFilter: 'food_order_list_filter_v1'
 };
 
@@ -22,6 +24,13 @@ function scoped(key) {
   if (!production()) return key;
   const app = getApp();
   return `production_${app.globalData.env || 'unconfigured'}_${key}`;
+}
+
+function storefrontNameKey() {
+  if (!production()) return KEYS.storefrontName;
+  const data = getApp().globalData;
+  // Prevent an AppID/API configuration switch from showing another store's cached name.
+  return `${scoped(KEYS.storefrontName)}_${encodeURIComponent(data.appId || '')}_${encodeURIComponent(data.apiBaseUrl || '')}`;
 }
 
 function customerToken() {
@@ -99,6 +108,8 @@ module.exports = {
   keys: KEYS,
   getCart() { return customerGet(KEYS.cart, []); },
   saveCart(value) { return customerSet(KEYS.cart, value); },
+  getDirectCheckout() { return customerGet(KEYS.directCheckout, null); },
+  saveDirectCheckout(value) { return customerSet(KEYS.directCheckout, value); },
   getOrders() { return customerGet(KEYS.orders, []); },
   saveOrders(value) { return customerSet(KEYS.orders, value); },
   getAddresses() { return customerGet(KEYS.addresses, production() ? [] : [mock.defaultAddress, mock.defaultShippingAddress]); },
@@ -139,6 +150,11 @@ module.exports = {
     return store;
   },
   saveStore(value, businessType) {
+    // Display metadata is shared by both businesses; fulfillment settings stay separate.
+    const name = String(value && (value.displayName || value.display_name || value.name) || '').trim();
+    write(storefrontNameKey(), name);
+    const app = getApp();
+    if (app && app.globalData) app.globalData.storeName = name || brand.name;
     const type = String(businessType || '').toLowerCase();
     if (type === 'restaurant' || type === 'retail') {
       const stores = get(KEYS.stores, {});
@@ -146,6 +162,10 @@ module.exports = {
       return set(KEYS.stores, stores);
     }
     return set(KEYS.store, value);
+  },
+  getStorefrontName() {
+    if (typeof getApp !== 'function' || !getApp()) return '';
+    return String(read(storefrontNameKey(), '') || '').trim();
   },
   getProfile() { return customerGet(KEYS.profile, null); },
   saveProfile(value) { return customerSet(KEYS.profile, value); },

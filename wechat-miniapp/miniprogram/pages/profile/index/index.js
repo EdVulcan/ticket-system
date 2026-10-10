@@ -1,8 +1,8 @@
 const brand = require('../../../config/brand');
-const mock = require('../../../data/mock');
 const storage = require('../../../services/storage');
 const api = require('../../../services/api');
 const commerce = require('../../../config/commerce');
+const storefrontBrand = require('../../../services/storefront-brand');
 
 function assistCampaignAvailable(campaign) {
   if (!campaign || !campaign.id || String(campaign.status || '').toLowerCase() !== 'active') return false;
@@ -14,8 +14,9 @@ function assistCampaignAvailable(campaign) {
 Page({
   data: {
     brand,
+    storeName: brand.name,
     profile: { nickname: '朋友' },
-    store: mock.store,
+    store: {},
     coupons: [],
     couponCount: 0,
     showCoupons: false,
@@ -28,6 +29,7 @@ Page({
     memberAvailable: false,
     showContact: false,
     assistAvailable: false,
+    assistDiscountText: '',
     memberProfile: { memberNo: '', status: 'active', membershipStatus: 'provisional', phoneMasked: '', phoneVerified: false, membershipConsentGranted: false, sourceCount: 0 },
     memberConsentGranted: false,
     verifyingMemberPhone: false,
@@ -38,6 +40,7 @@ Page({
   onShow() {
     // Reset any stale modal state left by a hot reload or a tab switch.
     this.setData({ showContact: false });
+    storefrontBrand.refresh(this);
     this.loadProfile();
   },
 
@@ -49,19 +52,21 @@ Page({
 
   loadAssistAvailability() {
     if (typeof api.getAssistCampaigns !== 'function') {
-      this.setData({ assistAvailable: false });
+      this.setData({ assistAvailable: false, assistDiscountText: '' });
       return;
     }
     const businesses = typeof api.getAuthorizedBusinesses === 'function' ? api.getAuthorizedBusinesses() : [];
     const types = businesses.map(item => String(item && (item.businessType || item.business_type) || '').toLowerCase()).filter((item, index, values) => (item === 'restaurant' || item === 'retail') && values.indexOf(item) === index);
     const requestedTypes = types.length ? types : (api.isProduction() ? [] : ['restaurant']);
     if (!requestedTypes.length) {
-      this.setData({ assistAvailable: false });
+      this.setData({ assistAvailable: false, assistDiscountText: '' });
       return;
     }
     Promise.all(requestedTypes.map(type => api.getAssistCampaigns(type).catch(() => ({ data: [] })))).then(results => {
-      const available = results.some(result => (result && result.data || []).some(assistCampaignAvailable));
-      this.setData({ assistAvailable: available });
+      const campaigns = results.reduce((all, result) => all.concat((result && result.data) || []), []);
+      const active = campaigns.find(assistCampaignAvailable);
+      const helperAmount = active && active.helperReward && Number(active.helperReward.discountAmount);
+      this.setData({ assistAvailable: Boolean(active), assistDiscountText: Number.isFinite(helperAmount) && helperAmount > 0 ? (helperAmount / 100).toFixed(2) : '' });
     });
   },
 

@@ -59,7 +59,7 @@ test('consumer copy stays neutral while legacy campus addresses remain supported
   const cold = read('pages/cold/index.wxml');
   const orderDetail = read('pages/order/detail/index.wxml');
   assert.deepEqual(app.tabBar.list.map(tab => tab.text), ['餐饮', '零售', '订单', '我的']);
-  assert.equal(coldConfig.navigationBarTitleText, '零售 · 琑遇·二两兔');
+  assert.equal(coldConfig.navigationBarTitleText, '零售');
   assert.match(cold, /零售商品/);
   assert.doesNotMatch(cold, /冷吃商品/);
   assert.match(orderDetail, /配送费/);

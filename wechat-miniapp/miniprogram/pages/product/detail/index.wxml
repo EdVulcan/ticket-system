@@ -1,7 +1,7 @@
 <view class="page-shell product-detail-page">
   <view class="product-overview">
     <view class="detail-visual" style="background: {{product.color}};">
-      <image wx:if="{{product.coverImageUrl}}" class="food-photo" mode="aspectFill" src="{{product.coverImageUrl}}" /><view wx:else class="detail-placeholder"><image class="detail-placeholder-icon" src="/images/theme/rabbit-pair.svg" /><view>{{brand.name}}</view></view>
+      <image wx:if="{{product.coverImageUrl}}" class="food-photo" mode="aspectFill" src="{{product.coverImageUrl}}" /><view wx:else class="detail-placeholder"><image class="detail-placeholder-icon" src="/images/theme/rabbit-pair.svg" /><view>{{storeName || brand.name}}</view></view>
     </view>
 
     <view class="detail-intro">
@@ -40,7 +40,18 @@
   </view>
 
   <view class="bottom-action">
-    <view class="quantity-control"><view class="quantity-button" bindtap="decrease">−</view><view class="quantity-number">{{quantity}}</view><view class="quantity-button quantity-button--plus" bindtap="increase">+</view></view>
-    <button class="primary-button add-detail-button" bindtap="addToCart" disabled="{{unavailable || product.isSoldOut || (product.stockMode !== 'UNLIMITED' && product.stock <= 0)}}">加入购物车 · ¥{{totalPriceText}}</button>
+    <view class="purchase-summary">
+      <text class="purchase-summary-label">商品合计</text>
+      <text class="purchase-total">¥{{totalPriceText}}</text>
+    </view>
+    <view class="purchase-actions">
+      <view class="quantity-control" aria-label="购买数量">
+        <view class="quantity-button {{quantity <= 1 ? 'quantity-button--disabled' : ''}}" bindtap="decrease" role="button" aria-label="减少数量">−</view>
+        <view class="quantity-number">{{quantity}}</view>
+        <view class="quantity-button" bindtap="increase" role="button" aria-label="增加数量">+</view>
+      </view>
+      <button class="outline-button add-detail-button" bindtap="addToCart" disabled="{{buying || unavailable || product.isSoldOut || (product.stockMode !== 'UNLIMITED' && product.stock <= 0)}}">加入购物车</button>
+      <button class="primary-button buy-detail-button" bindtap="buyNow" loading="{{buying}}" disabled="{{buying || unavailable || product.isSoldOut || (product.stockMode !== 'UNLIMITED' && product.stock <= 0)}}">立即购买</button>
+    </view>
   </view>
 </view>

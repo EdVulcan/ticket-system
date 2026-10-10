@@ -1,5 +1,5 @@
 <view class="page-shell checkout-page">
-  <view class="checkout-title"><view class="section-title">确认订单</view><view class="muted-text">餐饮和零售会分别下单</view></view>
+  <view class="checkout-title"><view class="section-title">确认订单</view><view wx:if="{{!directPurchase}}" class="muted-text">餐饮和零售会分别下单</view></view>
   <view wx:if="{{preOrderContact}}" class="private-domain-card" bindtap="openPreOrderContact" role="button" aria-label="添加店家微信">
     <view class="private-domain-avatar"><image src="/images/theme/rabbit-pair.svg" mode="aspectFit" /></view>
     <view class="private-domain-copy">

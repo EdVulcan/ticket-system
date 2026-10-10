@@ -1,23 +1,28 @@
 @import "../../../styles/common.wxss";
 
-.address-list-page { padding: 28rpx 30rpx 48rpx; }
-.address-heading { margin-bottom: 20rpx; }
+.address-list-page { padding: 28rpx 30rpx calc(48rpx + env(safe-area-inset-bottom)); }
+.address-heading { margin-bottom: 24rpx; }
 .address-heading .section-title { margin-bottom: 8rpx; }
-.address-list { border-radius: 24rpx; padding: 0 24rpx; }
-.address-card { padding: 24rpx 0; }
-.address-card + .address-card { border-top: 1rpx solid var(--line); }
-.address-card--disabled { background: #f1f2ef; }
-.address-card--disabled .address-card-main { opacity: .62; }
+.address-list { display: flex; flex-direction: column; gap: 20rpx; }
+.address-card { border-radius: 24rpx; overflow: hidden; padding: 26rpx 26rpx 0; }
+.address-card--disabled { background: #f3f4f0; border-color: #e2e5dd; }
+.address-card--disabled .address-card-name { color: #67716b; }
+.address-card--disabled .address-card-phone, .address-card--disabled .address-card-detail { color: #7b837c; }
 .address-card-main { min-width: 0; }
-.address-card-top { align-items: center; display: flex; flex-wrap: wrap; gap: 8rpx 16rpx; }
-.address-card-name { color: var(--ink); font-size: 29rpx; font-weight: 600; }
+.address-card-top { align-items: flex-start; display: flex; justify-content: space-between; gap: 16rpx; }
+.address-card-contact { align-items: baseline; display: flex; flex: 1; flex-wrap: wrap; gap: 4rpx 16rpx; min-width: 0; }
+.address-card-name { color: var(--ink); font-size: 29rpx; font-weight: 600; overflow-wrap: anywhere; }
 .address-card-phone { color: #6f786f; font-size: 23rpx; }
-.default-label { background: var(--paper); border-radius: 6rpx; color: var(--green); flex-shrink: 0; font-size: 19rpx; padding: 4rpx 8rpx; }
-.address-card-detail { color: #687268; font-size: 25rpx; line-height: 1.55; margin-top: 14rpx; overflow-wrap: anywhere; }
-.address-card-remark { color: var(--muted); font-size: 21rpx; margin-top: 8rpx; }
-.address-unavailable { color: var(--red); font-size: 21rpx; margin-top: 10rpx; }
-.address-card-actions { border-top: 1rpx solid var(--line); display: flex; justify-content: flex-end; margin-top: 18rpx; padding-top: 16rpx; }
-.edit-address, .delete-address { color: #778078; font-size: 22rpx; margin-left: 28rpx; }
-.delete-address { color: var(--red); }
-.address-add-card { align-items: center; border-radius: 24rpx; color: var(--green); display: flex; font-size: 26rpx; justify-content: center; margin-top: 18rpx; padding: 26rpx; }
-.address-add-icon { align-items: center; border: 2rpx solid var(--muted); border-radius: 50%; display: flex; font-size: 30rpx; height: 44rpx; justify-content: center; margin-right: 12rpx; width: 44rpx; }
+.default-label { background: var(--green-soft); border-radius: 8rpx; color: var(--green); flex-shrink: 0; font-size: 20rpx; line-height: 30rpx; padding: 3rpx 10rpx; }
+.address-card-detail { color: #526057; font-size: 25rpx; line-height: 1.65; margin-top: 14rpx; overflow-wrap: anywhere; }
+.address-card-delivery { color: var(--green); font-size: 21rpx; line-height: 1.6; margin-top: 10rpx; }
+.address-card-remark { color: var(--muted); font-size: 21rpx; line-height: 1.6; margin-top: 8rpx; overflow-wrap: anywhere; }
+.address-card-footer { align-items: center; border-top: 1rpx solid var(--line); display: flex; flex-wrap: wrap; gap: 0 12rpx; margin-top: 20rpx; min-height: 78rpx; padding: 4rpx 0; }
+.address-unavailable { color: #8a6a54; flex: 1 1 220rpx; font-size: 21rpx; line-height: 1.5; padding: 12rpx 0; }
+.address-card-actions { align-items: center; display: flex; flex-shrink: 0; margin-left: auto; }
+.edit-address, .delete-address { align-items: center; display: flex; font-size: 23rpx; justify-content: center; min-height: 70rpx; min-width: 82rpx; padding: 0 14rpx; }
+.edit-address { color: var(--green); }
+.delete-address { color: #a76b68; }
+.address-add-card { align-items: center; border-radius: 24rpx; color: var(--green); display: flex; font-size: 26rpx; font-weight: 500; justify-content: center; margin-top: 24rpx; min-height: 96rpx; padding: 22rpx; }
+.address-add-icon { align-items: center; background: var(--green-soft); border-radius: 50%; display: flex; flex-shrink: 0; font-size: 34rpx; height: 42rpx; justify-content: center; line-height: 1; margin-right: 14rpx; width: 42rpx; }
+.address-empty { gap: 20rpx; padding: 88rpx 20rpx; }

@@ -1,20 +1,26 @@
 <view class="page-shell home-page home-page--cold">
-  <view class="home-header"><view class="brand-copy"><view class="brand-name">{{store.name || brand.name}}</view><view class="brand-subtitle">{{channelKicker}}</view></view><view class="open-status {{channelOpen ? '' : 'open-status--off'}}"><text class="status-dot"></text>{{channelOpen ? '可下单' : '暂停售卖'}}</view></view>
+  <view class="home-header"><view class="brand-avatar">店</view><view class="brand-copy"><view class="brand-name">{{storeName || store.name || brand.name}}</view><view class="brand-subtitle">{{channelKicker}}</view></view><view class="open-status {{channelOpen ? '' : 'open-status--off'}}"><text class="status-dot"></text>{{channelOpen ? '可下单' : '暂停售卖'}}</view></view>
   <view wx:if="{{heroBanner && heroBanner.enabled}}" class="hero-card hero-card--food" bindtap="openHero" role="button" aria-label="{{heroBanner.title || '查看店铺推荐'}}">
     <image class="hero-food" src="{{heroBanner.imageUrl}}" mode="aspectFill" binderror="onHeroImageError" />
     <view class="hero-shade"></view>
     <view class="hero-food-copy">
       <view class="hero-kicker"><text>店铺推荐</text></view>
-      <view class="hero-food-title">{{heroBanner.title || store.name || brand.name}}</view>
+      <view class="hero-food-title">{{heroBanner.title || storeName || store.name || brand.name}}</view>
       <view wx:if="{{heroBanner.subtitle}}" class="hero-food-sub">{{heroBanner.subtitle}}</view>
     </view>
     <view wx:if="{{heroBanner.targetType === 'product'}}" class="hero-food-arrow">查看详情 <image class="ui-icon ui-icon--small" src="/images/theme/arrow-white.svg" /></view>
   </view>
   <view wx:else class="hero-card"><view class="hero-copy"><view class="hero-title">{{heroLine1}}<view>{{heroLine2}}</view></view><view class="hero-subtitle">{{heroSubtitle}}</view><view class="hero-note">快递发货</view></view><view class="hero-brand" aria-hidden="true"><image class="hero-rabbits" src="/images/theme/rabbit-pair.svg" mode="aspectFit" /><view class="hero-brand-caption">二 两 兔</view></view></view>
-  <view wx:if="{{assistAvailable || store.announcement}}" class="store-info">
-    <view wx:if="{{assistAvailable}}" class="benefit-row" bindtap="goAssist" role="button" aria-label="发起好友助力领券"><view class="benefit-title"><image class="ui-icon" src="/images/theme/ticket.svg" />好友助力领券</view><view class="benefit-action">发起助力<image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view></view>
-    <view wx:if="{{store.announcement}}" class="notice-row"><image class="ui-icon ui-icon--small" src="/images/theme/notice.svg" /><view>{{store.announcement}}</view></view>
+  <view wx:if="{{assistAvailable}}" class="assist-promo" bindtap="goAssist" role="button" aria-label="发起好友助力领券">
+    <view class="assist-promo-notch assist-promo-notch--left"></view><view class="assist-promo-notch assist-promo-notch--right"></view>
+    <view class="assist-promo-orb"></view>
+    <view class="assist-promo-main">
+      <view class="assist-promo-voucher"><view class="assist-promo-voucher-label">赏味立减</view><view class="assist-promo-voucher-amount"><text>¥</text>{{assistStarterDiscountText}}</view></view>
+      <view class="assist-promo-copy"><view class="assist-promo-title">{{assistCampaign.title || '请好友一起吃'}}</view><view class="assist-promo-badge">双方立享</view><view class="assist-promo-sub">送TA一张 ¥{{assistHelperDiscountText}} 券 · 你也自动得一张</view></view>
+      <view class="assist-promo-action-wrap"><view class="assist-promo-divider"></view><view class="assist-promo-action">立即发起<text>›</text></view></view>
+    </view>
   </view>
+  <view wx:if="{{store.announcement}}" class="store-info"><view class="notice-row"><image class="ui-icon ui-icon--small" src="/images/theme/notice.svg" /><view>{{store.announcement}}</view></view></view>
   <view class="section-head"><view class="section-title">{{menuTitle}}<view class="heading-dot"></view></view><view class="section-link" bindtap="goCoupons" role="button">我的券<image class="ui-icon ui-icon--small" src="/images/theme/chevron.svg" /></view></view>
   <scroll-view scroll-x class="category-scroll" show-scrollbar="{{false}}"><view class="category-row"><view wx:for="{{categories}}" wx:key="id" class="category-item {{activeCategory === item.id ? 'category-item--active' : ''}}" data-id="{{item.id}}" bindtap="selectCategory" role="button">{{item.name || '其他'}}</view></view></scroll-view>
   <view class="product-list">

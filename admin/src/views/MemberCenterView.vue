@@ -92,13 +92,13 @@
           <el-descriptions-item label="手机号">{{ detail.phone || '未验证' }}</el-descriptions-item>
           <el-descriptions-item label="会员授权">{{ detail.authorization?.consented ? '已授权' : '未授权' }}</el-descriptions-item>
           <el-descriptions-item label="身份入口">{{ detail.identities?.length || 0 }} 个</el-descriptions-item>
-          <el-descriptions-item label="票务订单">{{ detail.orders?.ticket_count || 0 }} 张票</el-descriptions-item>
-          <el-descriptions-item label="住宿订单">{{ detail.orders?.hotel_count || 0 }} 笔</el-descriptions-item>
-          <el-descriptions-item label="餐饮/电商订单">{{ detail.orders?.commerce_count || 0 }} 笔</el-descriptions-item>
+          <el-descriptions-item v-if="showTicketOrders" label="票务订单">{{ detail.orders?.ticket_count || 0 }} 张票</el-descriptions-item>
+          <el-descriptions-item v-if="showHotelOrders" label="住宿订单">{{ detail.orders?.hotel_count || 0 }} 笔</el-descriptions-item>
+          <el-descriptions-item v-if="showCommerceOrders" :label="commerceOrdersLabel">{{ detail.orders?.commerce_count || 0 }} 笔</el-descriptions-item>
           <el-descriptions-item label="历史支付订单">{{ detail.orders?.paid_order_count || 0 }} 笔</el-descriptions-item>
           <el-descriptions-item label="累计消费（最终实付）">
             <span class="spend-value">¥{{ formatCents(detail.orders?.total_spend_cents) }}</span>
-            <span class="muted spend-note">按已完成订单统计，含配送、快递和打包费；已扣除确认完成的退款</span>
+            <span class="muted spend-note">{{ spendNote }}</span>
           </el-descriptions-item>
         </el-descriptions>
         <div class="identity-list">
@@ -114,10 +114,25 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Refresh } from '@element-plus/icons-vue'
 import request from '@/utils/request'
+import { activeCapabilitySet, configuredBusinessCapabilitySet, configuredCapabilitySet, configuredSupplierBusinessTypeSet, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
+
+const user = ref(readStoredUser())
+// Use the same history visibility rules as the tenant workspaces, including suspended verticals.
+const showTicketOrders = computed(() => isScenicHistorySupplier(user.value) || ['distributor', 'travel_agency'].some(type => activeCapabilitySet(user.value).has(type)))
+const showHotelOrders = computed(() => configuredCapabilitySet(user.value).has('supplier') && configuredSupplierBusinessTypeSet(user.value).has('hotel'))
+const commerceTypes = computed(() => configuredBusinessCapabilitySet(user.value))
+const showCommerceOrders = computed(() => commerceTypes.value.has('restaurant') || commerceTypes.value.has('retail'))
+const commerceOrdersLabel = computed(() => commerceTypes.value.has('restaurant') && commerceTypes.value.has('retail') ? '餐饮/电商订单' : commerceTypes.value.has('restaurant') ? '餐饮订单' : '电商订单')
+const spendNote = computed(() => showCommerceOrders.value
+  ? '按已完成订单统计，含配送、快递和打包费；已扣除确认完成的退款'
+  : '按已完成订单统计；已扣除确认完成的退款')
+const handleIdentityRefresh = (event: Event) => {
+  user.value = (event as CustomEvent).detail || {}
+}
 
 const loading = ref(false)
 const exporting = ref(false)
@@ -244,7 +259,12 @@ async function toggleStatus() {
   }
 }
 
-onMounted(() => { loadMembers(); loadBenefit() })
+onMounted(() => {
+  window.addEventListener('tenant-identity-refreshed', handleIdentityRefresh)
+  loadMembers()
+  loadBenefit()
+})
+onBeforeUnmount(() => window.removeEventListener('tenant-identity-refreshed', handleIdentityRefresh))
 </script>
 
 <style scoped>

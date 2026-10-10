@@ -45,7 +45,7 @@ button:active, .add-button:active, .quantity-button:active { opacity: .75; }
   .form-row > .form-group--half, .form-row > .form-group--third { flex: 1 1 100%; margin-right: 0; width: 100%; }
 }
 
-/* Brand primitives: text-native 琑 seal and paired-rabbit signature. */
+/* Shared storefront primitives and paired-rabbit illustration. */
 .brand-seal { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 70rpx; height: 76rpx; border: 2rpx solid var(--green); border-radius: 16rpx 16rpx 6rpx 6rpx; color: var(--green); font-family: "Songti SC", "STSong", "SimSun", serif; font-size: 46rpx; line-height: 1; margin-right: 2rpx; }
 .brand-seal--red { color: var(--red); border-color: var(--red); }
 .empty-brand { width: 180rpx; height: 150rpx; margin-bottom: 28rpx; }

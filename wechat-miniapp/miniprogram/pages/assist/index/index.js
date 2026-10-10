@@ -1,6 +1,8 @@
 const brand = require('../../../config/brand');
 const storage = require('../../../services/storage');
 const api = require('../../../services/api');
+const promotion = require('../../../utils/promotion');
+const storefrontBrand = require('../../../services/storefront-brand');
 
 const BUSINESS_TYPE = 'restaurant';
 
@@ -16,8 +18,7 @@ function hasReward(reward) {
 
 function isAvailableCampaign(campaign, businessType) {
   if (!campaign || !campaign.id || String(campaign.status || '').toLowerCase() !== 'active') return false;
-  const campaignType = String(campaign.businessType || campaign.business_type || '').toLowerCase();
-  return (!campaignType || campaignType === businessType) && hasReward(campaign.starterReward) && hasReward(campaign.helperReward);
+  return promotion.appliesToBusiness(campaign, businessType) && hasReward(campaign.starterReward) && hasReward(campaign.helperReward);
 }
 
 function amountText(cents) {
@@ -70,6 +71,7 @@ function makeCoupon(id, role, reward) {
 Page({
   data: {
     brand,
+    storeName: brand.name,
     campaign: null,
     session: null,
     isDemo: true,
@@ -121,6 +123,7 @@ Page({
   },
 
   onShow() {
+    storefrontBrand.refresh(this, this.businessType || BUSINESS_TYPE);
     const demo = !api.isProduction();
     const session = demo ? toLocalSession(storage.getAssist()) : null;
     this.setData({ session, isDemo: demo, businessType: this.businessType || BUSINESS_TYPE });
@@ -228,6 +231,6 @@ Page({
     const token = this.data.session && this.data.session.token ? this.data.session.token : '';
     const type = this.businessType || BUSINESS_TYPE;
     const typeQuery = type === BUSINESS_TYPE ? '' : `&business_type=${encodeURIComponent(type)}`;
-    return { title: brand.assistShareTitle, path: `/pages/assist/detail/index?token=${encodeURIComponent(token)}${typeQuery}` };
+    return { title: `${storefrontBrand.name()}｜帮我助力，一起领券`, path: `/pages/assist/detail/index?token=${encodeURIComponent(token)}${typeQuery}` };
   }
 });

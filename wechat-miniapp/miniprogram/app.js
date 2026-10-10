@@ -22,6 +22,7 @@ App({
   },
 
   onLaunch() {
+    this.globalData.storeName = storage.getStorefrontName() || brand.name;
     const savedProfile = storage.getProfile();
     if (savedProfile) {
       this.globalData.user = Object.assign({}, this.globalData.user, savedProfile);

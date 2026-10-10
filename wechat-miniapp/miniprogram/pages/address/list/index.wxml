@@ -1,5 +1,25 @@
 <view class="page-shell address-list-page">
   <view class="address-heading"><view class="section-title">{{title}}</view></view>
-  <view wx:if="{{addresses.length}}" class="address-list card"><view wx:for="{{addresses}}" wx:key="id" class="address-card {{item.deliveryAvailable === false ? 'address-card--disabled' : ''}}" data-id="{{item.id}}" bindtap="selectAddress"><view class="address-card-main"><view class="address-card-top"><text class="address-card-name">{{item.contactName}}</text><text class="address-card-phone">{{item.contactPhone}}</text><text wx:if="{{item.isDefault}}" class="default-label">默认</text></view><view class="address-card-detail">{{item.displayText}}</view><view wx:if="{{businessType === 'restaurant' && item.deliveryAvailable && item.deliveryZoneName}}" class="address-card-remark">配送区域：{{item.deliveryZoneName}} · 跑腿费 ¥{{item.deliveryFeeText}}</view><view wx:if="{{item.remark}}" class="address-card-remark">备注：{{item.remark}}</view><view wx:if="{{item.deliveryAvailable === false}}" class="address-unavailable">{{businessType === 'restaurant' ? '不在本店配送范围内' : '地址信息不完整，请编辑补充'}}</view></view><view class="address-card-actions"><view class="edit-address" data-id="{{item.id}}" catchtap="editAddress">编辑</view><view class="delete-address" data-id="{{item.id}}" catchtap="deleteAddress">删除</view></view></view></view>
-  <view class="address-add-card card" bindtap="addAddress"><view class="address-add-icon">+</view><view>新增收货地址</view></view>
+  <view wx:if="{{addresses.length}}" class="address-list">
+    <view wx:for="{{addresses}}" wx:key="id" class="address-card card {{item.deliveryAvailable === false ? 'address-card--disabled' : ''}}" data-id="{{item.id}}" bindtap="selectAddress" role="button" aria-label="{{item.contactName}}，{{item.displayText}}">
+      <view class="address-card-main">
+        <view class="address-card-top">
+          <view class="address-card-contact"><text class="address-card-name">{{item.contactName}}</text><text class="address-card-phone">{{item.contactPhone}}</text></view>
+          <text wx:if="{{item.isDefault}}" class="default-label">默认</text>
+        </view>
+        <view class="address-card-detail">{{item.displayText}}</view>
+        <view wx:if="{{businessType === 'restaurant' && item.deliveryAvailable && item.deliveryZoneName}}" class="address-card-delivery">{{item.deliveryZoneName}} · 跑腿费 ¥{{item.deliveryFeeText}}</view>
+        <view wx:if="{{item.remark}}" class="address-card-remark">备注：{{item.remark}}</view>
+      </view>
+      <view class="address-card-footer">
+        <view wx:if="{{item.deliveryAvailable === false}}" class="address-unavailable">{{businessType === 'restaurant' ? '不在本店配送范围内' : '地址信息不完整，请编辑补充'}}</view>
+        <view class="address-card-actions">
+          <view class="edit-address" data-id="{{item.id}}" catchtap="editAddress" role="button" aria-label="编辑地址">编辑</view>
+          <view class="delete-address" data-id="{{item.id}}" catchtap="deleteAddress" role="button" aria-label="删除地址">删除</view>
+        </view>
+      </view>
+    </view>
+  </view>
+  <view wx:else class="empty-state address-empty"><image class="ui-icon ui-icon--large" src="/images/theme/pin.svg" /><view class="empty-title">暂无收货地址</view></view>
+  <view class="address-add-card card" bindtap="addAddress" role="button" aria-label="新增收货地址"><view class="address-add-icon">+</view><view>新增收货地址</view></view>
 </view>

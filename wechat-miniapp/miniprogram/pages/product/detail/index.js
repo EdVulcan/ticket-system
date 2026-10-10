@@ -3,6 +3,7 @@ const storage = require('../../../services/storage');
 const format = require('../../../utils/format');
 const api = require('../../../services/api');
 const commerce = require('../../../config/commerce');
+const storefrontBrand = require('../../../services/storefront-brand');
 
 function extraPrice(label) {
   const match = String(label || '').match(/\+(\d+(?:\.\d{1,2})?)元$/);
@@ -12,6 +13,7 @@ function extraPrice(label) {
 Page({
   data: {
     brand,
+    storeName: brand.name,
     product: { options: [] },
     priceText: '0.00',
     originalPriceText: '0.00',
@@ -20,12 +22,14 @@ Page({
     skuChoices: [],
     selectedSkuId: '',
     quantity: 1,
+    buying: false,
     remark: '',
     fulfillmentType: 'TAKEAWAY',
     deliveryText: ''
   },
 
   onLoad(options) {
+    storefrontBrand.apply(this);
     if (api.isProduction()) {
       api.getCatalog().then(result => {
         const products = (result.products || []).map(api.normalizeProduct);
@@ -48,6 +52,7 @@ Page({
     product = api.normalizeProduct(product);
     const fulfillmentType = commerce.fulfillmentOf(product);
     const store = api.normalizeStore(storage.getStore(commerce.businessTypeOf(product)));
+    storefrontBrand.apply(this, store);
     const activeBusinessType = String(store.activeBusinessType || store.businessType || '').toLowerCase();
     if (api.isProduction() && activeBusinessType && commerce.fulfillmentForBusinessType(activeBusinessType) !== fulfillmentType) { this.setData({ product: { options: [] }, unavailable: true }); wx.showToast({ title: '当前门店未开放该业务', icon: 'none' }); return; }
     const open = api.isProduction() ? store.catalogOpen === true : fulfillmentType === commerce.FULFILLMENT.COURIER ? (store.courierStatus || 'OPEN') === 'OPEN' : store.businessStatus === 'OPEN';
@@ -100,30 +105,77 @@ Page({
 
   onRemarkInput(event) { this.setData({ remark: event.detail.value }); },
 
-  addToCart() {
+  purchaseItem() {
     const product = this.data.product;
     const store = api.normalizeStore(storage.getStore(commerce.businessTypeOf(product)));
     const open = api.isProduction() ? store.catalogOpen === true : commerce.fulfillmentOf(product) === commerce.FULFILLMENT.COURIER ? (store.courierStatus || 'OPEN') === 'OPEN' : store.businessStatus === 'OPEN';
-    if (!product.id || !product.catalogReady && api.isProduction() || !product.isOnSale || product.isSoldOut || !open) { wx.showToast({ title: '商品暂不可购买', icon: 'none' }); return; }
+    if (!product.id || !product.catalogReady && api.isProduction() || !product.isOnSale || product.isSoldOut || !open) { wx.showToast({ title: '商品暂不可购买', icon: 'none' }); return null; }
+    if ((product.options || []).some(group => group.required !== false && !this.data.selectedValues[group.id])) { wx.showToast({ title: '请选择商品规格', icon: 'none' }); return null; }
     const selectedOptions = Object.keys(this.data.selectedValues || {}).map((key) => this.data.selectedValues[key]);
     const optionExtra = selectedOptions.reduce((total, label) => total + extraPrice(label), 0);
     const selectedSku = (product.activeSkus || []).find(sku => String(sku.id || sku.skuId || sku.sku_id) === String(this.data.selectedSkuId)) || product.sku || {};
     const skuId = selectedSku.id || selectedSku.skuId || selectedSku.sku_id || product.skuId || '';
     const basePrice = selectedSku.priceCents !== undefined ? selectedSku.priceCents : selectedSku.price_cents !== undefined ? selectedSku.price_cents : product.price;
     const cartKey = `${commerce.businessTypeOf(product)}_${product.id}_${skuId}_${selectedOptions.join('_') || 'default'}`;
+    const stockLimit = product.stockMode === 'UNLIMITED' ? 99 : Math.max(0, Number(product.stock || 0));
+    if (stockLimit < this.data.quantity) { wx.showToast({ title: '库存不足', icon: 'none' }); return null; }
+    return { cartKey, productId: product.id, skuId, name: product.name, emoji: product.emoji, color: product.color, coverImageUrl: product.coverImageUrl || '', unitPrice: Number(basePrice) + optionExtra, quantity: this.data.quantity, selectedOptions, fulfillmentType: commerce.fulfillmentOf(product), businessType: commerce.businessTypeOf(product), remark: this.data.remark };
+  },
+
+  async buyNow() {
+    if (this.data.buying) return;
+    this.setData({ buying: true });
+    let openingCheckout = false;
+    try {
+      if (api.isProduction()) await api.ensureSession();
+      let draft = storage.getDirectCheckout();
+      // Keep the original request and its idempotency key when creation or
+      // payment is unconfirmed. A new product must not replace that attempt.
+      if (draft && draft.attempt) wx.showToast({ title: '请先处理上次的购买', icon: 'none' });
+      else {
+        const item = this.purchaseItem();
+        if (!item) return;
+        draft = { id: storage.makeId('direct_checkout'), items: [item], attempt: null };
+        storage.saveDirectCheckout(draft);
+      }
+      const existingOrder = draft.attempt && (draft.attempt.attempts || []).find(entry => entry.orderId);
+      openingCheckout = true;
+      wx.navigateTo({
+        url: existingOrder ? `/pages/order/detail/index?id=${encodeURIComponent(existingOrder.orderId)}` : `/pages/checkout/index?direct=${encodeURIComponent(draft.id)}`,
+        success: () => {
+          if (existingOrder) {
+            const current = storage.getDirectCheckout();
+            if (current && current.id === draft.id) storage.saveDirectCheckout(null);
+          }
+        },
+        fail: () => wx.showToast({ title: '结算页打开失败，请重试', icon: 'none' }),
+        complete: () => this.setData({ buying: false })
+      });
+    } catch (error) {
+      wx.showToast({ title: '暂时无法购买，请重试', icon: 'none' });
+    } finally {
+      if (!openingCheckout) this.setData({ buying: false });
+    }
+  },
+
+  addToCart() {
+    if (this.data.buying) return;
+    const item = this.purchaseItem();
+    if (!item) return;
+    const product = this.data.product;
     const cart = storage.getCart();
-    const current = cart.find((item) => item.cartKey === cartKey);
+    const current = cart.find(entry => entry.cartKey === item.cartKey);
     const stockLimit = product.stockMode === 'UNLIMITED' ? 99 : Math.max(0, Number(product.stock || 0));
     const productCount = cart.filter(item => item.productId === product.id && commerce.businessTypeOf(item) === commerce.businessTypeOf(product)).reduce((sum, item) => sum + item.quantity, 0);
     if (productCount + this.data.quantity > stockLimit) { wx.showToast({ title: '库存不足', icon: 'none' }); return; }
     if (stockLimit < 1 || (current && current.quantity >= stockLimit) || (!current && this.data.quantity > stockLimit)) { wx.showToast({ title: '库存不足', icon: 'none' }); return; }
     if (current) {
       current.quantity = Math.min(stockLimit, current.quantity + this.data.quantity);
-      current.unitPrice = Number(basePrice) + optionExtra;
+      current.unitPrice = item.unitPrice;
       current.name = product.name;
       current.coverImageUrl = product.coverImageUrl || current.coverImageUrl || '';
     }
-    else cart.push({ cartKey, productId: product.id, skuId, name: product.name, emoji: product.emoji, color: product.color, coverImageUrl: product.coverImageUrl || '', unitPrice: Number(basePrice) + optionExtra, quantity: this.data.quantity, selectedOptions, fulfillmentType: commerce.fulfillmentOf(product), businessType: commerce.businessTypeOf(product), remark: this.data.remark });
+    else cart.push(item);
     storage.saveCart(cart);
     wx.showToast({ title: '已加入购物车', icon: 'success' });
     setTimeout(() => wx.navigateBack(), 450);

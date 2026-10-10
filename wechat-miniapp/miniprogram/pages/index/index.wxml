@@ -1,5 +1,6 @@
 <view class="page-shell home-page">
   <view class="home-header">
+    <view class="brand-avatar">店</view>
     <view class="brand-copy">
       <view class="brand-name">{{storeName || store.name || brand.name}}</view>
       <view class="brand-subtitle">{{channelKicker}}</view>

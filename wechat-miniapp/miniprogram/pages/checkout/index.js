@@ -107,6 +107,7 @@ function checkoutFingerprint(groups) {
 Page({
   data: {
     brand,
+    directPurchase: false,
     store: { businessStatus: 'PAUSED', courierStatus: 'PAUSED', defaultShippingFee: 0, freeShippingThreshold: 0 },
     businessStores: { restaurant: null, retail: null },
     deliveryOptions: { restaurant: null, retail: null },
@@ -156,8 +157,11 @@ Page({
     pricingNote: '餐饮和零售费用分别计算'
   },
 
-  onLoad() {
-    this.batchId = storage.makeId('checkout_batch');
+  onLoad(options) {
+    this.directCheckoutId = options && options.direct || '';
+    const draft = this.directCheckoutId ? storage.getDirectCheckout() : null;
+    this.batchId = draft && draft.id === this.directCheckoutId ? draft.batchId || draft.id : storage.makeId('checkout_batch');
+    this.setData({ directPurchase: Boolean(this.directCheckoutId) });
     const store = api.normalizeStore(storage.getStore());
     const activeBusinessType = String(store.activeBusinessType || store.businessType || '').toLowerCase();
     const bindingText = activeBusinessType === 'restaurant' ? '当前门店为餐饮业务绑定，金额由云端核算' : activeBusinessType === 'retail' ? '当前门店为零售业务绑定，金额由云端核算' : '金额由云端核算';
@@ -191,10 +195,38 @@ Page({
     });
   },
 
+  checkoutItems() {
+    if (!this.directCheckoutId) return storage.getCart();
+    const draft = storage.getDirectCheckout();
+    return draft && draft.id === this.directCheckoutId && Array.isArray(draft.items) ? draft.items : [];
+  },
+
+  getCheckoutAttempt() {
+    if (!this.directCheckoutId) return storage.getCheckoutBatchAttempt();
+    const draft = storage.getDirectCheckout();
+    return draft && draft.id === this.directCheckoutId ? draft.attempt : null;
+  },
+
+  saveCheckoutAttempt(attempt) {
+    if (!this.directCheckoutId) { storage.saveCheckoutBatchAttempt(attempt); return; }
+    const draft = storage.getDirectCheckout();
+    if (draft && draft.id === this.directCheckoutId) storage.saveDirectCheckout(Object.assign({}, draft, { batchId: this.batchId, attempt }));
+  },
+
+  completeCheckout() {
+    if (this.directCheckoutId) {
+      const draft = storage.getDirectCheckout();
+      if (draft && draft.id === this.directCheckoutId) storage.saveDirectCheckout(null);
+      return;
+    }
+    storage.saveCart([]);
+    storage.saveCheckoutBatchAttempt(null);
+  },
+
   loadData() {
     if (api.isProduction()) {
       const types = [];
-      storage.getCart().forEach(item => { const type = commerce.businessTypeOf(item); if (types.indexOf(type) < 0) types.push(type); });
+      this.checkoutItems().forEach(item => { const type = commerce.businessTypeOf(item); if (types.indexOf(type) < 0) types.push(type); });
       const couponRequests = types.map(type => api.getCoupons(type).then(result => ({ type, result })).catch(error => ({ type, error, result: { data: [] } })));
       const optionRequests = types.map(type => api.getDeliveryOptions(type).then(result => ({ type, result })).catch(error => ({ type, error, result: { config: {}, zones: [], slots: [] } })));
       Promise.all([api.getAddresses(), Promise.all(couponRequests), Promise.all(optionRequests)]).then(([addressResult, couponResults, optionResults]) => {
@@ -229,7 +261,7 @@ Page({
       retail: api.normalizeStore(storage.getStore('retail'))
     };
     const products = storage.getProducts();
-    const cart = storage.getCart().map(item => {
+    const cart = this.checkoutItems().map(item => {
       const businessType = commerce.businessTypeOf(item);
       const scopedProducts = storage.getProducts(businessType);
       const product = scopedProducts.find(entry => String(entry.id || entry._id) === String(item.productId)) || products.find(entry => String(entry.id || entry._id) === String(item.productId));
@@ -373,6 +405,7 @@ Page({
   },
 
   validateBeforeSubmit() {
+    if (this.directCheckoutId && !this.checkoutItems().length) return '购买信息已失效，请重新选择商品';
     if (!this.data.store) return '店铺信息加载中';
     const completeAddress = address => Boolean(address && ((address.province && address.city && address.district && address.detailAddress) || (address.addressType === 'CAMPUS' && address.campusName && address.zoneName && address.building && address.room)));
     if (this.data.hasTakeaway && this.data.takeawayDeliveryMethod === 'DELIVERY' && !completeAddress(this.data.takeawayAddress)) return '请先选择完整收货地址';
@@ -453,11 +486,11 @@ Page({
     }, 220);
   },
 
-  async submitProductionOrder() {
+  async submitProductionOrder(retryOriginal) {
     this.setData({ paying: true });
     const groups = this.buildGroups();
     const fingerprint = checkoutFingerprint(groups);
-    let attempt = storage.getCheckoutBatchAttempt();
+    let attempt = this.getCheckoutAttempt();
     const attemptMatches = Boolean(attempt && attempt.fingerprint === fingerprint && Array.isArray(attempt.attempts) && attempt.attempts.length === groups.length);
     const existingOrder = attempt && Array.isArray(attempt.attempts) && attempt.attempts.find(entry => entry && entry.orderId);
     if (!attemptMatches && existingOrder) {
@@ -466,7 +499,18 @@ Page({
       this.openCreatedOrder(existingOrder.orderId);
       return;
     }
-    if (!attemptMatches) {
+    const reuseOriginal = this.directCheckoutId && retryOriginal === true && attempt;
+    if (this.directCheckoutId && attempt && !attemptMatches && !reuseOriginal) {
+      this.setData({ paying: false });
+      wx.showModal({
+        title: '上次下单尚未确认',
+        content: '重试将沿用上次提交的商品、地址和优惠，不使用刚修改的信息，以免重复下单。',
+        confirmText: '重试原单',
+        success: result => { if (result.confirm) this.submitProductionOrder(true); }
+      });
+      return;
+    }
+    if (!attemptMatches && !reuseOriginal) {
       attempt = { batchId: this.batchId, fingerprint, attempts: groups.map(group => ({ key: group.key, businessType: group.key, payload: this.groupPayload(group.fulfillmentType, group.items, group.address, group.remark, group.couponId), orderId: '', status: 'PENDING' })) };
     }
     attempt.attempts.forEach((entry, index) => {
@@ -474,7 +518,7 @@ Page({
       entry.businessType = businessType;
       if (entry.payload) entry.payload.businessType = businessType;
     });
-    storage.saveCheckoutBatchAttempt(attempt);
+    this.saveCheckoutAttempt(attempt);
     let firstOrderId = '';
     try {
       for (const entry of attempt.attempts) {
@@ -483,17 +527,17 @@ Page({
           if (!result || !result.success || !result.orderId) throw new Error('ORDER_ID_MISSING');
           entry.orderId = result.orderId;
           entry.status = result.order && result.order.status || 'WAIT_PAY';
-          storage.saveCheckoutBatchAttempt(attempt);
+          this.saveCheckoutAttempt(attempt);
           if (!firstOrderId) firstOrderId = entry.orderId;
         }
         const payment = await paymentFlow.payOrder(entry.orderId);
         entry.status = payment.status;
-        storage.saveCheckoutBatchAttempt(attempt);
+        this.saveCheckoutAttempt(attempt);
         if (!paymentFlow.isSettled(payment.status)) { firstOrderId = entry.orderId; break; }
       }
       const complete = attempt.attempts.every(entry => paymentFlow.isSettled(entry.status));
       if (complete) {
-        storage.saveCart([]); storage.saveCheckoutBatchAttempt(null); wx.showToast({ title: `已完成${attempt.attempts.length}个关联订单`, icon: 'success' });
+        this.completeCheckout(); wx.showToast({ title: '支付成功', icon: 'success' });
         firstOrderId = firstOrderId || attempt.attempts[0] && attempt.attempts[0].orderId;
       }
       else wx.showToast({ title: '首个订单待核实，请在订单详情继续', icon: 'none' });
@@ -501,13 +545,18 @@ Page({
       console.error('production order payment failed', error);
       const code = String(error && (error.errMsg || error.message) || '');
       const rejected = error && error.statusCode === 409 || ['STORE_NOT_OPEN', 'ADDRESS_NOT_FOUND', 'ADDRESS_TYPE_INVALID', 'ADDRESS_OUT_OF_RANGE', 'PRODUCT_UNAVAILABLE', 'FULFILLMENT_MISMATCH', 'PRODUCT_OPTIONS_INVALID', 'PRODUCT_OPTIONS_REQUIRED', 'STOCK_NOT_ENOUGH', 'MIN_AMOUNT_NOT_REACHED', 'COUPON_UNAVAILABLE', 'COUPON_EXPIRED', 'ORDER_AMOUNT_INVALID', 'ORDER_PAYLOAD_INVALID', 'BUSINESS_SELECTOR_REQUIRED', 'BUSINESS_NOT_AUTHORIZED', 'BUSINESS_BINDING_MISMATCH'].some(item => code.indexOf(item) >= 0);
-      if (rejected && !attempt.attempts.some(entry => entry.orderId)) { storage.saveCheckoutBatchAttempt(null); this.batchId = storage.makeId('checkout_batch'); }
+      if (rejected && !attempt.attempts.some(entry => entry.orderId)) { this.batchId = storage.makeId('checkout_batch'); this.saveCheckoutAttempt(null); }
       wx.showToast({ title: rejected ? (error && error.statusCode === 409 && error.userMessage || '商品、地址、业务选择或优惠已变化，请重新确认') : '提交未确认，请在订单中核实', icon: 'none' });
     } finally {
       this.setData({ paying: false });
-      const pending = storage.getCheckoutBatchAttempt();
+      const pending = this.getCheckoutAttempt();
       const orderId = firstOrderId || pending && pending.attempts.find(entry => entry.orderId && !paymentFlow.isSettled(entry.status)) && pending.attempts.find(entry => entry.orderId && !paymentFlow.isSettled(entry.status)).orderId;
-      if (orderId) this.openCreatedOrder(orderId);
+      if (orderId) {
+        // Once the order is known, its detail page owns payment recovery.
+        // Release the direct draft so canceled payments cannot block a new purchase.
+        if (this.directCheckoutId) this.completeCheckout();
+        this.openCreatedOrder(orderId);
+      }
     }
   },
 
@@ -532,7 +581,7 @@ Page({
     storage.saveProducts(products);
     const couponOrder = created.find(order => order.couponSnapshot && order.couponSnapshot.id === (this.data.selectedCoupon && this.data.selectedCoupon.id));
     if (this.data.selectedCoupon && couponOrder) { const coupons = storage.getCoupons().map(coupon => coupon.id === this.data.selectedCoupon.id ? Object.assign({}, coupon, { status: 'USED', usedOrderId: couponOrder.id, usedAt: now }) : coupon); storage.saveCoupons(coupons); }
-    storage.saveCart([]);
+    this.completeCheckout();
     setTimeout(() => {
       this.setData({ paying: false });
       wx.showToast({ title: `已生成${created.length}个关联订单`, icon: 'success' });

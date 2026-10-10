@@ -112,3 +112,28 @@
 @keyframes assist-promo-shimmer { 0% { transform: translateX(-150%) rotate(25deg); } 30%, 100% { transform: translateX(350%) rotate(25deg); } }
 @keyframes assist-promo-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.02); } }
 .assist-promo:active { transform: scale(.985); }
+
+/* Match the optimized storefront reference while keeping server-provided media. */
+.home-page { padding: 24rpx 28rpx 48rpx; }
+.brand-avatar { align-items: center; background: var(--surface); border: 1rpx solid var(--line); border-radius: 12rpx; color: var(--green); display: flex; flex: 0 0 64rpx; font-size: 26rpx; font-weight: 700; height: 64rpx; justify-content: center; width: 64rpx; }
+.home-header { gap: 16rpx; margin-bottom: 20rpx; }
+.brand-name { font-size: 32rpx; }
+.brand-subtitle { font-size: 21rpx; margin-top: 2rpx; }
+.open-status { background: var(--green-soft); border-radius: 999rpx; font-weight: 600; gap: 8rpx; padding: 4rpx 12rpx; }
+.hero-card--food { height: 304rpx; }
+.hero-food-title { font-size: 38rpx; }
+.hero-food-sub { font-size: 22rpx; }
+.hero-food-price { color: #ffe082; font-size: 32rpx; }
+.product-row--featured .product-image { height: 280rpx; }
+.product-row--featured .product-main { padding: 22rpx 24rpx 24rpx; }
+.product-row--featured .product-name { font-size: 31rpx; font-weight: 700; }
+.product-row--featured .product-description { -webkit-line-clamp: 1; }
+.featured-tag { bottom: auto; top: 14rpx; }
+.product-row--compact { margin-top: 16rpx; padding: 20rpx; }
+.product-row--compact .product-image { height: 152rpx; width: 152rpx; }
+.product-row--compact .product-name { font-size: 28rpx; font-weight: 700; }
+.product-row--compact .product-description { -webkit-line-clamp: 1; }
+.product-description { font-size: 22rpx; }
+.add-button { box-shadow: 0 4rpx 10rpx rgba(39, 101, 75, .2); height: 56rpx; width: 56rpx; }
+.cart-float { border-radius: 999rpx; left: 28rpx; right: 28rpx; }
+.cart-float-action { background: #3b9468; border-radius: 999rpx; padding: 12rpx 24rpx; }

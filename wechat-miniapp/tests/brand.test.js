@@ -18,10 +18,10 @@ function storageHarness(mode, entries) {
   return { storage: module.exports, values };
 }
 
-test('formal brand is consistent in app navigation and local mock defaults', () => {
+test('neutral fallback is consistent in app navigation and local mock defaults', () => {
   const app = require('../miniprogram/app.json');
   const mock = require('../miniprogram/data/mock');
-  assert.equal(brand.name, '琑遇·二两兔');
+  assert.equal(brand.name, '店铺');
   assert.equal(app.window.navigationBarTitleText, brand.name);
   assert.equal(mock.store.name, brand.name);
   assert.equal(mock.store.slogan, brand.tagline);
@@ -50,12 +50,22 @@ test('custom and production store names stay authoritative', () => {
   assert.equal(storageHarness('production', []).storage.getStore().businessStatus, 'PAUSED');
 });
 
-test('homepage and assist share cards use the formal brand while keeping their routes', () => {
-  for (const [route, expected] of [['index/index', brand.shareTitle], ['assist/index/index', brand.assistShareTitle]]) {
+test('homepage and assist share cards use the configured store name while keeping their routes', () => {
+  for (const [route, expected] of [['index/index', '后台店名｜餐饮配送或自取'], ['assist/index/index', '后台店名｜帮我助力，一起领券']]) {
     const filename = path.resolve(__dirname, '../miniprogram/pages', route + '.js');
     let page;
     vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { require: createRequire(filename), Page: value => { page = value; } });
-    const share = page.onShareAppMessage();
+    const previousWx = global.wx;
+    const previousGetApp = global.getApp;
+    let share;
+    try {
+      global.wx = { getStorageSync: key => key === 'food_storefront_name_v1' ? '后台店名' : '' };
+      global.getApp = () => ({ globalData: { deploymentMode: 'demo' } });
+      share = page.onShareAppMessage();
+    } finally {
+      global.wx = previousWx;
+      global.getApp = previousGetApp;
+    }
     assert.equal(share.title, expected);
     assert.ok(share.path.startsWith('/pages/'));
     assert.equal(page.data.brand.name, brand.name);
