@@ -164,6 +164,9 @@ function rawRequest(path, options) {
           }
           const error = createError(`HTTP_${statusCode || 'UNKNOWN'}`, responseMessage(response && response.data, statusCode), statusCode);
           error.responseData = response && response.data;
+          if (response && response.data && typeof response.data === 'object') {
+            error.reasonCode = response.data.code || response.data.reason_code || '';
+          }
           reject(error);
         },
         fail(error) {

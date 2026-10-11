@@ -259,19 +259,45 @@ func (c *CommerceDeliveryController) CreateStorefrontQuote(ctx *gin.Context) {
 
 func commerceDeliveryError(ctx *gin.Context, err error) {
 	status, message := http.StatusInternalServerError, "配送服务处理失败"
+	code := "DELIVERY_SERVICE_ERROR"
 	switch {
 	case errors.Is(err, gorm.ErrRecordNotFound):
-		status, message = http.StatusNotFound, "配送配置不存在"
+		status, message, code = http.StatusNotFound, "配送配置不存在，请联系商家", "DELIVERY_CONFIG_NOT_FOUND"
 	case errors.Is(err, service.ErrCommerceQuoteExpired), errors.Is(err, service.ErrCommerceQuoteConflict):
-		status, message = http.StatusConflict, "结算报价已失效，请重新确认"
+		status, message, code = http.StatusConflict, "结算报价已失效，请重新确认", "CHECKOUT_QUOTE_EXPIRED"
 	case errors.Is(err, service.ErrCommerceDeliveryInvalid), errors.Is(err, service.ErrCommerceQuoteInvalid), errors.Is(err, service.ErrCommerceStorefrontInvalid), errors.Is(err, service.ErrCommerceStorefrontAddressInvalid):
-		status, message = http.StatusBadRequest, "配送或结算参数不符合要求"
+		status, message, code = http.StatusBadRequest, "配送或结算参数不符合要求", "CHECKOUT_QUOTE_INVALID"
+		// Keep the detailed reason safe and actionable without exposing database
+		// identifiers or internal error text to the storefront client.
+		detail := err.Error()
+		switch {
+		case strings.Contains(detail, "delivery address, zone, slot and date are required"):
+			message, code = "请重新选择完整的收货地址、配送区域和配送时段", "DELIVERY_SELECTION_REQUIRED"
+		case strings.Contains(detail, "address does not match delivery zone"):
+			message, code = "当前收货地址不在所选配送区域，请更换地址", "ADDRESS_ZONE_MISMATCH"
+		case strings.Contains(detail, "slot does not match delivery zone"):
+			message, code = "所选配送时段不属于当前配送区域，请重新选择", "SLOT_ZONE_MISMATCH"
+		case strings.Contains(detail, "selected date does not match slot weekday"):
+			message, code = "所选配送日期与配送时段不匹配，请重新选择", "SLOT_DATE_MISMATCH"
+		case strings.Contains(detail, "slot cutoff has passed"):
+			message, code = "所选配送时段已截止，请重新选择", "SLOT_CUTOFF_PASSED"
+		case strings.Contains(detail, "delivery slot is full"):
+			message, code = "所选配送时段已满，请重新选择", "SLOT_FULL"
+		case strings.Contains(detail, "goods subtotal is below minimum"):
+			message, code = "商品金额未达到起送金额", "MIN_AMOUNT_NOT_REACHED"
+		case strings.Contains(detail, "delivery is disabled"):
+			message, code = "当前门店暂未开放配送", "DELIVERY_DISABLED"
+		case strings.Contains(detail, "pickup is disabled"):
+			message, code = "当前门店暂未开放到店自取", "PICKUP_DISABLED"
+		case strings.Contains(detail, "shipping address is required"):
+			message, code = "请先选择收货地址", "ADDRESS_REQUIRED"
+		}
 	case errors.Is(err, service.ErrTenantUnavailable), errors.Is(err, service.ErrBusinessCapabilityInactive), errors.Is(err, service.ErrCapabilityInactive):
-		status, message = http.StatusForbidden, "当前业务未授权使用配送服务"
+		status, message, code = http.StatusForbidden, "当前业务未授权使用配送服务", "DELIVERY_NOT_AUTHORIZED"
 	case errors.Is(err, service.ErrCommerceStorefrontUnauthenticated):
-		status, message = http.StatusUnauthorized, "小程序登录已失效"
+		status, message, code = http.StatusUnauthorized, "小程序登录已失效", "STOREFRONT_SESSION_EXPIRED"
 	case errors.Is(err, service.ErrCommerceStorefrontOwnership):
-		status, message = http.StatusNotFound, "地址或购物车不存在"
+		status, message, code = http.StatusNotFound, "地址或购物车不存在", "CHECKOUT_RESOURCE_NOT_FOUND"
 	}
-	ctx.JSON(status, gin.H{"error": message})
+	ctx.JSON(status, gin.H{"code": code, "error": message})
 }

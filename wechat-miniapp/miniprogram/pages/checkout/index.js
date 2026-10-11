@@ -546,7 +546,10 @@ Page({
       const code = String(error && (error.errMsg || error.message) || '');
       const rejected = error && error.statusCode === 409 || ['STORE_NOT_OPEN', 'ADDRESS_NOT_FOUND', 'ADDRESS_TYPE_INVALID', 'ADDRESS_OUT_OF_RANGE', 'PRODUCT_UNAVAILABLE', 'FULFILLMENT_MISMATCH', 'PRODUCT_OPTIONS_INVALID', 'PRODUCT_OPTIONS_REQUIRED', 'STOCK_NOT_ENOUGH', 'MIN_AMOUNT_NOT_REACHED', 'COUPON_UNAVAILABLE', 'COUPON_EXPIRED', 'ORDER_AMOUNT_INVALID', 'ORDER_PAYLOAD_INVALID', 'BUSINESS_SELECTOR_REQUIRED', 'BUSINESS_NOT_AUTHORIZED', 'BUSINESS_BINDING_MISMATCH'].some(item => code.indexOf(item) >= 0);
       if (rejected && !attempt.attempts.some(entry => entry.orderId)) { this.batchId = storage.makeId('checkout_batch'); this.saveCheckoutAttempt(null); }
-      wx.showToast({ title: rejected ? (error && error.statusCode === 409 && error.userMessage || '商品、地址、业务选择或优惠已变化，请重新确认') : '提交未确认，请在订单中核实', icon: 'none' });
+      const message = rejected
+        ? (error && error.userMessage || '商品、地址、业务选择或优惠已变化，请重新确认')
+        : (error && error.userMessage || '提交未确认，请在订单中核实');
+      wx.showToast({ title: message, icon: 'none' });
     } finally {
       this.setData({ paying: false });
       const pending = this.getCheckoutAttempt();
