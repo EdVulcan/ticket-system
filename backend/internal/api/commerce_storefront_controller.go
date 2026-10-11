@@ -635,7 +635,7 @@ func commerceStorefrontError(ctx *gin.Context, err error) {
 			message, code = "订单金额不能为 0 元，请调整优惠后重试", "ZERO_PAY_NOT_SUPPORTED"
 		}
 	case errors.Is(err, service.ErrCommercePaymentUnavailable):
-		status, message, code = http.StatusNotImplemented, "支付渠道尚未接入", "PAYMENT_NOT_CONFIGURED"
+		status, message, code = http.StatusServiceUnavailable, "微信支付服务暂不可用，请检查支付配置或稍后重试", "PAYMENT_UNAVAILABLE"
 	case errors.Is(err, service.ErrCommercePaymentInvalid):
 		status, message, code = http.StatusBadRequest, "支付凭据或金额校验失败", "PAYMENT_INVALID"
 	case errors.Is(err, service.ErrCommercePaymentManualReview):

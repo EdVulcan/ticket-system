@@ -325,7 +325,7 @@ func (s *CommercePaymentService) CreateWechatPayment(ctx context.Context, token 
 	if !created && attempt.PrepayID != "" {
 		params, signErr := s.appletParams(cfg, attempt.PrepayID)
 		if signErr != nil {
-			return nil, signErr
+			return nil, fmt.Errorf("%w: payment signing failed", ErrCommercePaymentUnavailable)
 		}
 		return s.viewFor(&order, &attempt, params), nil
 	}
@@ -343,7 +343,7 @@ func (s *CommercePaymentService) CreateWechatPayment(ctx context.Context, token 
 	}
 	notifyURL, err := commercePaymentNotifyURL("payments", order.TenantID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: payment callback URL is unavailable", ErrCommercePaymentUnavailable)
 	}
 	createdPayment, providerErr := provider.CreateJSAPI(ctx, CommerceWechatCreateRequest{AppID: cfg.AppID, MchID: cfg.MchID, Description: description, NotifyURL: notifyURL, OutTradeNo: attempt.OutTradeNo, OpenID: openID, AmountCents: attempt.AmountCents})
 	if providerErr != nil {
@@ -361,7 +361,10 @@ func (s *CommercePaymentService) CreateWechatPayment(ctx context.Context, token 
 		if status == "failed" {
 			_, _ = s.orderService().ApplyPaymentOutcome(order.TenantID, order.ID, CommercePaymentOutcome{Status: "failed", ProviderState: "create_failed"})
 		}
-		return nil, providerErr
+		if status == "unknown" {
+			return nil, fmt.Errorf("%w: provider request may have been accepted", ErrCommercePaymentManualReview)
+		}
+		return nil, fmt.Errorf("%w: provider rejected the payment request", ErrCommercePaymentUnavailable)
 	}
 	if strings.TrimSpace(createdPayment.PrepayID) == "" {
 		return nil, fmt.Errorf("%w: provider did not return prepay id", ErrCommercePaymentUnavailable)
@@ -372,7 +375,7 @@ func (s *CommercePaymentService) CreateWechatPayment(ctx context.Context, token 
 	}
 	params, err := s.appletParams(cfg, createdPayment.PrepayID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: payment signing failed", ErrCommercePaymentUnavailable)
 	}
 	attempt.PrepayID = createdPayment.PrepayID
 	attempt.ProviderState = "created"
@@ -384,9 +387,13 @@ func (s *CommercePaymentService) CreateWechatPayment(ctx context.Context, token 
 func (s *CommercePaymentService) appletParams(cfg *model.PaymentConfig, prepayID string) (*wechatv3.AppletParams, error) {
 	client, err := wechatv3.NewClientV3(cfg.MchID, cfg.SerialNo, cfg.Key, cfg.PrivateKey)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: payment client initialization failed", ErrCommercePaymentUnavailable)
 	}
-	return client.PaySignOfApplet(cfg.AppID, prepayID)
+	params, err := client.PaySignOfApplet(cfg.AppID, prepayID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: payment signing failed", ErrCommercePaymentUnavailable)
+	}
+	return params, nil
 }
 
 func (s *CommercePaymentService) GetPaymentStatus(ctx context.Context, token, orderNo string) (*CommercePaymentView, error) {
