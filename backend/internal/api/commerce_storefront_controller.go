@@ -591,29 +591,55 @@ func storefrontQueryInt(ctx *gin.Context, name string, fallback int) int {
 func commerceStorefrontError(ctx *gin.Context, err error) {
 	status := http.StatusInternalServerError
 	message := "商业店铺暂时不可用"
+	code := "STOREFRONT_ERROR"
 	switch {
 	case errors.Is(err, service.ErrCommerceStorefrontUnauthenticated):
-		status, message = http.StatusUnauthorized, "登录状态已失效，请重新进入小程序"
+		status, message, code = http.StatusUnauthorized, "登录状态已失效，请重新进入小程序", "STOREFRONT_SESSION_EXPIRED"
 	case errors.Is(err, service.ErrCommerceStorefrontAmbiguous):
-		status, message = http.StatusConflict, "该小程序同时发布了多个业务，请指定业务类型"
+		status, message, code = http.StatusConflict, "该小程序同时发布了多个业务，请指定业务类型", "BUSINESS_SELECTOR_REQUIRED"
 	case errors.Is(err, service.ErrCommerceStorefrontUnavailable):
-		status, message = http.StatusServiceUnavailable, "当前小程序暂未开放"
+		status, message, code = http.StatusServiceUnavailable, "当前小程序暂未开放", "STOREFRONT_UNAVAILABLE"
 	case errors.Is(err, service.ErrTenantUnavailable), errors.Is(err, service.ErrCapabilityInactive), errors.Is(err, service.ErrBusinessCapabilityInactive):
-		status, message = http.StatusForbidden, "当前商户未启用该商业能力"
+		status, message, code = http.StatusForbidden, "当前商户未启用该商业能力", "BUSINESS_NOT_AUTHORIZED"
 	case errors.Is(err, gorm.ErrRecordNotFound), errors.Is(err, service.ErrCommerceStorefrontOwnership):
-		status, message = http.StatusNotFound, "商业资源不存在"
+		status, message, code = http.StatusNotFound, "商业资源不存在", "STOREFRONT_RESOURCE_NOT_FOUND"
 	case errors.Is(err, service.ErrCommerceIdempotencyConflict):
-		status, message = http.StatusConflict, "重复请求的参数不一致"
+		status, message, code = http.StatusConflict, "重复请求的参数不一致，请返回订单页核实", "IDEMPOTENCY_CONFLICT"
 	case errors.Is(err, service.ErrCommerceStorefrontInvalid), errors.Is(err, service.ErrCommerceStorefrontAddressInvalid), errors.Is(err, service.ErrCommerceCartInvalid), errors.Is(err, service.ErrCommerceOrderInvalid), errors.Is(err, service.ErrCommerceOrderState), errors.Is(err, service.ErrCommerceRefundInvalid), errors.Is(err, service.ErrCommerceInventoryShortage):
-		status, message = http.StatusBadRequest, "商业订单或购物车信息不符合要求"
+		status, message, code = http.StatusBadRequest, "商业订单或购物车信息不符合要求", "COMMERCE_CHECKOUT_INVALID"
+		detail := err.Error()
+		switch {
+		case strings.Contains(detail, "checkout quote is required"):
+			message, code = "结算报价已丢失，请返回结算页重新确认", "CHECKOUT_QUOTE_REQUIRED"
+		case strings.Contains(detail, "cart is empty or no longer active"):
+			message, code = "购物车已变化，请返回商品页重新选择", "CART_INACTIVE"
+		case strings.Contains(detail, "product, sku and positive quantity are required"):
+			message, code = "商品规格信息已变化，请重新选择规格", "PRODUCT_SKU_REQUIRED"
+		case strings.Contains(detail, "sku does not belong to the requested active product"):
+			message, code = "商品规格已变化，请重新选择商品", "PRODUCT_SKU_MISMATCH"
+		case strings.Contains(detail, "product is not online in this business domain"):
+			message, code = "商品已下架或暂不可售，请重新选择", "PRODUCT_NOT_SELLABLE"
+		case strings.Contains(detail, "product sale has not started"):
+			message, code = "商品尚未开始售卖", "PRODUCT_SALE_NOT_STARTED"
+		case strings.Contains(detail, "product sale has ended"):
+			message, code = "商品已结束售卖，请重新选择", "PRODUCT_SALE_ENDED"
+		case strings.Contains(detail, "inventory is insufficient") || strings.Contains(detail, "inventory counter") || strings.Contains(detail, "reservation"):
+			message, code = "商品库存不足或库存状态已变化，请重新选择", "INVENTORY_CHANGED"
+		case strings.Contains(detail, "delivery address is required") || strings.Contains(detail, "shipping address is required"):
+			message, code = "请先选择完整收货地址", "ADDRESS_REQUIRED"
+		case strings.Contains(detail, "member association is invalid"):
+			message, code = "会员信息已变化，请重新进入小程序", "MEMBER_STATE_INVALID"
+		case strings.Contains(detail, "zero-pay checkout is not supported"):
+			message, code = "订单金额不能为 0 元，请调整优惠后重试", "ZERO_PAY_NOT_SUPPORTED"
+		}
 	case errors.Is(err, service.ErrCommercePaymentUnavailable):
-		status, message = http.StatusNotImplemented, "支付渠道尚未接入"
+		status, message, code = http.StatusNotImplemented, "支付渠道尚未接入", "PAYMENT_NOT_CONFIGURED"
 	case errors.Is(err, service.ErrCommercePaymentInvalid):
-		status, message = http.StatusBadRequest, "支付凭据或金额校验失败"
+		status, message, code = http.StatusBadRequest, "支付凭据或金额校验失败", "PAYMENT_INVALID"
 	case errors.Is(err, service.ErrCommercePaymentManualReview):
-		status, message = http.StatusConflict, "支付结果正在核实，请稍后刷新订单"
+		status, message, code = http.StatusConflict, "支付结果正在核实，请稍后刷新订单", "PAYMENT_MANUAL_REVIEW"
 	}
-	ctx.JSON(status, gin.H{"error": message})
+	ctx.JSON(status, gin.H{"code": code, "error": message})
 }
 
 func commerceStorefrontPhoneError(ctx *gin.Context, err error) {
