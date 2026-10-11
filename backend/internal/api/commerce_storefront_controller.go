@@ -605,6 +605,8 @@ func commerceStorefrontError(ctx *gin.Context, err error) {
 		status, message, code = http.StatusNotFound, "商业资源不存在", "STOREFRONT_RESOURCE_NOT_FOUND"
 	case errors.Is(err, service.ErrCommerceIdempotencyConflict):
 		status, message, code = http.StatusConflict, "重复请求的参数不一致，请返回订单页核实", "IDEMPOTENCY_CONFLICT"
+	case errors.Is(err, service.ErrCommerceQuoteExpired), errors.Is(err, service.ErrCommerceQuoteConflict):
+		status, message, code = http.StatusConflict, "结算报价已变化，请返回结算页重新确认", "CHECKOUT_QUOTE_CONFLICT"
 	case errors.Is(err, service.ErrCommerceStorefrontInvalid), errors.Is(err, service.ErrCommerceStorefrontAddressInvalid), errors.Is(err, service.ErrCommerceCartInvalid), errors.Is(err, service.ErrCommerceOrderInvalid), errors.Is(err, service.ErrCommerceOrderState), errors.Is(err, service.ErrCommerceRefundInvalid), errors.Is(err, service.ErrCommerceInventoryShortage):
 		status, message, code = http.StatusBadRequest, "商业订单或购物车信息不符合要求", "COMMERCE_CHECKOUT_INVALID"
 		detail := err.Error()
