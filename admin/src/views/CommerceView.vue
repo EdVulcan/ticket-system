@@ -196,7 +196,7 @@
                 <h2>订单管理</h2>
                 <p class="muted">{{ orderDescription }}</p>
               </div>
-              <el-button :icon="Refresh" :loading="orderLoading" @click="loadOrders">刷新</el-button>
+              <el-button :icon="Refresh" :loading="orderLoading" @click="loadOrders()">刷新</el-button>
             </div>
             <div class="filter-toolbar commerce-filter-bar">
               <el-input v-model="orderSearch" class="commerce-search" clearable placeholder="搜索订单号、联系人或手机号" :prefix-icon="Search" @keyup.enter="applyOrderFilters" @clear="applyOrderFilters" />
@@ -1403,11 +1403,12 @@ function orderRefundRequest(row: any) {
   return (row.after_sales || []).find((request: any) => ['requested', 'approved', 'processing'].includes(request.status))
 }
 
-async function loadOrders(searchOverride?: string) {
+async function loadOrders(searchOverride?: string | number) {
   if (!isCurrentDomainConfigured.value) return
   orderLoading.value = true
   try {
-    const search = searchOverride === undefined ? orderSearch.value.trim() : searchOverride.trim()
+    if (typeof searchOverride === 'number') orderPage.value = Math.max(1, Math.floor(searchOverride))
+    const search = typeof searchOverride === 'string' ? searchOverride.trim() : orderSearch.value.trim()
     const selectedFulfillmentStatus = orderFulfillmentStatus.value
     const fulfillmentStatus = fulfillmentStatusOptions.value.some(option => option.value === selectedFulfillmentStatus)
       ? selectedFulfillmentStatus
