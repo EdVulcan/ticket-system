@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +22,21 @@ type commercePaymentTestProvider struct {
 	refund            CommerceWechatRefundStatus
 	paymentErr        error
 	refundErr         error
+}
+
+func TestCommercePaymentManualReviewDiagnosticIsSafeAndStructured(t *testing.T) {
+	cause := commerceWechatProviderError{statusCode: 500, code: "SYSTEM_ERROR", message: "微信支付系统繁忙"}
+	err := commercePaymentManualReview(cause)
+	if !errors.Is(err, ErrCommercePaymentManualReview) {
+		t.Fatalf("manual review error does not preserve sentinel: %v", err)
+	}
+	diagnostic := CommercePaymentDiagnosticOf(err)
+	if diagnostic == nil || diagnostic.Stage != "微信支付下单" || diagnostic.ProviderCode != "SYSTEM_ERROR" || diagnostic.HTTPStatus != 500 || diagnostic.Message != "微信支付系统繁忙" || !diagnostic.Retryable {
+		t.Fatalf("unexpected payment diagnostic: %+v", diagnostic)
+	}
+	if strings.Contains(err.Error(), "SYSTEM_ERROR") || strings.Contains(err.Error(), "微信支付系统繁忙") {
+		t.Fatalf("raw provider details leaked through the public error: %v", err)
+	}
 }
 
 func (p *commercePaymentTestProvider) CreateJSAPI(context.Context, CommerceWechatCreateRequest) (CommerceWechatPaymentResult, error) {

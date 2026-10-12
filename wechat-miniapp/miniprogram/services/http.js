@@ -125,7 +125,13 @@ function businessPath(path, businessType) {
 function responseMessage(data, statusCode) {
   if (data && typeof data === 'object') {
     const message = data.error || data.message;
-    if (typeof message === 'string' && message.trim()) return message.trim();
+    if (typeof message === 'string' && message.trim()) {
+      const diagnostic = data.diagnostic && typeof data.diagnostic === 'object' ? data.diagnostic : null;
+      const detail = diagnostic && typeof diagnostic.message === 'string' ? diagnostic.message.trim() : '';
+      const providerCode = diagnostic && typeof diagnostic.provider_code === 'string' ? diagnostic.provider_code.trim() : '';
+      if (detail) return `${message.trim()}（${providerCode ? `${providerCode}：` : ''}${detail}）`;
+      return message.trim();
+    }
   }
   if (statusCode === 401) return '登录状态已失效，请稍后重试';
   if (statusCode === 403) return '当前账号暂无权限执行此操作';

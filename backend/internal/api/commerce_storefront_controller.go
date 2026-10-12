@@ -641,7 +641,11 @@ func commerceStorefrontError(ctx *gin.Context, err error) {
 	case errors.Is(err, service.ErrCommercePaymentManualReview):
 		status, message, code = http.StatusConflict, "支付结果正在核实，请稍后刷新订单", "PAYMENT_MANUAL_REVIEW"
 	}
-	ctx.JSON(status, gin.H{"code": code, "error": message})
+	payload := gin.H{"code": code, "error": message}
+	if diagnostic := service.CommercePaymentDiagnosticOf(err); diagnostic != nil {
+		payload["diagnostic"] = diagnostic
+	}
+	ctx.JSON(status, payload)
 }
 
 func commerceStorefrontPhoneError(ctx *gin.Context, err error) {

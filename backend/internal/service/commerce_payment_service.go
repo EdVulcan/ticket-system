@@ -61,6 +61,78 @@ type CommerceWechatPaymentResult struct {
 	PrepayID string
 }
 
+// CommercePaymentDiagnostic is a safe, customer-facing summary of a payment
+// failure. It deliberately contains provider codes and short messages only;
+// credentials, signatures, tokens, and request payloads never cross the API
+// boundary.
+type CommercePaymentDiagnostic struct {
+	Stage        string `json:"stage"`
+	ProviderCode string `json:"provider_code,omitempty"`
+	HTTPStatus   int    `json:"http_status,omitempty"`
+	Message      string `json:"message"`
+	Retryable    bool   `json:"retryable"`
+}
+
+type commercePaymentDiagnosticCarrier interface {
+	PaymentDiagnostic() CommercePaymentDiagnostic
+}
+
+// CommercePaymentDiagnosticOf returns only an intentionally safe diagnostic
+// attached to a payment error. Callers must not expose error.Error() values.
+func CommercePaymentDiagnosticOf(err error) *CommercePaymentDiagnostic {
+	var carrier commercePaymentDiagnosticCarrier
+	if !errors.As(err, &carrier) {
+		return nil
+	}
+	diagnostic := carrier.PaymentDiagnostic()
+	return &diagnostic
+}
+
+type commercePaymentManualReviewError struct {
+	diagnostic CommercePaymentDiagnostic
+	cause      error
+}
+
+func (e *commercePaymentManualReviewError) Error() string {
+	return ErrCommercePaymentManualReview.Error()
+}
+
+func (e *commercePaymentManualReviewError) Unwrap() error {
+	return errors.Join(ErrCommercePaymentManualReview, e.cause)
+}
+
+func (e *commercePaymentManualReviewError) PaymentDiagnostic() CommercePaymentDiagnostic {
+	return e.diagnostic
+}
+
+type commerceWechatProviderError struct {
+	statusCode int
+	code       string
+	message    string
+}
+
+func (e commerceWechatProviderError) Error() string {
+	parts := make([]string, 0, 3)
+	if e.code != "" {
+		parts = append(parts, e.code)
+	}
+	if e.message != "" {
+		parts = append(parts, e.message)
+	}
+	if e.statusCode != 0 {
+		parts = append(parts, fmt.Sprintf("HTTP %d", e.statusCode))
+	}
+	return "微信支付接口返回错误: " + strings.Join(parts, "; ")
+}
+
+func (e commerceWechatProviderError) PaymentDiagnostic() CommercePaymentDiagnostic {
+	message := e.message
+	if message == "" {
+		message = "微信支付接口未接受请求"
+	}
+	return CommercePaymentDiagnostic{Stage: "微信支付下单", ProviderCode: e.code, HTTPStatus: e.statusCode, Message: message, Retryable: true}
+}
+
 type CommerceWechatPaymentStatus struct {
 	State         string
 	TransactionID string
@@ -165,6 +237,22 @@ func commercePaymentFingerprint(order *model.CommerceOrder, account *model.Chann
 	payload := fmt.Sprintf("%d|%d|%s|%s|%d|%d|%s", order.TenantID, order.ID, order.OrderNo, appID, account.ID, order.TotalAmountCents, subjectHash)
 	digest := sha256.Sum256([]byte(payload + "|" + mchID))
 	return hex.EncodeToString(digest[:])
+}
+
+func commercePaymentManualReview(cause error) error {
+	if diagnostic := CommercePaymentDiagnosticOf(cause); diagnostic != nil {
+		return &commercePaymentManualReviewError{diagnostic: *diagnostic, cause: cause}
+	}
+	var networkErr net.Error
+	message := "支付服务暂时没有返回可确认结果"
+	if errors.Is(cause, context.DeadlineExceeded) || errors.As(cause, &networkErr) {
+		message = "微信支付网络请求超时或中断，正在自动查单"
+	}
+	return &commercePaymentManualReviewError{diagnostic: CommercePaymentDiagnostic{
+		Stage:     "微信支付查单",
+		Message:   message,
+		Retryable: true,
+	}, cause: cause}
 }
 
 func (s *CommercePaymentService) loadWechatConfig(tenantID uint, account *model.ChannelAccount) (*model.PaymentConfig, error) {
@@ -363,7 +451,7 @@ func (s *CommercePaymentService) CreateWechatPayment(ctx context.Context, token 
 			_, _ = s.orderService().ApplyPaymentOutcome(order.TenantID, order.ID, CommercePaymentOutcome{Status: "failed", ProviderState: "create_failed"})
 		}
 		if status == "unknown" {
-			return nil, fmt.Errorf("%w: provider request may have been accepted", ErrCommercePaymentManualReview)
+			return nil, commercePaymentManualReview(providerErr)
 		}
 		return nil, fmt.Errorf("%w: provider rejected the payment request", ErrCommercePaymentUnavailable)
 	}
@@ -1026,7 +1114,7 @@ func (p *commerceWechatProvider) CreateJSAPI(ctx context.Context, request Commer
 		if response == nil {
 			return CommerceWechatPaymentResult{}, fmt.Errorf("微信 JSAPI 下单返回为空")
 		}
-		return CommerceWechatPaymentResult{}, fmt.Errorf("微信 JSAPI 下单失败: %s", response.Error)
+		return CommerceWechatPaymentResult{}, commerceWechatProviderError{statusCode: response.Code, code: strings.TrimSpace(response.ErrResponse.Code), message: strings.TrimSpace(response.ErrResponse.Message)}
 	}
 	return CommerceWechatPaymentResult{PrepayID: response.Response.PrepayId}, nil
 }
@@ -1040,8 +1128,11 @@ func (p *commerceWechatProvider) QueryPayment(ctx context.Context, outTradeNo st
 	if err != nil {
 		return CommerceWechatPaymentStatus{}, err
 	}
-	if response == nil || response.Code != 200 || response.Response == nil {
-		return CommerceWechatPaymentStatus{}, fmt.Errorf("微信支付查单失败")
+	if response == nil {
+		return CommerceWechatPaymentStatus{}, fmt.Errorf("微信支付查单返回为空")
+	}
+	if response.Code != 200 || response.Response == nil {
+		return CommerceWechatPaymentStatus{}, commerceWechatProviderError{statusCode: response.Code, code: strings.TrimSpace(response.ErrResponse.Code), message: strings.TrimSpace(response.ErrResponse.Message)}
 	}
 	status := CommerceWechatPaymentStatus{State: response.Response.TradeState, TransactionID: response.Response.TransactionId}
 	if response.Response.Amount != nil {
