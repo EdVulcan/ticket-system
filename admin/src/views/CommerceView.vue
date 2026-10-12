@@ -610,42 +610,64 @@
       <template #footer><el-button @click="adjustmentDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveAdjustment">确认调整</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="orderDetailVisible" title="订单详情" width="min(760px, calc(100vw - 32px))" destroy-on-close>
+    <el-dialog v-model="orderDetailVisible" title="订单详情" width="min(920px, calc(100vw - 32px))" destroy-on-close>
       <div v-if="selectedOrder" v-loading="orderDetailLoading" class="order-detail">
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="订单号">{{ selectedOrder.order_no }}</el-descriptions-item>
-          <el-descriptions-item label="下单时间">{{ formatDate(selectedOrder.created_at) }}</el-descriptions-item>
-          <el-descriptions-item label="联系人">{{ selectedOrder.contact_name || '未填写' }}</el-descriptions-item>
-          <el-descriptions-item label="手机号">{{ selectedOrder.contact_phone || '未填写' }}</el-descriptions-item>
-          <el-descriptions-item label="支付状态"><el-tag :type="paymentStatusType(selectedOrder.payment_status)" effect="plain">{{ paymentStatusLabel(selectedOrder.payment_status) }}</el-tag></el-descriptions-item>
-          <el-descriptions-item label="履约状态"><el-tag :type="fulfillmentStatusType(selectedOrder.fulfillment_status)" effect="plain">{{ fulfillmentStatusLabel(selectedOrder.fulfillment_status) }}</el-tag></el-descriptions-item>
-          <el-descriptions-item label="售后状态"><el-tag :type="refundStatusType(selectedOrder.refund_status)" effect="plain">{{ refundStatusLabel(selectedOrder.refund_status) }}</el-tag></el-descriptions-item>
-          <el-descriptions-item label="订单金额">¥{{ money(selectedOrder.total_amount_cents) }}</el-descriptions-item>
-          <el-descriptions-item :label="locationNoun">{{ orderLocationLabel(selectedOrder) }}</el-descriptions-item>
-          <el-descriptions-item v-if="selectedOrder.shipping_address" label="收货地址" :span="2">{{ selectedOrder.shipping_address }}</el-descriptions-item>
-        </el-descriptions>
-        <el-divider content-position="left">{{ productNoun }}快照</el-divider>
-        <el-table :data="selectedOrder.items || []" border size="small">
+        <div class="order-detail-header">
+          <div class="order-detail-heading">
+            <span class="order-detail-kicker">{{ selectedOrder.business_type === 'restaurant' ? '餐饮订单' : '电商订单' }}</span>
+            <strong>{{ selectedOrder.order_no }}</strong>
+            <span>下单于 {{ formatDate(selectedOrder.created_at) }}</span>
+          </div>
+          <div class="order-detail-statuses">
+            <el-tag :type="paymentStatusType(selectedOrder.payment_status)" effect="plain">{{ paymentStatusLabel(selectedOrder.payment_status) }}</el-tag>
+            <el-tag :type="fulfillmentStatusType(selectedOrder.fulfillment_status)" effect="plain">{{ fulfillmentStatusLabel(selectedOrder.fulfillment_status) }}</el-tag>
+            <el-tag :type="refundStatusType(selectedOrder.refund_status)" effect="plain">{{ refundStatusLabel(selectedOrder.refund_status) }}</el-tag>
+          </div>
+        </div>
+
+        <div class="order-overview-grid">
+          <div class="order-info-item"><span>联系人</span><strong>{{ selectedOrder.contact_name || '未填写' }}</strong></div>
+          <div class="order-info-item"><span>联系电话</span><strong>{{ selectedOrder.contact_phone || '未填写' }}</strong></div>
+          <div class="order-info-item"><span>{{ locationNoun }}</span><strong>{{ orderLocationLabel(selectedOrder) }}</strong></div>
+          <div class="order-info-item order-info-item--amount"><span>订单实付</span><strong>¥{{ money(selectedOrder.total_amount_cents) }}</strong></div>
+        </div>
+
+        <div v-if="selectedOrder.shipping_address" class="order-address-card">
+          <div class="order-section-heading"><div><strong>收货地址</strong><span>下单时保存的地址快照</span></div></div>
+          <p>{{ formatOrderAddress(selectedOrder.shipping_address) }}</p>
+        </div>
+
+        <section class="order-detail-section">
+          <div class="order-section-heading"><div><strong>{{ productNoun }}明细</strong><span>下单时保存的商品和规格</span></div><span class="order-section-count">{{ (selectedOrder.items || []).length }} 项</span></div>
+          <el-table :data="selectedOrder.items || []" border stripe size="small" class="order-items-table">
           <el-table-column prop="product_name" :label="productNoun" min-width="180" />
           <el-table-column prop="sku_name" label="规格" min-width="150" />
           <el-table-column label="数量" width="80" align="right"><template #default="{ row }">{{ row.quantity }}</template></el-table-column>
           <el-table-column label="单价" width="100" align="right"><template #default="{ row }">¥{{ money(row.unit_price_cents) }}</template></el-table-column>
           <el-table-column label="小计" width="110" align="right"><template #default="{ row }">¥{{ money(row.line_amount_cents) }}</template></el-table-column>
           <el-table-column label="库存状态" width="100" align="center"><template #default="{ row }">{{ reservationStatusLabel(row.reservation_status) }}</template></el-table-column>
-        </el-table>
+          </el-table>
+        </section>
+
         <div v-if="selectedOrder.restaurant_fulfillment || selectedOrder.retail_fulfillment" class="order-fulfillment-summary">
-          <el-divider content-position="left">履约信息</el-divider>
-          <div v-if="selectedOrder.restaurant_fulfillment">{{ selectedOrder.restaurant_fulfillment.method === 'delivery' ? '配送' : '自取' }} · {{ fulfillmentStatusLabel(selectedOrder.restaurant_fulfillment.status) }}</div>
-          <div v-if="selectedOrder.restaurant_fulfillment?.method === 'delivery' && selectedOrder.restaurant_fulfillment?.delivery_provider">
-            配送执行：{{ deliveryProviderLabel(selectedOrder.restaurant_fulfillment.delivery_provider) }}
-            <span v-if="selectedOrder.restaurant_fulfillment.courier_platform_name"> · {{ selectedOrder.restaurant_fulfillment.courier_platform_name }}</span>
-            <span v-if="selectedOrder.restaurant_fulfillment.courier_order_no"> · 跑腿单号 {{ selectedOrder.restaurant_fulfillment.courier_order_no }}</span>
+          <div class="order-section-heading"><div><strong>履约信息</strong><span>配送、取货或发货记录</span></div></div>
+          <div v-if="selectedOrder.restaurant_fulfillment" class="order-fulfillment-grid">
+            <div class="order-info-item"><span>履约方式</span><strong>{{ selectedOrder.restaurant_fulfillment.method === 'delivery' ? '配送到家' : '到店自取' }}</strong></div>
+            <div class="order-info-item"><span>当前进度</span><strong>{{ fulfillmentStatusLabel(selectedOrder.restaurant_fulfillment.status) }}</strong></div>
+            <div v-if="selectedOrder.restaurant_fulfillment.method === 'delivery'" class="order-info-item"><span>配送执行</span><strong>{{ deliveryProviderLabel(selectedOrder.restaurant_fulfillment.delivery_provider) }}</strong></div>
+            <div v-if="selectedOrder.restaurant_fulfillment.courier_platform_name" class="order-info-item"><span>跑腿平台</span><strong>{{ selectedOrder.restaurant_fulfillment.courier_platform_name }}</strong></div>
+            <div v-if="selectedOrder.restaurant_fulfillment.courier_order_no" class="order-info-item"><span>跑腿单号</span><strong>{{ selectedOrder.restaurant_fulfillment.courier_order_no }}</strong></div>
+            <div v-if="selectedOrder.restaurant_fulfillment.courier_contact" class="order-info-item"><span>骑手联系方式</span><strong>{{ selectedOrder.restaurant_fulfillment.courier_contact }}</strong></div>
+            <div v-if="selectedOrder.restaurant_fulfillment.delivery_note" class="order-info-item order-info-item--wide"><span>配送备注</span><strong>{{ selectedOrder.restaurant_fulfillment.delivery_note }}</strong></div>
           </div>
-          <div v-if="selectedOrder.restaurant_fulfillment?.delivery_note" class="secondary-cell">配送备注：{{ selectedOrder.restaurant_fulfillment.delivery_note }}</div>
-          <div v-if="selectedOrder.retail_fulfillment">{{ selectedOrder.retail_fulfillment.carrier || '待填写物流公司' }} · {{ selectedOrder.retail_fulfillment.tracking_no || '待填写运单号' }}</div>
+          <div v-if="selectedOrder.retail_fulfillment" class="order-fulfillment-grid">
+            <div class="order-info-item"><span>履约进度</span><strong>{{ fulfillmentStatusLabel(selectedOrder.retail_fulfillment.status) }}</strong></div>
+            <div class="order-info-item"><span>物流公司</span><strong>{{ selectedOrder.retail_fulfillment.carrier || '待填写' }}</strong></div>
+            <div class="order-info-item"><span>运单号</span><strong>{{ selectedOrder.retail_fulfillment.tracking_no || '待填写' }}</strong></div>
+          </div>
         </div>
         <div v-if="selectedOrder.business_type === 'retail' && shipmentTimeline" class="order-shipment-timeline">
-          <el-divider content-position="left">物流进度</el-divider>
+          <div class="order-section-heading"><div><strong>物流进度</strong><span>第三方物流轨迹</span></div></div>
           <div class="shipment-summary">
             <strong>{{ shipmentTimeline.shipment?.carrier_name || shipmentTimeline.shipment?.carrier_code || '人工物流' }}</strong>
             <span>{{ shipmentTimeline.shipment?.tracking_no || shipmentTimeline.shipment?.shipment_no }}</span>
@@ -671,7 +693,7 @@
           class="capability-alert"
         />
         <div v-if="selectedOrder.after_sales?.length" class="order-after-sale-list">
-          <el-divider content-position="left">售后记录</el-divider>
+          <div class="order-section-heading"><div><strong>售后记录</strong><span>退款及售后处理记录</span></div></div>
           <div v-for="afterSale in selectedOrder.after_sales" :key="afterSale.id" class="after-sale-row"><span>{{ afterSale.request_no }}</span><el-tag size="small" :type="refundStatusType(afterSale.status)" effect="plain">{{ afterSaleStatusLabel(afterSale.status) }}</el-tag><span class="secondary-cell">¥{{ money(afterSale.amount_cents) }}</span></div>
         </div>
       </div>
@@ -1197,6 +1219,37 @@ function orderLocationLabel(order: any) {
   return locations.value.find(row => Number(row.id) === locationID)?.name || `地点 #${locationID}`
 }
 
+function formatOrderAddress(value: unknown) {
+  if (!value) return '未填写'
+  let address: any = value
+  if (typeof address === 'string') {
+    const raw = address.trim()
+    if (!raw) return '未填写'
+    try {
+      address = JSON.parse(raw)
+    } catch {
+      return raw
+    }
+  }
+  if (!address || typeof address !== 'object') return String(address)
+
+  const parts = [
+    address.province || address.provinceName,
+    address.city || address.cityName,
+    address.district || address.districtName,
+    address.county || address.countyName,
+    address.zone_name || address.zoneName,
+    address.campus_name || address.campusName,
+    address.building,
+    address.room,
+    address.detail || address.detail_address || address.detailAddress,
+    address.address,
+    address.full_address || address.fullAddress,
+  ].map(part => String(part || '').trim()).filter(Boolean)
+  const uniqueParts = parts.filter((part, index) => parts.indexOf(part) === index)
+  return uniqueParts.join(' ') || '未填写'
+}
+
 function silentConfig(params: Record<string, string | number>) {
   return { params, skipErrorToast: true } as any
 }
@@ -1300,6 +1353,7 @@ function paymentStatusType(value: string) {
 
 function fulfillmentStatusLabel(value: string) {
   return ({
+    pending: '待处理',
     pending_acceptance: '待接单', accepted: '已接单', preparing: '制作中', ready: '待取/待配送',
     delivering: '配送中', pending_shipment: '待发货', shipped: '已发货', in_transit: '运输中',
     delivered: '待收货', completed: '已完成', cancelled: '已取消',
@@ -2340,6 +2394,35 @@ onBeforeUnmount(() => {
 .storefront-contact-upload-actions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .storefront-contact-upload-actions .form-help { width: 100%; margin-top: 0; }
 .adjustment-context { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; padding: 12px; background: var(--ui-surface-soft); border: 1px solid var(--ui-border); border-radius: var(--ui-radius); }
+.order-detail { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.order-detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--ui-border); }
+.order-detail-heading { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.order-detail-heading strong { overflow-wrap: anywhere; color: var(--ui-text); font-size: 18px; line-height: 1.35; }
+.order-detail-heading > span:last-child { color: var(--ui-text-secondary); font-size: 12px; }
+.order-detail-kicker { color: var(--ui-primary); font-size: 12px; font-weight: 700; }
+.order-detail-statuses { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
+.order-overview-grid, .order-fulfillment-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.order-info-item { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 12px 14px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface-soft); }
+.order-info-item > span { color: var(--ui-text-secondary); font-size: 12px; line-height: 1.4; }
+.order-info-item > strong { overflow-wrap: anywhere; color: var(--ui-text); font-size: 14px; font-weight: 650; line-height: 1.45; }
+.order-info-item--amount { border-color: color-mix(in srgb, var(--ui-primary) 32%, var(--ui-border)); background: color-mix(in srgb, var(--ui-primary) 7%, var(--ui-surface)); }
+.order-info-item--amount > strong { color: var(--ui-primary); font-size: 18px; }
+.order-info-item--wide { grid-column: 1 / -1; }
+.order-address-card, .order-fulfillment-summary, .order-shipment-timeline, .order-after-sale-list, .order-detail-section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.order-address-card { padding: 14px 16px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface-soft); }
+.order-address-card p { margin: 0; color: var(--ui-text); font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.order-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; }
+.order-section-heading > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.order-section-heading strong { color: var(--ui-text); font-size: 15px; line-height: 1.4; }
+.order-section-heading span { color: var(--ui-text-secondary); font-size: 12px; line-height: 1.4; }
+.order-section-count { flex: 0 0 auto; }
+.order-items-table { width: 100%; }
+.order-fulfillment-summary { padding: 14px 16px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface-soft); }
+.order-fulfillment-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.order-shipment-timeline { padding: 14px 16px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface-soft); }
+.after-sale-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-surface-soft); }
+.shipment-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: 8px; background: var(--ui-surface-soft); }
+.shipment-summary span { color: var(--ui-text-secondary); font-size: 13px; overflow-wrap: anywhere; }
 @media (max-width: 800px) {
   .commerce-heading { flex-direction: column; }
   .page-actions { justify-content: flex-start; }
@@ -2348,6 +2431,10 @@ onBeforeUnmount(() => {
   .form-grid { grid-template-columns: 1fr; }
   .sku-form-row { grid-template-columns: 1fr 1fr 1fr 1fr 36px; }
   .sku-code-input, .sku-name-input { grid-column: span 2; }
+  .order-detail-header { flex-direction: column; }
+  .order-detail-statuses { justify-content: flex-start; }
+  .order-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .order-fulfillment-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 560px) {
   .commerce-heading h1 { font-size: 22px; }
@@ -2364,5 +2451,10 @@ onBeforeUnmount(() => {
   .storefront-contact-preview, .storefront-contact-placeholder { width: min(100%, 220px); height: auto; aspect-ratio: 1; flex-basis: auto; }
   .storefront-hero-upload { flex-direction: column; }
   .storefront-hero-preview, .storefront-hero-placeholder { width: min(100%, 300px); height: auto; aspect-ratio: 2 / 1; flex-basis: auto; }
+  .order-overview-grid, .order-fulfillment-grid { grid-template-columns: 1fr; }
+  .order-info-item--wide { grid-column: auto; }
+  .after-sale-row { grid-template-columns: 1fr auto; }
+  .after-sale-row .secondary-cell { grid-column: 1 / -1; }
+  .shipment-summary { align-items: flex-start; flex-direction: column; }
 }
 </style>
