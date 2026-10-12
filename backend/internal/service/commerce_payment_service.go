@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"ticket-backend/internal/model"
@@ -1002,13 +1003,24 @@ func (p *commerceWechatProvider) client() (*wechatv3.ClientV3, error) {
 func (p *commerceWechatProvider) CreateJSAPI(ctx context.Context, request CommerceWechatCreateRequest) (CommerceWechatPaymentResult, error) {
 	client, err := p.client()
 	if err != nil {
-		return CommerceWechatPaymentResult{}, err
+		// Client construction happens before any request reaches WeChat. A
+		// malformed private key or incomplete credential can therefore never
+		// produce an accepted payment and must not be quarantined as ambiguous.
+		return CommerceWechatPaymentResult{}, fmt.Errorf("%w: payment client initialization failed", ErrCommercePaymentUnavailable)
 	}
 	body := make(gopay.BodyMap)
 	body.Set("appid", request.AppID).Set("mchid", request.MchID).Set("description", request.Description).Set("out_trade_no", request.OutTradeNo).Set("notify_url", request.NotifyURL).SetBodyMap("amount", func(amount gopay.BodyMap) { amount.Set("total", request.AmountCents).Set("currency", "CNY") }).SetBodyMap("payer", func(payer gopay.BodyMap) { payer.Set("openid", request.OpenID) })
 	response, err := client.V3TransactionJsapi(ctx, body)
 	if err != nil {
-		return CommerceWechatPaymentResult{}, err
+		// Transport failures leave the provider outcome unknown and are
+		// reconciled later. Errors raised while building/signing the request
+		// happen before it reaches WeChat and are definite configuration or
+		// credential failures.
+		var networkErr net.Error
+		if errors.Is(err, context.DeadlineExceeded) || errors.As(err, &networkErr) {
+			return CommerceWechatPaymentResult{}, err
+		}
+		return CommerceWechatPaymentResult{}, permanentProviderError{message: "微信 JSAPI 下单请求构造失败: " + err.Error()}
 	}
 	if response == nil || response.Code != 200 || response.Response == nil || strings.TrimSpace(response.Response.PrepayId) == "" {
 		if response == nil {
