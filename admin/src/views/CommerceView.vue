@@ -1328,6 +1328,8 @@ async function loadWorkspace() {
 async function refreshWorkspace() {
   user.value = await refreshStoredTenantIdentity()
   await loadWorkspace()
+  if (activeTab.value === 'orders') await loadOrders()
+  if (activeTab.value === 'storefront') await loadStorefrontData()
 }
 
 function resetProductFilters() {
@@ -1418,6 +1420,7 @@ async function loadOrders(searchOverride?: string) {
     }))
     orders.value = response.data?.data || []
     orderTotal.value = Number(response.data?.total || 0)
+    if (loadError.value === '订单暂时无法加载') loadError.value = ''
   } catch (error) {
     if (statusCode(error) !== 403) loadError.value = (error as any)?.response?.data?.error || '订单暂时无法加载'
   } finally {

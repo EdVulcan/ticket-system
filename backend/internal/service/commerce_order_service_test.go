@@ -208,6 +208,13 @@ func TestCommerceCompletedOrderRefundKeepsFulfillmentAndInventoryFacts(t *testin
 	if fulfillment.Status != "completed" {
 		t.Fatalf("completed refund changed fulfillment status=%s", fulfillment.Status)
 	}
+	rows, total, err := service.ListOrdersPage(tenantID, CommerceOrderListFilter{BusinessType: "restaurant", Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("list completed refunded order: %v", err)
+	}
+	if total != 1 || len(rows) != 1 || rows[0].RefundStatus != "refunded" || len(rows[0].AfterSales) != 1 {
+		t.Fatalf("listed completed refunded order rows=%d after_sales=%d total=%d", len(rows), len(rows[0].AfterSales), total)
+	}
 }
 
 func TestCommerceRestaurantDeliveryRecordsExecutionChoice(t *testing.T) {
