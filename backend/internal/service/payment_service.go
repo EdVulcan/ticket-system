@@ -325,6 +325,15 @@ func providerRequestMayHaveBeenAccepted(method string, cause error) bool {
 	for _, permanent := range []string{
 		"not configured", "not config", "invalid alipay auth code", "unsupported payment",
 		"payment-code collection is not configured", "public key is required", "private key",
+		// WeChat Pay returns these codes when the request is definitely
+		// rejected before a payment can be created. They must not be treated as
+		// an ambiguous network failure, otherwise the customer is incorrectly
+		// sent to manual review and cannot correct the payment configuration.
+		"param_error", "invalid_request", "appid_mchid_not_match", "mch_not_exists",
+		"certificate_not_found", "accountnotcertified", "noauth", "notenough",
+		"sign_error", "signature error", "invalid signature", "invalid appid",
+		"invalid openid", "invalid notify_url", "notify_url is invalid", "商户号",
+		"参数错误", "请求参数", "签名错误", "证书不存在", "未开通", "无权限",
 	} {
 		if strings.Contains(message, permanent) {
 			return false

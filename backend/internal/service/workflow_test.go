@@ -414,6 +414,15 @@ func TestAmbiguousProviderFailureIsReconciled(t *testing.T) {
 	if providerRequestMayHaveBeenAccepted("wechat", errors.New("WeChat payment is not configured")) {
 		t.Fatal("missing provider configuration must fail before reconciliation")
 	}
+	for _, message := range []string{
+		`微信 JSAPI 下单失败: {"code":"PARAM_ERROR","message":"参数错误"}`,
+		`微信 JSAPI 下单失败: {"code":"APPID_MCHID_NOT_MATCH","message":"appid and mchid do not match"}`,
+		`微信 JSAPI 下单失败: {"code":"SIGN_ERROR","message":"签名错误"}`,
+	} {
+		if providerRequestMayHaveBeenAccepted("wechat", errors.New(message)) {
+			t.Fatalf("definite WeChat rejection was treated as ambiguous: %s", message)
+		}
+	}
 	if providerRequestMayHaveBeenAccepted("cash", errors.New("cashier error")) {
 		t.Fatal("cash payments cannot have an ambiguous provider request")
 	}
