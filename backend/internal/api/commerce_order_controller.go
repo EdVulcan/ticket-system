@@ -113,10 +113,35 @@ func (c *CommerceOrderController) RequestRefund(ctx *gin.Context) {
 		commerceOrderError(ctx, err)
 		return
 	}
-	if result != nil && result.Request != nil {
+	// Orders that are already completed enter manual after-sales review first.
+	// Starting a provider refund remains an explicit operator action so a
+	// storefront request cannot silently refund fulfilled goods.
+	if result != nil && result.Request != nil && result.Order != nil && result.Order.FulfillmentStatus != "completed" {
 		_, _ = c.Payment.StartWechatRefund(ctx.Request.Context(), result.Request.TenantID, result.Request.ID)
 	}
 	ctx.JSON(http.StatusAccepted, result)
+}
+
+func (c *CommerceOrderController) ProcessCompletedRefund(ctx *gin.Context) {
+	id, err := parseCommerceOrderID(ctx)
+	if err != nil {
+		return
+	}
+	result, err := c.Service.ApproveRefundRequest(ctx.GetUint("tenant_id"), id)
+	if err != nil {
+		commerceOrderError(ctx, err)
+		return
+	}
+	if result == nil || result.Request == nil {
+		commerceOrderError(ctx, service.ErrCommerceRefundInvalid)
+		return
+	}
+	view, err := c.Payment.StartWechatRefund(ctx.Request.Context(), result.Request.TenantID, result.Request.ID)
+	if err != nil {
+		commerceOrderError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusAccepted, gin.H{"refund": view, "order": result.Order})
 }
 
 func (c *CommerceOrderController) CompleteRefund(ctx *gin.Context) {

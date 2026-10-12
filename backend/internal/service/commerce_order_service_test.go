@@ -151,6 +151,65 @@ func TestCommerceOrderPaymentAndRefundLifecycle(t *testing.T) {
 	}
 }
 
+func TestCommerceCompletedOrderRefundKeepsFulfillmentAndInventoryFacts(t *testing.T) {
+	tenantID, productID, skuID, locationID, now := commerceOrderFixture(t)
+	service := &CommerceOrderService{Clock: func() time.Time { return now }}
+	input := commerceOrderInput(productID, skuID, locationID, "refund-completed", now.Add(15*time.Minute))
+	input.FulfillmentMethod = "pickup"
+	input.PaymentReference = "original-payment-completed"
+	order, err := service.CreateOrder(tenantID, input)
+	if err != nil {
+		t.Fatalf("create order: %v", err)
+	}
+	if _, err := service.ConfirmPayment(tenantID, order.ID); err != nil {
+		t.Fatalf("confirm payment: %v", err)
+	}
+	for _, status := range []string{"accepted", "preparing", "ready", "completed"} {
+		if _, err := service.TransitionRestaurantFulfillment(tenantID, order.ID, RestaurantFulfillmentTransitionInput{Status: status}); err != nil {
+			t.Fatalf("transition to %s: %v", status, err)
+		}
+	}
+	var stockBefore model.CommerceInventory
+	if err := model.DB.Where("tenant_id = ? AND sku_id = ? AND location_id = ?", tenantID, skuID, locationID).First(&stockBefore).Error; err != nil {
+		t.Fatalf("load stock before refund: %v", err)
+	}
+	request, err := service.CreateRefundRequest(tenantID, order.ID, "refund-completed-key", "customer after-sale request")
+	if err != nil {
+		t.Fatalf("create completed-order refund request: %v", err)
+	}
+	if request.Request.Status != "requested" {
+		t.Fatalf("refund request status=%s, want requested", request.Request.Status)
+	}
+	approved, err := service.ApproveRefundRequest(tenantID, order.ID)
+	if err != nil {
+		t.Fatalf("approve completed-order refund request: %v", err)
+	}
+	if approved.Request.Status != "approved" {
+		t.Fatalf("approved refund request status=%s, want approved", approved.Request.Status)
+	}
+	refunded, err := service.CompleteRefundAfterProviderConfirmation(tenantID, request.Request.ID, "refund-provider-completed", order.TotalAmountCents)
+	if err != nil {
+		t.Fatalf("complete completed-order refund: %v", err)
+	}
+	if refunded.Order.PaymentStatus != "refunded" || refunded.Order.RefundStatus != "refunded" || refunded.Order.FulfillmentStatus != "completed" {
+		t.Fatalf("refunded completed order=%+v", refunded.Order)
+	}
+	var stockAfter model.CommerceInventory
+	if err := model.DB.Where("id = ?", stockBefore.ID).First(&stockAfter).Error; err != nil {
+		t.Fatalf("load stock after refund: %v", err)
+	}
+	if stockAfter.AvailableQty != stockBefore.AvailableQty || stockAfter.SoldQty != stockBefore.SoldQty {
+		t.Fatalf("completed refund changed inventory: before=%+v after=%+v", stockBefore, stockAfter)
+	}
+	var fulfillment model.RestaurantFulfillment
+	if err := model.DB.Where("tenant_id = ? AND order_id = ?", tenantID, order.ID).First(&fulfillment).Error; err != nil {
+		t.Fatalf("load fulfillment after refund: %v", err)
+	}
+	if fulfillment.Status != "completed" {
+		t.Fatalf("completed refund changed fulfillment status=%s", fulfillment.Status)
+	}
+}
+
 func TestCommerceRestaurantDeliveryRecordsExecutionChoice(t *testing.T) {
 	tenantID, productID, skuID, locationID, now := commerceOrderFixture(t)
 	service := &CommerceOrderService{Clock: func() time.Time { return now }}

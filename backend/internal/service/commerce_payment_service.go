@@ -623,8 +623,14 @@ func (s *CommercePaymentService) StartWechatRefund(ctx context.Context, tenantID
 		if !errors.Is(lookup, gorm.ErrRecordNotFound) {
 			return lookup
 		}
-		if request.Status != "requested" && request.Status != "processing" {
+		if request.Status != "requested" && request.Status != "approved" && request.Status != "processing" {
 			return fmt.Errorf("%w: refund request is %s", ErrCommerceRefundInvalid, request.Status)
+		}
+		// A completed order requires an explicit after-sales approval. The
+		// recovery worker also scans requested refunds, so enforce this at the
+		// provider boundary instead of relying only on the HTTP controller.
+		if request.Status == "requested" && order.FulfillmentStatus == "completed" {
+			return fmt.Errorf("%w: completed order refund requires after-sales approval", ErrCommerceRefundInvalid)
 		}
 		if order.PaymentStatus != "paid" || order.RefundStatus != "requested" && order.RefundStatus != "processing" {
 			return fmt.Errorf("%w: order is not refundable in its current state", ErrCommerceRefundInvalid)
@@ -800,7 +806,7 @@ func (s *CommercePaymentService) ReconcileDue(ctx context.Context, at time.Time,
 	// forever. StartWechatRefund is idempotent and will still refuse a request
 	// whose local order or fulfillment state is no longer refundable.
 	var pendingRequests []model.CommerceAfterSaleRequest
-	if err := s.db().Where("tenant_id > 0 AND status IN ? AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM commerce_refund_attempts a WHERE a.tenant_id = commerce_after_sale_requests.tenant_id AND a.request_id = commerce_after_sale_requests.id AND a.deleted_at IS NULL)", []string{"requested", "processing"}).Order("id ASC").Limit(remaining).Find(&pendingRequests).Error; err != nil {
+	if err := s.db().Where("tenant_id > 0 AND status IN ? AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM commerce_refund_attempts a WHERE a.tenant_id = commerce_after_sale_requests.tenant_id AND a.request_id = commerce_after_sale_requests.id AND a.deleted_at IS NULL)", []string{"requested", "approved", "processing"}).Order("id ASC").Limit(remaining).Find(&pendingRequests).Error; err != nil {
 		return processed, err
 	}
 	var firstRefundStartErr error

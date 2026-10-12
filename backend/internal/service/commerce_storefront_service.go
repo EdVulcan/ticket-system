@@ -1740,7 +1740,7 @@ func commerceStorefrontAvailableActions(order *model.CommerceOrder) *model.Comme
 		return actions
 	}
 	if order.BusinessType == "restaurant" {
-		if order.RestaurantFulfillment != nil && order.RestaurantFulfillment.Status == "pending_acceptance" {
+		if order.RestaurantFulfillment != nil && (order.RestaurantFulfillment.Status == "pending_acceptance" || order.RestaurantFulfillment.Status == "completed") {
 			actions.CanRefund = true
 		} else {
 			actions.Reason = "商家已接单，暂不可退款"
@@ -1749,7 +1749,7 @@ func commerceStorefrontAvailableActions(order *model.CommerceOrder) *model.Comme
 			actions.CanConfirmReceipt = true
 		}
 	} else if order.BusinessType == "retail" {
-		if order.RetailFulfillment != nil && order.RetailFulfillment.Status == "pending_shipment" {
+		if order.RetailFulfillment != nil && (order.RetailFulfillment.Status == "pending_shipment" || order.RetailFulfillment.Status == "completed") {
 			actions.CanRefund = true
 		} else {
 			actions.Reason = "订单已进入发货流程，暂不可退款"

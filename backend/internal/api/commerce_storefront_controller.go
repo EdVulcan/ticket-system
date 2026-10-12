@@ -486,7 +486,9 @@ func (c *CommerceStorefrontController) RequestRefund(ctx *gin.Context) {
 	// temporarily unavailable payment provider leaves the request visible as
 	// requested and recoverable by the worker; it must never be reported as a
 	// completed refund from this customer endpoint.
-	if result != nil && result.Request != nil {
+	// Completed orders remain in manual after-sales review until a merchant
+	// operator explicitly starts the provider refund.
+	if result != nil && result.Request != nil && result.Order != nil && result.Order.FulfillmentStatus != "completed" {
 		_, _ = c.Payment.StartWechatRefund(ctx.Request.Context(), result.Request.TenantID, result.Request.ID)
 	}
 	ctx.JSON(http.StatusAccepted, result)

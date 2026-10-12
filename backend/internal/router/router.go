@@ -463,6 +463,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	commerceOrderAfterSaleGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"))
 	{
 		commerceOrderAfterSaleGroup.POST("/:id/refund-requests", middleware.RequireTenantPermission(authz.PermissionAfterSalesWrite), commerceOrderController.RequestRefund)
+		commerceOrderAfterSaleGroup.POST("/:id/refund-requests/process", middleware.RequireTenantPermission(authz.PermissionAfterSalesApprove), commerceOrderController.ProcessCompletedRefund)
 	}
 	commerceNotificationController := &api.CommerceNotificationController{Service: service.CommerceNotificationService{}}
 	commerceNotificationReadGroup := protected.Group("/commerce/notifications")

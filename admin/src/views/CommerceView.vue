@@ -249,8 +249,9 @@
               <el-table-column label="操作" width="250" fixed="right" align="right">
                 <template #default="{ row }">
                   <el-button link type="primary" @click="openOrderDetail(row)">详情</el-button>
-                  <el-button v-if="canRequestRefund(row)" link type="warning" :loading="orderActionID === row.id" @click="requestOrderRefund(row)">申请退款</el-button>
-                  <el-tag v-if="orderRefundRequest(row)" type="warning" effect="plain">等待支付渠道确认</el-tag>
+                  <el-button v-if="canRequestRefund(row)" link type="warning" :loading="orderActionID === row.id" @click="requestOrderRefund(row)">{{ row.fulfillment_status === 'completed' ? '发起售后' : '申请退款' }}</el-button>
+                  <el-button v-if="canProcessCompletedRefund(row)" link type="danger" :loading="orderActionID === row.id" @click="processCompletedRefund(row)">处理退款</el-button>
+                  <el-tag v-if="orderRefundRequest(row) && !canProcessCompletedRefund(row)" type="warning" effect="plain">等待退款处理</el-tag>
                   <el-button v-if="canAdvanceFulfillment(row)" link type="primary" :loading="orderActionID === row.id" @click="advanceFulfillment(row)">{{ advanceFulfillmentLabel(row) }}</el-button>
                 </template>
               </el-table-column>
@@ -1071,6 +1072,7 @@ const isCurrentDomainActive = computed(() => activeDomains.value.has(currentDoma
 const canWrite = computed(() => isCurrentDomainActive.value && hasPermission(user.value, 'catalog.write'))
 const canOrdersRead = computed(() => hasPermission(user.value, 'orders.read'))
 const canAfterSalesWrite = computed(() => hasPermission(user.value, 'after_sales.write'))
+const canAfterSalesApprove = computed(() => hasPermission(user.value, 'after_sales.approve'))
 const canOperationsWrite = computed(() => isCurrentDomainActive.value && hasPermission(user.value, 'operations.write'))
 const currentDomainLabel = computed(() => businessTypeLabel(currentDomain.value))
 const capabilityStatusLabel = computed(() => isCurrentDomainActive.value ? '能力正常' : '能力已暂停')
@@ -1713,9 +1715,14 @@ function advanceFulfillmentLabel(row: any) {
 
 function canRequestRefund(row: any) {
   if (!canAfterSalesWrite.value || row?.payment_status !== 'paid' || row?.refund_status !== 'none') return false
-  if (row?.business_type === 'restaurant') return row?.restaurant_fulfillment?.status === 'pending_acceptance'
-  if (row?.business_type === 'retail') return row?.retail_fulfillment?.status === 'pending_shipment'
+  if (row?.business_type === 'restaurant') return ['pending_acceptance', 'completed'].includes(row?.restaurant_fulfillment?.status)
+  if (row?.business_type === 'retail') return ['pending_shipment', 'completed'].includes(row?.retail_fulfillment?.status)
   return false
+}
+
+function canProcessCompletedRefund(row: any) {
+  const request = orderRefundRequest(row)
+  return canAfterSalesApprove.value && row?.payment_status === 'paid' && row?.refund_status === 'requested' && row?.fulfillment_status === 'completed' && request?.status === 'requested'
 }
 
 function canAdvanceFulfillment(row: any) {
@@ -1726,10 +1733,11 @@ function canAdvanceFulfillment(row: any) {
 async function requestOrderRefund(row: any) {
   if (!canRequestRefund(row)) return
   try {
-    const result = await ElMessageBox.prompt('可选：填写退款原因，便于售后记录。', '申请退款', {
+    const isCompleted = row.fulfillment_status === 'completed'
+    const result = await ElMessageBox.prompt(isCompleted ? '订单已完成，将提交售后申请，审核通过后再发起退款。' : '可选：填写退款原因，便于售后记录。', isCompleted ? '发起售后' : '申请退款', {
       inputPlaceholder: '例如：客户取消订单',
       inputValidator: (value: string) => value.length <= 255 || '退款原因不能超过 255 个字符',
-      confirmButtonText: '提交申请',
+      confirmButtonText: isCompleted ? '提交售后' : '提交申请',
       cancelButtonText: '取消',
     })
     orderActionID.value = row.id
@@ -1738,6 +1746,22 @@ async function requestOrderRefund(row: any) {
       reason: result.value?.trim() || '管理员申请退款',
     })
     ElMessage.success('退款申请已提交')
+    await loadOrders()
+  } catch { /* cancelled or request interceptor already reported the error */ }
+  finally {
+    orderActionID.value = 0
+  }
+}
+
+async function processCompletedRefund(row: any) {
+  if (!canProcessCompletedRefund(row)) return
+  try {
+    await ElMessageBox.confirm('该订单已经完成履约，确认审核通过并发起整单退款？库存不会恢复，履约记录仍保留为已完成。', '处理售后退款', {
+      type: 'warning', confirmButtonText: '确认退款', cancelButtonText: '暂不处理',
+    })
+    orderActionID.value = row.id
+    await request.post(`/commerce/orders/${row.id}/refund-requests/process`)
+    ElMessage.success('退款已发起，等待支付渠道确认')
     await loadOrders()
   } catch { /* cancelled or request interceptor already reported the error */ }
   finally {

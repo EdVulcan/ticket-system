@@ -1358,6 +1358,51 @@ func (s *CommerceOrderService) RequestRefund(tenantID, orderID uint, idempotency
 	return s.CreateRefundRequest(tenantID, orderID, idempotencyKey, reason)
 }
 
+// ApproveRefundRequest moves a completed commercial order's customer refund
+// request into the provider-processing queue. Completed orders require an
+// operator decision because the goods have already been fulfilled; the
+// provider refund must not be started directly by the storefront request.
+func (s *CommerceOrderService) ApproveRefundRequest(tenantID, orderID uint) (*CommerceRefundResult, error) {
+	if tenantID == 0 || orderID == 0 {
+		return nil, fmt.Errorf("%w: tenant and order are required", ErrCommerceRefundInvalid)
+	}
+	var result *CommerceRefundResult
+	err := s.write(func(tx *gorm.DB) error {
+		var order model.CommerceOrder
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", orderID, tenantID).First(&order).Error; err != nil {
+			return err
+		}
+		if err := RequireConfiguredTenantBusinessCapability(tx, tenantID, order.BusinessType); err != nil {
+			return err
+		}
+		if order.PaymentStatus != "paid" || order.RefundStatus != "requested" || order.FulfillmentStatus != "completed" {
+			return fmt.Errorf("%w: completed order refund is not awaiting approval", ErrCommerceRefundInvalid)
+		}
+		if err := requireCommerceRefundableFulfillmentTx(tx, &order); err != nil {
+			return err
+		}
+		var request model.CommerceAfterSaleRequest
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND order_id = ? AND status IN ?", tenantID, orderID, []string{"requested", "approved", "processing"}).Order("id DESC").First(&request).Error; err != nil {
+			return err
+		}
+		if request.AmountCents != order.TotalAmountCents {
+			return fmt.Errorf("%w: only full commercial refunds are supported", ErrCommerceRefundInvalid)
+		}
+		if request.Status == "requested" {
+			if err := tx.Model(&request).Update("status", "approved").Error; err != nil {
+				return err
+			}
+			if err := tx.Create(&model.CommerceAfterSaleEvent{TenantID: tenantID, RequestID: request.ID, EventType: "refund_approved", PayloadJSON: `{"status":"approved"}`}).Error; err != nil {
+				return err
+			}
+			request.Status = "approved"
+		}
+		result = &CommerceRefundResult{Request: &request, Order: &order}
+		return nil
+	})
+	return result, err
+}
+
 // CancelUnpaidOrder cancels a customer order before payment is confirmed. It
 // deliberately refuses pending provider-payment states: releasing inventory
 // while a provider result is still unknown could turn a late payment into a
@@ -1553,6 +1598,7 @@ func (s *CommerceOrderService) CompleteRefundAfterProviderConfirmation(tenantID,
 			request.ProviderRefundReference = providerReference
 			request.ProviderRefundAmountCents = providerAmountCents
 		}
+		postFulfillmentRefund := order.FulfillmentStatus == "completed"
 		var items []model.CommerceOrderItem
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND order_id = ?", tenantID, order.ID).Order("id ASC").Find(&items).Error; err != nil {
 			return err
@@ -1561,21 +1607,23 @@ func (s *CommerceOrderService) CompleteRefundAfterProviderConfirmation(tenantID,
 			if item.ReservationStatus != "sold" {
 				return fmt.Errorf("%w: reservation status is inconsistent", ErrCommerceRefundInvalid)
 			}
-			var stock model.CommerceInventory
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND sku_id = ? AND location_id = ?", tenantID, item.SkuID, order.LocationID).First(&stock).Error; err != nil {
-				return err
-			}
-			if stock.SoldQty < item.Quantity {
-				return fmt.Errorf("%w: sold stock is inconsistent", ErrCommerceRefundInvalid)
-			}
-			newSold, soldOK := commerceSafeAddInt(stock.SoldQty, -item.Quantity)
-			newAvailable, availableOK := commerceSafeAddInt(stock.AvailableQty, item.Quantity)
-			newVersion, versionOK := commerceSafeIncrementInt64(stock.Version)
-			if !soldOK || !availableOK || !versionOK || newSold < 0 || newAvailable < 0 {
-				return fmt.Errorf("%w: inventory counter overflow", ErrCommerceRefundInvalid)
-			}
-			if err := tx.Model(&stock).Updates(map[string]interface{}{"sold_qty": newSold, "available_qty": newAvailable, "version": newVersion}).Error; err != nil {
-				return err
+			if !postFulfillmentRefund {
+				var stock model.CommerceInventory
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND sku_id = ? AND location_id = ?", tenantID, item.SkuID, order.LocationID).First(&stock).Error; err != nil {
+					return err
+				}
+				if stock.SoldQty < item.Quantity {
+					return fmt.Errorf("%w: sold stock is inconsistent", ErrCommerceRefundInvalid)
+				}
+				newSold, soldOK := commerceSafeAddInt(stock.SoldQty, -item.Quantity)
+				newAvailable, availableOK := commerceSafeAddInt(stock.AvailableQty, item.Quantity)
+				newVersion, versionOK := commerceSafeIncrementInt64(stock.Version)
+				if !soldOK || !availableOK || !versionOK || newSold < 0 || newAvailable < 0 {
+					return fmt.Errorf("%w: inventory counter overflow", ErrCommerceRefundInvalid)
+				}
+				if err := tx.Model(&stock).Updates(map[string]interface{}{"sold_qty": newSold, "available_qty": newAvailable, "version": newVersion}).Error; err != nil {
+					return err
+				}
 			}
 			changed := tx.Model(&model.CommerceOrderItem{}).Where("id = ? AND tenant_id = ? AND order_id = ? AND reservation_status = ?", item.ID, tenantID, order.ID, "sold").Updates(map[string]interface{}{"reservation_status": "refunded", "released_at": s.now()})
 			if changed.Error != nil {
@@ -1585,32 +1633,38 @@ func (s *CommerceOrderService) CompleteRefundAfterProviderConfirmation(tenantID,
 				return fmt.Errorf("%w: reservation changed concurrently", ErrCommerceRefundInvalid)
 			}
 		}
-		if order.BusinessType == "restaurant" {
-			if err := tx.Model(&model.RestaurantFulfillment{}).Where("tenant_id = ? AND order_id = ? AND status = ?", tenantID, order.ID, "pending_acceptance").Update("status", "cancelled").Error; err != nil {
+		if !postFulfillmentRefund {
+			if order.BusinessType == "restaurant" {
+				if err := tx.Model(&model.RestaurantFulfillment{}).Where("tenant_id = ? AND order_id = ? AND status = ?", tenantID, order.ID, "pending_acceptance").Update("status", "cancelled").Error; err != nil {
+					return err
+				}
+			} else {
+				if err := tx.Model(&model.RetailFulfillment{}).Where("tenant_id = ? AND order_id = ? AND status = ?", tenantID, order.ID, "pending_shipment").Update("status", "cancelled").Error; err != nil {
+					return err
+				}
+			}
+			promotions := CommercePromotionService{DB: tx, Clock: s.Clock}
+			if err := promotions.ReturnCouponAfterFullUnfulfilledRefundTx(tx, tenantID, order.ID); err != nil {
 				return err
 			}
-		} else {
-			if err := tx.Model(&model.RetailFulfillment{}).Where("tenant_id = ? AND order_id = ? AND status = ?", tenantID, order.ID, "pending_shipment").Update("status", "cancelled").Error; err != nil {
+			if err := tx.Model(&model.CommerceCheckoutQuote{}).
+				Where("tenant_id = ? AND consumed_order_id = ? AND status = ?", tenantID, order.ID, "consumed").
+				Update("status", "cancelled").Error; err != nil {
 				return err
 			}
 		}
-		promotions := CommercePromotionService{DB: tx, Clock: s.Clock}
-		if err := promotions.ReturnCouponAfterFullUnfulfilledRefundTx(tx, tenantID, order.ID); err != nil {
-			return err
-		}
-		if err := tx.Model(&model.CommerceCheckoutQuote{}).
-			Where("tenant_id = ? AND consumed_order_id = ? AND status = ?", tenantID, order.ID, "consumed").
-			Update("status", "cancelled").Error; err != nil {
-			return err
-		}
-		if err := tx.Create(&model.CommerceAfterSaleEvent{TenantID: tenantID, RequestID: request.ID, EventType: "refund_completed", PayloadJSON: fmt.Sprintf(`{"amount_cents":%d,"provider_reference":%q}`, request.AmountCents, providerReference)}).Error; err != nil {
+		if err := tx.Create(&model.CommerceAfterSaleEvent{TenantID: tenantID, RequestID: request.ID, EventType: "refund_completed", PayloadJSON: fmt.Sprintf(`{"amount_cents":%d,"provider_reference":%q,"post_fulfillment":%t}`, request.AmountCents, providerReference, postFulfillmentRefund)}).Error; err != nil {
 			return err
 		}
 		now := s.now()
 		if err := tx.Model(&request).Updates(map[string]interface{}{"status": "completed", "processed_at": now}).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&order).Updates(map[string]interface{}{"payment_status": "refunded", "refund_status": "refunded", "fulfillment_status": "cancelled"}).Error; err != nil {
+		orderUpdates := map[string]interface{}{"payment_status": "refunded", "refund_status": "refunded"}
+		if !postFulfillmentRefund {
+			orderUpdates["fulfillment_status"] = "cancelled"
+		}
+		if err := tx.Model(&order).Updates(orderUpdates).Error; err != nil {
 			return err
 		}
 		request.Status = "completed"
@@ -1632,6 +1686,12 @@ func requireCommerceRefundableFulfillmentTx(tx *gorm.DB, order *model.CommerceOr
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND order_id = ?", order.TenantID, order.ID).First(&fulfillment).Error; err != nil {
 			return err
 		}
+		if order.FulfillmentStatus == "completed" {
+			if fulfillment.Status != "completed" {
+				return fmt.Errorf("%w: restaurant fulfillment is inconsistent with the completed order", ErrCommerceRefundInvalid)
+			}
+			return nil
+		}
 		if fulfillment.Status != "pending_acceptance" {
 			return fmt.Errorf("%w: restaurant order is already being prepared or fulfilled", ErrCommerceRefundInvalid)
 		}
@@ -1641,6 +1701,12 @@ func requireCommerceRefundableFulfillmentTx(tx *gorm.DB, order *model.CommerceOr
 		var fulfillment model.RetailFulfillment
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND order_id = ?", order.TenantID, order.ID).First(&fulfillment).Error; err != nil {
 			return err
+		}
+		if order.FulfillmentStatus == "completed" {
+			if fulfillment.Status != "completed" {
+				return fmt.Errorf("%w: retail fulfillment is inconsistent with the completed order", ErrCommerceRefundInvalid)
+			}
+			return nil
 		}
 		if fulfillment.Status != "pending_shipment" {
 			return fmt.Errorf("%w: retail order has already been shipped", ErrCommerceRefundInvalid)

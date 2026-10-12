@@ -142,7 +142,8 @@ Page({
   refundOrder() {
     if (!this.data.canRequestRefund || this.data.refundSubmitting || this.data.refundQuerying) return;
     const reasons = ['商品不需要了', '下单有误', '其他原因'];
-    const confirm = reason => wx.showModal({ title: '申请退款', content: '将按原支付方式申请整单退款，是否继续？', confirmText: '确认申请', success: result => { if (result.confirm) this.submitRefund(reason); } });
+    const isCompleted = this.data.order && this.data.order.status === 'COMPLETED';
+    const confirm = reason => wx.showModal({ title: isCompleted ? '申请售后' : '申请退款', content: isCompleted ? '订单已完成，将提交售后申请，商家审核后再处理退款。是否继续？' : '将按原支付方式申请整单退款，是否继续？', confirmText: '确认申请', success: result => { if (result.confirm) this.submitRefund(reason); } });
     if (typeof wx.showActionSheet === 'function') wx.showActionSheet({ itemList: reasons, success: result => confirm(reasons[result.tapIndex] || '客户申请退款') });
     else confirm('客户申请退款');
   },
@@ -154,7 +155,7 @@ Page({
     return api.createRefund(this.orderId, { idempotencyKey, clientRequestId: idempotencyKey, reason: reason || '客户申请退款' }).then(result => {
       if (result && result.order) this.renderOrder(result.order);
       else this.setData({ refundMessage: '退款申请已提交，正在等待支付渠道确认' });
-      wx.showToast({ title: '退款申请已提交', icon: 'none' });
+      wx.showToast({ title: this.data.order && this.data.order.status === 'COMPLETED' ? '售后申请已提交' : '退款申请已提交', icon: 'none' });
       return this.queryRefund(false);
     }).catch(error => {
       console.error('create refund failed', error);
