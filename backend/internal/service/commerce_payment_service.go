@@ -1113,7 +1113,7 @@ func (p *commerceWechatProvider) CreateJSAPI(ctx context.Context, request Commer
 	if response == nil {
 		return CommerceWechatPaymentResult{}, fmt.Errorf("微信 JSAPI 下单返回为空")
 	}
-	if response.Code == 200 {
+	if response.Code == wechatv3.Success {
 		if response.Response == nil || strings.TrimSpace(response.Response.PrepayId) == "" {
 			// A successful HTTP status without a usable prepay_id is a malformed
 			// provider response. No payment could have been accepted in this case.
@@ -1136,7 +1136,7 @@ func (p *commerceWechatProvider) QueryPayment(ctx context.Context, outTradeNo st
 	if response == nil {
 		return CommerceWechatPaymentStatus{}, fmt.Errorf("微信支付查单返回为空")
 	}
-	if response.Code != 200 || response.Response == nil {
+	if response.Code != wechatv3.Success || response.Response == nil {
 		return CommerceWechatPaymentStatus{}, commerceWechatProviderError{statusCode: response.Code, code: strings.TrimSpace(response.ErrResponse.Code), message: strings.TrimSpace(response.ErrResponse.Message)}
 	}
 	status := CommerceWechatPaymentStatus{State: response.Response.TradeState, TransactionID: response.Response.TransactionId}
@@ -1160,7 +1160,7 @@ func (p *commerceWechatProvider) CreateRefund(ctx context.Context, request Comme
 	if err != nil {
 		return CommerceWechatRefundResult{}, err
 	}
-	if response == nil || response.Code != 200 || response.Response == nil {
+	if response == nil || response.Code != wechatv3.Success || response.Response == nil {
 		if response == nil {
 			return CommerceWechatRefundResult{}, fmt.Errorf("微信退款申请返回为空")
 		}
@@ -1182,7 +1182,7 @@ func (p *commerceWechatProvider) QueryRefund(ctx context.Context, outRefundNo st
 	if err != nil {
 		return CommerceWechatRefundStatus{}, err
 	}
-	if response == nil || response.Code != 200 || response.Response == nil {
+	if response == nil || response.Code != wechatv3.Success || response.Response == nil {
 		return CommerceWechatRefundStatus{}, fmt.Errorf("微信退款查单失败")
 	}
 	amount := int64(0)
