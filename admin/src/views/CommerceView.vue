@@ -1269,6 +1269,7 @@ async function loadProducts() {
       search: productSearch.value.trim(),
     }))
     products.value = response.data?.data || []
+    if (loadError.value === '商品目录暂时无法加载') loadError.value = ''
   } catch (error) {
     if (statusCode(error) !== 403) loadError.value = '商品目录暂时无法加载'
   }
@@ -1279,6 +1280,7 @@ async function loadLocations() {
   try {
     const response = await request.get('/commerce/locations', silentConfig({ business_type: currentDomain.value }))
     locations.value = response.data?.data || []
+    if (loadError.value === '履约地点暂时无法加载') loadError.value = ''
   } catch (error) {
     if (statusCode(error) !== 403) loadError.value = '履约地点暂时无法加载'
   }
@@ -1289,6 +1291,7 @@ async function loadInventory() {
   try {
     const response = await request.get('/commerce/inventory', silentConfig({ business_type: currentDomain.value }))
     inventoryRows.value = response.data?.data || []
+    if (loadError.value === '库存台账暂时无法加载') loadError.value = ''
   } catch (error) {
     if (statusCode(error) !== 403) loadError.value = '库存台账暂时无法加载'
   }
@@ -1304,6 +1307,7 @@ async function loadStorefrontData() {
     ])
     storefrontBindings.value = bindingsResponse.data?.data || []
     storefrontChannels.value = (channelsResponse.data?.data || []).filter((account: any) => account.status !== 'disabled')
+    if (loadError.value === '小程序发布配置暂时无法加载') loadError.value = ''
   } catch (error) {
     if (statusCode(error) !== 403) loadError.value = '小程序发布配置暂时无法加载'
   } finally {
