@@ -1110,13 +1110,18 @@ func (p *commerceWechatProvider) CreateJSAPI(ctx context.Context, request Commer
 		}
 		return CommerceWechatPaymentResult{}, permanentProviderError{message: "微信 JSAPI 下单请求构造失败: " + err.Error()}
 	}
-	if response == nil || response.Code != 200 || response.Response == nil || strings.TrimSpace(response.Response.PrepayId) == "" {
-		if response == nil {
-			return CommerceWechatPaymentResult{}, fmt.Errorf("微信 JSAPI 下单返回为空")
-		}
-		return CommerceWechatPaymentResult{}, commerceWechatProviderError{statusCode: response.Code, code: strings.TrimSpace(response.ErrResponse.Code), message: strings.TrimSpace(response.ErrResponse.Message)}
+	if response == nil {
+		return CommerceWechatPaymentResult{}, fmt.Errorf("微信 JSAPI 下单返回为空")
 	}
-	return CommerceWechatPaymentResult{PrepayID: response.Response.PrepayId}, nil
+	if response.Code == 200 {
+		if response.Response == nil || strings.TrimSpace(response.Response.PrepayId) == "" {
+			// A successful HTTP status without a usable prepay_id is a malformed
+			// provider response. No payment could have been accepted in this case.
+			return CommerceWechatPaymentResult{}, permanentProviderError{message: "微信 JSAPI 下单响应缺少 prepay_id"}
+		}
+		return CommerceWechatPaymentResult{PrepayID: response.Response.PrepayId}, nil
+	}
+	return CommerceWechatPaymentResult{}, commerceWechatProviderError{statusCode: response.Code, code: strings.TrimSpace(response.ErrResponse.Code), message: strings.TrimSpace(response.ErrResponse.Message)}
 }
 
 func (p *commerceWechatProvider) QueryPayment(ctx context.Context, outTradeNo string) (CommerceWechatPaymentStatus, error) {
