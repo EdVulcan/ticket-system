@@ -962,6 +962,11 @@ const orderPage = ref(1)
 const orderPageSize = 20
 const orderTotal = ref(0)
 const orderLoading = ref(false)
+let productsRequestVersion = 0
+let locationsRequestVersion = 0
+let inventoryRequestVersion = 0
+let storefrontRequestVersion = 0
+let orderRequestVersion = 0
 const orderDetailLoading = ref(false)
 const orderDetailVisible = ref(false)
 const selectedOrder = ref<any | null>(null)
@@ -1274,56 +1279,64 @@ function clearLoadError(source: string) {
 
 async function loadProducts() {
   if (!isCurrentDomainConfigured.value) return
+  const requestVersion = ++productsRequestVersion
   try {
     const response = await request.get('/commerce/products', silentConfig({
       business_type: currentDomain.value,
       status: productStatus.value,
       search: productSearch.value.trim(),
     }))
+    if (requestVersion !== productsRequestVersion) return
     products.value = response.data?.data || []
     clearLoadError('products')
   } catch (error) {
-    if (statusCode(error) !== 403) setLoadError('products', '商品目录暂时无法加载')
+    if (requestVersion === productsRequestVersion && statusCode(error) !== 403) setLoadError('products', '商品目录暂时无法加载')
   }
 }
 
 async function loadLocations() {
   if (!isCurrentDomainConfigured.value) return
+  const requestVersion = ++locationsRequestVersion
   try {
     const response = await request.get('/commerce/locations', silentConfig({ business_type: currentDomain.value }))
+    if (requestVersion !== locationsRequestVersion) return
     locations.value = response.data?.data || []
     clearLoadError('locations')
   } catch (error) {
-    if (statusCode(error) !== 403) setLoadError('locations', '履约地点暂时无法加载')
+    if (requestVersion === locationsRequestVersion && statusCode(error) !== 403) setLoadError('locations', '履约地点暂时无法加载')
   }
 }
 
 async function loadInventory() {
   if (!isCurrentDomainConfigured.value) return
+  const requestVersion = ++inventoryRequestVersion
   try {
     const response = await request.get('/commerce/inventory', silentConfig({ business_type: currentDomain.value }))
+    if (requestVersion !== inventoryRequestVersion) return
     inventoryRows.value = response.data?.data || []
     clearLoadError('inventory')
   } catch (error) {
-    if (statusCode(error) !== 403) setLoadError('inventory', '库存台账暂时无法加载')
+    if (requestVersion === inventoryRequestVersion && statusCode(error) !== 403) setLoadError('inventory', '库存台账暂时无法加载')
   }
 }
 
 async function loadStorefrontData() {
   if (!isCurrentDomainConfigured.value) return
+  const requestVersion = ++storefrontRequestVersion
   storefrontLoading.value = true
   try {
     const [bindingsResponse, channelsResponse] = await Promise.all([
       request.get('/commerce/storefront-bindings', silentConfig({ business_type: currentDomain.value })),
       request.get('/commerce/storefront-channels', silentConfig({})),
     ])
+    if (requestVersion !== storefrontRequestVersion) return
     storefrontBindings.value = bindingsResponse.data?.data || []
     storefrontChannels.value = (channelsResponse.data?.data || []).filter((account: any) => account.status !== 'disabled')
     clearLoadError('storefront')
   } catch (error) {
-    if (statusCode(error) !== 403) setLoadError('storefront', '小程序发布配置暂时无法加载')
+    if (requestVersion === storefrontRequestVersion && statusCode(error) !== 403) setLoadError('storefront', '小程序发布配置暂时无法加载')
   } finally {
-    storefrontLoading.value = false
+    if (requestVersion === storefrontRequestVersion) storefrontLoading.value = false
   }
 }
 
@@ -1418,6 +1431,7 @@ function orderRefundRequest(row: any) {
 
 async function loadOrders(searchOverride?: string | number) {
   if (!isCurrentDomainConfigured.value) return
+  const requestVersion = ++orderRequestVersion
   orderLoading.value = true
   try {
     if (typeof searchOverride === 'number') orderPage.value = Math.max(1, Math.floor(searchOverride))
@@ -1436,13 +1450,14 @@ async function loadOrders(searchOverride?: string | number) {
       page: orderPage.value,
       page_size: orderPageSize,
     }))
+    if (requestVersion !== orderRequestVersion) return
     orders.value = response.data?.data || []
     orderTotal.value = Number(response.data?.total || 0)
     clearLoadError('orders')
   } catch (error) {
-    if (statusCode(error) !== 403) setLoadError('orders', (error as any)?.response?.data?.error || '订单暂时无法加载')
+    if (requestVersion === orderRequestVersion && statusCode(error) !== 403) setLoadError('orders', (error as any)?.response?.data?.error || '订单暂时无法加载')
   } finally {
-    orderLoading.value = false
+    if (requestVersion === orderRequestVersion) orderLoading.value = false
   }
 }
 
