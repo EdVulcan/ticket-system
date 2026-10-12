@@ -126,7 +126,8 @@ const fetchAccounts = async () => {
     }
 }
 
-const fetchTransactions = async () => {
+const fetchTransactions = async (nextPage?: number) => {
+    if (Number.isFinite(nextPage)) page.value = Math.max(1, Math.floor(Number(nextPage)))
     loadingTrans.value = true
     try {
         const res = await request.get('/finance/transactions', {

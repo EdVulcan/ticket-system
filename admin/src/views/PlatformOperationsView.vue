@@ -9,15 +9,15 @@
     </div>
 
     <div class="flex flex-wrap gap-3 items-center">
-      <el-input v-model="tenantID" clearable placeholder="目标租户编号（可选）" style="width: 210px" @keyup.enter="loadAll" />
-      <el-select v-model="orderStatus" clearable placeholder="订单状态" style="width: 160px" @change="loadOrders">
+      <el-input v-model="tenantID" clearable placeholder="目标租户编号（可选）" style="width: 210px" @keyup.enter="applyFilters" />
+      <el-select v-model="orderStatus" clearable placeholder="订单状态" style="width: 160px" @change="applyOrderFilter">
         <el-option label="未支付" value="unpaid" />
         <el-option label="已支付" value="paid" />
         <el-option label="部分退款" value="partial_refunded" />
         <el-option label="已退款" value="refunded" />
         <el-option label="已取消" value="cancelled" />
       </el-select>
-      <el-button type="primary" @click="loadAll">查询</el-button>
+      <el-button type="primary" @click="applyFilters">查询</el-button>
     </div>
 
     <el-tabs v-model="activeTab" @tab-change="loadTab">
@@ -170,7 +170,8 @@ const auditActionText = (action: string) => ({
   'team.member.change': '调整团队人数',
 } as Record<string, string>)[action] || '其他系统操作'
 
-const loadOrders = async () => {
+const loadOrders = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) ordersPage.value = Math.max(1, Math.floor(Number(nextPage)))
   ordersLoading.value = true
   try {
     const res = await request.get('/platform/orders', { params: { tenant_id: tenantParam(), status: orderStatus.value, page: ordersPage.value, page_size: pageSize.value } })
@@ -179,7 +180,8 @@ const loadOrders = async () => {
   } catch (e: any) { ElMessage.error(e.response?.data?.error || '订单加载失败') } finally { ordersLoading.value = false }
 }
 
-const loadIssues = async () => {
+const loadIssues = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) issuesPage.value = Math.max(1, Math.floor(Number(nextPage)))
   issuesLoading.value = true
   try {
     const res = await request.get('/platform/issues', { params: { tenant_id: tenantParam(), page: issuesPage.value, page_size: pageSize.value } })
@@ -197,7 +199,8 @@ const loadFinance = async () => {
   finally { financeLoading.value = false }
 }
 
-const loadDevices = async () => {
+const loadDevices = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) devicesPage.value = Math.max(1, Math.floor(Number(nextPage)))
   devicesLoading.value = true
   try {
     const res = await request.get('/platform/devices', { params: { tenant_id: tenantParam(), page: devicesPage.value, page_size: pageSize.value } })
@@ -205,7 +208,8 @@ const loadDevices = async () => {
   } catch (e: any) { ElMessage.error(e.response?.data?.error || '设备总览加载失败') } finally { devicesLoading.value = false }
 }
 
-const loadSettlements = async () => {
+const loadSettlements = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) settlementsPage.value = Math.max(1, Math.floor(Number(nextPage)))
   settlementsLoading.value = true
   try {
     const res = await request.get('/platform/settlements', { params: { tenant_id: tenantParam(), page: settlementsPage.value, page_size: pageSize.value } })
@@ -213,7 +217,8 @@ const loadSettlements = async () => {
   } catch (e: any) { ElMessage.error(e.response?.data?.error || '结算总览加载失败') } finally { settlementsLoading.value = false }
 }
 
-const loadAudit = async () => {
+const loadAudit = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) auditPage.value = Math.max(1, Math.floor(Number(nextPage)))
   auditLoading.value = true
   try {
     const res = await request.get('/platform/audit-logs', { params: { tenant_id: tenantParam(), page: auditPage.value, page_size: pageSize.value } })
@@ -230,9 +235,21 @@ const loadTab = (name: string | number) => {
   }
 }
 
-const loadAll = async () => {
+const applyFilters = () => {
   ordersPage.value = 1
   issuesPage.value = 1
+  devicesPage.value = 1
+  settlementsPage.value = 1
+  auditPage.value = 1
+  void loadAll()
+}
+
+const applyOrderFilter = () => {
+  ordersPage.value = 1
+  void loadOrders()
+}
+
+const loadAll = async () => {
   await Promise.all([loadOrders(), loadIssues(), loadFinance(), loadDevices(), loadSettlements(), loadAudit()])
 }
 

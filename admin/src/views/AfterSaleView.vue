@@ -186,7 +186,7 @@ const approveForm = reactive({ reason: '', settlement_exception: false, settleme
 const differenceForm = reactive({ method: isSupplier.value ? 'cash' : 'wechat', pay_type: 'cscanb', auth_code: '', shift_id: null as number | null, device_id: null as number | null, cash_tendered_cents: 0 })
 const differenceChange = computed(() => ((Math.max(0, differenceForm.cash_tendered_cents - (differenceTarget.value?.difference_cents || 0))) / 100).toFixed(2))
 
-const load = async () => { loading.value = true; try { const res = await request.get('/after-sales', { params: { page: page.value, page_size: pageSize.value, status: status.value, order_no: orderNo.value.trim() } }); rows.value = res.data.data || []; total.value = res.data.total || 0 } finally { loading.value = false } }
+const load = async (nextPage?: number) => { if (Number.isFinite(nextPage)) page.value = Math.max(1, Math.floor(Number(nextPage))); loading.value = true; try { const res = await request.get('/after-sales', { params: { page: page.value, page_size: pageSize.value, status: status.value, order_no: orderNo.value.trim() } }); rows.value = res.data.data || []; total.value = res.data.total || 0 } finally { loading.value = false } }
 const applyFilters = () => { page.value = 1; load() }
 const loadOperationOptions = async () => {
 	if (!isSupplier.value) { devices.value = []; openShifts.value = []; return }

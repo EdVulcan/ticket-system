@@ -649,21 +649,24 @@ const loadPackageWorkspace = async () => {
   ])
 }
 
-const loadReservations = async () => {
+const loadReservations = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) reservationPage.value = Math.max(1, Math.floor(Number(nextPage)))
   if (!selectedHotelId.value) { hotelReservations.value = []; reservationTotal.value = 0; return }
   const response = await request.get('/scenic-hotel-packages/reservations', { params: { hotel_id: selectedHotelId.value, status: reservationStatus.value || undefined, order_no: reservationOrderNo.value.trim() || undefined, page: reservationPage.value, page_size: reservationPageSize.value } })
   hotelReservations.value = response.data.data || []
   reservationTotal.value = Number(response.data.total || 0)
 }
 
-const loadEntitlements = async () => {
+const loadEntitlements = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) entitlementPage.value = Math.max(1, Math.floor(Number(nextPage)))
   if (!selectedHotelId.value) { packageEntitlements.value = []; entitlementTotal.value = 0; return }
   const response = await request.get('/scenic-hotel-packages/entitlements', { params: { hotel_id: selectedHotelId.value, status: entitlementStatus.value || undefined, order_no: reservationOrderNo.value.trim() || undefined, page: entitlementPage.value, page_size: reservationPageSize.value } })
   packageEntitlements.value = response.data.data || []
   entitlementTotal.value = Number(response.data.total || 0)
 }
 
-const loadSyncFailures = async () => {
+const loadSyncFailures = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) syncFailurePage.value = Math.max(1, Math.floor(Number(nextPage)))
   if (!canViewReservations.value) { syncFailures.value = []; syncFailureTotal.value = 0; return }
   syncFailureLoading.value = true
   try {

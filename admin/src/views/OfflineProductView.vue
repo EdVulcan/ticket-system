@@ -318,7 +318,8 @@ const scenicAreaOptions = computed(() => scenicAreas.value.filter(area => area.s
 const filteredCheckpoints = computed(() => checkpoints.value.filter(cp => cp.scenic_area_id === form.product.scenic_area_id))
 const scenicAreaName = (id: number) => scenicAreas.value.find(area => area.id === id)?.name || '未归属'
 
-const fetchData = async () => {
+const fetchData = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) currentPage.value = Math.max(1, Math.floor(Number(nextPage)))
   loading.value = true
   try {
     const res = await request.get('/products', {

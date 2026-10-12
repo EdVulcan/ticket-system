@@ -180,6 +180,7 @@ const couponTemplates = ref<any[]>([])
 const campaigns = ref<any[]>([])
 const couponDialogVisible = ref(false)
 const campaignDialogVisible = ref(false)
+let loadVersion = 0
 
 const user = readStoredUser()
 const configuredTypes = configuredBusinessCapabilitySet(user)
@@ -208,10 +209,12 @@ function optionalISOString(value: unknown) { if (!value) return null; const date
 function resetError() { errorMessage.value = '' }
 
 async function loadPromotions() {
+  const version = ++loadVersion
   loading.value = true
   resetError()
   try {
     const channelsResponse = await request.get('/commerce/storefront-channels', { skipErrorToast: true } as any)
+    if (version !== loadVersion) return
     channels.value = (channelsResponse.data?.data || []).filter((row: any) => row.status !== 'disabled')
     if (!channelID.value || !channels.value.some(row => Number(row.id) === channelID.value)) channelID.value = Number(channels.value[0]?.id || 0)
     if (!channelID.value) { couponTemplates.value = []; campaigns.value = []; return }
@@ -220,14 +223,16 @@ async function loadPromotions() {
       request.get('/commerce/promotions/coupon-templates', params),
       request.get('/commerce/promotions/assist-campaigns', params),
     ])
+    if (version !== loadVersion) return
     couponTemplates.value = couponsResponse.data?.data || []
     campaigns.value = campaignsResponse.data?.data || []
   } catch (error) {
+    if (version !== loadVersion) return
     couponTemplates.value = []
     campaigns.value = []
     errorMessage.value = apiError(error, '营销配置暂时无法加载')
   } finally {
-    loading.value = false
+    if (version === loadVersion) loading.value = false
   }
 }
 

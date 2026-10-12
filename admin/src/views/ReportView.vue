@@ -198,7 +198,8 @@ const queryParams = (exportAll = false) => ({
   page_size: exportAll ? 10000 : pageSize.value
 })
 
-const loadRows = async () => {
+const loadRows = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) page.value = Math.max(1, Math.floor(Number(nextPage)))
   loading.value = true
   try {
     const response = await request.get(`/reports/${activeTab.value}`, { params: queryParams() })

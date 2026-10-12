@@ -10,11 +10,11 @@
     </header>
 
     <section class="toolbar">
-      <el-date-picker v-model="period" type="month" value-format="YYYY-MM" placeholder="选择账期" clearable @change="load" />
-      <el-input v-model="search" clearable placeholder="搜索租户名称或企业码" class="search-input" @keyup.enter="load" @clear="load">
+      <el-date-picker v-model="period" type="month" value-format="YYYY-MM" placeholder="选择账期" clearable @change="applyFilters" />
+      <el-input v-model="search" clearable placeholder="搜索租户名称或企业码" class="search-input" @keyup.enter="applyFilters" @clear="applyFilters">
         <template #prefix><el-icon><Search /></el-icon></template>
       </el-input>
-      <el-button type="primary" @click="load">查询</el-button>
+      <el-button type="primary" @click="applyFilters">查询</el-button>
     </section>
 
     <el-alert
@@ -111,6 +111,7 @@ const period = ref(currentPeriod)
 const search = ref('')
 const dialogVisible = ref(false)
 const editingRow = ref<any>(null)
+let requestVersion = 0
 const form = reactive({
   enabled: true,
   inheritRequest: true,
@@ -124,16 +125,24 @@ const formatNumber = (value: number) => new Intl.NumberFormat('zh-CN').format(Nu
 const tenantStatusText = (status: string) => ({ active: '正常', frozen: '已冻结', closed: '已关闭' } as Record<string, string>)[status] || status || '未知'
 const tenantStatusType = (status: string) => status === 'active' ? 'success' : status === 'frozen' ? 'warning' : 'info'
 
-const load = async () => {
+const load = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) page.value = Math.max(1, Math.floor(Number(nextPage)))
+  const version = ++requestVersion
   loading.value = true
   try {
     const response = await request.get('/platform/ai-quotas', { params: { period: period.value, search: search.value.trim(), page: page.value, page_size: pageSize.value } })
+    if (version !== requestVersion) return
     const data = response.data || {}
     rows.value = data.data || []
     total.value = Number(data.total || 0)
   } finally {
-    loading.value = false
+    if (version === requestVersion) loading.value = false
   }
+}
+
+const applyFilters = () => {
+  page.value = 1
+  void load()
 }
 
 const openEdit = (row: any) => {

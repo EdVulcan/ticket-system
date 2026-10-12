@@ -244,7 +244,8 @@ const submitVerify = async () => {
   }
 }
 
-const fetchData = async () => {
+const fetchData = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) currentPage.value = Math.max(1, Math.floor(Number(nextPage)))
   loading.value = true
   try {
     const params: any = {

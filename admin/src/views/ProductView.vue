@@ -521,7 +521,8 @@ const scenicAreaName = (id: number) => scenicAreas.value.find(area => area.id ==
 
 const formatRuleIndex = (index: number) => String(index + 1).padStart(2, '0')
 
-const fetchData = async () => {
+const fetchData = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) currentPage.value = Math.max(1, Math.floor(Number(nextPage)))
   loading.value = true
   try {
     const res = await request.get('/products', {

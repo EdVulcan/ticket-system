@@ -25,9 +25,9 @@
     </section>
 
     <section class="filter-panel">
-      <el-input v-model="filters.keyword" clearable placeholder="搜索姓名或会员编号" @keyup.enter="loadMembers" />
-      <el-input v-model="filters.phone" clearable placeholder="验证手机号" @keyup.enter="loadMembers" />
-      <el-select v-model="filters.status" clearable placeholder="全部状态" @change="loadMembers">
+      <el-input v-model="filters.keyword" clearable placeholder="搜索姓名或会员编号" @keyup.enter="applyFilters" />
+      <el-input v-model="filters.phone" clearable placeholder="验证手机号" @keyup.enter="applyFilters" />
+      <el-select v-model="filters.status" clearable placeholder="全部状态" @change="applyFilters">
         <el-option label="正式会员" value="active" />
         <el-option label="待认证客户" value="provisional" />
         <el-option label="冻结" value="frozen" />
@@ -35,7 +35,7 @@
         <el-option label="已匿名化" value="anonymized" />
         <el-option label="已退出会员" value="withdrawn" />
       </el-select>
-      <el-button type="primary" :loading="loading" @click="loadMembers">查询</el-button>
+      <el-button type="primary" :loading="loading" @click="applyFilters">查询</el-button>
     </section>
 
     <section class="table-panel">
@@ -146,6 +146,7 @@ const pageSize = ref(20)
 const detailVisible = ref(false)
 const detail = ref<any | null>(null)
 const filters = reactive({ keyword: '', phone: '', status: '' })
+let requestVersion = 0
 
 const statusText = (row: any) => {
   if (row?.status === 'frozen') return '冻结'
@@ -161,17 +162,26 @@ const formatCents = (value: unknown) => {
   return Number.isFinite(cents) ? (cents / 100).toFixed(2) : '0.00'
 }
 
-async function loadMembers() {
+async function loadMembers(nextPage?: number) {
+  if (Number.isFinite(nextPage)) page.value = Math.max(1, Math.floor(Number(nextPage)))
+  const version = ++requestVersion
   loading.value = true
   try {
     const response = await request.get('/members', { params: { page: page.value, page_size: pageSize.value, keyword: filters.keyword || undefined, phone: filters.phone || undefined, status: filters.status || undefined }, skipErrorToast: true } as any)
+    if (version !== requestVersion) return
     rows.value = response.data.items || []
     total.value = Number(response.data.total || 0)
   } catch (error: any) {
+    if (version !== requestVersion) return
     ElMessage.error(error.response?.data?.error || '客户列表加载失败')
   } finally {
-    loading.value = false
+    if (version === requestVersion) loading.value = false
   }
+}
+
+function applyFilters() {
+  page.value = 1
+  void loadMembers()
 }
 
 async function loadBenefit() {
@@ -230,7 +240,7 @@ async function exportMembers() {
 
 function handlePageSizeChange() {
   page.value = 1
-  loadMembers()
+  void loadMembers()
 }
 
 async function openDetail(row: any) {

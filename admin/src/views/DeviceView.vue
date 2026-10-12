@@ -356,7 +356,8 @@ const getDeviceTypeTag = (type: string) => {
 
 const isGateDevice = (device: any) => String(device?.type || '').trim().toLowerCase() === 'gate'
 
-const fetchData = async () => {
+const fetchData = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) currentPage.value = Math.max(1, Math.floor(Number(nextPage)))
   const sequence = ++fetchSequence
   loading.value = true
   try {

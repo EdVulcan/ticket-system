@@ -944,6 +944,7 @@ const detailLoading = ref(false)
 const mediaUploadingKind = ref('')
 const mediaDeletingID = ref(0)
 const loadError = ref('')
+const loadErrorSource = ref('')
 const activeTab = ref('products')
 const productSearch = ref('')
 const productStatus = ref<ProductStatus | ''>('')
@@ -1260,6 +1261,17 @@ function statusCode(error: any) {
   return Number(error?.response?.status || 0)
 }
 
+function setLoadError(source: string, message: string) {
+  loadErrorSource.value = source
+  loadError.value = message
+}
+
+function clearLoadError(source: string) {
+  if (loadErrorSource.value !== source) return
+  loadErrorSource.value = ''
+  loadError.value = ''
+}
+
 async function loadProducts() {
   if (!isCurrentDomainConfigured.value) return
   try {
@@ -1269,9 +1281,9 @@ async function loadProducts() {
       search: productSearch.value.trim(),
     }))
     products.value = response.data?.data || []
-    if (loadError.value === '商品目录暂时无法加载') loadError.value = ''
+    clearLoadError('products')
   } catch (error) {
-    if (statusCode(error) !== 403) loadError.value = '商品目录暂时无法加载'
+    if (statusCode(error) !== 403) setLoadError('products', '商品目录暂时无法加载')
   }
 }
 
@@ -1280,9 +1292,9 @@ async function loadLocations() {
   try {
     const response = await request.get('/commerce/locations', silentConfig({ business_type: currentDomain.value }))
     locations.value = response.data?.data || []
-    if (loadError.value === '履约地点暂时无法加载') loadError.value = ''
+    clearLoadError('locations')
   } catch (error) {
-    if (statusCode(error) !== 403) loadError.value = '履约地点暂时无法加载'
+    if (statusCode(error) !== 403) setLoadError('locations', '履约地点暂时无法加载')
   }
 }
 
@@ -1291,9 +1303,9 @@ async function loadInventory() {
   try {
     const response = await request.get('/commerce/inventory', silentConfig({ business_type: currentDomain.value }))
     inventoryRows.value = response.data?.data || []
-    if (loadError.value === '库存台账暂时无法加载') loadError.value = ''
+    clearLoadError('inventory')
   } catch (error) {
-    if (statusCode(error) !== 403) loadError.value = '库存台账暂时无法加载'
+    if (statusCode(error) !== 403) setLoadError('inventory', '库存台账暂时无法加载')
   }
 }
 
@@ -1307,9 +1319,9 @@ async function loadStorefrontData() {
     ])
     storefrontBindings.value = bindingsResponse.data?.data || []
     storefrontChannels.value = (channelsResponse.data?.data || []).filter((account: any) => account.status !== 'disabled')
-    if (loadError.value === '小程序发布配置暂时无法加载') loadError.value = ''
+    clearLoadError('storefront')
   } catch (error) {
-    if (statusCode(error) !== 403) loadError.value = '小程序发布配置暂时无法加载'
+    if (statusCode(error) !== 403) setLoadError('storefront', '小程序发布配置暂时无法加载')
   } finally {
     storefrontLoading.value = false
   }
@@ -1325,6 +1337,7 @@ async function loadWorkspace() {
   orderTotal.value = 0
   loading.value = true
   loadError.value = ''
+  loadErrorSource.value = ''
   await Promise.all([loadProducts(), loadLocations(), loadInventory()])
   loading.value = false
 }
@@ -1425,9 +1438,9 @@ async function loadOrders(searchOverride?: string | number) {
     }))
     orders.value = response.data?.data || []
     orderTotal.value = Number(response.data?.total || 0)
-    if (loadError.value === '订单暂时无法加载') loadError.value = ''
+    clearLoadError('orders')
   } catch (error) {
-    if (statusCode(error) !== 403) loadError.value = (error as any)?.response?.data?.error || '订单暂时无法加载'
+    if (statusCode(error) !== 403) setLoadError('orders', (error as any)?.response?.data?.error || '订单暂时无法加载')
   } finally {
     orderLoading.value = false
   }

@@ -211,7 +211,8 @@ const rules = computed(() => {
     return base
 })
 
-const fetchData = async () => {
+const fetchData = async (nextPage?: number) => {
+  if (Number.isFinite(nextPage)) currentPage.value = Math.max(1, Math.floor(Number(nextPage)))
   loading.value = true
   try {
     const res = await request.get('/tenants', {
