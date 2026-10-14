@@ -1349,3 +1349,114 @@ test('shared address book keeps restaurant and retail checkout selections indepe
   page.selectAddress({ currentTarget: { dataset: { id: 'delivery' } } });
   assert.deepEqual(writes, [['checkout_takeaway_address_id', 'delivery'], ['checkout_address_id', 'delivery']]);
 });
+
+test('fulfillment projection preserves ready and delivered before customer completion', () => {
+  const api = load('miniprogram/services/api.js', { './storage': {}, './http': {} });
+  const format = require('../miniprogram/utils/format');
+  const base = { payment_status: 'paid', status: 'PAID', business_type: 'restaurant', items: [] };
+  assert.equal(api.normalizeOrder({ ...base, fulfillment_status: 'accepted' }).status, 'ACCEPTED');
+  assert.equal(api.normalizeOrder({ ...base, fulfillment_status: 'preparing' }).status, 'PREPARING');
+  for (const method of ['pickup', 'delivery']) {
+    const ready = api.normalizeOrder({ ...base, fulfillment_status: 'ready', fulfillment_method: method, ready_at: '2026-10-14T09:00:00Z' });
+    assert.equal(ready.status, 'READY');
+    assert.equal(ready.readyAt, '2026-10-14T09:00:00Z');
+    assert.equal(ready.fulfillmentCompleted, false);
+    assert.equal(format.orderStatus(ready.status, ready.fulfillmentType, ready.deliveryMethod), method === 'pickup' ? '待取餐' : '待配送');
+  }
+  const delivered = api.normalizeOrder({ ...base, business_type: 'retail', status: 'COMPLETED', fulfillment_status: 'delivered' });
+  assert.equal(delivered.status, 'DELIVERED');
+  assert.equal(delivered.fulfillmentCompleted, false);
+  assert.equal(api.normalizeOrder({ ...base, business_type: 'retail', fulfillment_status: 'completed' }).fulfillmentCompleted, true);
+  const closed = api.normalizeOrder({ ...base, status: 'COMPLETED', fulfillment_status: 'completed', refund_status: 'closed' });
+  assert.equal(closed.status, 'REFUND_FAILED');
+  assert.equal(closed.fulfillmentCompleted, true);
+});
+
+test('ready and signed retail pages retain work tabs and obey server receipt permissions', () => {
+  const api = load('miniprogram/services/api.js', { './storage': {}, './http': {} });
+  let detail; let list;
+  let confirmations = 0;
+  load('miniprogram/pages/order/detail/index.js', {
+    '../../../services/storage': {},
+    '../../../services/api': { normalizeOrder: api.normalizeOrder, isProduction: () => true, confirmReceipt: () => { confirmations++; } },
+    '../../../services/payment': {}
+  }, { Page: page => { detail = page; }, wx: { showToast() {} } });
+  detail.setData = change => { detail.data = { ...detail.data, ...change }; };
+  load('miniprogram/pages/order/list/index.js', { '../../../services/storage': {}, '../../../services/api': {} }, { Page: page => { list = page; } });
+  for (const method of ['pickup', 'delivery']) {
+    detail.renderOrder({ business_type: 'restaurant', payment_status: 'paid', fulfillment_status: 'ready', fulfillment_method: method, available_actions: { can_confirm_receipt: false }, items: [] });
+    assert.equal(detail.data.order.status, 'READY');
+    assert.equal(detail.data.canConfirmReceipt, false);
+    assert.match(detail.data.statusDescription, method === 'pickup' ? /到店取餐/ : /等待安排配送/);
+    assert.equal(list.matchesTab(detail.data.order, 'PROCESSING'), true);
+    assert.equal(list.matchesTab(detail.data.order, 'DELIVERING'), false);
+    detail.confirmReceipt();
+  }
+  assert.equal(confirmations, 0);
+  detail.renderOrder({ business_type: 'restaurant', payment_status: 'paid', fulfillment_status: 'accepted', available_actions: { can_confirm_receipt: false }, items: [] });
+  assert.equal(detail.data.order.statusText, '已接单');
+  assert.equal(detail.data.statusDescription, '商家已接单，等待开始制作');
+  assert.equal(list.matchesTab(detail.data.order, 'PROCESSING'), true);
+  detail.renderOrder({ business_type: 'retail', payment_status: 'paid', fulfillment_status: 'delivered', available_actions: { can_confirm_receipt: true, can_refund: false }, items: [] });
+  assert.equal(detail.data.order.status, 'DELIVERED');
+  assert.equal(detail.data.order.fulfillmentCompleted, false);
+  assert.equal(detail.data.order.timelineStatus, 'DELIVERED');
+  assert.equal(detail.data.canRequestRefund, false);
+  assert.equal(detail.data.canConfirmReceipt, true);
+  assert.match(detail.data.statusDescription, /待确认收货/);
+  assert.equal(list.matchesTab(detail.data.order, 'SHIPPED'), true);
+  assert.equal(list.matchesTab(detail.data.order, 'COMPLETED'), false);
+  detail.renderOrder({ business_type: 'restaurant', payment_status: 'paid', fulfillment_status: 'delivering', available_actions: { can_confirm_receipt: false }, items: [] });
+  assert.match(detail.data.statusDescription, /配送途中/);
+  assert.equal(detail.data.canConfirmReceipt, false);
+});
+
+test('profile work counts and payment polling include ready and delivered without completing them', () => {
+  const api = load('miniprogram/services/api.js', { './storage': {}, './http': {} });
+  let profile;
+  load('miniprogram/pages/profile/index/index.js', {
+    '../../../services/storage': { getStore: () => ({}) }, '../../../services/api': { normalizeOrder: api.normalizeOrder }
+  }, { Page: page => { profile = page; } });
+  profile.setData = change => { profile.data = { ...profile.data, ...change }; };
+  profile.renderProfile({ globalData: { user: {} } }, [], [
+    { business_type: 'restaurant', payment_status: 'paid', fulfillment_status: 'accepted' },
+    { business_type: 'restaurant', payment_status: 'paid', fulfillment_status: 'ready', fulfillment_method: 'pickup' },
+    { business_type: 'retail', payment_status: 'paid', fulfillment_status: 'delivered' }
+  ]);
+  assert.equal(profile.data.orderStats.processing, 2);
+  assert.equal(profile.data.orderStats.delivering, 0);
+  assert.equal(profile.data.orderStats.shipped, 1);
+  assert.equal(profile.data.orderStats.completed, 0);
+  const payment = load('miniprogram/services/payment.js', { './api': {} });
+  assert.equal(payment.isSettled('ACCEPTED'), true);
+  assert.equal(payment.isSettled('READY'), true);
+  assert.equal(payment.isSettled('DELIVERED'), true);
+});
+
+test('demo receipt waits for signed retail delivery and completion persists fulfillment truth', () => {
+  const api = load('miniprogram/services/api.js', { './storage': {}, './http': {} });
+  let detail;
+  const order = { id: 'demo-retail', businessType: 'retail', paymentStatus: 'paid', status: 'SHIPPED', fulfillmentStatus: 'shipped', items: [] };
+  let saves = 0;
+  load('miniprogram/pages/order/detail/index.js', {
+    '../../../services/storage': { getOrders: () => [order], saveOrders: () => { saves++; } },
+    '../../../services/api': { normalizeOrder: api.normalizeOrder, isProduction: () => false },
+    '../../../services/payment': {}
+  }, { Page: page => { detail = page; }, wx: { showToast() {} } });
+  detail.setData = change => { detail.data = { ...detail.data, ...change }; };
+  detail.orderId = order.id;
+  detail.loadOrder = () => detail.renderOrder(order);
+  detail.renderOrder(order);
+  assert.equal(detail.data.canConfirmReceipt, false);
+  detail.confirmReceipt();
+  assert.equal(saves, 0);
+  Object.assign(order, { status: 'DELIVERED', fulfillmentStatus: 'delivered', delivered_at: '2026-10-14T10:00:00Z' });
+  detail.renderOrder(order);
+  assert.equal(detail.data.canConfirmReceipt, true);
+  assert.ok(detail.data.order.deliveredText);
+  assert.equal(detail.data.order.fulfillmentCompleted, false);
+  detail.confirmReceipt();
+  assert.equal(saves, 1);
+  assert.equal(order.fulfillmentStatus, 'completed');
+  assert.equal(detail.data.order.fulfillmentCompleted, true);
+});

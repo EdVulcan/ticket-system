@@ -2,7 +2,7 @@ const storage = require('../../../services/storage');
 const api = require('../../../services/api');
 const format = require('../../../utils/format');
 
-const PAID_STATUSES = ['PAID', 'PREPARING', 'DELIVERING', 'SHIPPED', 'COMPLETED', 'REFUNDING', 'REFUND_FAILED', 'REFUND_REVIEW'];
+const PAID_STATUSES = ['PAID', 'ACCEPTED', 'PREPARING', 'READY', 'DELIVERING', 'SHIPPED', 'DELIVERED', 'COMPLETED', 'REFUNDING', 'REFUND_FAILED', 'REFUND_REVIEW'];
 
 function dayKey(value) {
   const date = new Date(value);

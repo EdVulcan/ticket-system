@@ -7,7 +7,7 @@ function decorate(order) {
   order = typeof api.normalizeOrder === 'function' ? api.normalizeOrder(order) : order;
   return Object.assign({}, order, {
     id: order.id || order._id,
-    statusText: format.orderStatus(order.status, order.fulfillmentType),
+    statusText: format.orderStatus(order.status, order.fulfillmentType, order.deliveryMethod),
     fulfillmentText: order.fulfillmentType === commerce.FULFILLMENT.COURIER ? '零售快递' : '餐饮订单',
     createdText: format.dateTime(order.createdAt),
     payableText: format.yuan(order.payableAmount),
@@ -59,9 +59,9 @@ Page({
   },
 
   matchesTab(order, tab) {
-    if (tab === 'PROCESSING') return order.fulfillmentType !== commerce.FULFILLMENT.COURIER && ['PAID', 'PREPARING'].indexOf(order.status) > -1;
+    if (tab === 'PROCESSING') return order.fulfillmentType !== commerce.FULFILLMENT.COURIER && ['PAID', 'ACCEPTED', 'PREPARING', 'READY'].indexOf(order.status) > -1;
     if (tab === 'WAIT_SHIP') return order.fulfillmentType === commerce.FULFILLMENT.COURIER && order.status === 'PAID';
-    if (tab === 'SHIPPED') return order.fulfillmentType === commerce.FULFILLMENT.COURIER && order.status === 'SHIPPED';
+    if (tab === 'SHIPPED') return order.fulfillmentType === commerce.FULFILLMENT.COURIER && ['SHIPPED', 'DELIVERED'].indexOf(order.status) >= 0;
     return order.status === tab;
   },
 

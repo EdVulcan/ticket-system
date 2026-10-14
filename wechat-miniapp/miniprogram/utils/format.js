@@ -17,14 +17,16 @@ function dateTime(value) {
   return `${date.getMonth() + 1}月${date.getDate()}日 ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-function orderStatus(status, fulfillmentType) {
+function orderStatus(status, fulfillmentType, deliveryMethod) {
   if (fulfillmentType === 'COURIER') {
-    const courierMap = { PAID: '待发货', SHIPPED: '待收货' };
+    const courierMap = { PAID: '待发货', SHIPPED: '待收货', DELIVERED: '已签收 · 待确认' };
     if (courierMap[status]) return courierMap[status];
   }
+  if (status === 'READY') return deliveryMethod === 'PICKUP' ? '待取餐' : '待配送';
   const map = {
     WAIT_PAY: '待付款',
     PAID: '待接单',
+    ACCEPTED: '已接单',
     PREPARING: '制作中',
     DELIVERING: '配送中',
     COMPLETED: '已完成',

@@ -178,6 +178,29 @@ func (c *CommerceOrderController) RestaurantFulfillment(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, row)
 }
 
+// SaveRestaurantDelivery keeps preparation details separate from the actual
+// departure. Saving a contact or runner order must not mark food as dispatched.
+func (c *CommerceOrderController) SaveRestaurantDelivery(ctx *gin.Context) {
+	id, err := parseCommerceOrderID(ctx)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "无效的商业订单编号"})
+		return
+	}
+	var input service.RestaurantDeliveryDetailsInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "配送信息格式不正确"})
+		return
+	}
+	input.ActorUserID = ctx.GetUint("user_id")
+	input.ActorRole = ctx.GetString("role")
+	row, err := c.Service.SaveRestaurantDeliveryDetails(ctx.GetUint("tenant_id"), id, input)
+	if err != nil {
+		commerceOrderError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, row)
+}
+
 func (c *CommerceOrderController) RetailFulfillment(ctx *gin.Context) {
 	id, err := parseCommerceOrderID(ctx)
 	if err != nil {

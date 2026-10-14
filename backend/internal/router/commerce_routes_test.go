@@ -20,6 +20,7 @@ func TestCommerceOrderRoutesRegisterWithoutWildcardConflict(t *testing.T) {
 		"GET /api/v1/commerce/orders/:id",
 		"GET /api/v1/commerce/orders/:id/shipment",
 		"POST /api/v1/commerce/orders/:id/shipments",
+		"PUT /api/v1/commerce/orders/:id/restaurant-delivery",
 	} {
 		if !routes[expected] {
 			t.Fatalf("route %q is not registered", expected)

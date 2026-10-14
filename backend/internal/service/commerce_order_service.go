@@ -1719,7 +1719,7 @@ func requireCommerceRefundableFulfillmentTx(tx *gorm.DB, order *model.CommerceOr
 func restaurantTransitionAllowed(current, next, method string) bool {
 	switch current {
 	case "pending_acceptance":
-		return next == "accepted"
+		return next == "accepted" || next == "preparing"
 	case "accepted":
 		return next == "preparing"
 	case "preparing":
@@ -1738,7 +1738,7 @@ func retailTransitionAllowed(current, next string) bool {
 	case "pending_shipment":
 		return next == "shipped"
 	case "shipped":
-		return next == "in_transit"
+		return next == "in_transit" || next == "delivered"
 	case "in_transit":
 		return next == "delivered"
 	case "delivered":
@@ -1755,6 +1755,10 @@ func (s *CommerceOrderService) TransitionRestaurantFulfillment(tenantID, orderID
 	input.CourierOrderNo = strings.TrimSpace(input.CourierOrderNo)
 	input.CourierContact = strings.TrimSpace(input.CourierContact)
 	input.DeliveryNote = strings.TrimSpace(input.DeliveryNote)
+	if input.DeliveryProvider == "merchant" {
+		input.CourierPlatformName = ""
+		input.CourierOrderNo = ""
+	}
 	if input.Status == "" {
 		return nil, ErrCommerceOrderState
 	}
@@ -1781,21 +1785,16 @@ func (s *CommerceOrderService) TransitionRestaurantFulfillment(tenantID, orderID
 			if fulfillment.Method != "delivery" {
 				return fmt.Errorf("%w: pickup orders cannot be dispatched", ErrCommerceOrderState)
 			}
-			if input.DeliveryProvider != "merchant" && input.DeliveryProvider != "courier_platform" {
-				return fmt.Errorf("%w: delivery provider must be merchant or courier_platform", ErrCommerceOrderInvalid)
-			}
-			if input.DeliveryProvider == "courier_platform" && (input.CourierPlatformName == "" || input.CourierOrderNo == "") {
-				return fmt.Errorf("%w: courier platform and order number are required", ErrCommerceOrderInvalid)
-			}
-			if len([]rune(input.CourierPlatformName)) > 80 || len([]rune(input.CourierOrderNo)) > 120 || len([]rune(input.CourierContact)) > 40 || len([]rune(input.DeliveryNote)) > 500 {
-				return fmt.Errorf("%w: delivery details are too long", ErrCommerceOrderInvalid)
+			if err := validateRestaurantDeliveryDetails(input.DeliveryProvider, input.CourierPlatformName, input.CourierOrderNo, input.CourierContact, input.DeliveryNote); err != nil {
+				return err
 			}
 		}
 		beforeJSON, _ := json.Marshal(fulfillment)
 		now := s.now()
 		updates := map[string]interface{}{"status": input.Status}
-		if input.Status == "accepted" {
+		if input.Status == "accepted" || (input.Status == "preparing" && fulfillment.Status == "pending_acceptance") {
 			updates["accepted_at"] = now
+			fulfillment.AcceptedAt = &now
 		}
 		if input.Status == "ready" {
 			updates["ready_at"] = now
@@ -1832,7 +1831,13 @@ func (s *CommerceOrderService) TransitionRestaurantFulfillment(tenantID, orderID
 		if input.Status == "completed" && fulfillment.Method == "delivery" {
 			fulfillment.DeliveredAt = &now
 		}
-		if err := recordCommerceAuditTx(tx, input.ActorUserID, tenantID, input.ActorRole, "commerce.restaurant_fulfillment.transition", "restaurant_fulfillment", fulfillment.ID, commerceTransitionReason(input.Reason), string(beforeJSON), fmt.Sprintf(`{"status":%q}`, input.Status)); err != nil {
+		after := map[string]interface{}{"status": input.Status, "accepted_at": fulfillment.AcceptedAt}
+		// Existing schemas preserve preparation time as an immutable audit fact.
+		if input.Status == "preparing" {
+			after["preparing_at"] = now
+		}
+		afterJSON, _ := json.Marshal(after)
+		if err := recordCommerceAuditTx(tx, input.ActorUserID, tenantID, input.ActorRole, "commerce.restaurant_fulfillment.transition", "restaurant_fulfillment", fulfillment.ID, commerceTransitionReason(input.Reason), string(beforeJSON), string(afterJSON)); err != nil {
 			return err
 		}
 		result = &fulfillment
@@ -1862,7 +1867,7 @@ func (s *CommerceOrderService) TransitionRetailFulfillment(tenantID, orderID uin
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_id = ? AND tenant_id = ?", orderID, tenantID).First(&fulfillment).Error; err != nil {
 			return err
 		}
-		if !retailTransitionAllowed(fulfillment.Status, input.Status) {
+		if input.Status == "completed" || !retailTransitionAllowed(fulfillment.Status, input.Status) {
 			return fmt.Errorf("%w: retail %s -> %s is not allowed", ErrCommerceOrderState, fulfillment.Status, input.Status)
 		}
 		if input.Status == "shipped" && (strings.TrimSpace(input.Carrier) == "" || strings.TrimSpace(input.TrackingNo) == "") {
@@ -1916,4 +1921,86 @@ func (s *CommerceOrderService) UpdateRestaurantFulfillment(tenantID, orderID uin
 
 func (s *CommerceOrderService) UpdateRetailFulfillment(tenantID, orderID uint, input RetailFulfillmentTransitionInput) (*model.RetailFulfillment, error) {
 	return s.TransitionRetailFulfillment(tenantID, orderID, input)
+}
+
+// RestaurantDeliveryDetailsInput saves the merchant execution plan before dispatch.
+// Actor identity is supplied only by the authenticated server boundary.
+type RestaurantDeliveryDetailsInput struct {
+	DeliveryProvider    string `json:"delivery_provider"`
+	CourierPlatformName string `json:"courier_platform_name"`
+	CourierOrderNo      string `json:"courier_order_no"`
+	CourierContact      string `json:"courier_contact"`
+	DeliveryNote        string `json:"delivery_note"`
+	ActorUserID         uint   `json:"-"`
+	ActorRole           string `json:"-"`
+	Reason              string `json:"reason"`
+}
+
+func validateRestaurantDeliveryDetails(provider, platform, orderNo, contact, note string) error {
+	if provider != "merchant" && provider != "courier_platform" {
+		return fmt.Errorf("%w: delivery provider must be merchant or courier_platform", ErrCommerceOrderInvalid)
+	}
+	if provider == "courier_platform" && (platform == "" || orderNo == "") {
+		return fmt.Errorf("%w: courier platform and order number are required", ErrCommerceOrderInvalid)
+	}
+	if len([]rune(platform)) > 80 || len([]rune(orderNo)) > 120 || len([]rune(contact)) > 40 || len([]rune(note)) > 500 {
+		return fmt.Errorf("%w: delivery details are too long", ErrCommerceOrderInvalid)
+	}
+	return nil
+}
+
+// SaveRestaurantDeliveryDetails updates audited metadata without advancing fulfillment.
+func (s *CommerceOrderService) SaveRestaurantDeliveryDetails(tenantID, orderID uint, input RestaurantDeliveryDetailsInput) (*model.RestaurantFulfillment, error) {
+	if tenantID == 0 || orderID == 0 {
+		return nil, fmt.Errorf("%w: tenant and order are required", ErrCommerceOrderInvalid)
+	}
+	input.DeliveryProvider = strings.TrimSpace(input.DeliveryProvider)
+	input.CourierPlatformName = strings.TrimSpace(input.CourierPlatformName)
+	input.CourierOrderNo = strings.TrimSpace(input.CourierOrderNo)
+	input.CourierContact = strings.TrimSpace(input.CourierContact)
+	input.DeliveryNote = strings.TrimSpace(input.DeliveryNote)
+	if input.DeliveryProvider == "merchant" {
+		input.CourierPlatformName = ""
+		input.CourierOrderNo = ""
+	}
+	if err := validateRestaurantDeliveryDetails(input.DeliveryProvider, input.CourierPlatformName, input.CourierOrderNo, input.CourierContact, input.DeliveryNote); err != nil {
+		return nil, err
+	}
+	var result *model.RestaurantFulfillment
+	err := s.write(func(tx *gorm.DB) error {
+		var order model.CommerceOrder
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND business_type = ?", orderID, tenantID, "restaurant").First(&order).Error; err != nil {
+			return err
+		}
+		if err := RequireConfiguredTenantBusinessCapability(tx, tenantID, "restaurant"); err != nil {
+			return err
+		}
+		if order.PaymentStatus != "paid" || (order.RefundStatus != "none" && order.RefundStatus != "rejected") {
+			return fmt.Errorf("%w: order is not fulfillable", ErrCommerceOrderState)
+		}
+		var fulfillment model.RestaurantFulfillment
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_id = ? AND tenant_id = ?", orderID, tenantID).First(&fulfillment).Error; err != nil {
+			return err
+		}
+		if fulfillment.Method != "delivery" || (fulfillment.Status != "accepted" && fulfillment.Status != "preparing" && fulfillment.Status != "ready") {
+			return fmt.Errorf("%w: delivery details cannot be changed in this state", ErrCommerceOrderState)
+		}
+		beforeJSON, _ := json.Marshal(fulfillment)
+		updates := map[string]interface{}{"delivery_provider": input.DeliveryProvider, "courier_platform_name": input.CourierPlatformName, "courier_order_no": input.CourierOrderNo, "courier_contact": input.CourierContact, "delivery_note": input.DeliveryNote}
+		if err := tx.Model(&fulfillment).Updates(updates).Error; err != nil {
+			return err
+		}
+		fulfillment.DeliveryProvider = input.DeliveryProvider
+		fulfillment.CourierPlatformName = input.CourierPlatformName
+		fulfillment.CourierOrderNo = input.CourierOrderNo
+		fulfillment.CourierContact = input.CourierContact
+		fulfillment.DeliveryNote = input.DeliveryNote
+		afterJSON, _ := json.Marshal(fulfillment)
+		if err := recordCommerceAuditTx(tx, input.ActorUserID, tenantID, input.ActorRole, "commerce.restaurant_delivery.update", "restaurant_fulfillment", fulfillment.ID, commerceTransitionReason(input.Reason), string(beforeJSON), string(afterJSON)); err != nil {
+			return err
+		}
+		result = &fulfillment
+		return nil
+	})
+	return result, err
 }

@@ -34,7 +34,7 @@ Page({
     memberConsentGranted: false,
     verifyingMemberPhone: false,
     memberError: '',
-    orderStats: { waitPay: 0, processing: 0, delivering: 0, completed: 0 }
+    orderStats: { waitPay: 0, processing: 0, delivering: 0, shipped: 0, completed: 0 }
   },
 
   onShow() {
@@ -185,7 +185,7 @@ Page({
     const coupons = allCoupons.filter((coupon) => coupon.status === 'AVAILABLE');
     const normalizedOrders = orders.map(item => typeof api.normalizeOrder === 'function' ? api.normalizeOrder(item) : item);
     const restaurantOrders = normalizedOrders.filter(item => item.fulfillmentType !== commerce.FULFILLMENT.COURIER);
-    this.setData({ profile: app.globalData.user, store: storage.getStore(), coupons, couponCount: coupons.length, orderStats: { waitPay: normalizedOrders.filter((item) => item.status === 'WAIT_PAY').length, processing: restaurantOrders.filter((item) => ['PAID', 'PREPARING'].indexOf(item.status) > -1).length, delivering: restaurantOrders.filter((item) => item.status === 'DELIVERING').length, completed: normalizedOrders.filter((item) => item.status === 'COMPLETED').length } });
+    this.setData({ profile: app.globalData.user, store: storage.getStore(), coupons, couponCount: coupons.length, orderStats: { waitPay: normalizedOrders.filter((item) => item.status === 'WAIT_PAY').length, processing: restaurantOrders.filter((item) => ['PAID', 'ACCEPTED', 'PREPARING', 'READY'].indexOf(item.status) > -1).length, delivering: restaurantOrders.filter((item) => item.status === 'DELIVERING').length, shipped: normalizedOrders.filter(item => item.fulfillmentType === commerce.FULFILLMENT.COURIER && ['SHIPPED', 'DELIVERED'].indexOf(item.status) >= 0).length, completed: normalizedOrders.filter((item) => item.status === 'COMPLETED').length } });
   },
 
   toggleCoupons() { this.setData({ showCoupons: !this.data.showCoupons }); },

@@ -444,6 +444,9 @@ func (s *CommerceLogisticsService) AppendShipmentEvent(tenantID, shipmentID uint
 	if source == shipmentSourceProvider && input.ProviderEventID == "" {
 		return nil, fmt.Errorf("%w: provider event id is required", ErrCommerceLogisticsInvalid)
 	}
+	if source == shipmentSourceManual && input.Status == "delivered" && input.Description == "" {
+		return nil, fmt.Errorf("%w: manual delivery requires an evidence description", ErrCommerceLogisticsInvalid)
+	}
 	if source == shipmentSourceManual && input.IdempotencyKey == "" {
 		return nil, fmt.Errorf("%w: manual event idempotency key is required", ErrCommerceLogisticsInvalid)
 	}

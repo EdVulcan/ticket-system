@@ -373,8 +373,8 @@ function normalizeFulfillment(value) {
   const runnerPhone = String(firstDefined(row.runnerPhone, row.runner_phone, courierContact, '') || '');
   const deliveryNote = String(firstDefined(row.deliveryNote, row.delivery_note, '') || '');
   const deliveryProviderText = deliveryProvider === 'merchant' ? '店家自送' : deliveryProvider === 'courier_platform' ? '跑腿平台配送' : '';
-  const deliveryCardTitle = status === 'COMPLETED' ? '配送已完成' : '配送中';
-  const showDeliveryInfo = ['DELIVERING', 'COMPLETED', 'CALLED'].indexOf(status) >= 0 && Boolean(deliveryProviderText || courierPlatformName || courierOrderNo || courierContact || row.runnerName || row.runner_name || deliveryNote);
+  const deliveryCardTitle = status === 'COMPLETED' ? '配送已完成' : status === 'READY' || status === 'CALLED' ? '等待配送出发' : '配送中';
+  const showDeliveryInfo = ['READY', 'DELIVERING', 'COMPLETED', 'CALLED'].indexOf(status) >= 0 && Boolean(deliveryProviderText || courierPlatformName || courierOrderNo || courierContact || row.runnerName || row.runner_name || deliveryNote);
   return Object.assign({}, row, {
     status,
     method: String(firstDefined(row.method, row.fulfillmentMethod, row.fulfillment_method, '') || '').toUpperCase(),
@@ -432,7 +432,7 @@ function normalizeOrder(item) {
   const afterSaleStatus = String(afterSale && afterSale.status || '').toLowerCase();
   const availableActions = normalizeAvailableActions(firstDefined(item.availableActions, item.available_actions));
   let status = String(item.status || '').toUpperCase();
-  const fulfillmentCompleted = fulfillmentStatus === 'completed' || status === 'COMPLETED';
+  const fulfillmentCompleted = fulfillmentStatus ? fulfillmentStatus === 'completed' : status === 'COMPLETED';
   const providerRefundConfirmed = ['refunded', 'succeeded', 'success', 'completed'].indexOf(refundStatus) >= 0 || paymentStatus === 'refunded';
   const providerRefundWaiting = ['approved', 'processing'].indexOf(afterSaleStatus) >= 0 || ['pending', 'processing', 'refunding'].indexOf(refundStatus) >= 0 || (afterSaleStatus === 'requested' && !fulfillmentCompleted) || (refundStatus === 'requested' && !fulfillmentCompleted);
   const afterSalePendingApproval = !providerRefundWaiting && fulfillmentCompleted && (afterSaleStatus === 'requested' || (!afterSaleStatus && refundStatus === 'requested'));
@@ -448,10 +448,14 @@ function normalizeOrder(item) {
     else if (paymentStatus === 'unpaid' || paymentStatus === 'pending') status = 'WAIT_PAY';
     else if (paymentStatus !== 'paid') status = 'WAIT_PAY';
     else if (fulfillmentType === commerce.FULFILLMENT.COURIER) {
-      status = ['shipped', 'in_transit'].indexOf(fulfillmentStatus) >= 0 ? 'SHIPPED' : ['delivered', 'completed'].indexOf(fulfillmentStatus) >= 0 ? 'COMPLETED' : 'PAID';
+      status = ['shipped', 'in_transit'].indexOf(fulfillmentStatus) >= 0 ? 'SHIPPED' : fulfillmentStatus === 'delivered' ? 'DELIVERED' : fulfillmentStatus === 'completed' ? 'COMPLETED' : 'PAID';
     } else {
-      status = fulfillmentStatus === 'preparing' ? 'PREPARING' : ['delivering', 'ready'].indexOf(fulfillmentStatus) >= 0 ? 'DELIVERING' : fulfillmentStatus === 'completed' ? 'COMPLETED' : 'PAID';
+      status = fulfillmentStatus === 'accepted' ? 'ACCEPTED' : fulfillmentStatus === 'preparing' ? 'PREPARING' : fulfillmentStatus === 'ready' ? 'READY' : fulfillmentStatus === 'delivering' ? 'DELIVERING' : fulfillmentStatus === 'completed' ? 'COMPLETED' : 'PAID';
     }
+  }
+  if (['PAID', 'ACCEPTED', 'PREPARING', 'READY', 'DELIVERING', 'SHIPPED', 'DELIVERED', 'COMPLETED'].indexOf(status) >= 0 && fulfillmentStatus) {
+    const fulfillmentStates = fulfillmentType === commerce.FULFILLMENT.COURIER ? { pending: 'PAID', shipped: 'SHIPPED', in_transit: 'SHIPPED', delivered: 'DELIVERED', completed: 'COMPLETED' } : { pending: 'PAID', accepted: 'ACCEPTED', preparing: 'PREPARING', ready: 'READY', delivering: 'DELIVERING', completed: 'COMPLETED' };
+    status = fulfillmentStates[fulfillmentStatus] || status;
   }
   const rawItems = Array.isArray(item.items) ? item.items : Array.isArray(item.itemsSnapshot) ? item.itemsSnapshot : [];
   const itemsSnapshot = rawItems.map((line, index) => {
@@ -490,7 +494,7 @@ function normalizeOrder(item) {
     orderNo: firstDefined(item.orderNo, item.order_no, item.id),
     businessType: businessType || (fulfillmentType === commerce.FULFILLMENT.COURIER ? 'retail' : 'restaurant'),
     fulfillmentType,
-    deliveryMethod: String(firstDefined(item.fulfillmentMethod, item.fulfillment_method, restaurantFulfillment.method, fulfillmentType === commerce.FULFILLMENT.COURIER ? 'DELIVERY' : 'DELIVERY')).toUpperCase(),
+    deliveryMethod: String(firstDefined(item.fulfillmentMethod, item.fulfillment_method, item.deliveryMethod, item.delivery_method, restaurantFulfillment.method, fulfillmentType === commerce.FULFILLMENT.COURIER ? 'DELIVERY' : 'DELIVERY')).toUpperCase(),
     status,
     refundStatus: refundStatus ? refundStatus.toUpperCase() : firstDefined(item.refundStatus, item.refund_status, ''),
     afterSales,
@@ -512,6 +516,8 @@ function normalizeOrder(item) {
     shipping: fulfillmentType === commerce.FULFILLMENT.COURIER ? retailFulfillment : null,
     createdAt: firstDefined(item.createdAt, item.created_at),
     paidAt: firstDefined(item.paidAt, item.paid_at),
+    readyAt: firstDefined(item.readyAt, item.ready_at, restaurantFulfillment.readyAt, restaurantFulfillment.ready_at),
+    deliveredAt: firstDefined(item.deliveredAt, item.delivered_at, retailFulfillment.deliveredAt, retailFulfillment.delivered_at),
     shippingFee: priceText(firstDefined(item.shippingFee, item.shipping_fee, 0)),
     deliveryFee: priceText(firstDefined(item.deliveryFee, item.delivery_fee, 0))
   });
@@ -541,7 +547,7 @@ function normalizePaymentView(value) {
   const afterSale = afterSales[0] || null;
   const afterSaleStatus = String(afterSale && afterSale.status || '').toLowerCase();
   const rawUpperStatus = String(rawStatus || 'WAIT_PAY').toUpperCase();
-  const fulfillmentCompleted = fulfillmentStatus === 'completed' || orderStatus === 'COMPLETED' || rawUpperStatus === 'COMPLETED';
+  const fulfillmentCompleted = fulfillmentStatus ? fulfillmentStatus === 'completed' : orderStatus === 'COMPLETED' || rawUpperStatus === 'COMPLETED';
   const providerRefundConfirmed = ['refunded', 'succeeded', 'success', 'completed'].indexOf(refundStatus) >= 0 || paymentStatus === 'refunded' || rawUpperStatus === 'REFUNDED';
   const providerRefundWaiting = ['approved', 'processing'].indexOf(afterSaleStatus) >= 0 || ['pending', 'processing', 'refunding'].indexOf(refundStatus) >= 0 || (afterSaleStatus === 'requested' && !fulfillmentCompleted) || (refundStatus === 'requested' && !fulfillmentCompleted);
   const afterSalePendingApproval = !providerRefundWaiting && fulfillmentCompleted && (orderStatus === 'AFTER_SALE_REVIEW' || afterSaleStatus === 'requested' || (!afterSaleStatus && refundStatus === 'requested'));

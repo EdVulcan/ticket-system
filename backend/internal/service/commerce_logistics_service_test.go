@@ -524,3 +524,55 @@ func TestCommerceLogisticsTrackingIdentityAndTenantCustomerIsolation(t *testing.
 		t.Fatalf("cross-tenant append error=%v", err)
 	}
 }
+
+func TestCommerceLogisticsDirectDeliveryRequiresEvidenceAndCustomerConfirmation(t *testing.T) {
+	f := newCommerceLogisticsFixture(t, "direct-delivery-customer")
+	shipment, err := f.service.CreateShipment(f.tenantID, CreateCommerceShipmentInput{OrderID: f.orderID, ShipmentNo: "DIRECT-DELIVERY", CarrierCode: "carrier", TrackingNo: "track-direct", MarkShipped: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &CommerceOrderService{}
+	if _, err = svc.ConfirmReceipt(f.tenantID, f.orderID); !errors.Is(err, ErrCommerceOrderState) {
+		t.Fatalf("early receipt: %v", err)
+	}
+	input := AppendCommerceShipmentEventInput{Status: "delivered", IdempotencyKey: "direct-delivered", OccurredAt: f.now.Add(time.Hour)}
+	if _, err = f.service.AppendShipmentEvent(f.tenantID, shipment.ID, input); !errors.Is(err, ErrCommerceLogisticsInvalid) {
+		t.Fatalf("missing evidence: %v", err)
+	}
+	input.Description = "Merchant reports recipient signed for package"
+	other := f.tenantID + 999999
+	if _, err = f.service.AppendShipmentEvent(other, shipment.ID, input); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("cross tenant: %v", err)
+	}
+	model.DB.Model(&model.CommerceOrder{}).Where("id = ?", f.orderID).Update("refund_status", "requested")
+	if _, err = f.service.AppendShipmentEvent(f.tenantID, shipment.ID, input); !errors.Is(err, ErrCommerceLogisticsState) {
+		t.Fatalf("refund lock: %v", err)
+	}
+	model.DB.Model(&model.CommerceOrder{}).Where("id = ?", f.orderID).Updates(map[string]interface{}{"refund_status": "none", "payment_status": "unpaid"})
+	if _, err = f.service.AppendShipmentEvent(f.tenantID, shipment.ID, input); !errors.Is(err, ErrCommerceLogisticsState) {
+		t.Fatalf("payment lock: %v", err)
+	}
+	model.DB.Model(&model.CommerceOrder{}).Where("id = ?", f.orderID).Update("payment_status", "paid")
+	event, err := f.service.AppendShipmentEvent(f.tenantID, shipment.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := f.service.AppendShipmentEvent(f.tenantID, shipment.ID, input)
+	if err != nil || repeated.ID != event.ID {
+		t.Fatalf("retry: %+v %v", repeated, err)
+	}
+	timeline, err := f.service.ListShipmentTimeline(f.tenantID, shipment.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(timeline.Events) != 2 || timeline.Events[1].Status != "delivered" || timeline.Shipment.DeliveredAt == nil {
+		t.Fatalf("timeline manufactured intermediate: %+v", timeline)
+	}
+	if _, err = svc.UpdateRetailFulfillment(f.tenantID, f.orderID, RetailFulfillmentTransitionInput{Status: "completed"}); !errors.Is(err, ErrCommerceOrderState) {
+		t.Fatalf("merchant completion: %v", err)
+	}
+	completed, err := svc.ConfirmReceipt(f.tenantID, f.orderID)
+	if err != nil || completed.FulfillmentStatus != "completed" {
+		t.Fatalf("customer receipt: %+v %v", completed, err)
+	}
+}

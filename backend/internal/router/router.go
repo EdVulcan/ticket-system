@@ -450,6 +450,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	commerceOrderFulfillmentGroup := protected.Group("/commerce/orders")
 	commerceOrderFulfillmentGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"))
 	commerceOrderFulfillmentGroup.POST("/:id/restaurant-fulfillment", middleware.RequireTenantPermission(authz.PermissionOperationsWrite), commerceOrderController.RestaurantFulfillment)
+	commerceOrderFulfillmentGroup.PUT("/:id/restaurant-delivery", middleware.RequireTenantPermission(authz.PermissionOperationsWrite), commerceOrderController.SaveRestaurantDelivery)
 	// Retail fulfillment is projected exclusively from shipment creation and
 	// append-only logistics events below. Exposing the legacy direct transition
 	// would let an operator bypass the package timeline or complete an order

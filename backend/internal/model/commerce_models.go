@@ -317,8 +317,9 @@ type RestaurantFulfillment struct {
 	LocationID uint   `gorm:"not null;index:idx_restaurant_fulfillment_scope" json:"location_id"`
 	Method     string `gorm:"size:20;not null;check:chk_restaurant_fulfillment_method,method IN ('pickup','delivery')" json:"method"`
 	Status     string `gorm:"size:30;not null;default:'pending_acceptance';index;check:chk_restaurant_fulfillment_status,status IN ('pending_acceptance','accepted','preparing','ready','delivering','completed','cancelled')" json:"status"`
-	// DeliveryProvider records the merchant's execution choice after an order
-	// is ready. It is intentionally separate from Method: customers still only
+	// DeliveryProvider records the merchant's execution choice during preparation
+	// or dispatch. Saving it does not mean departure. It is separate from Method:
+	// customers still only
 	// choose pickup or delivery at checkout.
 	DeliveryProvider    string     `gorm:"size:30;not null;default:'';index;check:chk_restaurant_fulfillment_provider,delivery_provider IN ('','merchant','courier_platform')" json:"delivery_provider,omitempty"`
 	CourierPlatformName string     `gorm:"size:80;not null;default:''" json:"courier_platform_name,omitempty"`

@@ -1063,3 +1063,135 @@ func TestCommerceRefundIdempotencyConflictAcrossOrdersIsStable(t *testing.T) {
 		t.Fatalf("cross-order refund request count=%d, want 1", count)
 	}
 }
+
+func TestCommerceRestaurantMergedPreparationAndDeliveryDetails(t *testing.T) {
+	tenant, product, sku, location, now := commerceOrderFixture(t)
+	svc := &CommerceOrderService{Clock: func() time.Time { return now }}
+	input := commerceOrderInput(product, sku, location, "merged-preparation", now.Add(time.Hour))
+	input.FulfillmentMethod = "pickup"
+	order, err := svc.CreateOrder(tenant, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.TransitionRestaurantFulfillment(tenant, order.ID, RestaurantFulfillmentTransitionInput{Status: "preparing"}); !errors.Is(err, ErrCommerceOrderState) {
+		t.Fatalf("unpaid: %v", err)
+	}
+	if _, err = svc.ConfirmPayment(tenant, order.ID); err != nil {
+		t.Fatal(err)
+	}
+	other := tenant + 999999
+	if _, err = svc.TransitionRestaurantFulfillment(other, order.ID, RestaurantFulfillmentTransitionInput{Status: "preparing"}); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("cross tenant: %v", err)
+	}
+	if _, err = svc.TransitionRestaurantFulfillment(tenant, order.ID, RestaurantFulfillmentTransitionInput{Status: "ready"}); !errors.Is(err, ErrCommerceOrderState) {
+		t.Fatalf("skip ready: %v", err)
+	}
+	if err = model.DB.Model(&model.CommerceOrder{}).Where("id = ?", order.ID).Update("refund_status", "requested").Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.TransitionRestaurantFulfillment(tenant, order.ID, RestaurantFulfillmentTransitionInput{Status: "preparing"}); !errors.Is(err, ErrCommerceOrderState) {
+		t.Fatalf("refund lock: %v", err)
+	}
+	model.DB.Model(&model.CommerceOrder{}).Where("id = ?", order.ID).Update("refund_status", "none")
+	row, err := svc.TransitionRestaurantFulfillment(tenant, order.ID, RestaurantFulfillmentTransitionInput{Status: "preparing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.AcceptedAt == nil || !row.AcceptedAt.Equal(now) || row.Status != "preparing" {
+		t.Fatalf("merged facts: %+v", row)
+	}
+	var audit model.AuditLog
+	if err = model.DB.Where("tenant_id = ? AND target_id = ? AND action = ?", tenant, row.ID, "commerce.restaurant_fulfillment.transition").Last(&audit).Error; err != nil {
+		t.Fatal(err)
+	}
+	var after map[string]interface{}
+	if err = json.Unmarshal([]byte(audit.AfterJSON), &after); err != nil {
+		t.Fatal(err)
+	}
+	if after["preparing_at"] == nil || after["accepted_at"] == nil {
+		t.Fatalf("audit missing timestamps: %s", audit.AfterJSON)
+	}
+	details := RestaurantDeliveryDetailsInput{DeliveryProvider: "courier_platform", CourierPlatformName: "Runner", CourierOrderNo: "RUN-1", DeliveryNote: "Call on arrival"}
+	if _, err = svc.SaveRestaurantDeliveryDetails(tenant, order.ID, details); !errors.Is(err, ErrCommerceOrderState) {
+		t.Fatalf("pickup: %v", err)
+	}
+	model.DB.Model(&model.RestaurantFulfillment{}).Where("id = ?", row.ID).Update("method", "delivery")
+	if _, err = svc.SaveRestaurantDeliveryDetails(other, order.ID, details); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("details cross tenant: %v", err)
+	}
+	model.DB.Model(&model.CommerceOrder{}).Where("id = ?", order.ID).Update("refund_status", "processing")
+	if _, err = svc.SaveRestaurantDeliveryDetails(tenant, order.ID, details); !errors.Is(err, ErrCommerceOrderState) {
+		t.Fatalf("details refund lock: %v", err)
+	}
+	model.DB.Model(&model.CommerceOrder{}).Where("id = ?", order.ID).Update("refund_status", "none")
+	saved, err := svc.SaveRestaurantDeliveryDetails(tenant, order.ID, details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Status != "preparing" || saved.DeliveryStartedAt != nil || saved.CourierOrderNo != "RUN-1" {
+		t.Fatalf("saved plan changed departure: %+v", saved)
+	}
+
+	details.DeliveryProvider = "merchant"
+	saved, err = svc.SaveRestaurantDeliveryDetails(tenant, order.ID, details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.CourierPlatformName != "" || saved.CourierOrderNo != "" || saved.DeliveryNote != details.DeliveryNote {
+		t.Fatalf("merchant plan kept stale runner: %+v", saved)
+	}
+	if _, err = svc.TransitionRestaurantFulfillment(tenant, order.ID, RestaurantFulfillmentTransitionInput{Status: "ready"}); err != nil {
+		t.Fatal(err)
+	}
+	dispatched, err := svc.TransitionRestaurantFulfillment(tenant, order.ID, RestaurantFulfillmentTransitionInput{Status: "delivering", DeliveryProvider: "merchant", CourierPlatformName: "Forged runner", CourierOrderNo: "FORGED"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dispatched.CourierPlatformName != "" || dispatched.CourierOrderNo != "" {
+		t.Fatalf("merchant dispatch kept runner: %+v", dispatched)
+	}
+	model.DB.Model(&model.RestaurantFulfillment{}).Where("id = ?", row.ID).Update("status", "delivering")
+	if _, err = svc.SaveRestaurantDeliveryDetails(tenant, order.ID, details); !errors.Is(err, ErrCommerceOrderState) {
+		t.Fatalf("after departure: %v", err)
+	}
+}
+
+func TestCommerceMergedPreparationRollsBackWhenAuditFails(t *testing.T) {
+	tenant, product, sku, location, now := commerceOrderFixture(t)
+	svc := &CommerceOrderService{Clock: func() time.Time { return now }}
+	input := commerceOrderInput(product, sku, location, "merged-rollback", now.Add(time.Hour))
+	input.FulfillmentMethod = "pickup"
+	order, err := svc.CreateOrder(tenant, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ConfirmPayment(tenant, order.ID); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("audit unavailable")
+	callback := "test:merged-preparation-audit-failure"
+	if err = model.DB.Callback().Create().Before("gorm:create").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "audit_logs" {
+			tx.AddError(failure)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { model.DB.Callback().Create().Remove(callback) })
+	if _, err = svc.TransitionRestaurantFulfillment(tenant, order.ID, RestaurantFulfillmentTransitionInput{Status: "preparing"}); !errors.Is(err, failure) {
+		t.Fatalf("audit failure: %v", err)
+	}
+	var fulfillment model.RestaurantFulfillment
+	if err = model.DB.Where("tenant_id = ? AND order_id = ?", tenant, order.ID).First(&fulfillment).Error; err != nil {
+		t.Fatal(err)
+	}
+	if fulfillment.Status != "pending_acceptance" || fulfillment.AcceptedAt != nil {
+		t.Fatalf("partial fulfillment: %+v", fulfillment)
+	}
+	if err = model.DB.First(order, order.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if order.FulfillmentStatus != "pending_acceptance" {
+		t.Fatalf("partial order status: %s", order.FulfillmentStatus)
+	}
+}
