@@ -394,6 +394,30 @@ function normalizeFulfillment(value) {
   });
 }
 
+function normalizeAfterSale(value) {
+  const row = value || {};
+  return Object.assign({}, row, {
+    id: firstDefined(row.id, row.requestId, row.request_id),
+    requestNo: firstDefined(row.requestNo, row.request_no, row.requestId, row.request_id, ''),
+    type: String(firstDefined(row.type, 'refund') || 'refund').toLowerCase(),
+    status: String(firstDefined(row.status, row.state, '') || '').toLowerCase(),
+    amountCents: Number(firstDefined(row.amountCents, row.amount_cents, 0)) || 0,
+    providerRefundReference: firstDefined(row.providerRefundReference, row.provider_refund_reference, ''),
+    providerRefundAmountCents: Number(firstDefined(row.providerRefundAmountCents, row.provider_refund_amount_cents, 0)) || 0,
+    createdAt: firstDefined(row.createdAt, row.created_at, ''),
+    processedAt: firstDefined(row.processedAt, row.processed_at, '')
+  });
+}
+
+function normalizeAfterSales(item) {
+  const raw = Array.isArray(item && item.afterSales) ? item.afterSales : Array.isArray(item && item.after_sales) ? item.after_sales : [];
+  return raw.map(normalizeAfterSale).sort((left, right) => {
+    const leftTime = String(left.createdAt || left.processedAt || '');
+    const rightTime = String(right.createdAt || right.processedAt || '');
+    return rightTime.localeCompare(leftTime) || Number(right.id || 0) - Number(left.id || 0);
+  });
+}
+
 function normalizeOrder(item) {
   item = item || {};
   const businessType = String(firstDefined(item.businessType, item.business_type, '') || '').toLowerCase();
@@ -403,15 +427,24 @@ function normalizeOrder(item) {
   const paymentStatus = String(firstDefined(item.paymentStatus, item.payment_status, '') || '').toLowerCase();
   const fulfillmentStatus = String(firstDefined(item.fulfillmentStatus, item.fulfillment_status, fulfillmentType === commerce.FULFILLMENT.COURIER ? retailFulfillment.status : restaurantFulfillment.status, '') || '').toLowerCase();
   const refundStatus = String(firstDefined(item.refundStatus, item.refund_status, item.refund && (item.refund.status || item.refund.state), '') || '').toLowerCase();
+  const afterSales = normalizeAfterSales(item);
+  const afterSale = afterSales[0] || null;
+  const afterSaleStatus = String(afterSale && afterSale.status || '').toLowerCase();
   const availableActions = normalizeAvailableActions(firstDefined(item.availableActions, item.available_actions));
   let status = String(item.status || '').toUpperCase();
-  if (['refunded', 'succeeded', 'success', 'completed'].indexOf(refundStatus) >= 0) status = 'REFUNDED';
-  else if (['requested', 'processing', 'refunding', 'pending'].indexOf(refundStatus) >= 0) status = 'REFUNDING';
+  const fulfillmentCompleted = fulfillmentStatus === 'completed' || status === 'COMPLETED';
+  const providerRefundConfirmed = ['refunded', 'succeeded', 'success', 'completed'].indexOf(refundStatus) >= 0 || paymentStatus === 'refunded';
+  const providerRefundWaiting = ['approved', 'processing'].indexOf(afterSaleStatus) >= 0 || ['pending', 'processing', 'refunding'].indexOf(refundStatus) >= 0 || (afterSaleStatus === 'requested' && !fulfillmentCompleted) || (refundStatus === 'requested' && !fulfillmentCompleted);
+  const afterSalePendingApproval = !providerRefundWaiting && fulfillmentCompleted && (afterSaleStatus === 'requested' || (!afterSaleStatus && refundStatus === 'requested'));
+  if (providerRefundConfirmed) status = 'REFUNDED';
+  else if (afterSalePendingApproval) status = 'AFTER_SALE_REVIEW';
+  else if (providerRefundWaiting) status = 'REFUNDING';
   else if (['failed', 'closed', 'rejected'].indexOf(refundStatus) >= 0) status = 'REFUND_FAILED';
   else if (['review', 'abnormal'].indexOf(refundStatus) >= 0) status = 'REFUND_REVIEW';
   if (!status || status === 'UNKNOWN') {
-    if (refundStatus === 'refunded' || paymentStatus === 'refunded') status = 'REFUNDED';
-    else if (refundStatus === 'requested' || refundStatus === 'processing') status = 'REFUNDING';
+    if (providerRefundConfirmed) status = 'REFUNDED';
+    else if (afterSalePendingApproval) status = 'AFTER_SALE_REVIEW';
+    else if (providerRefundWaiting || refundStatus === 'requested' || refundStatus === 'pending' || refundStatus === 'processing') status = 'REFUNDING';
     else if (paymentStatus === 'unpaid' || paymentStatus === 'pending') status = 'WAIT_PAY';
     else if (paymentStatus !== 'paid') status = 'WAIT_PAY';
     else if (fulfillmentType === commerce.FULFILLMENT.COURIER) {
@@ -460,6 +493,10 @@ function normalizeOrder(item) {
     deliveryMethod: String(firstDefined(item.fulfillmentMethod, item.fulfillment_method, restaurantFulfillment.method, fulfillmentType === commerce.FULFILLMENT.COURIER ? 'DELIVERY' : 'DELIVERY')).toUpperCase(),
     status,
     refundStatus: refundStatus ? refundStatus.toUpperCase() : firstDefined(item.refundStatus, item.refund_status, ''),
+    afterSales,
+    afterSale,
+    afterSaleStatus: afterSaleStatus ? afterSaleStatus.toUpperCase() : '',
+    fulfillmentCompleted,
     paymentStatus: paymentStatus || String(firstDefined(item.paymentStatus, item.payment_status, '') || '').toLowerCase(),
     fulfillmentStatus: fulfillmentStatus || String(firstDefined(item.fulfillmentStatus, item.fulfillment_status, item.restaurantFulfillment && item.restaurantFulfillment.status, item.restaurant_fulfillment && item.restaurant_fulfillment.status, item.retailFulfillment && item.retailFulfillment.status, item.retail_fulfillment && item.retail_fulfillment.status, '') || '').toLowerCase(),
     availableActions,
@@ -493,10 +530,37 @@ function normalizePaymentParams(value) {
 
 function normalizePaymentView(value) {
   const root = resource(value);
-  const rawStatus = firstDefined(root.status, root.paymentStatus, root.payment_status, root.orderStatus, root.order_status, 'WAIT_PAY');
+  const order = root.order && typeof root.order === 'object' ? root.order : {};
+  const rawStatus = firstDefined(root.status, root.paymentStatus, root.payment_status, root.orderStatus, root.order_status, order.status, 'WAIT_PAY');
+  const paymentStatus = String(firstDefined(root.paymentStatus, root.payment_status, order.paymentStatus, order.payment_status, '') || '').toLowerCase();
+  const fulfillmentStatus = String(firstDefined(root.fulfillmentStatus, root.fulfillment_status, order.fulfillmentStatus, order.fulfillment_status, '') || '').toLowerCase();
+  const refundStatus = String(firstDefined(root.refundStatus, root.refund_status, order.refundStatus, order.refund_status, order.refund && (order.refund.status || order.refund.state), '') || '').toLowerCase();
+  const orderStatus = String(firstDefined(root.orderStatus, root.order_status, order.status, '') || '').toUpperCase();
+  const rootAfterSales = normalizeAfterSales(root);
+  const afterSales = rootAfterSales.length ? rootAfterSales : normalizeAfterSales(order);
+  const afterSale = afterSales[0] || null;
+  const afterSaleStatus = String(afterSale && afterSale.status || '').toLowerCase();
+  const rawUpperStatus = String(rawStatus || 'WAIT_PAY').toUpperCase();
+  const fulfillmentCompleted = fulfillmentStatus === 'completed' || orderStatus === 'COMPLETED' || rawUpperStatus === 'COMPLETED';
+  const providerRefundConfirmed = ['refunded', 'succeeded', 'success', 'completed'].indexOf(refundStatus) >= 0 || paymentStatus === 'refunded' || rawUpperStatus === 'REFUNDED';
+  const providerRefundWaiting = ['approved', 'processing'].indexOf(afterSaleStatus) >= 0 || ['pending', 'processing', 'refunding'].indexOf(refundStatus) >= 0 || (afterSaleStatus === 'requested' && !fulfillmentCompleted) || (refundStatus === 'requested' && !fulfillmentCompleted);
+  const afterSalePendingApproval = !providerRefundWaiting && fulfillmentCompleted && (orderStatus === 'AFTER_SALE_REVIEW' || afterSaleStatus === 'requested' || (!afterSaleStatus && refundStatus === 'requested'));
+  let status = rawUpperStatus;
+  if (providerRefundConfirmed) status = 'REFUNDED';
+  else if (afterSalePendingApproval) status = 'AFTER_SALE_REVIEW';
+  else if (providerRefundWaiting) status = 'REFUNDING';
+  else if ((status === 'WAIT_PAY' || status === 'PENDING' || status === 'UNKNOWN') && orderStatus) status = orderStatus;
   const payment = root.payment || root.payment_params || root.paymentParams;
   return Object.assign({}, root, {
-    status: String(rawStatus || 'WAIT_PAY').toUpperCase(),
+    status,
+    orderStatus,
+    paymentStatus: paymentStatus || firstDefined(root.paymentStatus, root.payment_status, ''),
+    fulfillmentStatus: fulfillmentStatus || firstDefined(root.fulfillmentStatus, root.fulfillment_status, ''),
+    fulfillmentCompleted,
+    refundStatus: refundStatus ? refundStatus.toUpperCase() : firstDefined(root.refundStatus, root.refund_status, ''),
+    afterSales,
+    afterSale,
+    afterSaleStatus: afterSaleStatus ? afterSaleStatus.toUpperCase() : '',
     attemptId: firstDefined(root.attemptId, root.attempt_id, ''),
     outTradeNo: firstDefined(root.outTradeNo, root.out_trade_no, ''),
     providerState: firstDefined(root.providerState, root.provider_state, ''),

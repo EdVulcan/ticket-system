@@ -104,6 +104,64 @@ function checkoutFingerprint(groups) {
   return JSON.stringify(fingerprintValue(normalized));
 }
 
+// Only these server-authorized reason codes prove that the request was
+// rejected before an order could be created. HTTP status and error text are
+// transport diagnostics: a 409 may be an idempotency conflict, and a 400 may
+// be a payment or provider state that still needs reconciliation.
+const CHECKOUT_REJECTION_CODES = new Set([
+  'STORE_NOT_OPEN',
+  'ADDRESS_NOT_FOUND',
+  'ADDRESS_REQUIRED',
+  'ADDRESS_TYPE_INVALID',
+  'ADDRESS_OUT_OF_RANGE',
+  'PRODUCT_UNAVAILABLE',
+  'PRODUCT_SKU_REQUIRED',
+  'PRODUCT_SKU_MISMATCH',
+  'PRODUCT_NOT_SELLABLE',
+  'PRODUCT_SALE_NOT_STARTED',
+  'PRODUCT_SALE_ENDED',
+  'FULFILLMENT_MISMATCH',
+  'PRODUCT_OPTIONS_INVALID',
+  'PRODUCT_OPTIONS_REQUIRED',
+  'STOCK_NOT_ENOUGH',
+  'INVENTORY_CHANGED',
+  'MIN_AMOUNT_NOT_REACHED',
+  'COUPON_UNAVAILABLE',
+  'COUPON_EXPIRED',
+  'ORDER_AMOUNT_INVALID',
+  'ORDER_PAYLOAD_INVALID',
+  'BUSINESS_SELECTOR_REQUIRED',
+  'BUSINESS_NOT_AUTHORIZED',
+  'BUSINESS_BINDING_MISMATCH',
+  'CHECKOUT_QUOTE_REQUIRED',
+  'CHECKOUT_QUOTE_CONFLICT',
+  'CART_INACTIVE',
+  'MEMBER_STATE_INVALID',
+  'SLOT_CUTOFF_PASSED',
+  'SLOT_FULL',
+  'DELIVERY_DISABLED',
+  'PICKUP_DISABLED',
+  'ZERO_PAY_NOT_SUPPORTED'
+]);
+
+function checkoutRejectionCode(error) {
+  return String(error && (error.reasonCode || error.reason_code || error.code) || '').trim().toUpperCase();
+}
+
+function checkoutAttemptHasOrder(attempt) {
+  return Boolean(attempt && Array.isArray(attempt.attempts) && attempt.attempts.some(entry => entry && entry.orderId));
+}
+
+function checkoutAttemptHasUnknownResult(attempt) {
+  if (!attempt || checkoutAttemptHasOrder(attempt)) return false;
+  if (attempt.creationResultUnknown === true) return true;
+  if (attempt.creationResultUnknown === false) return false;
+  // Attempts saved before the marker was introduced may already represent a
+  // request whose response was lost. Treat a valid marker-less attempt as
+  // unknown instead of clearing its idempotency key on a later 400.
+  return Array.isArray(attempt.attempts) && attempt.attempts.length > 0;
+}
+
 Page({
   data: {
     brand,
@@ -499,7 +557,17 @@ Page({
       this.openCreatedOrder(existingOrder.orderId);
       return;
     }
-    const reuseOriginal = this.directCheckoutId && retryOriginal === true && attempt;
+    if (!attemptMatches && !this.directCheckoutId && retryOriginal !== true && checkoutAttemptHasUnknownResult(attempt)) {
+      this.setData({ paying: false });
+      wx.showModal({
+        title: '上次下单尚未确认',
+        content: '上次提交结果未知，需先核实原单，暂不替换商品或重新下单。',
+        confirmText: '重试原单',
+        success: result => { if (result.confirm) this.submitProductionOrder(true); }
+      });
+      return;
+    }
+    const reuseOriginal = retryOriginal === true && attempt;
     if (this.directCheckoutId && attempt && !attemptMatches && !reuseOriginal) {
       this.setData({ paying: false });
       wx.showModal({
@@ -511,7 +579,7 @@ Page({
       return;
     }
     if (!attemptMatches && !reuseOriginal) {
-      attempt = { batchId: this.batchId, fingerprint, attempts: groups.map(group => ({ key: group.key, businessType: group.key, payload: this.groupPayload(group.fulfillmentType, group.items, group.address, group.remark, group.couponId), orderId: '', status: 'PENDING' })) };
+      attempt = { batchId: this.batchId, fingerprint, creationResultUnknown: false, attempts: groups.map(group => ({ key: group.key, businessType: group.key, payload: this.groupPayload(group.fulfillmentType, group.items, group.address, group.remark, group.couponId), orderId: '', status: 'PENDING' })) };
     }
     attempt.attempts.forEach((entry, index) => {
       const businessType = entry.businessType || (entry.key === commerce.FULFILLMENT.COURIER ? 'retail' : entry.key === commerce.FULFILLMENT.TAKEAWAY ? 'restaurant' : groups[index] && groups[index].key);
@@ -543,9 +611,18 @@ Page({
       else wx.showToast({ title: '首个订单待核实，请在订单详情继续', icon: 'none' });
     } catch (error) {
       console.error('production order payment failed', error);
-      const code = String(error && (error.errMsg || error.message) || '');
-      const rejected = error && error.statusCode === 409 || ['STORE_NOT_OPEN', 'ADDRESS_NOT_FOUND', 'ADDRESS_TYPE_INVALID', 'ADDRESS_OUT_OF_RANGE', 'PRODUCT_UNAVAILABLE', 'FULFILLMENT_MISMATCH', 'PRODUCT_OPTIONS_INVALID', 'PRODUCT_OPTIONS_REQUIRED', 'STOCK_NOT_ENOUGH', 'MIN_AMOUNT_NOT_REACHED', 'COUPON_UNAVAILABLE', 'COUPON_EXPIRED', 'ORDER_AMOUNT_INVALID', 'ORDER_PAYLOAD_INVALID', 'BUSINESS_SELECTOR_REQUIRED', 'BUSINESS_NOT_AUTHORIZED', 'BUSINESS_BINDING_MISMATCH'].some(item => code.indexOf(item) >= 0);
-      if (rejected && !attempt.attempts.some(entry => entry.orderId)) { this.batchId = storage.makeId('checkout_batch'); this.saveCheckoutAttempt(null); }
+      const rejected = CHECKOUT_REJECTION_CODES.has(checkoutRejectionCode(error));
+      const hasOrder = checkoutAttemptHasOrder(attempt);
+      if (rejected && !hasOrder && !checkoutAttemptHasUnknownResult(attempt)) {
+        this.batchId = storage.makeId('checkout_batch');
+        this.saveCheckoutAttempt(null);
+      } else if (!rejected && !hasOrder) {
+        // A transport or idempotency conflict does not prove that no order was
+        // created. Keep this marker sticky until the original attempt resolves,
+        // including when a later preflight request returns a clear 400.
+        attempt.creationResultUnknown = true;
+        this.saveCheckoutAttempt(attempt);
+      }
       const message = rejected
         ? (error && error.userMessage || '商品、地址、业务选择或优惠已变化，请重新确认')
         : (error && error.userMessage || '提交未确认，请在订单中核实');

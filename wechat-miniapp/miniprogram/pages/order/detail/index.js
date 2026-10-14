@@ -11,6 +11,10 @@ function fulfillmentStatusOf(order) {
   return String(nested && (nested.status || nested.fulfillmentStatus || nested.fulfillment_status) || '').toLowerCase();
 }
 
+function fulfillmentCompletedOf(order) {
+  return Boolean(order && (order.fulfillmentCompleted === true || fulfillmentStatusOf(order) === 'completed' || String(order.status || '').toUpperCase() === 'COMPLETED'));
+}
+
 function serverRefundDecision(order) {
   const actions = order && (order.availableActions || order.available_actions);
   if (!actions) return false;
@@ -36,8 +40,17 @@ function addressText(address) {
   return [address.province, address.city, address.district, address.detailAddress].filter(Boolean).join(' ');
 }
 
-function refundMessage(status) {
-  switch (String(status || '').toUpperCase()) {
+function refundMessage(status, order) {
+  const normalizedStatus = String(status || '').toUpperCase();
+  if (normalizedStatus === 'REFUNDING') {
+    const afterSale = order && (order.afterSale || order.after_sale);
+    const afterSaleStatus = String(order && (order.afterSaleStatus || order.after_sale_status) || afterSale && (afterSale.status || afterSale.state) || '').toUpperCase();
+    const refundStatus = String(order && (order.refundStatus || order.refund_status) || '').toUpperCase();
+    if (afterSaleStatus === 'APPROVED' && refundStatus === 'REQUESTED') return '商家已审核通过，正在安排退款';
+    if (afterSaleStatus === 'PROCESSING' || ['PROCESSING', 'REFUNDING'].indexOf(refundStatus) >= 0) return '退款申请处理中，等待支付渠道确认';
+  }
+  switch (normalizedStatus) {
+    case 'AFTER_SALE_REVIEW': return '售后申请已提交，等待商家审核';
     case 'REFUNDING': return '退款申请已提交，正在等待支付渠道确认';
     case 'REFUNDED': return '退款已完成，款项将原路退回';
     case 'REFUND_FAILED': return '退款未完成，请刷新订单状态或联系门店';
@@ -86,12 +99,13 @@ Page({
   renderOrder(raw) {
     raw = typeof api.normalizeOrder === 'function' ? api.normalizeOrder(raw) : raw;
     const isCourier = commerce.fulfillmentOf(raw) === commerce.FULFILLMENT.COURIER;
-    const description = isCourier ? { WAIT_PAY: '请在有效期内完成支付', PAID: '门店已收到订单，等待打包发货', SHIPPED: '包裹已发出，等待快递送达', COMPLETED: '包裹已签收', CANCELED: '订单已取消', REFUNDING: '退款申请处理中', REFUND_FAILED: '退款未完成，请刷新订单状态或联系门店', REFUND_REVIEW: '退款状态需要门店核查，请勿重复提交', REFUNDED: '款项已原路退回' } : { WAIT_PAY: '请在有效期内完成支付', PAID: '门店已收到订单，等待制作', PREPARING: '餐食正在制作中', DELIVERING: '配送员正在赶来', COMPLETED: '订单已完成', CANCELED: '订单已取消', REFUNDING: '退款申请处理中', REFUND_FAILED: '退款未完成，请刷新订单状态或联系门店', REFUND_REVIEW: '退款状态需要门店核查，请勿重复提交', REFUNDED: '款项已原路退回' };
-    const statusIcon = raw.status === 'CANCELED' || raw.status === 'REFUNDED' ? '·' : raw.status === 'COMPLETED' ? '✓' : raw.status === 'DELIVERING' || raw.status === 'SHIPPED' ? '↗' : '…';
-    const order = Object.assign({}, raw, { id: raw.id || raw._id, addressText: addressText(raw.addressSnapshot), statusText: format.orderStatus(raw.status, raw.fulfillmentType), createdText: format.dateTime(raw.createdAt), preparingText: raw.preparingAt ? format.dateTime(raw.preparingAt) : '', deliveringText: raw.deliveringAt ? format.dateTime(raw.deliveringAt) : '', shippedText: raw.shippedAt ? format.dateTime(raw.shippedAt) : '', completedText: raw.completedAt ? format.dateTime(raw.completedAt) : '', itemsSnapshot: (raw.itemsSnapshot || []).map((item, index) => Object.assign({}, item, { lineId: item.lineId || `${item.productId}_${index}`, subtotalText: format.yuan(item.subtotal), optionsText: (item.selectedOptions || []).map((option) => typeof option === 'string' ? option : option.name).join(' · ') })) });
+    const fulfillmentCompleted = fulfillmentCompletedOf(raw);
+    const description = isCourier ? { WAIT_PAY: '请在有效期内完成支付', PAID: '门店已收到订单，等待打包发货', SHIPPED: '包裹已发出，等待快递送达', COMPLETED: '包裹已签收', CANCELED: '订单已取消', AFTER_SALE_REVIEW: '售后申请已提交，等待商家审核', REFUNDING: '退款申请处理中', REFUND_FAILED: '退款未完成，请刷新订单状态或联系门店', REFUND_REVIEW: '退款状态需要门店核查，请勿重复提交', REFUNDED: '款项已原路退回' } : { WAIT_PAY: '请在有效期内完成支付', PAID: '门店已收到订单，等待制作', PREPARING: '餐食正在制作中', DELIVERING: '配送员正在赶来', COMPLETED: '订单已完成', CANCELED: '订单已取消', AFTER_SALE_REVIEW: '售后申请已提交，等待商家审核', REFUNDING: '退款申请处理中', REFUND_FAILED: '退款未完成，请刷新订单状态或联系门店', REFUND_REVIEW: '退款状态需要门店核查，请勿重复提交', REFUNDED: '款项已原路退回' };
+    const statusIcon = raw.status === 'CANCELED' || raw.status === 'REFUNDED' ? '·' : fulfillmentCompleted ? '✓' : raw.status === 'DELIVERING' || raw.status === 'SHIPPED' ? '↗' : '…';
+    const order = Object.assign({}, raw, { id: raw.id || raw._id, fulfillmentCompleted, timelineStatus: fulfillmentCompleted ? 'COMPLETED' : raw.status, addressText: addressText(raw.addressSnapshot), statusText: format.orderStatus(raw.status, raw.fulfillmentType), createdText: format.dateTime(raw.createdAt), preparingText: raw.preparingAt ? format.dateTime(raw.preparingAt) : '', deliveringText: raw.deliveringAt ? format.dateTime(raw.deliveringAt) : '', shippedText: raw.shippedAt ? format.dateTime(raw.shippedAt) : '', completedText: raw.completedAt ? format.dateTime(raw.completedAt) : '', itemsSnapshot: (raw.itemsSnapshot || []).map((item, index) => Object.assign({}, item, { lineId: item.lineId || `${item.productId}_${index}`, subtotalText: format.yuan(item.subtotal), optionsText: (item.selectedOptions || []).map((option) => typeof option === 'string' ? option : option.name).join(' · ') })) });
     const canCancelOrder = api.isProduction() ? actionAllowed(raw, 'canCancelOrder') : raw.status === 'WAIT_PAY';
     const canConfirmReceipt = api.isProduction() ? actionAllowed(raw, 'canConfirmReceipt') : (isCourier ? raw.status === 'SHIPPED' : raw.status === 'DELIVERING');
-    this.setData({ order, isCourier, fulfillmentTitle: isCourier ? '零售配送' : raw.deliveryMethod === 'PICKUP' ? '餐饮自取' : '餐饮配送', canCancelOrder, canConfirmReceipt, canRequestRefund: canRequestRefund(raw), statusIcon, statusDescription: raw.paymentClosing ? '正在核实取消和支付结果，请刷新或联系门店' : description[raw.status] || '', refundMessage: refundMessage(raw.status), goodsAmountText: format.yuan(raw.goodsAmount), deliveryFeeText: format.yuan(raw.deliveryFee), shippingFeeText: format.yuan(raw.shippingFee), discountText: format.yuan(raw.discountAmount), payableText: format.yuan(raw.payableAmount) });
+    this.setData({ order, isCourier, fulfillmentTitle: isCourier ? '零售配送' : raw.deliveryMethod === 'PICKUP' ? '餐饮自取' : '餐饮配送', canCancelOrder, canConfirmReceipt, canRequestRefund: canRequestRefund(raw), statusIcon, statusDescription: raw.paymentClosing ? '正在核实取消和支付结果，请刷新或联系门店' : description[raw.status] || '', refundMessage: refundMessage(raw.status, raw), goodsAmountText: format.yuan(raw.goodsAmount), deliveryFeeText: format.yuan(raw.deliveryFee), shippingFeeText: format.yuan(raw.shippingFee), discountText: format.yuan(raw.discountAmount), payableText: format.yuan(raw.payableAmount) });
   },
 
   async payOrder() {
@@ -142,7 +156,7 @@ Page({
   refundOrder() {
     if (!this.data.canRequestRefund || this.data.refundSubmitting || this.data.refundQuerying) return;
     const reasons = ['商品不需要了', '下单有误', '其他原因'];
-    const isCompleted = this.data.order && this.data.order.status === 'COMPLETED';
+    const isCompleted = fulfillmentCompletedOf(this.data.order);
     const confirm = reason => wx.showModal({ title: isCompleted ? '申请售后' : '申请退款', content: isCompleted ? '订单已完成，将提交售后申请，商家审核后再处理退款。是否继续？' : '将按原支付方式申请整单退款，是否继续？', confirmText: '确认申请', success: result => { if (result.confirm) this.submitRefund(reason); } });
     if (typeof wx.showActionSheet === 'function') wx.showActionSheet({ itemList: reasons, success: result => confirm(reasons[result.tapIndex] || '客户申请退款') });
     else confirm('客户申请退款');
@@ -150,17 +164,20 @@ Page({
 
   submitRefund(reason) {
     if (!this.data.canRequestRefund || this.data.refundSubmitting || !this.orderId || typeof api.createRefund !== 'function') return;
+    const submittedForAfterSale = fulfillmentCompletedOf(this.data.order);
     const idempotencyKey = `refund_${this.orderId}_initial`;
     this.setData({ refundSubmitting: true, refundMessage: '退款申请提交中' });
     return api.createRefund(this.orderId, { idempotencyKey, clientRequestId: idempotencyKey, reason: reason || '客户申请退款' }).then(result => {
       if (result && result.order) this.renderOrder(result.order);
-      else this.setData({ refundMessage: '退款申请已提交，正在等待支付渠道确认' });
-      wx.showToast({ title: this.data.order && this.data.order.status === 'COMPLETED' ? '售后申请已提交' : '退款申请已提交', icon: 'none' });
+      else this.setData({ refundMessage: submittedForAfterSale ? '售后申请已提交，等待商家审核' : '退款申请已提交，正在等待支付渠道确认' });
+      wx.showToast({ title: submittedForAfterSale ? '售后申请已提交' : '退款申请已提交', icon: 'none' });
       return this.queryRefund(false);
     }).catch(error => {
       console.error('create refund failed', error);
       return this.queryRefund(false).then(order => {
-        if (!order || !['REFUNDING', 'REFUNDED'].includes(String(order.status || '').toUpperCase())) wx.showToast({ title: error && error.userMessage || '退款申请未提交，请刷新订单后重试', icon: 'none' });
+        const status = String(order && order.status || '').toUpperCase();
+        const reconciled = submittedForAfterSale ? ['AFTER_SALE_REVIEW', 'REFUNDING', 'REFUNDED'].includes(status) : ['REFUNDING', 'REFUNDED'].includes(status);
+        if (!order || !reconciled) wx.showToast({ title: error && error.userMessage || '退款申请未提交，请刷新订单后重试', icon: 'none' });
       }).catch(() => wx.showToast({ title: error && error.userMessage || '退款状态待核实，请刷新订单', icon: 'none' }));
     }).finally(() => this.setData({ refundSubmitting: false }));
   },

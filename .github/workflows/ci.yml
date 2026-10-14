@@ -165,6 +165,21 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  wechat-miniapp:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: wechat-miniapp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test WeChat commerce flows
+        run: npm test
+      - name: Verify WeChat project
+        run: npm run verify
+
   admin-e2e:
     runs-on: ubuntu-latest
     services:
@@ -253,7 +268,7 @@ jobs:
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [backend-test, backend-race, backend-postgres, backend-build, frontend, admin-e2e, desktop-wails]
+    needs: [backend-test, backend-race, backend-postgres, backend-build, frontend, wechat-miniapp, admin-e2e, desktop-wails]
     runs-on: ubuntu-latest
     concurrency:
       group: production-deploy

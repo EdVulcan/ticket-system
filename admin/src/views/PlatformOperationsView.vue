@@ -121,6 +121,12 @@ const auditPage = ref(1)
 const devicesTotal = ref(0)
 const settlementsTotal = ref(0)
 const auditTotal = ref(0)
+let ordersRequestVersion = 0
+let issuesRequestVersion = 0
+let financeRequestVersion = 0
+let devicesRequestVersion = 0
+let settlementsRequestVersion = 0
+let auditRequestVersion = 0
 const financeCards = [
   { key: 'capital_balance_cents', label: '资金余额(元)', cents: true },
   { key: 'credit_used_cents', label: '已用授信(元)', cents: true },
@@ -172,58 +178,95 @@ const auditActionText = (action: string) => ({
 
 const loadOrders = async (nextPage?: number) => {
   if (Number.isFinite(nextPage)) ordersPage.value = Math.max(1, Math.floor(Number(nextPage)))
+  const requestVersion = ++ordersRequestVersion
   ordersLoading.value = true
   try {
     const res = await request.get('/platform/orders', { params: { tenant_id: tenantParam(), status: orderStatus.value, page: ordersPage.value, page_size: pageSize.value } })
+    if (requestVersion !== ordersRequestVersion) return
     orders.value = res.data.data || []
     ordersTotal.value = res.data.total || 0
-  } catch (e: any) { ElMessage.error(e.response?.data?.error || '订单加载失败') } finally { ordersLoading.value = false }
+  } catch (e: any) {
+    if (requestVersion === ordersRequestVersion) ElMessage.error(e.response?.data?.error || '订单加载失败')
+  } finally {
+    if (requestVersion === ordersRequestVersion) ordersLoading.value = false
+  }
 }
 
 const loadIssues = async (nextPage?: number) => {
   if (Number.isFinite(nextPage)) issuesPage.value = Math.max(1, Math.floor(Number(nextPage)))
+  const requestVersion = ++issuesRequestVersion
   issuesLoading.value = true
   try {
     const res = await request.get('/platform/issues', { params: { tenant_id: tenantParam(), page: issuesPage.value, page_size: pageSize.value } })
+    if (requestVersion !== issuesRequestVersion) return
     issues.value = res.data.data || []
     issuesTotal.value = res.data.total || 0
-  } catch (e: any) { ElMessage.error(e.response?.data?.error || '异常加载失败') } finally { issuesLoading.value = false }
+  } catch (e: any) {
+    if (requestVersion === issuesRequestVersion) ElMessage.error(e.response?.data?.error || '异常加载失败')
+  } finally {
+    if (requestVersion === issuesRequestVersion) issuesLoading.value = false
+  }
 }
 
 const centsToYuan = (value: number) => Number(value || 0) / 100
 
 const loadFinance = async () => {
+  const requestVersion = ++financeRequestVersion
   financeLoading.value = true
-  try { finance.value = (await request.get('/platform/finance', { params: { tenant_id: tenantParam() } })).data || {} }
-  catch (e: any) { ElMessage.error(e.response?.data?.error || '资金总览加载失败') }
-  finally { financeLoading.value = false }
+  try {
+    const res = await request.get('/platform/finance', { params: { tenant_id: tenantParam() } })
+    if (requestVersion !== financeRequestVersion) return
+    finance.value = res.data || {}
+  } catch (e: any) {
+    if (requestVersion === financeRequestVersion) ElMessage.error(e.response?.data?.error || '资金总览加载失败')
+  } finally {
+    if (requestVersion === financeRequestVersion) financeLoading.value = false
+  }
 }
 
 const loadDevices = async (nextPage?: number) => {
   if (Number.isFinite(nextPage)) devicesPage.value = Math.max(1, Math.floor(Number(nextPage)))
+  const requestVersion = ++devicesRequestVersion
   devicesLoading.value = true
   try {
     const res = await request.get('/platform/devices', { params: { tenant_id: tenantParam(), page: devicesPage.value, page_size: pageSize.value } })
+    if (requestVersion !== devicesRequestVersion) return
     devices.value = res.data.data || []; devicesTotal.value = res.data.total || 0
-  } catch (e: any) { ElMessage.error(e.response?.data?.error || '设备总览加载失败') } finally { devicesLoading.value = false }
+  } catch (e: any) {
+    if (requestVersion === devicesRequestVersion) ElMessage.error(e.response?.data?.error || '设备总览加载失败')
+  } finally {
+    if (requestVersion === devicesRequestVersion) devicesLoading.value = false
+  }
 }
 
 const loadSettlements = async (nextPage?: number) => {
   if (Number.isFinite(nextPage)) settlementsPage.value = Math.max(1, Math.floor(Number(nextPage)))
+  const requestVersion = ++settlementsRequestVersion
   settlementsLoading.value = true
   try {
     const res = await request.get('/platform/settlements', { params: { tenant_id: tenantParam(), page: settlementsPage.value, page_size: pageSize.value } })
+    if (requestVersion !== settlementsRequestVersion) return
     settlements.value = res.data.data || []; settlementsTotal.value = res.data.total || 0
-  } catch (e: any) { ElMessage.error(e.response?.data?.error || '结算总览加载失败') } finally { settlementsLoading.value = false }
+  } catch (e: any) {
+    if (requestVersion === settlementsRequestVersion) ElMessage.error(e.response?.data?.error || '结算总览加载失败')
+  } finally {
+    if (requestVersion === settlementsRequestVersion) settlementsLoading.value = false
+  }
 }
 
 const loadAudit = async (nextPage?: number) => {
   if (Number.isFinite(nextPage)) auditPage.value = Math.max(1, Math.floor(Number(nextPage)))
+  const requestVersion = ++auditRequestVersion
   auditLoading.value = true
   try {
     const res = await request.get('/platform/audit-logs', { params: { tenant_id: tenantParam(), page: auditPage.value, page_size: pageSize.value } })
+    if (requestVersion !== auditRequestVersion) return
     auditLogs.value = res.data.data || []; auditTotal.value = res.data.total || 0
-  } catch (e: any) { ElMessage.error(e.response?.data?.error || '审计日志加载失败') } finally { auditLoading.value = false }
+  } catch (e: any) {
+    if (requestVersion === auditRequestVersion) ElMessage.error(e.response?.data?.error || '审计日志加载失败')
+  } finally {
+    if (requestVersion === auditRequestVersion) auditLoading.value = false
+  }
 }
 
 const loadTab = (name: string | number) => {

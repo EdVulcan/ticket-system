@@ -202,7 +202,8 @@ test('assist pages use explicit APIs and share the raw token', async () => {
     helpAssist: async (token, businessType) => { calls.push(['help', token, businessType]); return { data: { share_token: token, status: 'SUCCESS', starter_reward: { discount_cents: 300 }, helper_reward: { discount_cents: 200 } } }; }
   };
   const wx = { showToast() {}, showShareMenu() {} };
-  load('miniprogram/pages/assist/index/index.js', { '../../../services/storage': storage, '../../../services/api': api }, { Page: value => { indexPage = value; }, wx });
+  const brandService = { name: () => '测试店铺', refresh: page => { page.setData({ storeName: '测试店铺' }); return Promise.resolve(); } };
+  load('miniprogram/pages/assist/index/index.js', { '../../../services/storage': storage, '../../../services/api': api, '../../../services/storefront-brand': brandService }, { Page: value => { indexPage = value; }, wx });
   indexPage.setData = change => { indexPage.data = Object.assign({}, indexPage.data, change); };
   indexPage.onShow();
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -213,7 +214,7 @@ test('assist pages use explicit APIs and share the raw token', async () => {
   assert.deepEqual(calls.find(call => call[0] === 'create').slice(1), [17, 'assist_create_1', 'restaurant']);
   assert.equal(indexPage.onShareAppMessage().path, '/pages/assist/detail/index?token=raw-token');
 
-  load('miniprogram/pages/assist/detail/index.js', { '../../../services/storage': storage, '../../../services/api': api }, { Page: value => { detailPage = value; }, wx });
+  load('miniprogram/pages/assist/detail/index.js', { '../../../services/storage': storage, '../../../services/api': api, '../../../services/storefront-brand': brandService }, { Page: value => { detailPage = value; }, wx });
   detailPage.setData = change => { detailPage.data = Object.assign({}, detailPage.data, change); };
   detailPage.onLoad({ token: 'raw-token' });
   await new Promise(resolve => setTimeout(resolve, 0));

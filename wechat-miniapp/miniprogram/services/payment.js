@@ -2,7 +2,7 @@ const api = require('./api');
 
 // Refund states describe after-sale processing, not a successful payment.
 function isSettled(status) { return ['PAID', 'PREPARING', 'DELIVERING', 'SHIPPED', 'COMPLETED'].indexOf(String(status || '').toUpperCase()) >= 0; }
-function isPaymentClosed(status) { return ['CANCELED', 'REFUNDED', 'REFUNDING', 'REFUND_FAILED', 'REFUND_REVIEW', 'FAILED', 'EXPIRED'].indexOf(String(status || '').toUpperCase()) >= 0; }
+function isPaymentClosed(status) { return ['CANCELED', 'REFUNDED', 'REFUNDING', 'AFTER_SALE_REVIEW', 'REFUND_FAILED', 'REFUND_REVIEW', 'FAILED', 'EXPIRED'].indexOf(String(status || '').toUpperCase()) >= 0; }
 function requestPayment(params) {
   if (!params || !params.timeStamp || !params.nonceStr || !params.package || !params.paySign || !params.signType) return Promise.reject(new Error('PAYMENT_PARAMS_MISSING'));
   return new Promise((resolve, reject) => wx.requestPayment({ timeStamp: String(params.timeStamp), nonceStr: params.nonceStr, package: params.package, signType: params.signType, paySign: params.paySign, success: resolve, fail: reject }));
@@ -30,4 +30,4 @@ async function payOrder(orderNo) {
   if (clientError) throw clientError;
   return verified;
 }
-module.exports = { payOrder, isSettled };
+module.exports = { payOrder, isSettled, isPaymentClosed };

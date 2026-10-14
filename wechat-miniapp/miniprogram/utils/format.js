@@ -29,6 +29,7 @@ function orderStatus(status, fulfillmentType) {
     DELIVERING: '配送中',
     COMPLETED: '已完成',
     CANCELED: '已取消',
+    AFTER_SALE_REVIEW: '售后待审核',
     REFUNDING: '退款中',
     REFUND_FAILED: '退款已关闭',
     REFUND_REVIEW: '退款异常待核查',

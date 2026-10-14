@@ -426,6 +426,7 @@
       :title="`编辑${productNoun}基本信息`"
       width="min(720px, calc(100vw - 32px))"
       destroy-on-close
+      @close="invalidateProductEditMutation"
     >
       <el-form :model="productEditForm" label-position="top" class="commerce-form">
         <div class="form-grid">
@@ -453,7 +454,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="productDetailVisible" :title="`${productNoun}详情`" width="min(980px, calc(100vw - 32px))" top="4vh" destroy-on-close>
+    <el-dialog v-model="productDetailVisible" :title="`${productNoun}详情`" width="min(980px, calc(100vw - 32px))" top="4vh" destroy-on-close @close="invalidateProductDetailRequest">
       <div v-if="detailProduct" v-loading="detailLoading" class="detail-workspace">
         <div class="detail-header">
           <div>
@@ -611,7 +612,7 @@
       <template #footer><el-button @click="adjustmentDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveAdjustment">确认调整</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="orderDetailVisible" title="订单详情" width="min(920px, calc(100vw - 32px))" destroy-on-close>
+    <el-dialog v-model="orderDetailVisible" title="订单详情" width="min(920px, calc(100vw - 32px))" destroy-on-close @close="invalidateOrderDetailRequest">
       <div v-if="selectedOrder" v-loading="orderDetailLoading" class="order-detail">
         <div class="order-detail-header">
           <div class="order-detail-heading">
@@ -967,6 +968,10 @@ let locationsRequestVersion = 0
 let inventoryRequestVersion = 0
 let storefrontRequestVersion = 0
 let orderRequestVersion = 0
+let commerceContextVersion = 0
+let productDetailRequestVersion = 0
+let orderDetailRequestVersion = 0
+let productEditMutationVersion = 0
 const orderDetailLoading = ref(false)
 const orderDetailVisible = ref(false)
 const selectedOrder = ref<any | null>(null)
@@ -1152,6 +1157,116 @@ const fulfillmentStatusOptions = computed(() => currentDomain.value === 'restaur
       { value: 'completed', label: '已完成' },
       { value: 'cancelled', label: '已取消' },
     ])
+
+type CommerceContextSnapshot = {
+  version: number
+  domain: CommerceDomain
+  identityKey: string
+}
+
+function normalizedIdentityValue(value: unknown) {
+  if (Array.isArray(value)) {
+    return value
+      .map(item => typeof item === 'object' && item !== null ? JSON.stringify(item) : String(item ?? ''))
+      .sort()
+  }
+  return String(value ?? '')
+}
+
+function commerceIdentityKey(identity: any) {
+  return JSON.stringify({
+    tenantID: identity?.tenant_id ?? '',
+    tenantStatus: identity?.tenant_status ?? '',
+    scope: identity?.scope ?? '',
+    role: identity?.role ?? '',
+    permissions: normalizedIdentityValue(identity?.permissions),
+    capabilities: normalizedIdentityValue(identity?.capabilities),
+    supplierBusinessTypes: normalizedIdentityValue(identity?.supplier_business_types),
+    businessCapabilities: normalizedIdentityValue(identity?.business_capabilities),
+  })
+}
+
+function captureCommerceContext(): CommerceContextSnapshot {
+  return {
+    version: commerceContextVersion,
+    domain: currentDomain.value,
+    identityKey: commerceIdentityKey(user.value),
+  }
+}
+
+function isCommerceContextCurrent(context: CommerceContextSnapshot) {
+  return context.version === commerceContextVersion
+    && context.domain === currentDomain.value
+    && context.identityKey === commerceIdentityKey(user.value)
+}
+
+function invalidateProductDetailRequest() {
+  productDetailRequestVersion += 1
+  detailLoading.value = false
+}
+
+function invalidateOrderDetailRequest() {
+  orderDetailRequestVersion += 1
+  orderDetailLoading.value = false
+}
+
+function invalidateProductEditMutation() {
+  productEditMutationVersion += 1
+  productEditSaving.value = false
+}
+
+function invalidateCommerceContext() {
+  commerceContextVersion += 1
+  productsRequestVersion += 1
+  locationsRequestVersion += 1
+  inventoryRequestVersion += 1
+  storefrontRequestVersion += 1
+  orderRequestVersion += 1
+  productDetailRequestVersion += 1
+  orderDetailRequestVersion += 1
+  productEditMutationVersion += 1
+
+  loading.value = false
+  saving.value = false
+  detailLoading.value = false
+  orderLoading.value = false
+  orderDetailLoading.value = false
+  productEditSaving.value = false
+  mediaUploadingKind.value = ''
+  mediaDeletingID.value = 0
+  storefrontLoading.value = false
+  storefrontSaving.value = false
+  storefrontHeroUploading.value = false
+  storefrontContactSaving.value = false
+  storefrontDisplayNameSaving.value = false
+
+  orders.value = []
+  orderTotal.value = 0
+  selectedOrder.value = null
+  shipmentTimeline.value = null
+  shipmentTimelineError.value = ''
+  detailProduct.value = null
+  optionGroups.value = []
+  adjustmentRow.value = null
+  shippingOrder.value = null
+  deliveryOrder.value = null
+
+  productDialogVisible.value = false
+  productEditDialogVisible.value = false
+  productDetailVisible.value = false
+  skuDialogVisible.value = false
+  optionGroupDialogVisible.value = false
+  optionDialogVisible.value = false
+  locationDialogVisible.value = false
+  inventoryDialogVisible.value = false
+  adjustmentDialogVisible.value = false
+  orderDetailVisible.value = false
+  shippingDialogVisible.value = false
+  deliveryDialogVisible.value = false
+  storefrontDialogVisible.value = false
+  storefrontContactDialogVisible.value = false
+  storefrontDisplayNameDialogVisible.value = false
+}
 
 function newSkuForm(): ProductSKU {
   return { key: Date.now() + Math.random(), sku_code: '', name: '', original_price: 0, price: 0, status: 'active', attributes: '' }
@@ -1703,6 +1818,8 @@ async function saveStorefrontContact() {
 
 async function openOrderDetail(row: any) {
   if (!row?.id) return
+  const requestVersion = ++orderDetailRequestVersion
+  const context = captureCommerceContext()
   selectedOrder.value = row
   shipmentTimeline.value = null
   shipmentTimelineError.value = ''
@@ -1715,6 +1832,7 @@ async function openOrderDetail(row: any) {
         ? request.get(`/commerce/orders/${row.id}/shipment`, { skipErrorToast: true } as any)
         : Promise.resolve(null),
     ])
+    if (requestVersion !== orderDetailRequestVersion || !isCommerceContextCurrent(context) || !orderDetailVisible.value) return
     if (orderResult.status === 'rejected') throw orderResult.reason
     selectedOrder.value = orderResult.value.data
     if (shipmentResult.status === 'fulfilled') {
@@ -1723,9 +1841,13 @@ async function openOrderDetail(row: any) {
       shipmentTimelineError.value = '物流信息暂时无法加载'
     }
   } catch (error) {
-    if (statusCode(error) !== 403) ElMessage.error('订单详情暂时无法加载')
+    if (requestVersion === orderDetailRequestVersion && isCommerceContextCurrent(context) && orderDetailVisible.value && statusCode(error) !== 403) {
+      ElMessage.error('订单详情暂时无法加载')
+    }
   } finally {
-    orderDetailLoading.value = false
+    if (requestVersion === orderDetailRequestVersion && isCommerceContextCurrent(context) && orderDetailVisible.value) {
+      orderDetailLoading.value = false
+    }
   }
 }
 
@@ -1892,17 +2014,12 @@ async function submitShipping() {
 }
 
 function handleIdentityRefresh(event: Event) {
-  user.value = (event as CustomEvent).detail || readStoredUser()
-  if (!isCurrentDomainActive.value) {
+  const nextUser = (event as CustomEvent).detail || readStoredUser()
+  const identityChanged = commerceIdentityKey(nextUser) !== commerceIdentityKey(user.value)
+  user.value = nextUser
+  if (identityChanged || !isCurrentDomainActive.value) {
+    invalidateCommerceContext()
     if (activeTab.value === 'phase-two') activeTab.value = 'products'
-    productDialogVisible.value = false
-    productEditDialogVisible.value = false
-    skuDialogVisible.value = false
-    optionGroupDialogVisible.value = false
-    optionDialogVisible.value = false
-    locationDialogVisible.value = false
-    inventoryDialogVisible.value = false
-    adjustmentDialogVisible.value = false
   }
 }
 
@@ -1973,6 +2090,8 @@ async function toggleProductStatus(row: any) {
 }
 
 async function openProductDetail(row: any) {
+  const requestVersion = ++productDetailRequestVersion
+  const context = captureCommerceContext()
   detailProduct.value = row
   optionGroups.value = []
   productDetailVisible.value = true
@@ -1982,12 +2101,17 @@ async function openProductDetail(row: any) {
       request.get(`/commerce/products/${row.id}/options`, { skipErrorToast: true } as any),
       request.get(`/commerce/products/${row.id}`, { skipErrorToast: true } as any),
     ])
+    if (requestVersion !== productDetailRequestVersion || !isCommerceContextCurrent(context) || !productDetailVisible.value) return
     optionGroups.value = optionsResponse.data?.data || []
     if (productResponse.data) detailProduct.value = productResponse.data
   } catch (error) {
-    if (statusCode(error) !== 403) ElMessage.error('规格暂时无法加载')
+    if (requestVersion === productDetailRequestVersion && isCommerceContextCurrent(context) && productDetailVisible.value && statusCode(error) !== 403) {
+      ElMessage.error('规格暂时无法加载')
+    }
   } finally {
-    detailLoading.value = false
+    if (requestVersion === productDetailRequestVersion && isCommerceContextCurrent(context) && productDetailVisible.value) {
+      detailLoading.value = false
+    }
   }
 }
 
@@ -2008,11 +2132,13 @@ function openProductEditDialog() {
 }
 
 async function saveProductEdit() {
-  if (!canWrite.value || !productEditForm.id) return
+  if (!canWrite.value || !productEditDialogVisible.value || !productEditForm.id) return
   if (!productEditForm.name.trim()) {
     ElMessage.warning(`请填写${productNoun.value}名称`)
     return
   }
+  const context = captureCommerceContext()
+  const mutationVersion = ++productEditMutationVersion
   productEditSaving.value = true
   try {
     const response = await request.put(`/commerce/products/${productEditForm.id}`, {
@@ -2024,13 +2150,15 @@ async function saveProductEdit() {
       sale_starts_at: productEditForm.sale_starts_at,
       sale_ends_at: productEditForm.sale_ends_at,
     })
-    productEditDialogVisible.value = false
+    if (mutationVersion !== productEditMutationVersion || !isCommerceContextCurrent(context) || !productEditDialogVisible.value) return
     if (response.data) detailProduct.value = response.data
-    ElMessage.success(`${productNoun.value}基本信息已保存`)
     await loadProducts()
+    if (mutationVersion !== productEditMutationVersion || !isCommerceContextCurrent(context)) return
     syncDetailProduct()
+    ElMessage.success(`${productNoun.value}基本信息已保存`)
+    productEditDialogVisible.value = false
   } finally {
-    productEditSaving.value = false
+    if (mutationVersion === productEditMutationVersion && isCommerceContextCurrent(context)) productEditSaving.value = false
   }
 }
 
@@ -2339,6 +2467,7 @@ async function saveAdjustment() {
 
 watch(() => [route.params.businessType, route.query.tab, route.query.order], async ([businessType], [previousBusinessType]) => {
   if (businessType !== previousBusinessType) {
+    invalidateCommerceContext()
     activeTab.value = 'products'
     productSearch.value = ''
     productStatus.value = ''
@@ -2349,8 +2478,6 @@ watch(() => [route.params.businessType, route.query.tab, route.query.order], asy
     orderPage.value = 1
     orders.value = []
     orderTotal.value = 0
-    detailProduct.value = null
-    productDetailVisible.value = false
     user.value = readStoredUser()
     await loadWorkspace()
   }

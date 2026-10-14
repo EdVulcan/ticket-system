@@ -342,6 +342,27 @@ func providerRequestMayHaveBeenAccepted(method string, cause error) bool {
 	return true
 }
 
+func applyWeChatNativeResponse(req *model.Payment, res *wechatv3.NativeRsp) error {
+	if req == nil {
+		return fmt.Errorf("WeChat payment request is missing")
+	}
+	if res == nil {
+		return fmt.Errorf("WeChat payment response is empty")
+	}
+	if res.Code != wechatv3.Success {
+		return fmt.Errorf("WeChat payment request failed: %s", res.Error)
+	}
+	if res.Response == nil {
+		return fmt.Errorf("WeChat payment response body is empty")
+	}
+	codeURL := strings.TrimSpace(res.Response.CodeUrl)
+	if codeURL == "" {
+		return fmt.Errorf("WeChat payment response is missing code_url")
+	}
+	req.CodeURL = codeURL
+	return nil
+}
+
 func (s *PaymentService) payWeChat(req *model.Payment) error {
 	cfg, err := s.GetConfig(req.TenantID, "wechat")
 	if err != nil {
@@ -367,11 +388,7 @@ func (s *PaymentService) payWeChat(req *model.Payment) error {
 	if err != nil {
 		return err
 	}
-	if res.Code != 200 || res.Response == nil {
-		return fmt.Errorf("WeChat payment request failed: %s", res.Error)
-	}
-	req.CodeURL = res.Response.CodeUrl
-	return nil
+	return applyWeChatNativeResponse(req, res)
 }
 
 func (s *PaymentService) payWeChatPaymentCode(req *model.Payment, cfg *model.PaymentConfig) error {

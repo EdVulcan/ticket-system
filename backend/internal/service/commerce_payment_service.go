@@ -806,7 +806,7 @@ func (s *CommercePaymentService) ReconcileDue(ctx context.Context, at time.Time,
 	// forever. StartWechatRefund is idempotent and will still refuse a request
 	// whose local order or fulfillment state is no longer refundable.
 	var pendingRequests []model.CommerceAfterSaleRequest
-	if err := s.db().Where("tenant_id > 0 AND status IN ? AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM commerce_refund_attempts a WHERE a.tenant_id = commerce_after_sale_requests.tenant_id AND a.request_id = commerce_after_sale_requests.id AND a.deleted_at IS NULL)", []string{"requested", "approved", "processing"}).Order("id ASC").Limit(remaining).Find(&pendingRequests).Error; err != nil {
+	if err := s.db().Where("tenant_id > 0 AND status IN ? AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM commerce_orders o WHERE o.id = commerce_after_sale_requests.order_id AND o.tenant_id = commerce_after_sale_requests.tenant_id AND o.deleted_at IS NULL AND NOT (commerce_after_sale_requests.status = 'requested' AND o.fulfillment_status = 'completed')) AND NOT EXISTS (SELECT 1 FROM commerce_refund_attempts a WHERE a.tenant_id = commerce_after_sale_requests.tenant_id AND a.request_id = commerce_after_sale_requests.id AND a.deleted_at IS NULL)", []string{"requested", "approved", "processing"}).Order("id ASC").Limit(remaining).Find(&pendingRequests).Error; err != nil {
 		return processed, err
 	}
 	var firstRefundStartErr error
@@ -818,7 +818,7 @@ func (s *CommercePaymentService) ReconcileDue(ctx context.Context, at time.Time,
 	}
 	remaining = limit - processed
 	if remaining < 1 {
-		return processed, nil
+		return processed, firstRefundStartErr
 	}
 	var refunds []model.CommerceRefundAttempt
 	if err := s.db().Where("status IN ? AND (next_query_at IS NULL OR next_query_at <= ?)", []string{"processing", "unknown"}, at).Order("id ASC").Limit(remaining).Find(&refunds).Error; err != nil {

@@ -80,9 +80,11 @@ test('already-paid order never opens another payment sheet', async () => {
   assert.equal((await flow.payOrder('order')).status, 'DELIVERING');
 });
 test('refund states never reopen the WeChat payment sheet', async () => {
-  let created = false;
-  const flow = load('miniprogram/services/payment.js', { './api': { queryPayment: async () => ({ status: 'REFUNDING' }), createPayment: async () => { created = true; } } }, { wx: { requestPayment: () => assert.fail('must not open payment') } });
-  assert.equal((await flow.payOrder('order')).status, 'REFUNDING'); assert.equal(created, false);
+  for (const status of ['AFTER_SALE_REVIEW', 'REFUNDING']) {
+    let created = false;
+    const flow = load('miniprogram/services/payment.js', { './api': { queryPayment: async () => ({ status }), createPayment: async () => { created = true; } } }, { wx: { requestPayment: () => assert.fail('must not open payment') } });
+    assert.equal((await flow.payOrder('order')).status, status); assert.equal(created, false);
+  }
 });
 test('payment flow obtains a fresh wx login code for a new JSAPI payment', async () => {
   let loginCount = 0; let paymentOptions;
@@ -113,6 +115,46 @@ test('production payment adapter uses order number endpoints and normalizes paym
   assert.equal(queried.status, 'PAID'); assert.equal(queried.outTradeNo, 'OT-1');
   assert.equal(calls[0].path, '/orders/NO-1/payments'); assert.equal(calls[0].options.data.order_no, 'NO-1'); assert.equal(calls[0].options.data.login_code, 'fresh-code');
   assert.equal(calls[1].path, '/orders/NO-1/payment'); assert.equal(calls[1].options.method, 'GET');
+});
+
+test('payment view closes payment for pending approval and provider refund states', () => {
+  const api = load('miniprogram/services/api.js', {
+    './storage': {},
+    './http': { isProduction: () => false, isConfigured: () => false, createError: (code, message) => Object.assign(new Error(message), { code }) }
+  });
+  const pending = api.normalizePaymentView({ status: 'WAIT_PAY', payment_status: 'paid', fulfillment_status: 'completed', refund_status: 'requested', after_sales: [{ id: 1, status: 'requested', type: 'refund' }] });
+  assert.equal(pending.status, 'AFTER_SALE_REVIEW');
+  assert.equal(pending.fulfillmentCompleted, true);
+  assert.equal(pending.afterSaleStatus, 'REQUESTED');
+  const approved = api.normalizePaymentView({ status: 'PAID', payment_status: 'paid', fulfillment_status: 'completed', refund_status: 'requested', after_sales: [{ id: 1, status: 'approved', type: 'refund' }] });
+  assert.equal(approved.status, 'REFUNDING');
+  const processed = api.normalizePaymentView({ status: 'PAID', payment_status: 'paid', fulfillment_status: 'completed', refund_status: 'processing', after_sales: [{ id: 1, status: 'processing', type: 'refund' }] });
+  assert.equal(processed.status, 'REFUNDING');
+  assert.equal(api.normalizePaymentView({ status: 'REFUNDING' }).status, 'REFUNDING');
+  const refunded = api.normalizePaymentView({ status: 'PAID', payment_status: 'refunded', fulfillment_status: 'completed', refund_status: 'refunded', after_sales: [{ id: 1, status: 'completed', type: 'refund' }] });
+  assert.equal(refunded.status, 'REFUNDED');
+});
+
+test('completed fulfillment remains visible while after-sale moves from review to provider processing', () => {
+  const api = load('miniprogram/services/api.js', {
+    './storage': {},
+    './http': { isProduction: () => false, isConfigured: () => false, createError: (code, message) => Object.assign(new Error(message), { code }) }
+  });
+  const base = { order_no: 'ORDER-AFTER-SALE-1', business_type: 'restaurant', status: 'COMPLETED', payment_status: 'paid', fulfillment_status: 'completed', refund_status: 'requested', after_sales: [{ id: 1, status: 'requested', type: 'refund' }] };
+  const pending = api.normalizeOrder(base);
+  assert.equal(pending.status, 'AFTER_SALE_REVIEW');
+  assert.equal(pending.fulfillmentStatus, 'completed');
+  assert.equal(pending.fulfillmentCompleted, true);
+  assert.equal(pending.afterSaleStatus, 'REQUESTED');
+  const approved = api.normalizeOrder(Object.assign({}, base, { after_sales: [{ id: 1, status: 'approved', type: 'refund' }] }));
+  assert.equal(approved.status, 'REFUNDING');
+  const processed = api.normalizeOrder(Object.assign({}, base, { refund_status: 'processing', after_sales: [{ id: 1, status: 'processing', type: 'refund' }] }));
+  assert.equal(processed.status, 'REFUNDING');
+  const pendingProvider = api.normalizeOrder(Object.assign({}, base, { refund_status: 'pending', after_sales: [] }));
+  assert.equal(pendingProvider.status, 'REFUNDING');
+  const refunded = api.normalizeOrder(Object.assign({}, base, { payment_status: 'refunded', refund_status: 'refunded', after_sales: [{ id: 1, status: 'completed', type: 'refund' }] }));
+  assert.equal(refunded.status, 'REFUNDED');
+  assert.equal(refunded.fulfillmentStatus, 'completed');
 });
 test('production HTTP requests use the storefront wechat route prefix for every SaaS resource', async () => {
   const requests = [];
@@ -534,11 +576,14 @@ test('production storage cannot load demo orders, addresses or mock products', (
   storage.saveOrders([{ id: 'real' }]); mode = 'demo'; assert.equal(storage.getOrders()[0].id, 'demo');
 });
 
-test('production checkout fingerprint replaces a pending payload when the product changes', async () => {
+test('production checkout keeps an unknown attempt and retries the original payload when the product changes', async () => {
   let page;
   let attempt = null;
   let createCount = 0;
   const payloads = [];
+  let initialUnknownMarker;
+  let modal;
+  let retryPromise;
   const storage = {
     makeId: prefix => `${prefix}_current`,
     getCheckoutBatchAttempt: () => attempt,
@@ -549,6 +594,7 @@ test('production checkout fingerprint replaces a pending payload when the produc
     isProduction: () => true,
     isBusinessAvailable: () => true,
     createOrder: async payload => {
+      initialUnknownMarker = attempt && attempt.creationResultUnknown;
       payloads.push(payload);
       createCount += 1;
       if (createCount === 1) throw new Error('network');
@@ -560,7 +606,7 @@ test('production checkout fingerprint replaces a pending payload when the produc
     '../../services/api': api,
     '../../services/payment': { payOrder: async () => ({ status: 'PAID' }), isSettled: status => status === 'PAID' },
     '../../config/commerce': { FULFILLMENT: { TAKEAWAY: 'TAKEAWAY', COURIER: 'COURIER' }, businessTypeForFulfillment: type => type === 'COURIER' ? 'retail' : 'restaurant' }
-  }, { Page: value => { page = value; }, wx: { showToast() {}, redirectTo() {} } });
+  }, { Page: value => { page = value; }, wx: { showToast() {}, showModal: options => { modal = options; }, redirectTo() {} } });
   page.batchId = 'batch_current';
   page.data = Object.assign({}, page.data, {
     takeawayItems: [{ productId: 'old-product', skuId: 'old-sku', quantity: 1, unitPrice: 1000, selectedOptions: [] }],
@@ -568,16 +614,192 @@ test('production checkout fingerprint replaces a pending payload when the produc
     customerRemark: '', courierRemark: '', couponTarget: 'TAKEAWAY', selectedCoupon: null, paying: false
   });
   page.setData = change => { page.data = Object.assign({}, page.data, change); };
+  const submit = page.submitProductionOrder;
+  page.submitProductionOrder = retryOriginal => {
+    const result = submit.call(page, retryOriginal);
+    if (retryOriginal === true) retryPromise = result;
+    return result;
+  };
   await page.submitProductionOrder();
   assert.equal(payloads.length, 1);
+  assert.equal(initialUnknownMarker, false);
   assert.equal(payloads[0].items[0].productId, 'old-product');
   assert.ok(attempt && attempt.fingerprint);
+  assert.equal(attempt.creationResultUnknown, true);
+  page.data.takeawayItems = [{ productId: 'new-product', skuId: 'new-sku', quantity: 1, unitPrice: 1200, selectedOptions: [] }];
+  await page.submitProductionOrder();
+  assert.equal(modal.confirmText, '重试原单');
+  modal.success({ confirm: true });
+  await retryPromise;
+  assert.equal(payloads.length, 2);
+  assert.equal(payloads[1].items[0].productId, 'old-product');
+  assert.equal(attempt, null);
+});
+
+test('a fresh explicit checkout rejection clears only the direct draft attempt so edited goods can retry', async () => {
+  let page;
+  let draft = { id: 'direct-1', batchId: 'batch-old', items: [{ productId: 'old-product' }], attempt: null };
+  const payloads = [];
+  let createCount = 0;
+  const storage = {
+    makeId: prefix => `${prefix}_fresh`,
+    getDirectCheckout: () => draft,
+    saveDirectCheckout: value => { draft = value; },
+    saveCart() {}
+  };
+  const api = {
+    isProduction: () => true,
+    createOrder: async payload => {
+      payloads.push(payload);
+      createCount += 1;
+      if (createCount === 1) throw Object.assign(new Error('HTTP_400'), { statusCode: 400, reasonCode: 'ZERO_PAY_NOT_SUPPORTED', userMessage: '优惠后金额为零' });
+      return { success: true, orderId: 'NEW-EDITED', order: { status: 'PAID' } };
+    }
+  };
+  load('miniprogram/pages/checkout/index.js', {
+    '../../services/storage': storage,
+    '../../services/api': api,
+    '../../services/payment': { payOrder: async () => ({ status: 'PAID' }), isSettled: status => status === 'PAID' },
+    '../../config/commerce': { FULFILLMENT: { TAKEAWAY: 'TAKEAWAY', COURIER: 'COURIER' }, businessTypeForFulfillment: type => type === 'COURIER' ? 'retail' : 'restaurant' }
+  }, { Page: value => { page = value; }, wx: { showToast() {}, redirectTo() {} } });
+  page.directCheckoutId = 'direct-1';
+  page.batchId = 'batch-old';
+  page.data = Object.assign({}, page.data, {
+    takeawayItems: [{ productId: 'old-product', skuId: 'old-sku', quantity: 1, unitPrice: 1000, selectedOptions: [] }],
+    courierItems: [], takeawayDeliveryMethod: 'PICKUP', takeawayAddress: null, courierAddress: null,
+    customerRemark: '', courierRemark: '', couponTarget: 'TAKEAWAY', selectedCoupon: null, paying: false
+  });
+  page.setData = change => { page.data = Object.assign({}, page.data, change); };
+  await page.submitProductionOrder();
+  assert.equal(draft.attempt, null);
 
   page.data.takeawayItems = [{ productId: 'new-product', skuId: 'new-sku', quantity: 1, unitPrice: 1200, selectedOptions: [] }];
   await page.submitProductionOrder();
   assert.equal(payloads.length, 2);
+  assert.equal(payloads[0].items[0].productId, 'old-product');
   assert.equal(payloads[1].items[0].productId, 'new-product');
-  assert.equal(attempt, null);
+  assert.equal(draft, null);
+});
+
+test('an unknown checkout result stays sticky when a retry returns an explicit rejection', async () => {
+  let page;
+  let attempt = null;
+  let createCount = 0;
+  const storage = {
+    makeId: prefix => `${prefix}_sticky`,
+    getCheckoutBatchAttempt: () => attempt,
+    saveCheckoutBatchAttempt: value => { attempt = value; },
+    saveCart() {}
+  };
+  const api = {
+    isProduction: () => true,
+    createOrder: async () => {
+      createCount += 1;
+      if (createCount === 1) throw Object.assign(new Error('network'), { code: 'NETWORK_ERROR' });
+      throw Object.assign(new Error('HTTP_400'), { statusCode: 400, reasonCode: 'ZERO_PAY_NOT_SUPPORTED' });
+    }
+  };
+  load('miniprogram/pages/checkout/index.js', {
+    '../../services/storage': storage,
+    '../../services/api': api,
+    '../../services/payment': { payOrder: async () => ({ status: 'PAID' }), isSettled: status => status === 'PAID' },
+    '../../config/commerce': { FULFILLMENT: { TAKEAWAY: 'TAKEAWAY', COURIER: 'COURIER' }, businessTypeForFulfillment: type => type === 'COURIER' ? 'retail' : 'restaurant' }
+  }, { Page: value => { page = value; }, wx: { showToast() {}, showModal() {}, redirectTo() {} } });
+  page.batchId = 'batch-sticky';
+  page.data = Object.assign({}, page.data, {
+    takeawayItems: [{ productId: 'same-product', skuId: 'same-sku', quantity: 1, unitPrice: 1000, selectedOptions: [] }],
+    courierItems: [], takeawayDeliveryMethod: 'PICKUP', takeawayAddress: null, courierAddress: null,
+    customerRemark: '', courierRemark: '', couponTarget: 'TAKEAWAY', selectedCoupon: null, paying: false
+  });
+  page.setData = change => { page.data = Object.assign({}, page.data, change); };
+  await page.submitProductionOrder();
+  const originalAttempt = attempt;
+  assert.equal(originalAttempt.creationResultUnknown, true);
+  await page.submitProductionOrder();
+  assert.equal(createCount, 2);
+  assert.equal(attempt, originalAttempt);
+  assert.equal(attempt.creationResultUnknown, true);
+});
+
+test('a legacy checkout attempt without a result marker stays sticky after an explicit rejection', async () => {
+  let page;
+  let attempt = null;
+  let createCount = 0;
+  const storage = {
+    makeId: prefix => `${prefix}_legacy`,
+    getCheckoutBatchAttempt: () => attempt,
+    saveCheckoutBatchAttempt: value => { attempt = value; },
+    saveCart() {}
+  };
+  const api = {
+    isProduction: () => true,
+    createOrder: async () => {
+      createCount += 1;
+      if (createCount === 1) throw Object.assign(new Error('network'), { code: 'NETWORK_ERROR' });
+      throw Object.assign(new Error('HTTP_400'), { statusCode: 400, reasonCode: 'ZERO_PAY_NOT_SUPPORTED' });
+    }
+  };
+  load('miniprogram/pages/checkout/index.js', {
+    '../../services/storage': storage,
+    '../../services/api': api,
+    '../../services/payment': { payOrder: async () => ({ status: 'PAID' }), isSettled: status => status === 'PAID' },
+    '../../config/commerce': { FULFILLMENT: { TAKEAWAY: 'TAKEAWAY', COURIER: 'COURIER' }, businessTypeForFulfillment: type => type === 'COURIER' ? 'retail' : 'restaurant' }
+  }, { Page: value => { page = value; }, wx: { showToast() {}, redirectTo() {} } });
+  page.batchId = 'batch-legacy';
+  page.data = Object.assign({}, page.data, {
+    takeawayItems: [{ productId: 'legacy-product', skuId: 'legacy-sku', quantity: 1, unitPrice: 1000, selectedOptions: [] }],
+    courierItems: [], takeawayDeliveryMethod: 'PICKUP', takeawayAddress: null, courierAddress: null,
+    customerRemark: '', courierRemark: '', couponTarget: 'TAKEAWAY', selectedCoupon: null, paying: false
+  });
+  page.setData = change => { page.data = Object.assign({}, page.data, change); };
+  await page.submitProductionOrder();
+  assert.equal(attempt.creationResultUnknown, true);
+  delete attempt.creationResultUnknown;
+  const legacyAttempt = attempt;
+  assert.equal(Object.prototype.hasOwnProperty.call(legacyAttempt, 'creationResultUnknown'), false);
+  await page.submitProductionOrder();
+  assert.equal(createCount, 2);
+  assert.equal(attempt, legacyAttempt);
+  assert.equal(Object.prototype.hasOwnProperty.call(attempt, 'creationResultUnknown'), false);
+});
+
+test('an idempotency conflict never replaces the pending checkout attempt with a new order', async () => {
+  let page;
+  let attempt = null;
+  let createCount = 0;
+  const storage = {
+    makeId: prefix => `${prefix}_conflict`,
+    getCheckoutBatchAttempt: () => attempt,
+    saveCheckoutBatchAttempt: value => { attempt = value; },
+    saveCart() {}
+  };
+  const api = {
+    isProduction: () => true,
+    createOrder: async () => {
+      createCount += 1;
+      throw Object.assign(new Error('HTTP_409'), { statusCode: 409, reasonCode: 'IDEMPOTENCY_CONFLICT' });
+    }
+  };
+  load('miniprogram/pages/checkout/index.js', {
+    '../../services/storage': storage,
+    '../../services/api': api,
+    '../../services/payment': { payOrder: async () => ({ status: 'PAID' }), isSettled: status => status === 'PAID' },
+    '../../config/commerce': { FULFILLMENT: { TAKEAWAY: 'TAKEAWAY', COURIER: 'COURIER' }, businessTypeForFulfillment: type => type === 'COURIER' ? 'retail' : 'restaurant' }
+  }, { Page: value => { page = value; }, wx: { showToast() {}, showModal() {}, redirectTo() {} } });
+  page.batchId = 'batch-conflict';
+  page.data = Object.assign({}, page.data, {
+    takeawayItems: [{ productId: 'original-product', skuId: 'original-sku', quantity: 1, unitPrice: 1000, selectedOptions: [] }],
+    courierItems: [], takeawayDeliveryMethod: 'PICKUP', takeawayAddress: null, courierAddress: null,
+    customerRemark: '', courierRemark: '', couponTarget: 'TAKEAWAY', selectedCoupon: null, paying: false
+  });
+  page.setData = change => { page.data = Object.assign({}, page.data, change); };
+  await page.submitProductionOrder();
+  const originalAttempt = attempt;
+  page.data.takeawayItems = [{ productId: 'edited-product', skuId: 'edited-sku', quantity: 1, unitPrice: 1200, selectedOptions: [] }];
+  await page.submitProductionOrder();
+  assert.equal(createCount, 1);
+  assert.equal(attempt, originalAttempt);
+  assert.equal(attempt.creationResultUnknown, true);
 });
 
 test('production checkout does not create a new order when an older attempt has an order ID', async () => {
@@ -780,7 +1002,7 @@ test('merchant product editor loads and saves numeric product and category IDs',
 
 test('demo mixed checkout binds the coupon to its actual fulfillment order', async () => {
   const values = { cart: [], orders: [], products: [{ id: 'take', stockMode: 'LIMITED', stock: 5 }, { id: 'cold', stockMode: 'LIMITED', stock: 5 }], coupons: [{ id: 'coupon', status: 'AVAILABLE' }] };
-  const storage = { getCart: () => values.cart, saveCart: value => { values.cart = value; }, getOrders: () => values.orders, saveOrders: value => { values.orders = value; }, getProducts: () => values.products, saveProducts: value => { values.products = value; }, getCoupons: () => values.coupons, saveCoupons: value => { values.coupons = value; }, makeId: prefix => `${prefix}_id`, getStore: () => ({}) };
+  const storage = { getCart: () => values.cart, saveCart: value => { values.cart = value; }, getOrders: () => values.orders, saveOrders: value => { values.orders = value; }, getProducts: () => values.products, saveProducts: value => { values.products = value; }, getCoupons: () => values.coupons, saveCoupons: value => { values.coupons = value; }, getCheckoutBatchAttempt: () => null, saveCheckoutBatchAttempt() {}, makeId: prefix => `${prefix}_id`, getStore: () => ({}) };
   let page;
   load('miniprogram/pages/checkout/index.js', { '../../services/storage': storage, '../../services/api': { isProduction: () => false, normalizeStore: value => value }, '../../services/payment': { isSettled: status => ['PAID', 'COMPLETED'].includes(status) } }, { Page: value => { page = value; }, wx: { getStorageSync: () => '', showToast() {}, redirectTo() {} }, setTimeout, getApp: () => ({ globalData: { deploymentMode: 'demo' } }) });
   page.data = Object.assign({}, page.data, { hasTakeaway: true, hasCourier: true, takeawayItems: [{ productId: 'take', name: '便当', unitPrice: 1000, quantity: 1, fulfillmentType: 'TAKEAWAY' }], courierItems: [{ productId: 'cold', name: '冷吃兔', unitPrice: 2000, quantity: 1, fulfillmentType: 'COURIER' }], takeawayDeliveryMethod: 'PICKUP', takeawayDeliveryFee: 0, courierShippingFee: 800, selectedCoupon: { id: 'coupon', name: '券', scope: 'COURIER' }, couponTarget: 'COURIER', discount: 300, customerRemark: '', courierRemark: '', paying: false });
@@ -1047,6 +1269,53 @@ test('refund submission uses one deterministic key and reconciles an ambiguous P
   assert.equal(page.data.order.status, 'REFUNDING');
   assert.equal(page.data.canRequestRefund, false);
   assert.equal(toasts.some(item => item.title === '退款申请未提交，请刷新订单后重试'), false);
+});
+
+test('completed after-sale submission renders merchant review, toasts by original fulfillment, and keeps processed refunds separate', async () => {
+  const orderApi = load('miniprogram/services/api.js', {
+    './storage': {},
+    './http': { isProduction: () => false, isConfigured: () => false, createError: (code, message) => Object.assign(new Error(message), { code }) }
+  });
+  let page;
+  const toasts = [];
+  const completedOrder = { order_no: 'ORDER-AFTER-SALE-2', business_type: 'restaurant', status: 'COMPLETED', payment_status: 'paid', fulfillment_status: 'completed', available_actions: { can_refund: true }, items: [] };
+  const pendingOrder = Object.assign({}, completedOrder, { refund_status: 'requested', after_sales: [{ id: 2, status: 'requested', type: 'refund' }], available_actions: { can_refund: false } });
+  const processedOrder = Object.assign({}, completedOrder, { refund_status: 'processing', after_sales: [{ id: 2, status: 'processing', type: 'refund' }], available_actions: { can_refund: false } });
+  const api = {
+    isProduction: () => true,
+    normalizeOrder: orderApi.normalizeOrder,
+    createRefund: async () => ({ order: pendingOrder }),
+    queryRefund: async () => pendingOrder
+  };
+  load('miniprogram/pages/order/detail/index.js', {
+    '../../../services/storage': { getOrders: () => [], getCart: () => [], getStore: () => ({}) },
+    '../../../utils/format': { orderStatus: status => status === 'AFTER_SALE_REVIEW' ? '售后待审核' : status, dateTime: () => '', yuan: value => String(Number(value || 0) / 100) },
+    '../../../services/api': api,
+    '../../../services/payment': {}
+  }, { Page: value => { page = value; }, wx: { showToast: value => toasts.push(value) } });
+  page.setData = change => { page.data = Object.assign({}, page.data, change); };
+  page.orderId = 'ORDER-AFTER-SALE-2';
+  page.renderOrder(completedOrder);
+  assert.equal(page.data.canRequestRefund, true);
+  await page.submitRefund('商品不需要了');
+  assert.equal(page.data.order.status, 'AFTER_SALE_REVIEW');
+  assert.equal(page.data.order.statusText, '售后待审核');
+  assert.equal(page.data.order.fulfillmentStatus, 'completed');
+  assert.equal(page.data.order.timelineStatus, 'COMPLETED');
+  assert.equal(page.data.statusDescription, '售后申请已提交，等待商家审核');
+  assert.equal(page.data.refundMessage, '售后申请已提交，等待商家审核');
+  assert.equal(toasts.some(item => item.title === '售后申请已提交'), true);
+
+  page.renderOrder(processedOrder);
+  assert.equal(page.data.order.status, 'REFUNDING');
+  assert.equal(page.data.order.fulfillmentStatus, 'completed');
+  assert.equal(page.data.statusDescription, '退款申请处理中');
+  assert.equal(page.data.refundMessage, '退款申请处理中，等待支付渠道确认');
+
+  const approvedOrder = Object.assign({}, completedOrder, { refund_status: 'requested', after_sales: [{ id: 2, status: 'approved', type: 'refund' }], available_actions: { can_refund: false } });
+  page.renderOrder(approvedOrder);
+  assert.equal(page.data.order.status, 'REFUNDING');
+  assert.equal(page.data.refundMessage, '商家已审核通过，正在安排退款');
 });
 
 test('legacy CAMPUS addresses remain selectable in the shared address book', () => {

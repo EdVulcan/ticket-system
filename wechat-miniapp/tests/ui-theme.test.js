@@ -54,20 +54,22 @@ test('theme keeps the original routes and explicit runtime selection', () => {
 test('consumer copy stays neutral while legacy campus addresses remain supported', () => {
   const app = JSON.parse(read('app.json'));
   const addressEdit = read('pages/address/edit/index.js');
+  const addressEditWxml = read('pages/address/edit/index.wxml');
   const addressList = read('pages/address/list/index.wxml');
   const coldConfig = JSON.parse(read('pages/cold/index.json'));
   const cold = read('pages/cold/index.wxml');
+  const catalogPage = read('services/catalog-page.js');
   const orderDetail = read('pages/order/detail/index.wxml');
   assert.deepEqual(app.tabBar.list.map(tab => tab.text), ['餐饮', '零售', '订单', '我的']);
   assert.equal(coldConfig.navigationBarTitleText, '零售');
-  assert.match(cold, /零售商品/);
+  assert.match(catalogPage, /menuTitle:\s*'零售商品'/);
   assert.doesNotMatch(cold, /冷吃商品/);
   assert.match(orderDetail, /配送费/);
   assert.doesNotMatch(orderDetail, /跑腿费/);
   assert.match(addressEdit, /addressType === 'CAMPUS'/);
   assert.match(addressEdit, /请补充配送区域信息/);
   assert.match(addressList, /收货地址/);
-  assert.match(addressList, /配送和快递共用同一套收货地址/);
+  assert.match(addressEditWxml, /这个地址可同时用于餐饮配送和零售快递/);
   assert.doesNotMatch(addressEdit, /请填写校区和配送区域/);
 });
 

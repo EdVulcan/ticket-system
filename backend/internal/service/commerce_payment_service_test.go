@@ -323,12 +323,125 @@ func TestCommerceRefundRequestWithoutAttemptIsRecoveredByWorker(t *testing.T) {
 	if err := model.DB.Where("tenant_id = ? AND provider = ?", tenantID, "wechat").Delete(&model.PaymentConfig{}).Error; err != nil {
 		t.Fatalf("remove payment config: %v", err)
 	}
-	if processed, err := payment.ReconcileDue(context.Background(), now, 20); err == nil || processed != 1 {
+	if processed, err := payment.ReconcileDue(context.Background(), now, 1); err == nil || processed != 1 {
 		t.Fatalf("missing config should be reported after attempting recovery, processed=%d err=%v", processed, err)
 	}
 	var attempt model.CommerceRefundAttempt
 	if err := model.DB.Where("tenant_id = ? AND request_id = ?", tenantID, request.Request.ID).First(&attempt).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
 		t.Fatalf("unexpected refund attempt after unavailable provider: %+v err=%v", attempt, err)
+	}
+}
+
+func TestCommerceRefundReconcileSkipsCompletedApprovalAndProcessesNext(t *testing.T) {
+	tenantID, productID, skuID, locationID, now := commerceOrderFixture(t)
+	if err := model.DB.Create(&model.PaymentConfig{TenantID: tenantID, Provider: "wechat", AppID: "wx-test", MchID: "mch-test", Status: true}).Error; err != nil {
+		t.Fatalf("create payment config: %v", err)
+	}
+	orders := &CommerceOrderService{Clock: func() time.Time { return now }}
+	completedInput := commerceOrderInput(productID, skuID, locationID, "refund-reconcile-completed-order", now.Add(15*time.Minute))
+	completedInput.FulfillmentMethod = "pickup"
+	completedInput.PaymentReference = "refund-reconcile-completed-payment"
+	completedOrder, err := orders.CreateOrder(tenantID, completedInput)
+	if err != nil {
+		t.Fatalf("create completed order: %v", err)
+	}
+	if _, err := orders.ConfirmPayment(tenantID, completedOrder.ID); err != nil {
+		t.Fatalf("confirm completed order payment: %v", err)
+	}
+	for _, status := range []string{"accepted", "preparing", "ready", "completed"} {
+		if _, err := orders.TransitionRestaurantFulfillment(tenantID, completedOrder.ID, RestaurantFulfillmentTransitionInput{Status: status}); err != nil {
+			t.Fatalf("transition completed order to %s: %v", status, err)
+		}
+	}
+	completedRequest, err := orders.CreateRefundRequest(tenantID, completedOrder.ID, "refund-reconcile-completed-request", "completed order after-sale")
+	if err != nil {
+		t.Fatalf("create completed refund request: %v", err)
+	}
+
+	unfulfilledInput := commerceOrderInput(productID, skuID, locationID, "refund-reconcile-unfulfilled-order", now.Add(15*time.Minute))
+	unfulfilledInput.PaymentReference = "refund-reconcile-unfulfilled-payment"
+	unfulfilledOrder, err := orders.CreateOrder(tenantID, unfulfilledInput)
+	if err != nil {
+		t.Fatalf("create unfulfilled order: %v", err)
+	}
+	if _, err := orders.ConfirmPayment(tenantID, unfulfilledOrder.ID); err != nil {
+		t.Fatalf("confirm unfulfilled order payment: %v", err)
+	}
+	unfulfilledRequest, err := orders.CreateRefundRequest(tenantID, unfulfilledOrder.ID, "refund-reconcile-unfulfilled-request", "unfulfilled order refund")
+	if err != nil {
+		t.Fatalf("create unfulfilled refund request: %v", err)
+	}
+
+	previousBaseURL := config.GlobalConfig.Server.PublicBaseURL
+	config.GlobalConfig.Server.PublicBaseURL = "https://merchant.example.test"
+	t.Cleanup(func() { config.GlobalConfig.Server.PublicBaseURL = previousBaseURL })
+	provider := &commercePaymentTestProvider{}
+	payment := &CommercePaymentService{DB: model.DB, Provider: provider, Clock: func() time.Time { return now }}
+	processed, err := payment.ReconcileDue(context.Background(), now, 1)
+	if err != nil || processed != 1 {
+		t.Fatalf("reconcile eligible unfulfilled refund processed=%d err=%v", processed, err)
+	}
+	var completedAttempts, unfulfilledAttempts int64
+	if err := model.DB.Model(&model.CommerceRefundAttempt{}).Where("tenant_id = ? AND request_id = ?", tenantID, completedRequest.Request.ID).Count(&completedAttempts).Error; err != nil {
+		t.Fatalf("count completed refund attempts: %v", err)
+	}
+	if err := model.DB.Model(&model.CommerceRefundAttempt{}).Where("tenant_id = ? AND request_id = ?", tenantID, unfulfilledRequest.Request.ID).Count(&unfulfilledAttempts).Error; err != nil {
+		t.Fatalf("count unfulfilled refund attempts: %v", err)
+	}
+	if completedAttempts != 0 || unfulfilledAttempts != 1 || provider.createRefundCalls != 1 {
+		t.Fatalf("reconcile selected wrong refund: completed_attempts=%d unfulfilled_attempts=%d provider_calls=%d", completedAttempts, unfulfilledAttempts, provider.createRefundCalls)
+	}
+	var persistedCompleted model.CommerceAfterSaleRequest
+	if err := model.DB.Where("id = ? AND tenant_id = ?", completedRequest.Request.ID, tenantID).First(&persistedCompleted).Error; err != nil {
+		t.Fatalf("load completed request: %v", err)
+	}
+	if persistedCompleted.Status != "requested" {
+		t.Fatalf("completed request state changed during recovery: %q", persistedCompleted.Status)
+	}
+}
+
+func TestCommerceRefundReconcileApprovedCompletedRequestCanRecover(t *testing.T) {
+	tenantID, order, now := createCommercePaymentAttemptFixture(t)
+	orders := &CommerceOrderService{Clock: func() time.Time { return now }}
+	if _, err := orders.ConfirmPayment(tenantID, order.ID); err != nil {
+		t.Fatalf("confirm payment: %v", err)
+	}
+	for _, status := range []string{"accepted", "preparing", "ready", "completed"} {
+		if _, err := orders.TransitionRestaurantFulfillment(tenantID, order.ID, RestaurantFulfillmentTransitionInput{Status: status}); err != nil {
+			t.Fatalf("transition order to %s: %v", status, err)
+		}
+	}
+	request, err := orders.CreateRefundRequest(tenantID, order.ID, "refund-reconcile-approved-request", "completed order after-sale")
+	if err != nil {
+		t.Fatalf("create refund request: %v", err)
+	}
+	approved, err := orders.ApproveRefundRequest(tenantID, order.ID)
+	if err != nil || approved.Request.Status != "approved" {
+		t.Fatalf("approve refund request=%+v err=%v", approved, err)
+	}
+
+	previousBaseURL := config.GlobalConfig.Server.PublicBaseURL
+	config.GlobalConfig.Server.PublicBaseURL = "https://merchant.example.test"
+	t.Cleanup(func() { config.GlobalConfig.Server.PublicBaseURL = previousBaseURL })
+	provider := &commercePaymentTestProvider{}
+	payment := &CommercePaymentService{DB: model.DB, Provider: provider, Clock: func() time.Time { return now }}
+	processed, err := payment.ReconcileDue(context.Background(), now, 1)
+	if err != nil || processed != 1 || provider.createRefundCalls != 1 {
+		t.Fatalf("approved refund recovery processed=%d err=%v provider_calls=%d", processed, err, provider.createRefundCalls)
+	}
+	var attempt model.CommerceRefundAttempt
+	if err := model.DB.Where("tenant_id = ? AND request_id = ?", tenantID, request.Request.ID).First(&attempt).Error; err != nil {
+		t.Fatalf("load approved refund attempt: %v", err)
+	}
+	if attempt.Status != "processing" || attempt.OutRefundNo == "" {
+		t.Fatalf("approved refund attempt=%+v", attempt)
+	}
+	var persistedRequest model.CommerceAfterSaleRequest
+	if err := model.DB.Where("id = ? AND tenant_id = ?", request.Request.ID, tenantID).First(&persistedRequest).Error; err != nil {
+		t.Fatalf("load approved refund request: %v", err)
+	}
+	if persistedRequest.Status != "processing" {
+		t.Fatalf("approved refund did not enter processing: %q", persistedRequest.Status)
 	}
 }
 
