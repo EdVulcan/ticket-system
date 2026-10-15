@@ -1550,6 +1550,31 @@ test('shipped demo receipt requires explicit customer confirmation and persists 
   assert.equal(detail.data.order.fulfillmentCompleted, true);
 });
 
+test('receipt modal obeys native label limits and recovers after modal failure', () => {
+  let detail; let modal; let toast; let writes = 0;
+  load('miniprogram/pages/order/detail/index.js', {
+    '../../../services/storage': {}, '../../../services/api': {}, '../../../services/payment': {}
+  }, { Page: page => { detail = page; }, wx: {
+    showModal: options => {
+      assert.ok(options.confirmText.length <= 4, 'WeChat modal confirmText must not exceed four characters');
+      modal = options;
+    },
+    showToast: options => { toast = options; }
+  } });
+  detail.data = { canConfirmReceipt: true, actionSubmitting: false };
+  detail.updateOrder = () => { writes++; };
+  detail.confirmReceipt();
+  modal.fail({ errMsg: 'showModal:fail' });
+  modal.complete();
+  assert.match(toast.title, /重试/);
+  assert.equal(writes, 0);
+  assert.equal(detail.receiptPromptOpen, false);
+  detail.confirmReceipt();
+  modal.success({ confirm: true });
+  modal.complete();
+  assert.equal(writes, 1);
+});
+
 test('retail tracking copy preserves exact number after shipping and completion', () => {
   let detail; let clipboard; let toast;
   load('miniprogram/pages/order/detail/index.js', {

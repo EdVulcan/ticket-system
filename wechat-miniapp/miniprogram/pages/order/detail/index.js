@@ -134,8 +134,9 @@ Page({
     if (!this.data.canConfirmReceipt || this.data.actionSubmitting || this.receiptPromptOpen) return;
     this.receiptPromptOpen = true;
     wx.showModal({
-      title: '确认收货', content: '请确认已收到商品，确认后订单将完成。', confirmText: '已收到商品',
+      title: '确认收货', content: '请确认已收到商品，确认后订单将完成。', confirmText: '确认收货',
       success: result => { if (result.confirm) this.updateOrder('COMPLETED'); },
+      fail: () => { this.receiptPromptOpen = false; wx.showToast({ title: '确认窗口打开失败，请重试', icon: 'none' }); },
       complete: () => { this.receiptPromptOpen = false; }
     });
   },
