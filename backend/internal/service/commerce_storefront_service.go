@@ -1728,6 +1728,11 @@ func commerceStorefrontAvailableActions(order *model.CommerceOrder) *model.Comme
 		return actions
 	}
 	if order.RefundStatus != "none" {
+		// A rejected refund releases fulfillment, while refund/cancel actions
+		// retain their existing policy. Match the receipt service guard.
+		if commerceRefundAllowsFulfillment(order.RefundStatus) && order.PaymentStatus == "paid" && order.FulfillmentStatus != "cancelled" && order.BusinessType == "retail" && order.RetailFulfillment != nil {
+			actions.CanConfirmReceipt = retailCanConfirmReceipt(order.RetailFulfillment.Status)
+		}
 		actions.Reason = "订单已申请或完成退款"
 		return actions
 	}
@@ -1757,7 +1762,7 @@ func commerceStorefrontAvailableActions(order *model.CommerceOrder) *model.Comme
 		} else {
 			actions.Reason = "订单已进入发货流程，暂不可退款"
 		}
-		if order.RetailFulfillment != nil && order.RetailFulfillment.Status == "delivered" {
+		if order.RetailFulfillment != nil && retailCanConfirmReceipt(order.RetailFulfillment.Status) && order.FulfillmentStatus != "cancelled" {
 			actions.CanConfirmReceipt = true
 		}
 	} else {
@@ -1827,7 +1832,7 @@ func (s *CommerceStorefrontService) CancelOrder(token, orderNo string) (*model.C
 	return s.ordersService().CancelUnpaidOrder(context.Session.TenantID, candidate.ID)
 }
 
-// ConfirmReceipt lets a customer acknowledge a delivered retail order or a
+// ConfirmReceipt lets a customer acknowledge a dispatched retail order or a
 // restaurant delivery order. Pickup and merchant-completed orders are kept on
 // their existing merchant workflow.
 func (s *CommerceStorefrontService) ConfirmReceipt(token, orderNo string) (*model.CommerceOrder, error) {

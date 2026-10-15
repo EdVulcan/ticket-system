@@ -259,7 +259,7 @@ func (s *CommerceLogisticsService) CreateShipment(tenantID uint, input CreateCom
 			idempotencyKey := fmt.Sprintf("shipment-created:%d:%d", tenantID, order.ID)
 			event := &model.CommerceShipmentEvent{
 				TenantID: tenantID, ShipmentID: shipment.ID, Source: shipmentSourceManual,
-				Status: "shipped", Description: "shipment created and marked shipped",
+				Status: "shipped", Description: "商家已发货",
 				OccurredAt: *shippedAt, IdempotencyKey: &idempotencyKey,
 			}
 			if err := tx.Create(event).Error; err != nil {
@@ -416,6 +416,11 @@ func projectRetailFulfillmentStatus(shipmentStatus, current string) (string, boo
 		return current, false, nil
 	default:
 		return "", false, fmt.Errorf("%w: unsupported shipment projection status", ErrCommerceLogisticsInvalid)
+	}
+	// Customer receipt is terminal for the order, independently of delayed
+	// carrier events. Preserve the real shipment timeline without reopening it.
+	if current == "completed" && projected != "pending_shipment" && projected != "cancelled" {
+		return current, false, nil
 	}
 	if projected == current {
 		return current, false, nil

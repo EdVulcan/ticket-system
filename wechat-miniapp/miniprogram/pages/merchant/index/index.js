@@ -47,7 +47,6 @@ Page({
   onRunnerInput(event) { const id = event.currentTarget.dataset.id; this.deliveryDrafts[id] = Object.assign({}, this.deliveryDrafts[id] || {}, { [event.currentTarget.dataset.field]: event.detail.value }); },
   startPreparing(event) { this.updateStatus(event.currentTarget.dataset.id, 'PREPARING'); },
   finishPreparing(event) { this.updateStatus(event.currentTarget.dataset.id, 'READY'); },
-  markDelivered(event) { this.updateStatus(event.currentTarget.dataset.id, 'DELIVERED'); },
   startDelivery(event) { const id = event.currentTarget.dataset.id; this.updateStatus(id, 'DELIVERING', this.deliveryDrafts[id] || {}); },
   shipOrder(event) { const id = event.currentTarget.dataset.id; const draft = this.deliveryDrafts[id] || {}; if (!draft.carrier || !draft.trackingNo) { wx.showToast({ title: '请填写快递公司和单号', icon: 'none' }); return; } this.updateStatus(id, 'SHIPPED', draft); },
   onShippingInput(event) { const id = event.currentTarget.dataset.id; this.deliveryDrafts[id] = Object.assign({}, this.deliveryDrafts[id] || {}, { [event.currentTarget.dataset.field]: event.detail.value }); },

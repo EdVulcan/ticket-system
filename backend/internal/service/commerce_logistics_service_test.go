@@ -532,9 +532,6 @@ func TestCommerceLogisticsDirectDeliveryRequiresEvidenceAndCustomerConfirmation(
 		t.Fatal(err)
 	}
 	svc := &CommerceOrderService{}
-	if _, err = svc.ConfirmReceipt(f.tenantID, f.orderID); !errors.Is(err, ErrCommerceOrderState) {
-		t.Fatalf("early receipt: %v", err)
-	}
 	input := AppendCommerceShipmentEventInput{Status: "delivered", IdempotencyKey: "direct-delivered", OccurredAt: f.now.Add(time.Hour)}
 	if _, err = f.service.AppendShipmentEvent(f.tenantID, shipment.ID, input); !errors.Is(err, ErrCommerceLogisticsInvalid) {
 		t.Fatalf("missing evidence: %v", err)

@@ -670,32 +670,6 @@
             <div class="order-info-item"><span>运单号</span><strong>{{ selectedOrder.retail_fulfillment.tracking_no || '待填写' }}</strong></div>
           </div>
         </div>
-        <div v-if="selectedOrder.business_type === 'retail' && shipmentTimeline" class="order-shipment-timeline">
-          <div class="order-section-heading"><div><strong>物流进度</strong><span>第三方物流轨迹</span></div></div>
-          <div class="shipment-summary">
-            <strong>{{ shipmentTimeline.shipment?.carrier_name || shipmentTimeline.shipment?.carrier_code || '人工物流' }}</strong>
-            <span>{{ shipmentTimeline.shipment?.tracking_no || shipmentTimeline.shipment?.shipment_no }}</span>
-          </div>
-          <el-timeline v-if="shipmentTimeline.events?.length">
-            <el-timeline-item
-              v-for="event in shipmentTimeline.events"
-              :key="event.id"
-              :timestamp="formatDate(event.occurred_at)"
-              placement="top"
-            >
-              <strong>{{ shipmentEventLabel(event.status) }}</strong>
-              <div v-if="event.description" class="secondary-cell">{{ event.description }}</div>
-              <div v-if="event.location" class="secondary-cell">{{ event.location }}</div>
-            </el-timeline-item>
-          </el-timeline>
-        </div>
-        <el-alert
-          v-if="selectedOrder.business_type === 'retail' && shipmentTimelineError"
-          type="warning"
-          :closable="false"
-          title="物流信息暂时无法加载，订单详情仍可查看。"
-          class="capability-alert"
-        />
         <div v-if="selectedOrder.after_sales?.length" class="order-after-sale-list">
           <div class="order-section-heading"><div><strong>售后记录</strong><span>退款及售后处理记录</span></div></div>
           <div v-for="afterSale in selectedOrder.after_sales" :key="afterSale.id" class="after-sale-row"><span>{{ afterSale.request_no }}</span><el-tag size="small" :type="refundStatusType(afterSale.status)" effect="plain">{{ afterSaleStatusLabel(afterSale.status) }}</el-tag><span class="secondary-cell">¥{{ money(afterSale.amount_cents) }}</span></div>
@@ -977,8 +951,6 @@ let productEditMutationVersion = 0
 const orderDetailLoading = ref(false)
 const orderDetailVisible = ref(false)
 const selectedOrder = ref<any | null>(null)
-const shipmentTimeline = ref<any | null>(null)
-const shipmentTimelineError = ref('')
 const orderActionID = ref(0)
 const shippingDialogVisible = ref(false)
 const shippingOrder = ref<any | null>(null)
@@ -1095,7 +1067,7 @@ const domainIntro = computed(() => isRestaurant.value
   : '管理商品 SKU、仓库库存、发货与物流订单，不影响景区票务产品。')
 const workflowTitle = computed(() => isRestaurant.value
   ? '从接单到取餐或配送，门店按制作进度推进订单。'
-  : '填写物流即可发货；实际送达后记录，顾客确认收货后完成订单。')
+  : '填写快递信息即可发货，顾客确认收货后完成订单。')
 const workflowSteps = computed(() => isRestaurant.value
   ? ['顾客下单', '接单并制作', '备餐完成', '取餐/配送']
   : ['顾客下单', '仓库备货', '填写物流', '顾客收货'])
@@ -1119,7 +1091,7 @@ const inventoryDescription = computed(() => isRestaurant.value
 const orderTabLabel = computed(() => isRestaurant.value ? '接单与履约' : '订单与发货')
 const orderDescription = computed(() => isRestaurant.value
   ? '处理接单、制作、取餐/配送和退款。'
-  : '处理备货、发货、物流跟踪、收货和退款。')
+  : '处理备货、发货、顾客收货和退款。')
 const storefrontHelpText = computed(() => isRestaurant.value
   ? '同一个微信小程序账号可同时开放餐饮和电商接口；这里仅配置餐饮业务使用的门店/取餐点，AppSecret 等密钥仍由渠道账号统一维护。'
   : '同一个微信小程序账号可同时开放餐饮和电商接口；这里仅配置电商业务使用的仓库/发货点，AppSecret 等密钥仍由渠道账号统一维护。')
@@ -1246,8 +1218,6 @@ function invalidateCommerceContext() {
   orders.value = []
   orderTotal.value = 0
   selectedOrder.value = null
-  shipmentTimeline.value = null
-  shipmentTimelineError.value = ''
   detailProduct.value = null
   optionGroups.value = []
   adjustmentRow.value = null
@@ -1509,13 +1479,6 @@ function fulfillmentStatusLabel(value: string) {
     pending_acceptance: '待接单', accepted: '已接单', preparing: '制作中', ready: '待取/待配送',
     delivering: '配送中', pending_shipment: '待发货', shipped: '已发货', in_transit: '运输中',
     delivered: '待收货', completed: '已完成', cancelled: '已取消',
-  } as Record<string, string>)[value] || value || '-'
-}
-
-function shipmentEventLabel(value: string) {
-  return ({
-    pending_shipment: '待发货', shipped: '已发货', in_transit: '运输中', out_for_delivery: '派送中',
-    delivered: '已送达', exception: '物流异常', cancelled: '已取消',
   } as Record<string, string>)[value] || value || '-'
 }
 
@@ -1824,25 +1787,12 @@ async function openOrderDetail(row: any) {
   const requestVersion = ++orderDetailRequestVersion
   const context = captureCommerceContext()
   selectedOrder.value = row
-  shipmentTimeline.value = null
-  shipmentTimelineError.value = ''
   orderDetailVisible.value = true
   orderDetailLoading.value = true
   try {
-    const [orderResult, shipmentResult] = await Promise.allSettled([
-      request.get(`/commerce/orders/${row.id}`, { skipErrorToast: true } as any),
-      row.business_type === 'retail'
-        ? request.get(`/commerce/orders/${row.id}/shipment`, { skipErrorToast: true } as any)
-        : Promise.resolve(null),
-    ])
+    const response = await request.get(`/commerce/orders/${row.id}`, { skipErrorToast: true } as any)
     if (requestVersion !== orderDetailRequestVersion || !isCommerceContextCurrent(context) || !orderDetailVisible.value) return
-    if (orderResult.status === 'rejected') throw orderResult.reason
-    selectedOrder.value = orderResult.value.data
-    if (shipmentResult.status === 'fulfilled') {
-      shipmentTimeline.value = shipmentResult.value?.data || null
-    } else if (statusCode(shipmentResult.reason) !== 404) {
-      shipmentTimelineError.value = '物流信息暂时无法加载'
-    }
+    selectedOrder.value = response.data
   } catch (error) {
     if (requestVersion === orderDetailRequestVersion && isCommerceContextCurrent(context) && orderDetailVisible.value && statusCode(error) !== 403) {
       ElMessage.error('订单详情暂时无法加载')
@@ -1864,7 +1814,7 @@ function nextFulfillmentStatus(row: any) {
     if (current === 'ready') return row.restaurant_fulfillment?.method === 'delivery' ? 'delivering' : 'completed'
     return next[current] || ''
   }
-  return ({ pending_shipment: 'shipped', shipped: 'delivered', in_transit: 'delivered' } as Record<string, string>)[current] || ''
+  return row?.business_type === 'retail' && current === 'pending_shipment' ? 'shipped' : ''
 }
 
 function advanceFulfillmentLabel(row: any) {
@@ -1874,7 +1824,7 @@ function advanceFulfillmentLabel(row: any) {
     if (row.fulfillment_status === 'preparing' && next === 'delivering') return '出餐并配送'
     return ({ accepted: '确认接单', preparing: '开始制作', ready: '备餐完成', delivering: '开始配送', completed: row.restaurant_fulfillment?.method === 'delivery' ? '标记已送达' : '确认取餐' } as Record<string, string>)[next] || '推进履约'
   }
-  return ({ shipped: '填写发货信息', in_transit: '更新运输状态', delivered: '标记已送达' } as Record<string, string>)[next] || '推进订单'
+  return next === 'shipped' ? '填写发货信息' : '推进订单'
 }
 
 function canRequestRefund(row: any) {
@@ -1952,27 +1902,14 @@ async function advanceFulfillment(row: any) {
     return
   }
   try {
-    if (['completed', 'delivered'].includes(next)) {
-      const message = row.business_type === 'retail'
-        ? '确认包裹已实际送达？记录送达后仍需顾客确认收货，订单不会直接完成。'
-        : `确认订单已${row.restaurant_fulfillment?.method === 'delivery' ? '实际送达' : '由顾客取餐'}？此操作将完成履约。`
+    if (next === 'completed') {
+      const message = `确认订单已${row.restaurant_fulfillment?.method === 'delivery' ? '实际送达' : '由顾客取餐'}？此操作将完成履约。`
       await ElMessageBox.confirm(message, advanceFulfillmentLabel(row), {
         type: 'warning', confirmButtonText: '确认', cancelButtonText: '取消',
       })
     }
     orderActionID.value = row.id
-    if (row.business_type === 'restaurant') {
-      await request.post(`/commerce/orders/${row.id}/restaurant-fulfillment`, { status: next })
-    } else {
-      const timelineResponse = await request.get(`/commerce/orders/${row.id}/shipment`, { skipErrorToast: true } as any)
-      const shipmentID = Number(timelineResponse.data?.shipment?.id || 0)
-      if (!shipmentID) throw new Error('物流包裹不存在')
-      await request.post(`/commerce/shipments/${shipmentID}/events`, {
-        status: next,
-        description: next === 'delivered' ? '商家确认包裹已送达' : '商家更新为运输中',
-        idempotency_key: `admin-logistics-${row.id}-${next}-${Date.now()}`,
-      })
-    }
+    await request.post(`/commerce/orders/${row.id}/restaurant-fulfillment`, { status: next })
     ElMessage.success('履约状态已更新')
     await loadOrders()
   } catch { /* cancelled or request interceptor already reported the error */ }
@@ -2658,7 +2595,7 @@ onBeforeUnmount(() => {
 .order-info-item--amount { border-color: color-mix(in srgb, var(--ui-primary) 32%, var(--ui-border)); background: color-mix(in srgb, var(--ui-primary) 7%, var(--ui-surface)); }
 .order-info-item--amount > strong { color: var(--ui-primary); font-size: 18px; }
 .order-info-item--wide { grid-column: 1 / -1; }
-.order-address-card, .order-fulfillment-summary, .order-shipment-timeline, .order-after-sale-list, .order-detail-section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.order-address-card, .order-fulfillment-summary, .order-after-sale-list, .order-detail-section { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .order-address-card { padding: 14px 16px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface-soft); }
 .order-address-card p { margin: 0; color: var(--ui-text); font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
 .order-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; }
@@ -2669,10 +2606,7 @@ onBeforeUnmount(() => {
 .order-items-table { width: 100%; }
 .order-fulfillment-summary { padding: 14px 16px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface-soft); }
 .order-fulfillment-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.order-shipment-timeline { padding: 14px 16px; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface-soft); }
 .after-sale-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-surface-soft); }
-.shipment-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: 8px; background: var(--ui-surface-soft); }
-.shipment-summary span { color: var(--ui-text-secondary); font-size: 13px; overflow-wrap: anywhere; }
 @media (max-width: 800px) {
   .commerce-heading { flex-direction: column; }
   .page-actions { justify-content: flex-start; }
@@ -2705,6 +2639,5 @@ onBeforeUnmount(() => {
   .order-info-item--wide { grid-column: auto; }
   .after-sale-row { grid-template-columns: 1fr auto; }
   .after-sale-row .secondary-cell { grid-column: 1 / -1; }
-  .shipment-summary { align-items: flex-start; flex-direction: column; }
 }
 </style>

@@ -3,12 +3,15 @@ async function setup(page: Page, business: string, status: string, method = 'pic
   const user = { id: 21, role: 'admin', scope: 'tenant', tenant_id: 21, capabilities: [], business_capabilities: [{ business_type: 'restaurant', status: 'active' }, { business_type: 'retail', status: 'active' }] }
   const row: any = { id: 42, order_no: 'FULFILL-42', business_type: business, payment_status: 'paid', refund_status: 'none', fulfillment_status: status, restaurant_fulfillment: { status, method, ...details }, retail_fulfillment: { status }, items: [], ...overrides }
   const writes: any[] = []
+  const reads: string[] = []
   await page.addInitScript(u => { localStorage.setItem('token', 'test'); localStorage.setItem('user', JSON.stringify(u)) }, user)
   await page.route('**/api/v1/**', async route => {
     const req = route.request(), path = new URL(req.url()).pathname
+    if (req.method() === 'GET') reads.push(path)
     let body: any = { data: [] }
     if (path.endsWith('/tenants/me')) body = { ...user, status: 'active' }
     if (path.endsWith('/commerce/orders')) body = { data: [row], total: 1 }
+    if (path.endsWith('/commerce/orders/42')) body = row
     if (path.endsWith('/shipment')) body = { shipment: { id: 77 }, events: [] }
     if (['POST', 'PUT'].includes(req.method())) {
       const payload = req.postDataJSON(); writes.push({ method: req.method(), path, body: payload })
@@ -21,7 +24,7 @@ async function setup(page: Page, business: string, status: string, method = 'pic
   })
   await page.goto(`/commerce/${business}?tab=orders`)
   await expect(page.getByText('FULFILL-42', { exact: true })).toBeVisible({ timeout: 15_000 })
-  return { row, writes }
+  return { row, writes, reads }
 }
 for (const [status, label, target] of [['pending_acceptance', '接单并制作', 'preparing'], ['accepted', '开始制作', 'preparing'], ['preparing', '备餐完成', 'ready']]) {
   test(`餐饮 ${status} 单次提交 ${target}`, async ({ page }) => {
@@ -61,16 +64,21 @@ test('配送信息提前保存，开始配送复用且不提前完成', async ({
   expect(writes[1].body).toMatchObject({ status: 'delivering', courier_order_no: 'COURIER42' })
   expect(writes.some(w => w.body.status === 'completed')).toBe(false)
 })
-for (const status of ['shipped', 'in_transit']) test(`电商 ${status} 直接送达但不完成`, async ({ page }) => {
-  const { row, writes } = await setup(page, 'retail', status)
+for (const status of ['shipped', 'in_transit', 'delivered', 'completed']) test(`电商 ${status} 展示快递信息且无需商家维护物流`, async ({ page }) => {
+  const { writes, reads } = await setup(page, 'retail', status, 'pickup', {}, {
+    retail_fulfillment: { status, carrier: '顺丰', tracking_no: 'SF42' },
+  })
   await expect(page.getByRole('button', { name: '更新运输状态' })).toHaveCount(0)
-  await page.getByRole('button', { name: '标记已送达', exact: true }).click()
-  expect(writes).toHaveLength(0)
-  await page.getByRole('button', { name: '确认', exact: true }).click()
-  await expect.poll(() => writes.length).toBe(1)
-  expect(writes[0].body.status).toBe('delivered')
-  expect(row.fulfillment_status).toBe('delivered')
   await expect(page.getByRole('button', { name: '标记已送达', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '填写发货信息', exact: true })).toHaveCount(0)
+  await page.getByRole('button', { name: '详情', exact: true }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByText('顺丰', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('SF42', { exact: true })).toBeVisible()
+  await expect(dialog.getByText('物流进度', { exact: true })).toHaveCount(0)
+  await expect(dialog.getByText('第三方物流轨迹', { exact: true })).toHaveCount(0)
+  expect(reads.some(path => path.endsWith('/shipment'))).toBe(false)
+  expect(writes).toHaveLength(0)
 })
 test('电商发货表单一次提交', async ({ page }) => {
   const { writes } = await setup(page, 'retail', 'pending_shipment')

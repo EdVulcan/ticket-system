@@ -712,7 +712,7 @@ function normalizeShipmentTimeline(payload) {
   const events = (Array.isArray(root.events) ? root.events : Array.isArray(shipment.events) ? shipment.events : []).map((event, index) => Object.assign({}, event, {
     id: firstDefined(event.id, `${event.occurredAt || event.occurred_at || 'event'}_${index}`),
     status: String(firstDefined(event.status, '') || '').toUpperCase(),
-    description: displayText(firstDefined(event.description, event.location, ''), '物流状态更新'),
+    description: event.description === 'shipment created and marked shipped' ? '商家已发货' : displayText(firstDefined(event.description, event.location, ''), '物流状态更新'),
     occurredAt: firstDefined(event.occurredAt, event.occurred_at, ''),
     location: firstDefined(event.location, '')
   })).sort((left, right) => String(left.occurredAt).localeCompare(String(right.occurredAt)) || String(left.id).localeCompare(String(right.id)));

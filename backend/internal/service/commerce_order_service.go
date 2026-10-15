@@ -1448,7 +1448,11 @@ func (s *CommerceOrderService) CancelUnpaidOrder(tenantID, orderID uint) (*model
 	return result, err
 }
 
-// ConfirmReceipt is the customer-side terminal acknowledgement for delivered
+func retailCanConfirmReceipt(status string) bool {
+	return status == "shipped" || status == "in_transit" || status == "delivered"
+}
+
+// ConfirmReceipt is the customer-side terminal acknowledgement for dispatched
 // commercial orders. Pickup restaurant orders remain merchant-completed; the
 // endpoint intentionally does not expose a customer confirmation path for
 // them.
@@ -1498,8 +1502,8 @@ func (s *CommerceOrderService) ConfirmReceipt(tenantID, orderID uint) (*model.Co
 				result = &order
 				return nil
 			}
-			if fulfillment.Status != "delivered" {
-				return fmt.Errorf("%w: retail order is not delivered", ErrCommerceOrderState)
+			if !retailCanConfirmReceipt(fulfillment.Status) {
+				return fmt.Errorf("%w: retail order is not shipped", ErrCommerceOrderState)
 			}
 			if err := tx.Model(&fulfillment).Updates(map[string]interface{}{"status": "completed"}).Error; err != nil {
 				return err

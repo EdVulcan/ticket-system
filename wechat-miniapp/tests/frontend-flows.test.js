@@ -1483,9 +1483,15 @@ test('ready and signed retail pages retain work tabs and obey server receipt per
   assert.equal(detail.data.order.timelineStatus, 'DELIVERED');
   assert.equal(detail.data.canRequestRefund, false);
   assert.equal(detail.data.canConfirmReceipt, true);
-  assert.match(detail.data.statusDescription, /待确认收货/);
+  assert.match(detail.data.statusDescription, /收到商品后请确认收货/);
   assert.equal(list.matchesTab(detail.data.order, 'SHIPPED'), true);
   assert.equal(list.matchesTab(detail.data.order, 'COMPLETED'), false);
+  for (const fulfillment_status of ['shipped', 'in_transit']) {
+    detail.renderOrder({ business_type: 'retail', payment_status: 'paid', fulfillment_status, available_actions: { can_confirm_receipt: true }, items: [] });
+    assert.equal(detail.data.canConfirmReceipt, true);
+    detail.renderOrder({ business_type: 'retail', payment_status: 'paid', fulfillment_status, available_actions: { can_confirm_receipt: false }, items: [] });
+    assert.equal(detail.data.canConfirmReceipt, false);
+  }
   detail.renderOrder({ business_type: 'restaurant', payment_status: 'paid', fulfillment_status: 'delivering', available_actions: { can_confirm_receipt: false }, items: [] });
   assert.match(detail.data.statusDescription, /配送途中/);
   assert.equal(detail.data.canConfirmReceipt, false);
@@ -1513,32 +1519,87 @@ test('profile work counts and payment polling include ready and delivered withou
   assert.equal(payment.isSettled('DELIVERED'), true);
 });
 
-test('demo receipt waits for signed retail delivery and completion persists fulfillment truth', () => {
+test('shipped demo receipt requires explicit customer confirmation and persists completion', () => {
   const api = load('miniprogram/services/api.js', { './storage': {}, './http': {} });
   let detail;
   const order = { id: 'demo-retail', businessType: 'retail', paymentStatus: 'paid', status: 'SHIPPED', fulfillmentStatus: 'shipped', items: [] };
   let saves = 0;
+  let modal;
   load('miniprogram/pages/order/detail/index.js', {
     '../../../services/storage': { getOrders: () => [order], saveOrders: () => { saves++; } },
     '../../../services/api': { normalizeOrder: api.normalizeOrder, isProduction: () => false },
     '../../../services/payment': {}
-  }, { Page: page => { detail = page; }, wx: { showToast() {} } });
+  }, { Page: page => { detail = page; }, wx: { showToast() {}, showModal: options => { modal = options; } } });
   detail.setData = change => { detail.data = { ...detail.data, ...change }; };
   detail.orderId = order.id;
   detail.loadOrder = () => detail.renderOrder(order);
   detail.renderOrder(order);
-  assert.equal(detail.data.canConfirmReceipt, false);
+  assert.equal(detail.data.canConfirmReceipt, true);
   detail.confirmReceipt();
   assert.equal(saves, 0);
-  Object.assign(order, { status: 'DELIVERED', fulfillmentStatus: 'delivered', delivered_at: '2026-10-14T10:00:00Z' });
-  detail.renderOrder(order);
-  assert.equal(detail.data.canConfirmReceipt, true);
-  assert.ok(detail.data.order.deliveredText);
+  assert.match(modal.content, /已收到商品/);
+  modal.success({ confirm: false });
+  modal.complete();
+  assert.equal(saves, 0);
   assert.equal(detail.data.order.fulfillmentCompleted, false);
   detail.confirmReceipt();
+  modal.success({ confirm: true });
+  modal.complete();
   assert.equal(saves, 1);
   assert.equal(order.fulfillmentStatus, 'completed');
   assert.equal(detail.data.order.fulfillmentCompleted, true);
+});
+
+test('retail tracking copy preserves exact number after shipping and completion', () => {
+  let detail; let clipboard; let toast;
+  load('miniprogram/pages/order/detail/index.js', {
+    '../../../services/storage': {}, '../../../services/api': {}, '../../../services/payment': {}
+  }, { Page: page => { detail = page; }, wx: { setClipboardData: options => { clipboard = options; }, showToast: options => { toast = options; } } });
+  for (const status of ['SHIPPED', 'DELIVERED', 'COMPLETED']) {
+    detail.data = { isCourier: true, order: { status, shipping: { trackingNo: '00123456789012345678' } } };
+    detail.copyTrackingNo();
+    assert.equal(clipboard.data, '00123456789012345678');
+  }
+  clipboard.fail();
+  assert.equal(toast.title, '复制失败，请重试');
+  clipboard = null;
+  detail.data.order.shipping.trackingNo = '';
+  detail.copyTrackingNo();
+  assert.equal(clipboard, null);
+  const template = fs.readFileSync(path.resolve(__dirname, '../miniprogram/pages/order/detail/index.wxml'), 'utf8');
+  assert.match(template, /class="tracking-copy" bindtap="copyTrackingNo"/);
+  assert.match(template, /wx:if="{{isCourier && order.shipping && order.shipping.trackingNo}}"/);
+});
+
+test('historic system shipment descriptions are localized without replacing real tracking details', () => {
+  const api = load('miniprogram/services/api.js', { './storage': {}, './http': {} });
+  const result = api.normalizeShipmentTimeline({ events: [{ description: 'shipment created and marked shipped' }, { description: '快件已到达成都转运中心' }] });
+  assert.equal(result.events[0].description, '商家已发货');
+  assert.equal(result.events[1].description, '快件已到达成都转运中心');
+});
+
+test('retail detail loads order progress without requesting carrier tracking', async () => {
+  let detail; let trackingCalls = 0;
+  const api = load('miniprogram/services/api.js', { './storage': {}, './http': {} });
+  load('miniprogram/pages/order/detail/index.js', {
+    '../../../services/storage': {}, '../../../services/payment': {},
+    '../../../services/api': { normalizeOrder: api.normalizeOrder, isProduction: () => true,
+      queryPayment: async () => ({}),
+      getOrder: async () => ({ data: { business_type: 'retail', payment_status: 'paid', fulfillment_status: 'shipped', available_actions: { can_confirm_receipt: true }, retail_fulfillment: { status: 'shipped', tracking_no: '00123', carrier_name: '顺丰' } } }),
+      getShipments: async () => { trackingCalls++; throw new Error('No carrier API'); }
+    }
+  }, { Page: page => { detail = page; }, wx: { showToast() {} } });
+  detail.orderId = 'retail';
+  detail.setData = change => { detail.data = { ...detail.data, ...change }; };
+  await detail.loadOrder(true);
+  assert.equal(trackingCalls, 0);
+  assert.equal(detail.data.order.retailDispatched, true);
+  assert.equal(detail.data.order.fulfillmentCompleted, false);
+  assert.equal(detail.data.order.shipping.trackingNo, '00123');
+  assert.equal(detail.data.canConfirmReceipt, true);
+  const template = fs.readFileSync(path.resolve(__dirname, '../miniprogram/pages/order/detail/index.wxml'), 'utf8');
+  assert.match(template, /订单进度/);
+  assert.doesNotMatch(template, /物流动态|运输中|shipmentEvents/);
 });
 
 test('demo merchant dispatch combines readiness and departure in one write while preserving deferred and pickup flows', () => {
