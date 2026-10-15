@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 153
+const CurrentPostgresSchemaVersion = 154
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -84,7 +84,7 @@ func runPostgresMigrations(db *gorm.DB) error {
 		&CommerceCouponTemplate{}, &CommerceCouponTemplateBusinessType{}, &CommerceCouponGrant{}, &CommerceCouponGrantBusinessType{},
 		&CommerceAssistCampaign{}, &CommerceAssistCampaignBusinessType{}, &CommerceAssistSession{}, &CommerceAssistRecord{},
 		&TenantMember{}, &TenantMemberIdentity{}, &TenantMemberVerifiedContact{}, &TenantMemberConsent{}, &TenantMemberEvent{},
-		&TenantMemberBenefit{},
+		&TenantMemberBenefit{}, &MemberCouponGrantBatch{}, &MemberCouponGrantBatchItem{},
 	}
 	if err := db.AutoMigrate(models...); err != nil {
 		return fmt.Errorf("create current PostgreSQL schema: %w", err)
@@ -811,9 +811,12 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := migrateCommerceRestaurantDeliveryExecution(db, previousSchemaVersion); err != nil {
 		return err
 	}
+	if err := applyMemberCouponGrantGuards(db); err != nil {
+		return fmt.Errorf("install member coupon receipt guards: %w", err)
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "xiaohongshu supplier verification reports",
+		Name:      "manual member coupon grant receipts",
 		AppliedAt: time.Now(),
 	}).Error
 }

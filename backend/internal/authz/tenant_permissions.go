@@ -64,6 +64,7 @@ const (
 	PermissionMembersSensitiveRead   = "members.sensitive.read"
 	PermissionMembersStatusWrite     = "members.status.write"
 	PermissionMembersExport          = "members.export"
+	PermissionMembersCouponsWrite    = "members.coupons.write"
 	PermissionMembersSecurityResolve = "members.security.resolve"
 )
 

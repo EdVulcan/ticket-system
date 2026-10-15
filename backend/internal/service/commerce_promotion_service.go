@@ -1190,11 +1190,23 @@ func (s *CommercePromotionService) issueGrantTx(tx *gorm.DB, campaign *model.Com
 			return nil, ErrPromotionScopeDenied
 		}
 	}
+	return s.issueCouponGrantTx(tx, campaign.TenantID, campaign.ChannelAccountID, templateID, customerID, source, sourceIdentity, now)
+}
+
+func (s *CommercePromotionService) issueCouponGrantTx(tx *gorm.DB, tenantID, channelID uint, templateID uint, customerID, source, sourceIdentity string, now time.Time) (*model.CommerceCouponGrant, error) {
+	var template model.CommerceCouponTemplate
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ? AND channel_account_id = ?", templateID, tenantID, channelID).First(&template).Error; err != nil {
+		return nil, ErrPromotionScopeDenied
+	}
+	templateTypes, err := promotionBusinessTypesForTemplate(tx, &template)
+	if err != nil {
+		return nil, err
+	}
 	if template.Status != "active" || (template.StartsAt != nil && now.Before(*template.StartsAt)) || (template.EndsAt != nil && !now.Before(*template.EndsAt)) {
 		return nil, ErrPromotionUnavailable
 	}
 	var existing model.CommerceCouponGrant
-	if err := tx.Where("tenant_id = ? AND template_id = ? AND source = ? AND source_identity = ? AND customer_id = ?", campaign.TenantID, templateID, source, sourceIdentity, customerID).First(&existing).Error; err == nil {
+	if err := tx.Where("tenant_id = ? AND template_id = ? AND source = ? AND source_identity = ? AND customer_id = ?", tenantID, templateID, source, sourceIdentity, customerID).First(&existing).Error; err == nil {
 		existingTypes, typesErr := promotionBusinessTypesForGrant(tx, &existing)
 		if typesErr != nil {
 			return nil, typesErr
@@ -1206,7 +1218,7 @@ func (s *CommercePromotionService) issueGrantTx(tx *gorm.DB, campaign *model.Com
 	}
 	if template.IssuanceCap > 0 {
 		var issued int64
-		if err := tx.Model(&model.CommerceCouponGrant{}).Where("tenant_id = ? AND template_id = ? AND status <> ?", campaign.TenantID, templateID, "cancelled").Count(&issued).Error; err != nil {
+		if err := tx.Model(&model.CommerceCouponGrant{}).Where("tenant_id = ? AND template_id = ? AND status <> ?", tenantID, templateID, "cancelled").Count(&issued).Error; err != nil {
 			return nil, err
 		}
 		if issued >= int64(template.IssuanceCap) {
@@ -1215,7 +1227,7 @@ func (s *CommercePromotionService) issueGrantTx(tx *gorm.DB, campaign *model.Com
 	}
 	if template.PerCustomerCap > 0 {
 		var count int64
-		if err := tx.Model(&model.CommerceCouponGrant{}).Where("tenant_id = ? AND template_id = ? AND customer_id = ? AND status <> ?", campaign.TenantID, templateID, customerID, "cancelled").Count(&count).Error; err != nil {
+		if err := tx.Model(&model.CommerceCouponGrant{}).Where("tenant_id = ? AND template_id = ? AND customer_id = ? AND status <> ?", tenantID, templateID, customerID, "cancelled").Count(&count).Error; err != nil {
 			return nil, err
 		}
 		if count >= int64(template.PerCustomerCap) {
@@ -1232,11 +1244,11 @@ func (s *CommercePromotionService) issueGrantTx(tx *gorm.DB, campaign *model.Com
 	// A grant is an immutable snapshot of the selected coupon template. The
 	// campaign must cover its own configured scope, but it must not narrow or
 	// rewrite the coupon's store-level applicability when the reward is issued.
-	row := &model.CommerceCouponGrant{TenantID: campaign.TenantID, TemplateID: template.ID, ChannelAccountID: template.ChannelAccountID, BusinessType: template.BusinessType, CustomerID: customerID, Source: source, SourceIdentity: sourceIdentity, DiscountCents: template.DiscountCents, MinGoodsSubtotalCents: template.MinGoodsSubtotalCents, RefundReturnPolicy: template.RefundReturnPolicy, Status: "available", ExpiresAt: expires}
+	row := &model.CommerceCouponGrant{TenantID: tenantID, TemplateID: template.ID, ChannelAccountID: template.ChannelAccountID, BusinessType: template.BusinessType, CustomerID: customerID, Source: source, SourceIdentity: sourceIdentity, DiscountCents: template.DiscountCents, MinGoodsSubtotalCents: template.MinGoodsSubtotalCents, RefundReturnPolicy: template.RefundReturnPolicy, Status: "available", ExpiresAt: expires}
 	if err := tx.Create(row).Error; err != nil {
 		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			var retry model.CommerceCouponGrant
-			if retryErr := tx.Where("tenant_id = ? AND template_id = ? AND source = ? AND source_identity = ? AND customer_id = ?", campaign.TenantID, templateID, source, sourceIdentity, customerID).First(&retry).Error; retryErr == nil {
+			if retryErr := tx.Where("tenant_id = ? AND template_id = ? AND source = ? AND source_identity = ? AND customer_id = ?", tenantID, templateID, source, sourceIdentity, customerID).First(&retry).Error; retryErr == nil {
 				retryTypes, typesErr := promotionBusinessTypesForGrant(tx, &retry)
 				if typesErr != nil {
 					return nil, typesErr

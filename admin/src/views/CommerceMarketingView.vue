@@ -68,7 +68,7 @@
             <el-table-column label="使用门槛" width="120" align="right"><template #default="{ row }">¥{{ yuan(row.min_goods_subtotal_cents) }}</template></el-table-column>
             <el-table-column label="有效期" min-width="150"><template #default="{ row }">{{ validityLabel(row) }}</template></el-table-column>
             <el-table-column label="状态" width="90" align="center"><template #default="{ row }"><el-tag :type="statusType(row.status)" effect="plain">{{ statusLabel(row.status) }}</el-tag></template></el-table-column>
-            <el-table-column label="操作" width="180" fixed="right" align="right"><template #default="{ row }"><template v-if="canWrite"><el-button link type="primary" @click="openCouponDialog(row)">编辑</el-button><el-button link :type="row.status === 'active' ? 'warning' : 'success'" @click="toggleCouponStatus(row)">{{ row.status === 'active' ? '停用' : '启用' }}</el-button></template><span v-else class="muted">只读</span></template></el-table-column>
+            <el-table-column label="操作" width="270" fixed="right" align="right"><template #default="{ row }"><template v-if="canWrite"><el-button v-if="canGrantCoupons && row.status === 'active'" link type="primary" @click="openMemberGrant(row)">发给会员</el-button><el-button link type="primary" @click="openCouponDialog(row)">编辑</el-button><el-button link :type="row.status === 'active' ? 'warning' : 'success'" @click="toggleCouponStatus(row)">{{ row.status === 'active' ? '停用' : '启用' }}</el-button></template><span v-else class="muted">只读</span></template></el-table-column>
             <template #empty>
               <el-empty description="暂无优惠券模板" :image-size="64">
                 <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCouponDialog()">新增优惠券模板</el-button>
@@ -106,6 +106,8 @@
         </section>
       </el-tab-pane>
     </el-tabs>
+
+    <MemberCouponGrantDialog v-model="grantVisible" :user="user" :preselected-template="grantTemplate" :preselected-channel="Number(grantTemplate?.channel_account_id || 0)" />
 
     <el-dialog v-model="couponDialogVisible" :title="couponForm.id ? '编辑优惠券模板' : '新增优惠券模板'" width="min(660px, calc(100vw - 32px))" destroy-on-close>
       <el-form :model="couponForm" label-position="top" class="marketing-form">
@@ -159,10 +161,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Refresh } from '@element-plus/icons-vue'
 import request from '@/utils/request'
+import MemberCouponGrantDialog from '@/components/MemberCouponGrantDialog.vue'
 import { activeBusinessCapabilitySet, configuredBusinessCapabilitySet, readStoredUser } from '@/utils/tenantAccess'
 import { hasPermission } from '@/utils/permissions'
 
@@ -182,12 +185,18 @@ const couponDialogVisible = ref(false)
 const campaignDialogVisible = ref(false)
 let loadVersion = 0
 
-const user = readStoredUser()
-const configuredTypes = configuredBusinessCapabilitySet(user)
-const activeTypes = activeBusinessCapabilitySet(user)
-const canWrite = computed(() => props.canWrite !== false && hasPermission(user, 'catalog.write') && [...activeTypes].some(type => type === 'restaurant' || type === 'retail'))
+const user = ref(readStoredUser())
+const grantVisible = ref(false), grantTemplate = ref<any>(null)
+const canGrantCoupons = computed(() => user.value.customer_membership_enabled === true
+  && ['members.read', 'members.coupons.write', 'catalog.write'].every(key => hasPermission(user.value, key))
+  && [...activeBusinessCapabilitySet(user.value)].some(type => ['restaurant', 'retail'].includes(type)))
+function openMemberGrant(row: any) { if (!canGrantCoupons.value || row.status !== 'active') return; grantTemplate.value = { ...row, channel_account_id: Number(row.channel_account_id || channelID.value) }; grantVisible.value = true }
+const refreshGrantIdentity = (event: Event) => { user.value = (event as CustomEvent).detail || readStoredUser() }
+const configuredTypes = computed(() => configuredBusinessCapabilitySet(user.value))
+const activeTypes = computed(() => activeBusinessCapabilitySet(user.value))
+const canWrite = computed(() => props.canWrite !== false && hasPermission(user.value, 'catalog.write') && [...activeTypes.value].some(type => type === 'restaurant' || type === 'retail'))
 const availableBusinessTypes = computed<BusinessType[]>(() => {
-  const values = (['restaurant', 'retail'] as BusinessType[]).filter(type => configuredTypes.has(type))
+  const values = (['restaurant', 'retail'] as BusinessType[]).filter(type => configuredTypes.value.has(type))
   return values.length ? values : ['restaurant', 'retail']
 })
 
@@ -313,7 +322,8 @@ async function saveCampaign() {
   } catch (error) { errorMessage.value = apiError(error, '助力活动保存失败') } finally { saving.value = false }
 }
 
-onMounted(() => { void loadPromotions() })
+onMounted(() => { window.addEventListener('tenant-identity-refreshed', refreshGrantIdentity); void loadPromotions() })
+onBeforeUnmount(() => { loadVersion++; window.removeEventListener('tenant-identity-refreshed', refreshGrantIdentity) })
 </script>
 
 <style scoped>

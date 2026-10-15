@@ -24,6 +24,19 @@ func TestFixedTenantRolePermissions(t *testing.T) {
 	}
 }
 
+func TestMemberCouponIssuanceIsAnExplicitAdministratorPermission(t *testing.T) {
+	for _, role := range []string{RoleProductOperator, RoleTeamOperator, RoleSettlementOperator, RoleViewer, "seller", "checker", "platform_admin"} {
+		if HasTenantPermission(role, PermissionMembersCouponsWrite) {
+			t.Fatalf("role %s must not issue member coupon benefits", role)
+		}
+	}
+	for _, role := range []string{RoleTenantAdmin, "super_admin"} {
+		if !HasTenantPermission(role, PermissionMembersCouponsWrite) {
+			t.Fatalf("role %s should retain explicit tenant coupon permission", role)
+		}
+	}
+}
+
 func TestAgentUseIsSeparateFromHighRiskPermissions(t *testing.T) {
 	for _, role := range []string{RoleTenantAdmin, RoleProductOperator, RoleTeamOperator, RoleSettlementOperator, RoleViewer} {
 		if !HasTenantPermission(role, PermissionAgentUse) {

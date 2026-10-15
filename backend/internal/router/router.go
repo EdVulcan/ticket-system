@@ -234,6 +234,15 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 		memberGroup.POST("/:id/freeze", middleware.RequireTenantPermission(authz.PermissionMembersStatusWrite), memberController.Freeze)
 		memberGroup.POST("/:id/unfreeze", middleware.RequireTenantPermission(authz.PermissionMembersStatusWrite), memberController.Unfreeze)
 		memberGroup.POST("/export", middleware.RequireTenantPermission(authz.PermissionMembersExport), memberController.Export)
+		memberCouponController := &api.MemberCouponGrantController{Service: &service.MemberCouponGrantService{DB: model.DB, Member: memberService}}
+		memberCouponGroup := protected.Group("/commerce/promotions/member-coupon-grants")
+		memberCouponGroup.Use(middleware.RequireConfiguredTenantBusinessCapability("restaurant", "retail"),
+			middleware.RequireTenantPermission(authz.PermissionMembersRead), middleware.RequireTenantPermission(authz.PermissionMembersCouponsWrite),
+			middleware.RequireTenantPermission(authz.PermissionCatalogWrite))
+		memberCouponGroup.POST("/preview", middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"), memberCouponController.Preview)
+		memberCouponGroup.POST("", middleware.RequireAnyTenantBusinessCapability("restaurant", "retail"), memberCouponController.Issue)
+		// Recovery remains available for existing grants after sales are paused.
+		memberCouponGroup.GET("/:batchKey", memberCouponController.Get)
 	}
 
 	// Staff Routes (Employee Management)

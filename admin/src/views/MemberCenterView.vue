@@ -39,7 +39,9 @@
     </section>
 
     <section class="table-panel">
-      <el-table v-loading="loading" :data="rows" stripe>
+      <el-button v-if="canGrantCoupons" :disabled="!selectedGrantMembers.length" @click="openGrant(selectedGrantMembers)">批量发券（{{ selectedGrantMembers.length }}/100）</el-button>
+      <el-table ref="memberTable" v-loading="loading" :data="rows" stripe @selection-change="handleGrantSelection">
+        <el-table-column v-if="canGrantCoupons" type="selection" width="48" :selectable="canSelectGrantMember" />
         <el-table-column prop="display_name" label="客户" min-width="180">
           <template #default="{ row }">
             <div class="member-name">{{ row.display_name || '未命名客户' }}</div>
@@ -56,9 +58,10 @@
         <el-table-column label="最近访问" min-width="180">
           <template #default="{ row }">{{ formatTime(row.last_seen_at || row.created_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right">
+        <el-table-column label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="openDetail(row)">查看详情</el-button>
+            <el-button v-if="canGrantCoupons && isFormalMember(row)" link type="primary" @click="openGrant([row])">发优惠券</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -73,6 +76,8 @@
         @size-change="handlePageSizeChange"
       />
     </section>
+
+    <MemberCouponGrantDialog v-model="grantVisible" :user="user" :initial-members="grantMembers" />
 
     <el-drawer v-model="detailVisible" title="客户详情" size="min(520px, 100vw)">
       <template v-if="detail">
@@ -118,9 +123,24 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, Refresh } from '@element-plus/icons-vue'
 import request from '@/utils/request'
-import { activeCapabilitySet, configuredBusinessCapabilitySet, configuredCapabilitySet, configuredSupplierBusinessTypeSet, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
+import MemberCouponGrantDialog from '@/components/MemberCouponGrantDialog.vue'
+import { hasPermission } from '@/utils/permissions'
+import { activeBusinessCapabilitySet, activeCapabilitySet, configuredBusinessCapabilitySet, configuredCapabilitySet, configuredSupplierBusinessTypeSet, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
 
 const user = ref(readStoredUser())
+const grantVisible = ref(false), grantMembers = ref<any[]>([]), selectedGrantMembers = ref<any[]>([])
+const memberTable = ref<any>()
+const canGrantCoupons = computed(() => user.value.customer_membership_enabled === true
+  && ['members.read', 'members.coupons.write', 'catalog.write'].every(key => hasPermission(user.value, key))
+  && [...activeBusinessCapabilitySet(user.value)].some(type => ['restaurant', 'retail'].includes(type)))
+const isFormalMember = (row: any) => row.status === 'active' && row.membership_status === 'active'
+const canSelectGrantMember = (row: any) => isFormalMember(row) && (selectedGrantMembers.value.some(item => item.id === row.id) || selectedGrantMembers.value.length < 100)
+function handleGrantSelection(selection: any[]) { selectedGrantMembers.value = selection.filter(isFormalMember).slice(0, 100) }
+function openGrant(members: any[]) {
+  if (!canGrantCoupons.value) return
+  grantMembers.value = members.filter(isFormalMember).slice(0, 100)
+  if (grantMembers.value.length) grantVisible.value = true
+}
 // Use the same history visibility rules as the tenant workspaces, including suspended verticals.
 const showTicketOrders = computed(() => isScenicHistorySupplier(user.value) || ['distributor', 'travel_agency'].some(type => activeCapabilitySet(user.value).has(type)))
 const showHotelOrders = computed(() => configuredCapabilitySet(user.value).has('supplier') && configuredSupplierBusinessTypeSet(user.value).has('hotel'))
@@ -169,6 +189,8 @@ async function loadMembers(nextPage?: number) {
   try {
     const response = await request.get('/members', { params: { page: page.value, page_size: pageSize.value, keyword: filters.keyword || undefined, phone: filters.phone || undefined, status: filters.status || undefined }, skipErrorToast: true } as any)
     if (version !== requestVersion) return
+    memberTable.value?.clearSelection()
+    selectedGrantMembers.value = []
     rows.value = response.data.items || []
     total.value = Number(response.data.total || 0)
   } catch (error: any) {
