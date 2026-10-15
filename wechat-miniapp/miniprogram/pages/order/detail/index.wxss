@@ -62,7 +62,7 @@
 .runner-icon--red { color: var(--red); }
 .tracking-number-row { align-items: center; display: flex; gap: 16rpx; margin-top: 8rpx; }
 .tracking-number { flex: 1; min-width: 0; margin-top: 0; word-break: break-all; }
-.tracking-copy { background: transparent; border: 1rpx solid var(--line); border-radius: 10rpx; color: var(--green); flex-shrink: 0; font-size: 22rpx; line-height: 56rpx; margin: 0; padding: 0 20rpx; }
+.tracking-copy { width: auto; min-width: 88rpx; background: transparent; border: 1rpx solid var(--line); border-radius: 10rpx; color: var(--green); flex-shrink: 0; font-size: 22rpx; line-height: 56rpx; margin: 0; padding: 0 20rpx; }
 .tracking-copy::after { border: none; }
 .tracking-copy--pressed { background: var(--green-soft); }
 .detail-line-name { min-width: 0; overflow-wrap: anywhere; }

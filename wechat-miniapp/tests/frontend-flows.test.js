@@ -1382,14 +1382,14 @@ test('completed after-sale submission renders merchant review, toasts by origina
   assert.equal(page.data.order.statusText, '售后待审核');
   assert.equal(page.data.order.fulfillmentStatus, 'completed');
   assert.equal(page.data.order.timelineStatus, 'COMPLETED');
-  assert.equal(page.data.statusDescription, '售后申请已提交，等待商家审核');
+  assert.equal(page.data.statusDescription, '');
   assert.equal(page.data.refundMessage, '售后申请已提交，等待商家审核');
   assert.equal(toasts.some(item => item.title === '售后申请已提交'), true);
 
   page.renderOrder(processedOrder);
   assert.equal(page.data.order.status, 'REFUNDING');
   assert.equal(page.data.order.fulfillmentStatus, 'completed');
-  assert.equal(page.data.statusDescription, '退款申请处理中');
+  assert.equal(page.data.statusDescription, '');
   assert.equal(page.data.refundMessage, '退款申请处理中，等待支付渠道确认');
 
   const approvedOrder = Object.assign({}, completedOrder, { refund_status: 'requested', after_sales: [{ id: 2, status: 'approved', type: 'refund' }], available_actions: { can_refund: false } });
@@ -1548,6 +1548,43 @@ test('shipped demo receipt requires explicit customer confirmation and persists 
   assert.equal(saves, 1);
   assert.equal(order.fulfillmentStatus, 'completed');
   assert.equal(detail.data.order.fulfillmentCompleted, true);
+});
+
+test('after-sale headers show one explanation and the current processing icon for both businesses', () => {
+  let detail;
+  load('miniprogram/pages/order/detail/index.js', {
+    '../../../services/storage': {}, '../../../services/api': { isProduction: () => true }, '../../../services/payment': {}
+  }, { Page: page => { detail = page; }, wx: {} });
+  detail.setData = change => { detail.data = { ...detail.data, ...change }; };
+  for (const businessType of ['restaurant', 'retail']) {
+    for (const status of ['AFTER_SALE_REVIEW', 'REFUNDING', 'REFUNDED', 'REFUND_FAILED', 'REFUND_REVIEW']) {
+      detail.renderOrder({ businessType, fulfillmentType: businessType === 'retail' ? 'COURIER' : 'TAKEAWAY', status, fulfillmentStatus: 'completed', itemsSnapshot: [] });
+      assert.ok(detail.data.refundMessage);
+      assert.equal(detail.data.statusDescription, '', `${businessType}/${status} must not maintain a second refund explanation`);
+      assert.equal(detail.data.order.fulfillmentCompleted, true);
+      if (['AFTER_SALE_REVIEW', 'REFUNDING'].includes(status)) assert.equal(detail.data.statusIcon, '…');
+      if (['REFUND_FAILED', 'REFUND_REVIEW'].includes(status)) assert.equal(detail.data.statusIcon, '!');
+    }
+    detail.renderOrder({ businessType, status: 'COMPLETED', fulfillmentStatus: 'completed', itemsSnapshot: [] });
+    assert.equal(detail.data.refundMessage, '');
+    assert.ok(detail.data.statusDescription);
+    assert.equal(detail.data.statusIcon, '✓');
+    for (const status of ['CANCELED', 'REFUNDED']) {
+      detail.renderOrder({ businessType, status, fulfillmentStatus: 'cancelled', itemsSnapshot: [] });
+      assert.equal(detail.data.order.fulfillmentClosed, true);
+      detail.renderOrder({ businessType, status, fulfillmentStatus: 'completed', itemsSnapshot: [] });
+      assert.equal(detail.data.order.fulfillmentClosed, false);
+      assert.equal(detail.data.order.timelineStatus, 'COMPLETED');
+    }
+  }
+  detail.renderOrder({ businessType: 'restaurant', status: 'REFUNDING', fulfillmentStatus: 'ready', itemsSnapshot: [] });
+  assert.equal(detail.data.order.timelineStatus, 'READY');
+  assert.equal(detail.data.order.fulfillmentClosed, false);
+  const template = fs.readFileSync(path.resolve(__dirname, '../miniprogram/pages/order/detail/index.wxml'), 'utf8');
+  assert.match(template, /{{refundMessage \|\| statusDescription}}/);
+  assert.doesNotMatch(template, /{{refundMessage}}|{{statusDescription}}/);
+  assert.match(template, /wx:if="{{order.fulfillmentClosed}}"/);
+  assert.match(template, /order.timelineStatus === 'READY'/);
 });
 
 test('receipt modal obeys native label limits and recovers after modal failure', () => {
