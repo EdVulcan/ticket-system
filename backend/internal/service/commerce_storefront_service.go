@@ -1465,6 +1465,9 @@ func (s *CommerceStorefrontService) applyCheckoutQuoteAndCouponTx(tx *gorm.DB, c
 	couponDiscount := int64(0)
 	var grant *model.CommerceCouponGrant
 	if input.CouponGrantID != 0 {
+		if discountedGoods <= 0 {
+			return ErrCouponNotApplicable
+		}
 		promotions := CommercePromotionService{DB: tx, Clock: s.Now}
 		grant, err = promotions.ReserveCouponGrantTx(tx, order.TenantID, order.ID, input.CouponGrantID, context.CustomerID, order.BusinessType, context.Session.ChannelAccountID, order.TotalAmountCents)
 		if err != nil {

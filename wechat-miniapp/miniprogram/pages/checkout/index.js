@@ -381,9 +381,10 @@ Page({
 
   isCouponForTarget(coupon, target) {
     const scope = coupon && coupon.scope || 'UNIVERSAL';
-    const businessType = coupon && String(coupon.businessType || coupon.business_type || '').toLowerCase();
     const targetBusiness = target === commerce.FULFILLMENT.COURIER ? 'retail' : 'restaurant';
-    return scope === 'UNIVERSAL' || scope === target || !businessType || businessType === targetBusiness;
+    const businessTypes = coupon && (Array.isArray(coupon.businessTypes) ? coupon.businessTypes : coupon.business_types);
+    if (Array.isArray(businessTypes)) return businessTypes.includes(targetBusiness);
+    return scope === 'UNIVERSAL' || scope === target;
   },
 
   calculate() {

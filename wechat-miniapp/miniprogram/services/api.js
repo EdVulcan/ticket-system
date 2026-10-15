@@ -418,6 +418,11 @@ function normalizeAfterSales(item) {
   });
 }
 
+function orderFeeCents(item, kind, legacyAmount) {
+  const charges = (Array.isArray(item.adjustments) ? item.adjustments : []).filter(row => row && row.kind === kind);
+  return charges.length ? charges.reduce((total, row) => total + priceText(firstDefined(row.amountCents, row.amount_cents, 0)), 0) : priceText(legacyAmount);
+}
+
 function normalizeOrder(item) {
   item = item || {};
   const businessType = String(firstDefined(item.businessType, item.business_type, '') || '').toLowerCase();
@@ -441,6 +446,7 @@ function normalizeOrder(item) {
   else if (providerRefundWaiting) status = 'REFUNDING';
   else if (['failed', 'closed', 'rejected'].indexOf(refundStatus) >= 0) status = 'REFUND_FAILED';
   else if (['review', 'abnormal'].indexOf(refundStatus) >= 0) status = 'REFUND_REVIEW';
+  else if (paymentStatus === 'failed' && fulfillmentStatus === 'cancelled') status = 'CANCELED';
   if (!status || status === 'UNKNOWN') {
     if (providerRefundConfirmed) status = 'REFUNDED';
     else if (afterSalePendingApproval) status = 'AFTER_SALE_REVIEW';
@@ -518,8 +524,8 @@ function normalizeOrder(item) {
     paidAt: firstDefined(item.paidAt, item.paid_at),
     readyAt: firstDefined(item.readyAt, item.ready_at, restaurantFulfillment.readyAt, restaurantFulfillment.ready_at),
     deliveredAt: firstDefined(item.deliveredAt, item.delivered_at, retailFulfillment.deliveredAt, retailFulfillment.delivered_at),
-    shippingFee: priceText(firstDefined(item.shippingFee, item.shipping_fee, 0)),
-    deliveryFee: priceText(firstDefined(item.deliveryFee, item.delivery_fee, 0))
+    shippingFee: orderFeeCents(item, 'shipping_fee', firstDefined(item.shippingFee, item.shipping_fee, 0)),
+    deliveryFee: orderFeeCents(item, 'delivery_fee', firstDefined(item.deliveryFee, item.delivery_fee, 0))
   });
 }
 
@@ -555,6 +561,7 @@ function normalizePaymentView(value) {
   if (providerRefundConfirmed) status = 'REFUNDED';
   else if (afterSalePendingApproval) status = 'AFTER_SALE_REVIEW';
   else if (providerRefundWaiting) status = 'REFUNDING';
+  else if (paymentStatus === 'failed' && fulfillmentStatus === 'cancelled') status = 'CANCELED';
   else if ((status === 'WAIT_PAY' || status === 'PENDING' || status === 'UNKNOWN') && orderStatus) status = orderStatus;
   const payment = root.payment || root.payment_params || root.paymentParams;
   return Object.assign({}, root, {
@@ -613,13 +620,17 @@ function normalizeAddress(item) {
 function normalizeCoupon(item) {
   item = item || {};
   const businessType = String(firstDefined(item.businessType, item.business_type, '') || '').toLowerCase();
+  const rawBusinessTypes = Array.isArray(item.business_types) ? item.business_types : item.businessTypes;
+  const businessTypes = Array.isArray(rawBusinessTypes) ? rawBusinessTypes.map(value => String(value).toLowerCase()).filter((value, index, values) => ['restaurant', 'retail'].includes(value) && values.indexOf(value) === index) : undefined;
+  const scope = businessTypes ? businessTypes.length === 2 ? 'UNIVERSAL' : businessTypes[0] === 'restaurant' ? 'TAKEAWAY' : businessTypes[0] === 'retail' ? 'COURIER' : 'UNAVAILABLE' : firstDefined(item.scope, businessType === 'restaurant' ? 'TAKEAWAY' : businessType === 'retail' ? 'COURIER' : 'UNIVERSAL');
   const status = String(firstDefined(item.status, '') || '').toUpperCase();
   return Object.assign({}, item, {
     id: firstDefined(item.id, item.grantId, item.grant_id, item._id),
     name: displayText(firstDefined(item.name, item.title, item.templateName, item.template_name), '优惠券'),
     description: displayText(firstDefined(item.description, item.memo, ''), ''),
     businessType,
-    scope: firstDefined(item.scope, businessType === 'restaurant' ? 'TAKEAWAY' : businessType === 'retail' ? 'COURIER' : 'UNIVERSAL'),
+    businessTypes,
+    scope,
     status: status || 'AVAILABLE',
     discountAmount: priceText(firstDefined(item.discountAmount, item.discount_amount, item.discountCents, item.discount_cents, 0)),
     minGoodsAmount: priceText(firstDefined(item.minGoodsAmount, item.min_goods_amount, item.minGoodsSubtotalCents, item.min_goods_subtotal_cents, 0)),
@@ -676,15 +687,19 @@ function normalizeSlotDate(value) {
 function normalizeCheckoutQuote(payload) {
   const root = resource(payload);
   const quote = root.quote && typeof root.quote === 'object' ? root.quote : root;
+  const goodsAmount = firstDefined(quote.goodsAmount, quote.goods_amount, quote.goodsSubtotalCents, quote.goods_subtotal_cents);
+  const discountAmount = firstDefined(quote.discountAmount, quote.discount_amount, quote.discountCents, quote.discount_cents);
   return {
     quoteToken: firstDefined(root.token, root.quoteToken, root.quote_token, quote.token, quote.quoteToken, quote.quote_token, ''),
     estimatedMinutes: Number(firstDefined(root.estimatedMinutes, root.estimated_minutes, 0)) || 0,
     quote: Object.assign({}, quote, {
-      goodsAmount: priceText(firstDefined(quote.goodsAmount, quote.goods_amount, quote.goodsSubtotalCents, quote.goods_subtotal_cents, 0)),
+      goodsAmount: priceText(goodsAmount),
+      // Quote discounts are trusted membership pricing; coupons only reduce the remaining goods.
+      couponGoodsAmount: goodsAmount !== undefined && discountAmount !== undefined ? Math.max(0, priceText(goodsAmount) - priceText(discountAmount)) : undefined,
       packagingFee: priceText(firstDefined(quote.packagingFee, quote.packaging_fee, quote.packagingFeeCents, quote.packaging_fee_cents, 0)),
       deliveryFee: priceText(firstDefined(quote.deliveryFee, quote.delivery_fee, quote.deliveryFeeCents, quote.delivery_fee_cents, 0)),
       shippingFee: priceText(firstDefined(quote.shippingFee, quote.shipping_fee, quote.shippingFeeCents, quote.shipping_fee_cents, 0)),
-      discountAmount: priceText(firstDefined(quote.discountAmount, quote.discount_amount, quote.discountCents, quote.discount_cents, 0)),
+      discountAmount: priceText(discountAmount),
       payableAmount: priceText(firstDefined(quote.payableAmount, quote.payable_amount, quote.totalCents, quote.total_cents, 0)),
       expiresAt: firstDefined(quote.expiresAt, quote.expires_at, '')
     })
@@ -1116,7 +1131,7 @@ module.exports = {
         contact_phone: contactPhone,
         address_id: address && address.id,
         quote_token: quote.quoteToken,
-        coupon_grant_id: numericId(firstDefined(payload.couponGrantId, payload.coupon_grant_id, payload.couponId)),
+        coupon_grant_id: quote.quote && quote.quote.couponGoodsAmount === 0 ? undefined : numericId(firstDefined(payload.couponGrantId, payload.coupon_grant_id, payload.couponId)),
         businessType
         };
       if (businessType === 'restaurant') checkoutInput.fulfillment_method = cartFulfillmentMethod(payload, businessType);

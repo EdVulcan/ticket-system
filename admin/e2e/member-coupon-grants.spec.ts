@@ -197,3 +197,37 @@ test('查询尚未提交完成不能解除锁定，可用原记录重试', async
   await expect(dialog(page).getByText('优惠券已发放', { exact: true })).toBeVisible()
   expect(posts[1]).toEqual(posts[0])
 })
+
+test('商业暂停后仍能查询原发券结果，但不能重试发放', async ({ page }) => {
+  const { posts, previews } = await setup(page, { user: { ...admin, business_capabilities: [{ business_type: 'restaurant', status: 'suspended' }] } })
+  const record = { template_id: 31, member_ids: [1], idempotency_key: 'paused-original', reason: '', template_name: template.name }
+  await page.addInitScript(value => sessionStorage.setItem('member-coupon-grant:21:21', JSON.stringify(value)), record)
+  let queries = 0
+  await page.route('**/api/v1/commerce/promotions/member-coupon-grants/paused-original', async route => {
+    queries++
+    await json(route, { status: 'completed', idempotency_key: record.idempotency_key, template_id: 31, member_count: 1, items: [{ member_id: 1, member_no: 'M001', display_name: '小明', grant_id: 51 }] })
+  })
+  await page.goto('/commerce/marketing')
+  await page.getByRole('button', { name: '恢复待确认发券', exact: true }).click()
+  await expect(dialog(page).getByRole('button', { name: '重试原发放', exact: true })).toBeDisabled()
+  await dialog(page).getByRole('button', { name: '查询发放结果', exact: true }).click()
+  await expect(dialog(page).getByText('优惠券已发放', { exact: true })).toBeVisible()
+  expect(queries).toBe(1)
+  expect(posts).toHaveLength(0)
+  expect(previews).toHaveLength(0)
+  expect(await page.evaluate(() => sessionStorage.getItem('member-coupon-grant:21:21'))).toBeNull()
+})
+
+test('发放结果未知时暂停业务，保持查询入口和原批次', async ({ page }) => {
+  const { posts, queries } = await setup(page, { unknown: true })
+  await openSingle(page); await selectTemplate(page); await preview(page)
+  await dialog(page).getByRole('button', { name: '确认发放', exact: true }).click()
+  await expect(dialog(page).getByRole('button', { name: '重试原发放', exact: true })).toBeEnabled()
+  await page.evaluate(user => window.dispatchEvent(new CustomEvent('tenant-identity-refreshed', { detail: user })), { ...admin, business_capabilities: [{ business_type: 'restaurant', status: 'suspended' }] })
+  await expect(dialog(page)).toBeVisible()
+  await expect(dialog(page).getByRole('button', { name: '重试原发放', exact: true })).toBeDisabled()
+  await dialog(page).getByRole('button', { name: '查询发放结果', exact: true }).click()
+  await expect(dialog(page).getByText('优惠券已发放', { exact: true })).toBeVisible()
+  expect(posts).toHaveLength(1)
+  expect(queries).toEqual([posts[0].idempotency_key])
+})

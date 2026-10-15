@@ -9,6 +9,86 @@ function load(relative, stubs, globals = {}) {
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), Object.assign({ module, exports: module.exports, console, setTimeout, require: id => Object.prototype.hasOwnProperty.call(stubs, id) ? stubs[id] : localRequire(id) }, globals), { filename });
   return module.exports;
 }
+
+test('cross-business coupon grants retain their exact identity and work in either checkout', () => {
+  const api = load('miniprogram/services/api.js', { './storage': {}, './http': {} });
+  const grant = api.normalizeCoupon({ id: 51, template_id: 31, business_type: 'restaurant', business_types: ['restaurant', 'retail'], status: 'available', discount_cents: 500, min_goods_subtotal_cents: 0 });
+  for (const businessType of ['restaurant', 'retail']) {
+    let page;
+    const fulfillmentType = businessType === 'restaurant' ? 'TAKEAWAY' : 'COURIER';
+    const cart = [{ productId: 'p1', businessType, fulfillmentType, unitPrice: 1000, quantity: 1 }];
+    load('miniprogram/pages/checkout/index.js', {
+      '../../services/storage': { getStore: () => ({}), getProducts: () => [], getCart: () => cart },
+      '../../services/api': { isProduction: () => true, normalizeStore: value => value },
+      '../../services/payment': {}
+    }, { Page: value => { page = value; }, wx: { getStorageSync: () => '' } });
+    page.data = { ...page.data, takeawayDeliveryMethod: 'PICKUP' };
+    page.setData = (change, callback) => { page.data = { ...page.data, ...change }; if (callback) callback(); };
+    page.applyData([], [grant], {});
+    assert.equal(page.data.selectedCoupon.id, 51);
+    assert.equal(page.groupPayload(fulfillmentType, cart, null, '', page.data.selectedCoupon.id).couponId, 51);
+    assert.equal(page.data.discount, 500);
+    assert.equal(page.isCouponForTarget(api.normalizeCoupon({ business_type: 'restaurant', business_types: ['retail'] }), 'TAKEAWAY'), false);
+    assert.equal(page.isCouponForTarget(api.normalizeCoupon({ business_types: ['future'] }), fulfillmentType), false);
+    assert.equal(page.isCouponForTarget(api.normalizeCoupon({ scope: 'UNKNOWN' }), fulfillmentType), false);
+  }
+});
+
+test('cancelled fulfillment with failed payment stays cancelled in order and payment views', () => {
+  const api = load('miniprogram/services/api.js', { './storage': {}, './http': {} });
+  for (const business_type of ['restaurant', 'retail']) {
+    const cancelled = { order_no: 'CANCELLED-1', business_type, payment_status: 'failed', fulfillment_status: 'cancelled', refund_status: 'none' };
+    assert.equal(api.normalizeOrder(cancelled).status, 'CANCELED');
+    assert.equal(api.normalizeOrder({ ...cancelled, status: 'WAIT_PAY' }).status, 'CANCELED');
+    assert.equal(api.normalizePaymentView({ status: 'WAIT_PAY', order: cancelled }).status, 'CANCELED');
+    assert.equal(api.normalizeOrder({ ...cancelled, fulfillment_status: 'pending_acceptance' }).status, 'WAIT_PAY');
+    assert.equal(api.normalizeOrder({ ...cancelled, refund_status: 'completed' }).status, 'REFUNDED');
+  }
+});
+
+test('order fees project charged adjustment cents and preserve zero and legacy amounts', () => {
+  const api = load('miniprogram/services/api.js', { './storage': {}, './http': {} });
+  for (const [kind, field, business_type] of [['delivery_fee', 'deliveryFee', 'restaurant'], ['shipping_fee', 'shippingFee', 'retail']]) {
+    const input = { order_no: `FEE-${kind}`, business_type, payment_status: 'paid', original_amount_cents: 1000, total_amount_cents: 1500, [field]: 99, adjustments: [{ kind, amount_cents: 500 }, { kind: 'packaging_fee', amount_cents: 200 }] };
+    const normalized = api.normalizeOrder(input);
+    assert.equal(normalized[field], 500);
+    assert.equal(api.normalizeOrder(normalized)[field], 500);
+    assert.equal(normalized.goodsAmount, 1000);
+    assert.equal(normalized.payableAmount, 1500);
+    assert.equal(api.normalizeOrder({ ...input, adjustments: [{ kind, amount_cents: 0 }] })[field], 0);
+    assert.equal(api.normalizeOrder({ ...input, adjustments: [{ kind, amountCents: 325 }] })[field], 325);
+    assert.equal(api.normalizeOrder({ ...input, adjustments: [] })[field], 99);
+    assert.equal(api.normalizeOrder({ business_type, [`${kind}`]: 250 })[field], 250);
+  }
+});
+
+test('checkout preserves the selected coupon unless the server quote leaves no goods to discount', async () => {
+  for (const [quote, expectedCoupon] of [
+    [{ goods_subtotal_cents: 1000, discount_cents: 1000, delivery_fee_cents: 100, total_cents: 100 }, undefined],
+    [{ goods_subtotal_cents: 1000, discount_cents: 200, total_cents: 800 }, 51],
+    [{ goods_subtotal_cents: 1000, total_cents: 1000 }, 51]
+  ]) {
+    const calls = [];
+    const api = load('miniprogram/services/api.js', {
+      './storage': { getProducts: () => [{ id: 1, businessType: 'restaurant', skuId: 2 }], getAddresses: () => [], getStore: () => ({}) },
+      './http': {
+        isProduction: () => true, getBusinesses: () => [{ businessType: 'restaurant' }],
+        createError: (code, message) => Object.assign(new Error(message), { code }),
+        request: async (path, options) => {
+          calls.push({ path, options });
+          if (path === '/checkout-quotes') return { quote_token: 'authoritative-quote', quote };
+          if (path.endsWith('/checkout')) return { order_no: 'ORDER-COUPON-1', business_type: 'restaurant', payment_status: 'unpaid' };
+          return { id: 11, items: [] };
+        }
+      }
+    }, { getApp: () => ({ globalData: { deploymentMode: 'production' } }) });
+    await api.createOrder({ businessType: 'restaurant', fulfillmentType: 'TAKEAWAY', deliveryMethod: 'PICKUP', couponId: 51, clientRequestId: 'original-request', items: [{ productId: 1, skuId: 2, quantity: 1 }] });
+    const checkout = calls.find(call => call.path.endsWith('/checkout')).options.data;
+    assert.equal(checkout.coupon_grant_id, expectedCoupon);
+    assert.equal(checkout.idempotency_key, 'original-request');
+    assert.equal(checkout.quote_token, 'authoritative-quote');
+  }
+});
 test('profile order shortcuts open the order list with the requested filter', () => {
   let profilePage; let orderPage; let requestedTab = '';
   load('miniprogram/pages/profile/index/index.js', {

@@ -1,9 +1,9 @@
 <template>
-  <el-alert v-if="allowed && pending && !modelValue" type="warning" :closable="false" title="有一笔发券结果待确认，请恢复原记录后查询或重试。">
+  <el-alert v-if="canRecover && pending && !modelValue" type="warning" :closable="false" title="有一笔发券结果待确认，请恢复原记录后查询或重试。">
     <el-button @click="emit('update:modelValue', true)">恢复待确认发券</el-button>
   </el-alert>
   <el-dialog :model-value="modelValue" title="发优惠券给会员" width="min(820px, calc(100vw - 32px))" :close-on-click-modal="false" @update:model-value="emit('update:modelValue', $event)">
-    <el-alert v-if="!allowed" type="warning" :closable="false" title="当前账号没有会员发券权限，或会员与商业能力未启用。" />
+    <el-alert v-if="!canRecover" type="warning" :closable="false" title="当前账号没有会员发券权限，或会员与商业能力未启用。" />
     <template v-else>
       <el-alert v-if="message" :type="pending ? 'warning' : 'error'" :closable="false" :title="message" />
       <template v-if="pending">
@@ -11,12 +11,14 @@
         <p>优惠券：{{ pending.template_name || '原优惠券模板' }} · 用途：{{ pending.reason || '会员优惠券发放' }}</p>
         <p>{{ pending.recipients?.map(item => item.display_name || item.member_no).join('、') }}</p>
         <el-button :loading="recovering" :disabled="issuing" @click="recover">查询发放结果</el-button>
-        <el-button type="primary" :loading="issuing" :disabled="recovering" @click="issue(true)">重试原发放</el-button>
+        <el-button type="primary" :loading="issuing" :disabled="recovering || !allowed" @click="issue(true)">重试原发放</el-button>
+        <p v-if="!allowed">商业业务已暂停，可查询原发放结果，恢复业务后才能重试发放。</p>
       </template>
       <template v-else-if="result">
         <el-result icon="success" title="优惠券已发放" :sub-title="`已向 ${result.member_count} 位会员各发一张券`" />
         <el-table :data="result.items || []"><el-table-column prop="member_no" label="会员编号" /><el-table-column prop="display_name" label="会员" /></el-table>
       </template>
+      <el-alert v-else-if="!allowed" type="warning" :closable="false" title="商业业务已暂停，暂不能发放新的优惠券。" />
       <template v-else>
         <el-form label-position="top" class="grant-form">
           <el-form-item label="店铺渠道" required>
@@ -66,7 +68,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import request from '@/utils/request'
-import { activeBusinessCapabilitySet } from '@/utils/tenantAccess'
+import { activeBusinessCapabilitySet, configuredBusinessCapabilitySet } from '@/utils/tenantAccess'
 import { hasPermission } from '@/utils/permissions'
 
 const props = withDefaults(defineProps<{ modelValue: boolean; user: any; initialMembers?: any[]; preselectedTemplate?: any; preselectedChannel?: number }>(), { initialMembers: () => [] })
@@ -74,9 +76,11 @@ const emit = defineEmits(['update:modelValue', 'completed'])
 type Attempt = { template_id: number; member_ids: number[]; idempotency_key: string; reason: string; recipients?: any[]; template_name?: string }
 const base = '/commerce/promotions/member-coupon-grants'
 const config = { skipErrorToast: true } as any
-const allowed = computed(() => Number(props.user?.tenant_id) > 0 && Number(props.user?.id) > 0 && props.user?.customer_membership_enabled === true
+const permitted = computed(() => Number(props.user?.tenant_id) > 0 && Number(props.user?.id) > 0 && props.user?.customer_membership_enabled === true
   && ['members.read', 'members.coupons.write', 'catalog.write'].every(key => hasPermission(props.user, key))
-  && [...activeBusinessCapabilitySet(props.user)].some(type => ['restaurant', 'retail'].includes(type)))
+)
+const canRecover = computed(() => permitted.value && [...configuredBusinessCapabilitySet(props.user)].some(type => ['restaurant', 'retail'].includes(type)))
+const allowed = computed(() => permitted.value && [...activeBusinessCapabilitySet(props.user)].some(type => ['restaurant', 'retail'].includes(type)))
 const scope = computed(() => `${props.user?.tenant_id || ''}:${props.user?.id || ''}`)
 const storageKey = computed(() => `member-coupon-grant:${scope.value}`)
 const pending = ref<Attempt | null>(null)
@@ -113,13 +117,15 @@ watch(scope, (_scope, previous) => {
   pending.value = null; readPending()
   if (previous !== undefined) emit('update:modelValue', false)
 }, { immediate: true })
-watch(allowed, value => { context++; preview.value = null; if (!value) emit('update:modelValue', false) })
+watch(allowed, value => { context++; preview.value = null; if (!value && !pending.value) emit('update:modelValue', false) })
+watch(canRecover, value => { if (!value) emit('update:modelValue', false) })
 watch(() => props.modelValue, async open => {
   context++; channelVersion++; memberVersion++; previewVersion++
   previewLoading.value = false; loading.value = false; membersLoading.value = false
-  if (!open || !allowed.value) return
+  if (!open || !canRecover.value) return
   readPending()
   if (pending.value) { message.value = '上次发放结果尚未确认。请先查询结果；需要重试时将沿用原发放记录。'; return }
+  if (!allowed.value) return
   result.value = null; message.value = ''; preview.value = null; reason.value = ''; keyword.value = ''
   selected.value = props.initialMembers.filter(formal).slice(0, 100)
   channelID.value = props.preselectedChannel || Number(props.preselectedTemplate?.channel_account_id) || undefined
@@ -215,7 +221,7 @@ async function issue(retry: boolean) {
   } finally { issuing.value = false }
 }
 async function recover() {
-  if (!allowed.value || !pending.value || issuing.value || recovering.value) return
+  if (!canRecover.value || !pending.value || issuing.value || recovering.value) return
   const record = pending.value, key = storageKey.value, versionScope = scope.value
   recovering.value = true
   try {

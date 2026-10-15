@@ -101,6 +101,8 @@ type CreateCommerceShipmentInput struct {
 // UpdateCommerceShipmentInput contains only mutable package metadata. The
 // tenant, order, location, source and status remain server-owned facts; status
 // changes must be appended as events so the timeline stays auditable.
+// PUT replaces this metadata snapshot, so shipped packages must retain both
+// a carrier (code or name) and a tracking number in every replacement.
 type UpdateCommerceShipmentInput struct {
 	ShipmentNo      string `json:"shipment_no"`
 	CarrierCode     string `json:"carrier_code"`
@@ -307,6 +309,10 @@ func (s *CommerceLogisticsService) UpdateShipment(tenantID, shipmentID uint, inp
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND tenant_id = ?", shipmentID, tenantID).First(&shipment).Error; err != nil {
 			return err
 		}
+		if (shipment.ShippedAt != nil || shipmentStatusRank(shipment.Status) > 0) &&
+			(input.TrackingNo == "" || (input.CarrierCode == "" && input.CarrierName == "")) {
+			return fmt.Errorf("%w: shipped shipment requires carrier and tracking number", ErrCommerceLogisticsInvalid)
+		}
 		if input.ShipmentNo != shipment.ShipmentNo {
 			var count int64
 			if err := tx.Model(&model.CommerceShipment{}).Where("tenant_id = ? AND shipment_no = ? AND id <> ?", tenantID, input.ShipmentNo, shipment.ID).Count(&count).Error; err != nil {
@@ -494,7 +500,13 @@ func (s *CommerceLogisticsService) AppendShipmentEvent(tenantID, shipmentID uint
 				}
 				return err
 			}
-			if !sameShipmentEvent(&existing, input, source, occurredAt, payloadHash) {
+			comparisonTime := occurredAt
+			if input.OccurredAt.IsZero() {
+				// A server-assigned timestamp belongs to the original event;
+				// retries without a client timestamp must reuse that fact.
+				comparisonTime = existing.OccurredAt
+			}
+			if !sameShipmentEvent(&existing, input, source, comparisonTime, payloadHash) {
 				return fmt.Errorf("%w: duplicate event identity has different contents", ErrCommerceLogisticsConflict)
 			}
 			result = &existing

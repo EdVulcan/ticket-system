@@ -361,29 +361,79 @@ func (s *CommercePaymentService) CreateWechatPayment(ctx context.Context, token 
 	var order model.CommerceOrder
 	var attempt model.CommercePaymentAttempt
 	var created bool
-	err = s.db().Transaction(func(tx *gorm.DB) error {
+	loadState := func(tx *gorm.DB, lock bool) error {
+		order = model.CommerceOrder{}
+		attempt = model.CommercePaymentAttempt{}
 		// Payment follows the immutable order scope. Publishing a business is a
 		// gate for new carts/orders, not a reason to orphan an already-created
 		// customer order when the binding is later disabled or moved.
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ? AND order_no = ? AND customer_id = ? AND channel = ?", storeCtx.Session.TenantID, input.OrderNo, storeCtx.CustomerID, "wechat_miniapp").First(&order).Error; err != nil {
+		query := tx.Where("tenant_id = ? AND order_no = ? AND customer_id = ? AND channel = ?", storeCtx.Session.TenantID, input.OrderNo, storeCtx.CustomerID, "wechat_miniapp")
+		if lock {
+			query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		if err := query.First(&order).Error; err != nil {
 			return err
 		}
 		fingerprint := commercePaymentFingerprint(&order, &storeCtx.Account, cfg.AppID, cfg.MchID, storeCtx.Session.SubjectHash)
-		lookup := tx.Where("tenant_id = ? AND client_request_id = ?", order.TenantID, input.ClientRequestID).First(&attempt).Error
+		attemptQuery := tx.Where("tenant_id = ? AND client_request_id = ?", order.TenantID, input.ClientRequestID)
+		if lock {
+			attemptQuery = attemptQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		lookup := attemptQuery.First(&attempt).Error
 		if lookup == nil {
 			if attempt.OrderID != order.ID || attempt.RequestFingerprint != fingerprint {
 				return ErrCommerceIdempotencyConflict
 			}
-			return nil
+			return commercePaymentCreationState(&order, &attempt, s.now())
 		}
 		if !errors.Is(lookup, gorm.ErrRecordNotFound) {
 			return lookup
 		}
+		if err := commercePaymentCreationState(&order, nil, s.now()); err != nil {
+			return err
+		}
 		if order.PaymentStatus == "paid" || order.PaymentStatus == "refunded" {
 			return nil
 		}
-		if order.ExpiresAt != nil && !order.ExpiresAt.After(s.now()) {
-			return fmt.Errorf("%w: payment window has expired", ErrCommerceOrderState)
+		// One order has one provider identity. A changed client key must not
+		// manufacture a second attempt using the pending order's out_trade_no.
+		var existing int64
+		if err := tx.Model(&model.CommercePaymentAttempt{}).Where("tenant_id = ? AND order_id = ?", order.TenantID, order.ID).Count(&existing).Error; err != nil {
+			return err
+		}
+		if existing != 0 {
+			return ErrCommerceIdempotencyConflict
+		}
+		return nil
+	}
+	if err := loadState(s.db(), false); err != nil {
+		return nil, err
+	}
+	// Resolve local prerequisites before reserving a provider payment. A failed
+	// login exchange or callback configuration has never reached WeChat and must
+	// leave a fresh order cancellable and eligible for ordinary expiry.
+	var openID, notifyURL string
+	if attempt.ID == 0 && order.PaymentStatus != "paid" && order.PaymentStatus != "refunded" {
+		notifyURL, err = commercePaymentNotifyURL("payments", order.TenantID)
+		if err != nil {
+			return nil, fmt.Errorf("%w: payment callback URL is unavailable", ErrCommercePaymentUnavailable)
+		}
+		openID, err = s.exchangePaymentSubject(ctx, sf, storeCtx, input.LoginCode)
+		if err != nil {
+			return nil, err
+		}
+	}
+	err = s.db().Transaction(func(tx *gorm.DB) error {
+		// Cancellation, expiry, callbacks and another retry may have changed the
+		// order during the login exchange. Only the locked state authorizes work.
+		if err := loadState(tx, true); err != nil {
+			return err
+		}
+		if attempt.ID != 0 || order.PaymentStatus == "paid" || order.PaymentStatus == "refunded" {
+			return nil
+		}
+		if openID == "" || notifyURL == "" {
+			return fmt.Errorf("%w: payment prerequisites changed during retry", ErrCommerceOrderState)
 		}
 		outTradeNo := commercePaymentOutTradeNo(s.now())
 		if order.PaymentStatus == "unpaid" {
@@ -398,6 +448,7 @@ func (s *CommercePaymentService) CreateWechatPayment(ctx context.Context, token 
 		if err := ensureCommercePaymentTaskTx(tx, &order, s.now()); err != nil {
 			return err
 		}
+		fingerprint := commercePaymentFingerprint(&order, &storeCtx.Account, cfg.AppID, cfg.MchID, storeCtx.Session.SubjectHash)
 		attempt = model.CommercePaymentAttempt{TenantID: order.TenantID, OrderID: order.ID, ChannelAccountID: storeCtx.Account.ID, Provider: "wechat", ClientRequestID: input.ClientRequestID, RequestFingerprint: fingerprint, OutTradeNo: outTradeNo, AppID: cfg.AppID, MchID: cfg.MchID, AmountCents: order.TotalAmountCents, Currency: "CNY", PayerSubjectHash: storeCtx.Session.SubjectHash, Status: "pending"}
 		if err := tx.Create(&attempt).Error; err != nil {
 			return err
@@ -408,7 +459,7 @@ func (s *CommercePaymentService) CreateWechatPayment(ctx context.Context, token 
 	if err != nil {
 		return nil, err
 	}
-	if order.PaymentStatus == "paid" || attempt.Status == "paid" {
+	if order.PaymentStatus == "paid" || order.PaymentStatus == "refunded" || attempt.Status == "paid" {
 		return s.viewFor(&order, &attempt, nil), nil
 	}
 	if !created && attempt.PrepayID != "" {
@@ -418,21 +469,14 @@ func (s *CommercePaymentService) CreateWechatPayment(ctx context.Context, token 
 		}
 		return s.viewFor(&order, &attempt, params), nil
 	}
-	// wx.login codes are one-time credentials. Resolve the provider subject only
-	// when a new JSAPI request is actually needed; an idempotent retry that can
-	// reuse the persisted prepay_id must not fail merely because the client
-	// replayed an already-consumed login code.
-	openID, err := s.exchangePaymentSubject(ctx, sf, storeCtx, input.LoginCode)
-	if err != nil {
-		return nil, err
+	if !created {
+		// A concurrent submission or unknown provider outcome must be queried,
+		// not submitted again. No fresh wx.login code is needed for this view.
+		return s.viewFor(&order, &attempt, nil), nil
 	}
 	description := "商业订单"
 	if len(order.Items) > 0 && strings.TrimSpace(order.Items[0].ProductNameSnapshot) != "" {
 		description = order.Items[0].ProductNameSnapshot
-	}
-	notifyURL, err := commercePaymentNotifyURL("payments", order.TenantID)
-	if err != nil {
-		return nil, fmt.Errorf("%w: payment callback URL is unavailable", ErrCommercePaymentUnavailable)
 	}
 	createdPayment, providerErr := provider.CreateJSAPI(ctx, CommerceWechatCreateRequest{AppID: cfg.AppID, MchID: cfg.MchID, Description: description, NotifyURL: notifyURL, OutTradeNo: attempt.OutTradeNo, OpenID: openID, AmountCents: attempt.AmountCents})
 	if providerErr != nil {
@@ -469,6 +513,32 @@ func (s *CommercePaymentService) CreateWechatPayment(ctx context.Context, token 
 	attempt.PrepayID = createdPayment.PrepayID
 	attempt.ProviderState = "created"
 	return s.viewFor(&order, &attempt, params), nil
+}
+
+func commercePaymentCreationState(order *model.CommerceOrder, attempt *model.CommercePaymentAttempt, now time.Time) error {
+	if order.PaymentStatus == "paid" || order.PaymentStatus == "refunded" {
+		return nil
+	}
+	if order.PaymentStatus != "unpaid" && order.PaymentStatus != "pending" || order.FulfillmentStatus == "cancelled" {
+		return fmt.Errorf("%w: order no longer accepts payment", ErrCommerceOrderState)
+	}
+	if order.ExpiresAt != nil && !order.ExpiresAt.After(now) {
+		return fmt.Errorf("%w: payment window has expired", ErrCommerceOrderState)
+	}
+	if attempt != nil {
+		if order.PaymentStatus != "pending" {
+			return fmt.Errorf("%w: existing payment attempt requires a pending order", ErrCommerceOrderState)
+		}
+		switch attempt.Status {
+		case "pending", "unknown", "paid":
+			return nil
+		case "manual_review":
+			return ErrCommercePaymentManualReview
+		default:
+			return fmt.Errorf("%w: payment attempt is %s", ErrCommerceOrderState, attempt.Status)
+		}
+	}
+	return nil
 }
 
 // appletParams is kept server-side so only the short-lived signed invocation
@@ -694,7 +764,17 @@ func (s *CommercePaymentService) submitWechatRefundAttempt(ctx context.Context, 
 		_ = s.db().Model(attempt).Updates(updates).Error
 		return status, providerErr
 	}
-	updates := map[string]interface{}{"provider_state": createdRefund.State, "provider_refund_id": createdRefund.ProviderID, "next_query_at": s.now().Add(15 * time.Second), "last_error": ""}
+	providerState := strings.TrimSpace(createdRefund.State)
+	if providerState == "" {
+		// A successful submission response is evidence that a request reached
+		// the provider even if the adapter omitted its state. Keep it distinct
+		// from a crash before submission; confirmation must now use querying.
+		providerState = "submitted"
+	}
+	updates := map[string]interface{}{"provider_state": providerState, "next_query_at": s.now().Add(15 * time.Second), "last_error": ""}
+	if strings.TrimSpace(createdRefund.ProviderID) != "" {
+		updates["provider_refund_id"] = createdRefund.ProviderID
+	}
 	if err := s.db().Model(attempt).Updates(updates).Error; err != nil {
 		return "", err
 	}
@@ -718,7 +798,7 @@ func (s *CommercePaymentService) queryRefundAttempt(ctx context.Context, attempt
 	if err != nil {
 		return s.rescheduleCommerceRefundAttempt(attempt, err, false)
 	}
-	if strings.TrimSpace(attempt.ProviderState) == "" && attempt.LastQueriedAt == nil {
+	if strings.TrimSpace(attempt.ProviderState) == "" && strings.TrimSpace(attempt.ProviderRefundID) == "" {
 		var order model.CommerceOrder
 		if err := s.db().Where("id = ? AND tenant_id = ?", attempt.OrderID, attempt.TenantID).First(&order).Error; err != nil {
 			return s.rescheduleCommerceRefundAttempt(attempt, err, false)
@@ -737,6 +817,11 @@ func (s *CommercePaymentService) queryRefundAttempt(ctx context.Context, attempt
 	if status.ProviderAmount != 0 && status.ProviderAmount != request.AmountCents {
 		err := fmt.Errorf("%w: provider refund amount mismatch", ErrCommercePaymentInvalid)
 		return s.rescheduleCommerceRefundAttempt(attempt, err, true)
+	}
+	if strings.TrimSpace(status.State) == "" {
+		// A malformed query must not erase evidence of an earlier submission
+		// and make the next worker pass treat it as an interrupted local write.
+		return s.rescheduleCommerceRefundAttempt(attempt, fmt.Errorf("provider refund query has no state"), false)
 	}
 	if strings.EqualFold(status.State, "success") || strings.EqualFold(status.State, "succeeded") {
 		if strings.TrimSpace(status.ProviderID) == "" || status.ProviderAmount <= 0 {
@@ -1029,6 +1114,9 @@ func (s *CommercePaymentService) markCommerceRefundProviderState(tenantID uint, 
 	var attempt model.CommerceRefundAttempt
 	if err := s.db().Where("tenant_id = ? AND out_refund_no = ?", tenantID, outRefundNo).First(&attempt).Error; err != nil {
 		return err
+	}
+	if strings.TrimSpace(state) == "" {
+		return s.rescheduleCommerceRefundAttempt(&attempt, fmt.Errorf("provider refund callback has no state"), false)
 	}
 	if strings.EqualFold(state, "CLOSED") || strings.EqualFold(state, "ABNORMAL") || strings.EqualFold(state, "FAILED") {
 		return s.markCommerceRefundFailed(&attempt, state, "provider refund is not successful")
