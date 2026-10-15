@@ -252,6 +252,7 @@
                   <el-button v-if="canRequestRefund(row)" link type="warning" :loading="orderActionID === row.id" @click="requestOrderRefund(row)">{{ row.fulfillment_status === 'completed' ? '发起售后' : '申请退款' }}</el-button>
                   <el-button v-if="canProcessCompletedRefund(row)" link type="danger" :loading="orderActionID === row.id" @click="processCompletedRefund(row)">处理退款</el-button>
                   <el-tag v-if="orderRefundRequest(row) && !canProcessCompletedRefund(row)" type="warning" effect="plain">等待退款处理</el-tag>
+                  <el-button v-if="canFinishDeliveryPreparation(row)" link :loading="orderActionID === row.id" @click="finishDeliveryPreparation(row)">仅备餐完成</el-button>
                   <el-button v-if="canEditDeliveryDetails(row)" link @click="openDeliveryDialog(row, false)">配送信息</el-button>
                   <el-button v-if="canAdvanceFulfillment(row)" link type="primary" :loading="orderActionID === row.id" @click="advanceFulfillment(row)">{{ advanceFulfillmentLabel(row) }}</el-button>
                 </template>
@@ -715,7 +716,7 @@
       <el-alert
         type="info"
         :closable="false"
-        :title="deliveryStartsFulfillment ? '确认实际承运信息，提交后订单进入配送中。' : '可提前记录配送信息。保存不会开始配送，备餐完成后再点击开始配送。'"
+        :title="deliveryStartsFulfillment ? '确认实际承运信息，提交后订单进入配送中。' : '可提前记录配送信息。保存不会开始配送，出餐后可直接开始配送。'"
         class="capability-alert"
       />
       <el-form :model="deliveryForm" label-position="top" class="commerce-form delivery-form">
@@ -738,7 +739,7 @@
           <el-input v-model="deliveryForm.delivery_note" type="textarea" :rows="3" maxlength="500" placeholder="可选，例如已在跑腿平台备注送达要求" />
         </el-form-item>
       </el-form>
-      <template #footer><el-button @click="deliveryDialogVisible = false">取消</el-button><el-button type="primary" :loading="orderActionID !== 0" @click="submitDelivery">{{ deliveryStartsFulfillment ? '开始配送' : '保存配送信息' }}</el-button></template>
+      <template #footer><el-button @click="deliveryDialogVisible = false">取消</el-button><el-button type="primary" :loading="orderActionID !== 0" @click="submitDelivery">{{ deliveryStartsFulfillment ? (deliveryOrder?.fulfillment_status === 'preparing' ? '出餐并配送' : '开始配送') : '保存配送信息' }}</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="storefrontDialogVisible" :title="storefrontForm.id ? '编辑小程序发布配置' : '新增小程序发布配置'" width="min(620px, calc(100vw - 32px))" destroy-on-close>
@@ -1859,6 +1860,7 @@ function nextFulfillmentStatus(row: any) {
     const next: Record<string, string> = {
       pending_acceptance: 'preparing', accepted: 'preparing', preparing: 'ready', delivering: 'completed',
     }
+    if (current === 'preparing' && row.restaurant_fulfillment?.method === 'delivery') return 'delivering'
     if (current === 'ready') return row.restaurant_fulfillment?.method === 'delivery' ? 'delivering' : 'completed'
     return next[current] || ''
   }
@@ -1869,6 +1871,7 @@ function advanceFulfillmentLabel(row: any) {
   const next = nextFulfillmentStatus(row)
   if (row?.business_type === 'restaurant') {
     if (row.fulfillment_status === 'pending_acceptance') return '接单并制作'
+    if (row.fulfillment_status === 'preparing' && next === 'delivering') return '出餐并配送'
     return ({ accepted: '确认接单', preparing: '开始制作', ready: '备餐完成', delivering: '开始配送', completed: row.restaurant_fulfillment?.method === 'delivery' ? '标记已送达' : '确认取餐' } as Record<string, string>)[next] || '推进履约'
   }
   return ({ shipped: '填写发货信息', in_transit: '更新运输状态', delivered: '标记已送达' } as Record<string, string>)[next] || '推进订单'
@@ -1931,7 +1934,7 @@ async function processCompletedRefund(row: any) {
 }
 
 async function advanceFulfillment(row: any) {
-  if (!canAdvanceFulfillment(row)) return
+  if (orderActionID.value || !canAdvanceFulfillment(row)) return
   const next = nextFulfillmentStatus(row)
   if (!next) return
   if (row.business_type === 'retail' && row.fulfillment_status === 'pending_shipment') {
@@ -1942,6 +1945,10 @@ async function advanceFulfillment(row: any) {
   }
   if (row.business_type === 'restaurant' && next === 'delivering') {
     openDeliveryDialog(row, true)
+    if (hasCompleteDeliveryDetails(row.restaurant_fulfillment)) {
+      deliveryDialogVisible.value = false
+      await submitDelivery()
+    }
     return
   }
   try {
@@ -1974,6 +1981,27 @@ async function advanceFulfillment(row: any) {
   }
 }
 
+function canFinishDeliveryPreparation(row: any) {
+  return canAdvanceFulfillment(row) && row.business_type === 'restaurant'
+    && row.restaurant_fulfillment?.method === 'delivery' && row.fulfillment_status === 'preparing'
+}
+
+async function finishDeliveryPreparation(row: any) {
+  if (orderActionID.value || !canFinishDeliveryPreparation(row)) return
+  orderActionID.value = row.id
+  try {
+    await request.post(`/commerce/orders/${row.id}/restaurant-fulfillment`, { status: 'ready' })
+    ElMessage.success('已备餐完成，等待配送员取餐；出发时请点击开始配送')
+    await loadOrders()
+  } catch { /* request interceptor already reported the error */ }
+  finally { orderActionID.value = 0 }
+}
+
+function hasCompleteDeliveryDetails(details: any) {
+  return details?.delivery_provider === 'merchant' || (details?.delivery_provider === 'courier_platform'
+    && Boolean(details.courier_platform_name?.trim()) && Boolean(details.courier_order_no?.trim()))
+}
+
 function canEditDeliveryDetails(row: any) {
   return canAdvanceFulfillment(row) && row.business_type === 'restaurant'
     && row.restaurant_fulfillment?.method === 'delivery'
@@ -1985,7 +2013,7 @@ function openDeliveryDialog(row: any, startsFulfillment: boolean) {
   deliveryStartsFulfillment.value = startsFulfillment
   const details = row.restaurant_fulfillment || {}
   Object.assign(deliveryForm, {
-    delivery_provider: details.delivery_provider || 'merchant',
+    delivery_provider: ['merchant', 'courier_platform'].includes(details.delivery_provider) ? details.delivery_provider : '',
     courier_platform_name: details.courier_platform_name || '',
     courier_order_no: details.courier_order_no || '',
     courier_contact: details.courier_contact || '',
@@ -1997,7 +2025,12 @@ function openDeliveryDialog(row: any, startsFulfillment: boolean) {
 async function submitDelivery() {
   const row = deliveryOrder.value
   const provider = deliveryForm.delivery_provider
-  if (!row?.id || !['merchant', 'courier_platform'].includes(provider)) return
+  if (orderActionID.value || !row?.id || !canEditDeliveryDetails(row)) return
+  if (deliveryStartsFulfillment.value && !['preparing', 'ready'].includes(row.fulfillment_status)) return
+  if (!['merchant', 'courier_platform'].includes(provider)) {
+    ElMessage.warning('请选择配送执行方式')
+    return
+  }
   if (provider === 'courier_platform' && (!deliveryForm.courier_platform_name.trim() || !deliveryForm.courier_order_no.trim())) {
     ElMessage.warning('请填写跑腿平台名称和跑腿订单号')
     return

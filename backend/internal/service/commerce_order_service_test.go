@@ -1195,3 +1195,167 @@ func TestCommerceMergedPreparationRollsBackWhenAuditFails(t *testing.T) {
 		t.Fatalf("partial order status: %s", order.FulfillmentStatus)
 	}
 }
+
+func commercePreparingDispatchFixture(t *testing.T) (uint, *model.CommerceOrder, *CommerceOrderService, time.Time) {
+	t.Helper()
+	tenant, product, sku, location, now := commerceOrderFixture(t)
+	svc := &CommerceOrderService{Clock: func() time.Time { return now }}
+	input := commerceOrderInput(product, sku, location, "dispatch-merged", now.Add(time.Hour))
+	input.FulfillmentMethod = "pickup"
+	order, err := svc.CreateOrder(tenant, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ConfirmPayment(tenant, order.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.TransitionRestaurantFulfillment(tenant, order.ID, RestaurantFulfillmentTransitionInput{Status: "preparing"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = model.DB.Model(&model.RestaurantFulfillment{}).Where("tenant_id = ? AND order_id = ?", tenant, order.ID).Update("method", "delivery").Error; err != nil {
+		t.Fatal(err)
+	}
+	return tenant, order, svc, now
+}
+
+func TestCommerceRestaurantMergedDispatchRejectsInvalidFacts(t *testing.T) {
+	for _, scenario := range []string{"tenant", "unpaid", "refund", "pickup", "missing_provider", "missing_runner_order", "too_long", "completed_skip", "accepted_skip"} {
+		t.Run(scenario, func(t *testing.T) {
+			tenant, order, svc, _ := commercePreparingDispatchFixture(t)
+			scope := tenant
+			input := RestaurantFulfillmentTransitionInput{Status: "delivering", DeliveryProvider: "courier_platform", CourierPlatformName: "Runner", CourierOrderNo: "RUN-1"}
+			want := ErrCommerceOrderState
+			update := func(value interface{}, field string) {
+				t.Helper()
+				if err := model.DB.Model(&model.CommerceOrder{}).Where("id = ?", order.ID).Update(field, value).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch scenario {
+			case "tenant":
+				scope = tenant + 999999
+				want = gorm.ErrRecordNotFound
+			case "unpaid":
+				update("unpaid", "payment_status")
+			case "refund":
+				update("processing", "refund_status")
+			case "pickup":
+				if err := model.DB.Model(&model.RestaurantFulfillment{}).Where("order_id = ?", order.ID).Update("method", "pickup").Error; err != nil {
+					t.Fatal(err)
+				}
+			case "missing_provider":
+				input.DeliveryProvider = ""
+				want = ErrCommerceOrderInvalid
+			case "missing_runner_order":
+				input.CourierOrderNo = ""
+				want = ErrCommerceOrderInvalid
+			case "too_long":
+				input.DeliveryNote = strings.Repeat("x", 501)
+				want = ErrCommerceOrderInvalid
+			case "completed_skip":
+				input.Status = "completed"
+			case "accepted_skip":
+				if err := model.DB.Model(&model.RestaurantFulfillment{}).Where("order_id = ?", order.ID).Update("status", "accepted").Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			var before model.RestaurantFulfillment
+			if err := model.DB.Where("order_id = ?", order.ID).First(&before).Error; err != nil {
+				t.Fatal(err)
+			}
+			if _, err := svc.TransitionRestaurantFulfillment(scope, order.ID, input); !errors.Is(err, want) {
+				t.Fatalf("error=%v want=%v", err, want)
+			}
+			var after model.RestaurantFulfillment
+			if err := model.DB.First(&after, before.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if after.Status != before.Status || after.ReadyAt != nil || after.DeliveryStartedAt != nil || after.CourierOrderNo != "" {
+				t.Fatalf("rejected dispatch wrote facts: %+v", after)
+			}
+		})
+	}
+}
+
+func TestCommerceRestaurantMergedDispatchAndReadyCompatibility(t *testing.T) {
+	for _, separateReady := range []bool{false, true} {
+		t.Run(fmt.Sprint(separateReady), func(t *testing.T) {
+			tenant, order, svc, acceptedAt := commercePreparingDispatchFixture(t)
+			readyAt := acceptedAt.Add(time.Minute)
+			dispatchedAt := readyAt
+			if separateReady {
+				svc.Clock = func() time.Time { return readyAt }
+				if _, err := svc.TransitionRestaurantFulfillment(tenant, order.ID, RestaurantFulfillmentTransitionInput{Status: "ready"}); err != nil {
+					t.Fatal(err)
+				}
+				dispatchedAt = readyAt.Add(time.Minute)
+			}
+			svc.Clock = func() time.Time { return dispatchedAt }
+			row, err := svc.TransitionRestaurantFulfillment(tenant, order.ID, RestaurantFulfillmentTransitionInput{Status: "delivering", DeliveryProvider: "courier_platform", CourierPlatformName: "Runner", CourierOrderNo: "RUN-1"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if row.Status != "delivering" || row.AcceptedAt == nil || !row.AcceptedAt.Equal(acceptedAt) || row.ReadyAt == nil || !row.ReadyAt.Equal(readyAt) || row.DeliveryStartedAt == nil || !row.DeliveryStartedAt.Equal(dispatchedAt) || row.CompletedAt != nil {
+				t.Fatalf("dispatch facts: %+v", row)
+			}
+			var persisted model.RestaurantFulfillment
+			if err = model.DB.First(&persisted, row.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if persisted.ReadyAt == nil || !persisted.ReadyAt.Equal(readyAt) || persisted.DeliveryStartedAt == nil || !persisted.DeliveryStartedAt.Equal(dispatchedAt) {
+				t.Fatalf("persisted timestamps: %+v", persisted)
+			}
+			if err = model.DB.First(order, order.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if order.FulfillmentStatus != "delivering" {
+				t.Fatalf("order projection: %s", order.FulfillmentStatus)
+			}
+			var audit model.AuditLog
+			if err = model.DB.Where("tenant_id = ? AND target_id = ? AND action = ?", tenant, row.ID, "commerce.restaurant_fulfillment.transition").Last(&audit).Error; err != nil {
+				t.Fatal(err)
+			}
+			var facts struct {
+				ReadyAt   time.Time `json:"ready_at"`
+				StartedAt time.Time `json:"delivery_started_at"`
+			}
+			if err = json.Unmarshal([]byte(audit.AfterJSON), &facts); err != nil {
+				t.Fatal(err)
+			}
+			if !facts.ReadyAt.Equal(readyAt) || !facts.StartedAt.Equal(dispatchedAt) {
+				t.Fatalf("audit omitted ready/departure facts: %s", audit.AfterJSON)
+			}
+		})
+	}
+}
+
+func TestCommerceRestaurantMergedDispatchAuditFailureRollsBack(t *testing.T) {
+	tenant, order, svc, now := commercePreparingDispatchFixture(t)
+	svc.Clock = func() time.Time { return now.Add(time.Minute) }
+	failure := errors.New("dispatch audit unavailable")
+	callback := "test:dispatch-audit-failure"
+	if err := model.DB.Callback().Create().Before("gorm:create").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "audit_logs" {
+			tx.AddError(failure)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer model.DB.Callback().Create().Remove(callback)
+	if _, err := svc.TransitionRestaurantFulfillment(tenant, order.ID, RestaurantFulfillmentTransitionInput{Status: "delivering", DeliveryProvider: "merchant", DeliveryNote: "departing"}); !errors.Is(err, failure) {
+		t.Fatalf("audit failure: %v", err)
+	}
+	var row model.RestaurantFulfillment
+	if err := model.DB.Where("order_id = ?", order.ID).First(&row).Error; err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "preparing" || row.ReadyAt != nil || row.DeliveryStartedAt != nil || row.DeliveryProvider != "" || row.DeliveryNote != "" || row.AcceptedAt == nil || !row.AcceptedAt.Equal(now) {
+		t.Fatalf("partial dispatch persisted: %+v", row)
+	}
+	if err := model.DB.First(order, order.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if order.FulfillmentStatus != "preparing" {
+		t.Fatalf("partial order dispatch: %s", order.FulfillmentStatus)
+	}
+}

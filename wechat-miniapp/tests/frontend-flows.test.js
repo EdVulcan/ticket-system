@@ -1460,3 +1460,54 @@ test('demo receipt waits for signed retail delivery and completion persists fulf
   assert.equal(order.fulfillmentStatus, 'completed');
   assert.equal(detail.data.order.fulfillmentCompleted, true);
 });
+
+test('demo merchant dispatch combines readiness and departure in one write while preserving deferred and pickup flows', () => {
+  let merchant; let writes = 0;
+  const orders = [
+    { id: 'combined', status: 'PREPARING', fulfillmentType: 'TAKEAWAY', deliveryMethod: 'DELIVERY', deliveryFee: 300 },
+    { id: 'deferred', status: 'PREPARING', fulfillmentType: 'TAKEAWAY', deliveryMethod: 'DELIVERY' },
+    { id: 'pickup', status: 'PREPARING', fulfillmentType: 'TAKEAWAY', deliveryMethod: 'PICKUP' }
+  ];
+  load('miniprogram/pages/merchant/index/index.js', {
+    '../../../services/storage': { getOrders: () => orders, saveOrders: saved => { assert.equal(saved, orders); writes++; } },
+    '../../../services/api': { isProduction: () => false }
+  }, { Page: page => { merchant = page; }, wx: { showToast() {} } });
+  merchant.setData = change => { merchant.data = { ...merchant.data, ...change }; };
+  merchant.deliveryDrafts = {};
+  const event = id => ({ currentTarget: { dataset: { id } } });
+  merchant.onRunnerInput({ currentTarget: { dataset: { id: 'combined', field: 'runnerName' } }, detail: { value: '配送师傅' } });
+  merchant.onRunnerInput({ currentTarget: { dataset: { id: 'combined', field: 'runnerPhone' } }, detail: { value: '13911112222' } });
+  merchant.startDelivery(event('combined'));
+  assert.equal(writes, 1);
+  assert.equal(orders[0].status, 'DELIVERING');
+  assert.equal(orders[0].fulfillmentStatus, 'delivering');
+  assert.ok(orders[0].readyAt);
+  assert.equal(orders[0].readyAt, orders[0].deliveringAt);
+  assert.equal(orders[0].delivery.runnerName, '配送师傅');
+  assert.equal(orders[0].delivery.runnerPhone, '13911112222');
+  merchant.finishPreparing(event('deferred'));
+  assert.equal(writes, 2);
+  assert.equal(orders[1].status, 'READY');
+  assert.ok(orders[1].readyAt);
+  assert.equal(orders[1].deliveringAt, undefined);
+  orders[1].readyAt = '2026-10-14T09:00:00Z';
+  merchant.startDelivery(event('deferred'));
+  assert.equal(writes, 3);
+  assert.equal(orders[1].status, 'DELIVERING');
+  assert.equal(orders[1].readyAt, '2026-10-14T09:00:00Z');
+  assert.ok(orders[1].deliveringAt);
+  merchant.startDelivery(event('pickup'));
+  assert.equal(writes, 3);
+  assert.equal(orders[2].status, 'PREPARING');
+  merchant.finishPreparing(event('pickup'));
+  assert.equal(writes, 4);
+  assert.equal(orders[2].status, 'READY');
+  assert.ok(orders[2].readyAt);
+  merchant.startDelivery(event('pickup'));
+  assert.equal(writes, 4);
+  assert.equal(orders[2].deliveringAt, undefined);
+  merchant.completeOrder(event('pickup'));
+  assert.equal(writes, 5);
+  assert.equal(orders[2].status, 'COMPLETED');
+  assert.ok(orders[2].completedAt);
+});

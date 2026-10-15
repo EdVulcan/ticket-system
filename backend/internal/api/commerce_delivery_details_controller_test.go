@@ -96,4 +96,39 @@ func TestRestaurantDeliveryDetailsHTTPAuthorityAndNoDeparture(t *testing.T) {
 	if audit.ActorUserID != 17 || audit.ActorRole != authz.RoleTenantAdmin {
 		t.Fatalf("audit accepted client actor fields: %+v", audit)
 	}
+	// A single dispatch request can reuse the saved plan while recording both
+	// preparation completion and departure; the draft save itself did neither.
+	dispatch := func(tenantID uint) *httptest.ResponseRecorder {
+		return invokeCommerceController(t, http.MethodPost, "/orders/"+id+"/restaurant-fulfillment", tenantID, map[string]interface{}{
+			"status": "delivering", "delivery_provider": saved.DeliveryProvider,
+			"courier_platform_name": saved.CourierPlatformName, "courier_order_no": saved.CourierOrderNo,
+			"courier_contact": saved.CourierContact, "tenant_id": foreign.ID,
+			"actor_user_id": 999, "actor_role": "platform_admin",
+		}, gin.Params{{Key: "id", Value: id}}, func(ctx *gin.Context) {
+			ctx.Set("user_id", uint(17))
+			ctx.Set("role", authz.RoleTenantAdmin)
+			controller.RestaurantFulfillment(ctx)
+		})
+	}
+	if response := dispatch(foreign.ID); response.Code != http.StatusNotFound {
+		t.Fatalf("foreign dispatch status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = dispatch(owner.ID)
+	if response.Code != http.StatusOK {
+		t.Fatalf("merged dispatch status=%d body=%s", response.Code, response.Body.String())
+	}
+	var dispatched model.RestaurantFulfillment
+	if err := json.Unmarshal(response.Body.Bytes(), &dispatched); err != nil {
+		t.Fatal(err)
+	}
+	if dispatched.Status != "delivering" || dispatched.ReadyAt == nil || dispatched.DeliveryStartedAt == nil || !dispatched.ReadyAt.Equal(*dispatched.DeliveryStartedAt) || dispatched.CourierOrderNo != "RUNNER-123" {
+		t.Fatalf("merged dispatch lost preparation or delivery facts: %+v", dispatched)
+	}
+	var transitionAudit model.AuditLog
+	if err := db.Where("tenant_id = ? AND action = ?", owner.ID, "commerce.restaurant_fulfillment.transition").First(&transitionAudit).Error; err != nil {
+		t.Fatal(err)
+	}
+	if transitionAudit.ActorUserID != 17 || transitionAudit.ActorRole != authz.RoleTenantAdmin {
+		t.Fatalf("dispatch audit accepted client actor fields: %+v", transitionAudit)
+	}
 }

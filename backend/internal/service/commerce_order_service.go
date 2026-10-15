@@ -1723,7 +1723,7 @@ func restaurantTransitionAllowed(current, next, method string) bool {
 	case "accepted":
 		return next == "preparing"
 	case "preparing":
-		return next == "ready"
+		return next == "ready" || next == "delivering" && method == "delivery"
 	case "ready":
 		return next == "delivering" && method == "delivery" || next == "completed" && method == "pickup"
 	case "delivering":
@@ -1796,8 +1796,10 @@ func (s *CommerceOrderService) TransitionRestaurantFulfillment(tenantID, orderID
 			updates["accepted_at"] = now
 			fulfillment.AcceptedAt = &now
 		}
-		if input.Status == "ready" {
+		// Direct dispatch records readiness and departure together; pickup still requires ready.
+		if input.Status == "ready" || (input.Status == "delivering" && fulfillment.Status == "preparing") {
 			updates["ready_at"] = now
+			fulfillment.ReadyAt = &now
 		}
 		if input.Status == "completed" {
 			updates["completed_at"] = now
@@ -1831,7 +1833,7 @@ func (s *CommerceOrderService) TransitionRestaurantFulfillment(tenantID, orderID
 		if input.Status == "completed" && fulfillment.Method == "delivery" {
 			fulfillment.DeliveredAt = &now
 		}
-		after := map[string]interface{}{"status": input.Status, "accepted_at": fulfillment.AcceptedAt}
+		after := map[string]interface{}{"status": input.Status, "accepted_at": fulfillment.AcceptedAt, "ready_at": fulfillment.ReadyAt, "delivery_started_at": fulfillment.DeliveryStartedAt}
 		// Existing schemas preserve preparation time as an immutable audit fact.
 		if input.Status == "preparing" {
 			after["preparing_at"] = now
