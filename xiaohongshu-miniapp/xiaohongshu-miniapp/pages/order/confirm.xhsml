@@ -1,5 +1,5 @@
 <view class="page">
-  <view class="header"><text class="title">确认订单</text><text class="header-hint">核对商品、数量与订单信息后发起小红书担保支付</text></view>
+  <view class="header"><text class="title">确认订单</text><text class="header-hint">核对商品、数量与联系人信息后提交订单</text></view>
   <view class="loading-state" xhs:if="{{loading}}"><view class="loading-card"><view class="loading-thumb"></view><view class="loading-lines"><view class="loading-line wide"></view><view class="loading-line"></view><view class="loading-line short"></view></view></view><text class="loading-copy">正在加载商品...</text></view>
   <view class="state error-state" xhs:elif="{{error && !product}}"><text class="state-title">暂时无法加载商品</text><text class="state-detail">{{error}}</text><button class="retry-button" bindtap="retry">重新加载</button></view>
   <view class="content" xhs:elif="{{product}}">
@@ -29,7 +29,7 @@
       <view class="stepper"><button class="stepper-button {{quantity <= 1 || submitting || createdOrderNo || orderRecoveryPending ? 'is-disabled' : ''}}" bindtap="decrease" disabled="{{quantity <= 1 || submitting || createdOrderNo || orderRecoveryPending}}">−</button><text>{{quantity}}</text><button class="stepper-button {{quantity >= maxQuantity || submitting || createdOrderNo || orderRecoveryPending ? 'is-disabled' : ''}}" bindtap="increase" disabled="{{quantity >= maxQuantity || submitting || createdOrderNo || orderRecoveryPending}}">+</button></view>
     </view>
     <text class="limit" xhs:if="{{maxQuantity < 100}}">单次最多购买 {{maxQuantity}} {{product.isPackage ? '份' : '张'}}</text>
-    <view class="notice"><text class="notice-title">购买须知</text><text>{{product.isDeferredPackage ? '支付成功后获得套餐预约权益，实际入住日期以预约时的可用房量为准；预约成功后才生成可用门票。' : (product.isPackage ? '每份套餐同时锁定门票和住宿房量，退改按整份套餐处理。' : '支付结果以小红书担保交易为准，支付成功后系统自动出票。退改按票种实际规则执行。')}}</text></view>
+    <view class="notice"><text class="notice-title">购买须知</text><text xhs:if="{{product.price_cents === 0}}">本单无需付款，成交和出票结果以小红书平台确认为准。</text><text>{{product.isDeferredPackage ? '订单成交后获得套餐预约权益，实际入住日期以预约时的可用房量为准；预约成功后才生成可用门票。' : (product.isPackage ? '每份套餐同时锁定门票和住宿房量，退改按整份套餐处理。' : (product.price_cents === 0 ? '退改按票种实际规则执行。' : '支付结果以小红书担保交易为准，支付成功后系统自动出票。退改按票种实际规则执行。'))}}</text></view>
     <view class="summary"><view><text class="summary-label">商品原价</text><text>¥{{product.priceText}} × {{quantity}} · ¥{{originalTotalText}}</text></view><view xhs:if="{{hasDiscount}}"><text class="summary-label">随机立减</text><text class="discount">-¥{{discountText}}</text></view><view class="summary-total"><text>应付</text><text class="total">¥{{totalText}}</text></view></view>
     <view class="quote-state" xhs:if="{{quoteLoading}}">正在更新优惠价格...</view>
     <view class="quote-state error" xhs:elif="{{quoteError}}"><text>{{quoteError}}</text><button bindtap="refreshQuote">重新报价</button></view>
@@ -38,6 +38,6 @@
     <view class="notice" xhs:if="{{createdOrderNo}}"><text>订单已创建{{useDate ? ' · ' + useDate : ''}}。如需支付，请继续查看该订单。</text></view>
     <text class="inline-error" xhs:if="{{error}}">{{error}}</text>
     <view class="page-spacer"></view>
-    <view class="checkout-bar"><view><text class="checkout-label">应付</text><text class="checkout-total">¥{{totalText}}</text></view><button class="pay-button {{submitting || product.purchase_blocked_reason || (!quoteReady && !createdOrderNo && !orderRecoveryPending) ? 'is-disabled' : ''}}" loading="{{submitting}}" disabled="{{submitting || product.purchase_blocked_reason || (!quoteReady && !createdOrderNo && !orderRecoveryPending)}}" bindtap="submit">{{product.purchase_blocked_reason ? '暂不可购买' : (submitting ? (createdOrderNo ? '正在支付' : '正在创建订单') : (createdOrderNo ? '查看订单 · 继续支付' : (orderRecoveryPending ? '重试确认订单' : (quoteLoading ? '正在报价' : '确认并支付'))))}}</button></view>
+    <view class="checkout-bar"><view><text class="checkout-label">应付</text><text class="checkout-total">¥{{totalText}}</text></view><button class="pay-button {{submitting || product.purchase_blocked_reason || (!quoteReady && !createdOrderNo && !orderRecoveryPending) ? 'is-disabled' : ''}}" loading="{{submitting}}" disabled="{{submitting || product.purchase_blocked_reason || (!quoteReady && !createdOrderNo && !orderRecoveryPending)}}" bindtap="submit">{{product.purchase_blocked_reason ? '暂不可购买' : (submitting ? (createdOrderNo ? (product.price_cents === 0 ? '正在确认' : '正在支付') : '正在创建订单') : (createdOrderNo ? (product.price_cents === 0 ? '查看订单' : '查看订单 · 继续支付') : (orderRecoveryPending ? '重试确认订单' : (quoteLoading ? '正在报价' : (product.price_cents === 0 ? '确认领取' : '确认并支付')))))}}</button></view>
   </view>
 </view>

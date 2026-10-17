@@ -37,7 +37,7 @@ func zeroPriceMapping(t *testing.T, f xiaohongshuOrderRegressionFixture) {
 	}
 }
 
-func TestXiaohongshuZeroPriceCatalogAndProductionGate(t *testing.T) {
+func TestXiaohongshuZeroPriceCatalogAndProductionCheckout(t *testing.T) {
 	f := seedXiaohongshuOrderRegressionFixture(t)
 	zeroPriceMapping(t, f)
 	service, server := newXiaohongshuOrderRegressionService(t)
@@ -54,23 +54,28 @@ func TestXiaohongshuZeroPriceCatalogAndProductionGate(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog, err = NewMiniappService().ListCatalog(&f.customer)
-	if err != nil || len(catalog.Products) != 1 || catalog.Products[0].PriceCents != 0 || catalog.Products[0].PurchaseBlockedReason == "" {
+	if err != nil || len(catalog.Products) != 1 || catalog.Products[0].PriceCents != 0 || catalog.Products[0].PurchaseBlockedReason != "" {
 		t.Fatalf("production catalog=%+v err=%v", catalog, err)
 	}
-	_, err = service.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: "zero-production", GuestName: "测试联系人", ContactPhone: "13800138000"})
-	if err == nil || !strings.Contains(err.Error(), "零元") {
+	created, err := service.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: "zero-production", GuestName: "测试联系人", ContactPhone: "13800138000"})
+	if err != nil || created.AmountCents != 0 || created.CoreOrderStatus != "unpaid" || created.PayToken == "" {
 		t.Fatalf("production zero order=%v", err)
 	}
 	var count int64
-	model.DB.Model(&model.Order{}).Where("tenant_id = ?", f.tenantID).Count(&count)
-	if count != 0 {
-		t.Fatalf("blocked zero order persisted: %d", count)
+	if err := model.DB.Model(&model.Order{}).Where("tenant_id = ? AND environment = 'production' AND total_amount = 0 AND status = 'unpaid'", f.tenantID).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("zero production order missing: %d", count)
 	}
 }
 
 func TestXiaohongshuZeroPriceRequiresProviderConfirmationAndSupportsClosure(t *testing.T) {
 	f := seedXiaohongshuOrderRegressionFixture(t)
 	zeroPriceMapping(t, f)
+	if err := model.DB.Model(&f.account).Updates(map[string]interface{}{"environment": "production", "status": "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
 	var providerState atomic.Int32
 	providerState.Store(1)
 	var creates atomic.Int32
@@ -165,6 +170,19 @@ func TestXiaohongshuZeroPriceRequiresProviderConfirmationAndSupportsClosure(t *t
 	}
 	if order.Status != "paid" {
 		t.Fatalf("provider-confirmed zero order status=%s", order.Status)
+	}
+	projected, err := service.GetXiaohongshuOrder(context.Background(), &f.customer, order.OrderNo)
+	if err != nil || projected.CanApplyRefund || !strings.Contains(projected.RefundApplicationMessage, "零元") {
+		t.Fatalf("free order refund projection=%+v err=%v", projected, err)
+	}
+	if _, err := NewMiniappService().ApplyXiaohongshuRefund(&f.customer, order.OrderNo, MiniappRefundApplicationInput{ClientRequestID: "zero-return", Reason: "取消行程"}); err == nil || !strings.Contains(err.Error(), "零元") {
+		t.Fatalf("free return must explain current provider limitation: %v", err)
+	}
+	for _, target := range []interface{}{&model.Refund{}, &model.DigitalRefundTask{}, &model.AfterSaleRequest{}} {
+		var count int64
+		if err := model.DB.Model(target).Count(&count).Error; err != nil || count != 0 {
+			t.Fatalf("free return created financial work %T: count=%d err=%v", target, count, err)
+		}
 	}
 	var payments []model.Payment
 	model.DB.Where("order_no = ?", order.OrderNo).Find(&payments)

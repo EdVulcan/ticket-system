@@ -22,8 +22,15 @@ import (
 )
 
 func seedUpstreamContactOrder(t *testing.T, endpoint string, required bool) model.Order {
+	return seedUpstreamContactOrderWithPrice(t, endpoint, required, 1)
+}
+
+func seedUpstreamContactOrderWithPrice(t *testing.T, endpoint string, required bool, priceCents int64) model.Order {
 	t.Helper()
 	f := seedXiaohongshuOrderRegressionFixture(t)
+	if priceCents == 0 {
+		zeroPriceMapping(t, f)
+	}
 	if err := model.DB.Model(&model.Product{}).Where("id = ?", f.mapping.ProductID).Update("code_mode", "order").Error; err != nil {
 		t.Fatal(err)
 	}
@@ -53,6 +60,40 @@ func seedUpstreamContactOrder(t *testing.T, endpoint string, required bool) mode
 		t.Fatal(err)
 	}
 	return order
+}
+
+func TestUpstreamZeroPriceOrderUsesExplicitAmountAndContact(t *testing.T) {
+	var sends atomic.Int32
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		xml := r.Form.Get("xmlMsg")
+		if strings.Contains(xml, "SEND_CODE_REQ") {
+			sends.Add(1)
+			if !strings.Contains(xml, "<orderPrice>0.00</orderPrice>") || !strings.Contains(xml, "<price>0.00</price>") || !strings.Contains(xml, "<certificateNo>"+testMiniappContactID+"</certificateNo>") {
+				t.Error("free purchase changed amount or omitted contact")
+			}
+			fmt.Fprintf(w, `<PWBResponse><transactionName>SEND_CODE_RES</transactionName><code>0</code><orderResponse><order><orderCode>FREE-PROVIDER</orderCode><ticketOrders><ticketOrder><orderCode>FREE-SUB</orderCode><goodsCode>CONTACT-GOODS</goodsCode><quantity>3</quantity><price>0.00</price><totalPrice>0.00</totalPrice><occDate>%s</occDate></ticketOrder></ticketOrders></order></orderResponse></PWBResponse>`, time.Now().Format("2006-01-02"))
+			return
+		}
+		if strings.Contains(xml, "SEND_CODE_IMG_REQ") {
+			fmt.Fprintf(w, `<PWBResponse><transactionName>SEND_CODE_IMG_RES</transactionName><code>0</code><img>%s</img></PWBResponse>`, base64.StdEncoding.EncodeToString([]byte("qr")))
+			return
+		}
+		http.Error(w, "unexpected", 500)
+	}))
+	defer server.Close()
+	order := seedUpstreamContactOrderWithPrice(t, server.URL, true, 0)
+	worker := contactUpstreamWorker(server)
+	if _, err := worker.ProcessTasks(context.Background(), time.Now(), 1); err != nil {
+		t.Fatal(err)
+	}
+	var snapshot model.OrderItemSupplySnapshot
+	if err := model.DB.Where("order_id = ?", order.ID).First(&snapshot).Error; err != nil {
+		t.Fatal(err)
+	}
+	if sends.Load() != 1 || snapshot.IssueStatus != "ready" {
+		t.Fatalf("free issuance failed: sends=%d status=%s error=%s", sends.Load(), snapshot.IssueStatus, snapshot.LastError)
+	}
 }
 
 func TestUpstreamContactIdentitySnapshotRecoveryAndIsolation(t *testing.T) {

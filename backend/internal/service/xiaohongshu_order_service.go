@@ -592,9 +592,6 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 		if totalCents < 0 {
 			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "票种售价无效")
 		}
-		if totalCents == 0 && account.Environment != "sandbox" {
-			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "零元商品暂未开放购买，需先完成平台零元交易与退券联调")
-		}
 		if account.Environment == "sandbox" && totalCents > 10 {
 			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "测试小程序单笔订单金额不能超过 0.10 元")
 		}

@@ -279,9 +279,6 @@ func (s *OrderService) createTx(tx *gorm.DB, req *model.Order, beforePersist fun
 				if mapping.ChannelSaleCents < 0 || (channelAccount.Type == "ctrip" && mapping.ChannelSaleCents == 0) {
 					return errors.New("official channel product pricing is not configured")
 				}
-				if channelAccount.Type == "xiaohongshu" && mapping.ChannelSaleCents == 0 && channelAccount.Environment != "sandbox" {
-					return errors.New("零元商品暂未开放购买，需先完成平台零元交易与退券联调")
-				}
 				listingForResolution.Price = centsMoney(mapping.ChannelSaleCents)
 				if channelAccount.Type == "ctrip" {
 					if mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents {

@@ -196,8 +196,10 @@ test('unknown order creation freezes the first payload and retries it after atte
 test('explicit precheck rejection unlocks editing and requires a fresh quote before retry', async () => {
   const requests = [];
   const app = {
+    setStoreName() {},
     request: (url, options) => {
       requests.push({ url, data: options && options.data });
+      if (url === '/catalog') return Promise.resolve({ products: [{ id: 1, price_cents: 9000, product_kind: 'ticket' }] });
       if (url === '/orders') {
         const error = new Error('价格或立减资格已变化，请确认最新金额后重新提交');
         error.data = { error_code: 'order_not_created' };
@@ -207,6 +209,7 @@ test('explicit precheck rejection unlocks editing and requires a fresh quote bef
     }
   };
   const page = loadPage('pages/order/confirm.js', app, {});
+  page.mappingId = 1;
   page.data.product = { id: 1, price_cents: 8000, requiresUseDate: false };
   page.data.quoteReady = true;
   page.data.quoteToken = 'stale-quote';

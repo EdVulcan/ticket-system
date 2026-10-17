@@ -81,11 +81,12 @@ Page({
     }
     if (this.data.product && !this.data.submitting && !this.data.createdOrderNo && !this.data.orderRecoveryPending) {
       this.loadOpportunity();
-      this.refreshQuote();
+      this.loadProduct();
     }
   },
 
   onUnload() {
+    this.productVersion = (this.productVersion || 0) + 1;
     this.quoteVersion = (this.quoteVersion || 0) + 1;
     this.opportunityVersion = (this.opportunityVersion || 0) + 1;
     this.stopOpportunityTimer();
@@ -95,9 +96,17 @@ Page({
   },
 
   loadProduct() {
-    if (this.data.orderRecoveryPending) return Promise.resolve();
-    this.setData({ loading: true, error: '' });
-    app.request('/catalog').then(catalog => {
+    if (this.isOrderSelectionLocked()) return Promise.resolve();
+    const version = (this.productVersion || 0) + 1;
+    this.productVersion = version;
+    const preserveSelection = this.hasLoadedProduct || Boolean(this.data.product);
+    const selectedQuantity = preserveSelection ? this.data.quantity : this.requestedQuantity;
+    const selectedUseDate = preserveSelection ? this.data.useDate : this.requestedUseDate;
+    this.productLoading = true;
+    this.quoteVersion = (this.quoteVersion || 0) + 1;
+    this.setData({ loading: true, quoteLoading: false, quoteReady: false, quoteToken: '', error: '' });
+    return app.request('/catalog').then(catalog => {
+      if (version !== this.productVersion || this.isOrderSelectionLocked()) return;
       const product = (catalog.products || []).find(item => Number(item.id) === this.mappingId);
       if (!product) throw new Error('票种当前不可购买');
       product.contact_real_name_required = product.contact_real_name_required === true;
@@ -122,16 +131,26 @@ Page({
       const today = new Date();
       const minDate = calendar.formatDate(calendar.addDays(today, product.isPackage ? Math.max(0, Number(product.min_advance_days || 0)) : 0));
       const maxDate = calendar.formatDate(calendar.addDays(today, 365));
-      const quantity = Math.min(Math.max(1, Math.floor(this.requestedQuantity || 1)), maxQuantity);
-      const useDate = product.requiresUseDate && calendar.isDateWithin(this.requestedUseDate, minDate, maxDate) ? this.requestedUseDate : '';
+      const quantity = Math.min(Math.max(1, Math.floor(selectedQuantity || 1)), maxQuantity);
+      const useDate = product.requiresUseDate && calendar.isDateWithin(selectedUseDate, minDate, maxDate) ? selectedUseDate : '';
       this.calendarMonth = calendar.monthStart(useDate || today);
-      this.setData({ product, storeName: catalog.store_name || '', maxQuantity, quantity, useDate, minDate, maxDate, loading: false }, () => {
-        app.setStoreName(catalog.store_name || '');
-        this.updateTotal();
-        this.refreshCalendar();
-        this.refreshQuote();
+      this.productLoading = false;
+      this.hasLoadedProduct = true;
+      return new Promise(resolve => {
+        this.setData({ product, storeName: catalog.store_name || '', maxQuantity, quantity, useDate, minDate, maxDate, loading: false,
+          contactIdCard: product.contact_real_name_required ? this.data.contactIdCard : '' }, () => {
+          if (version !== this.productVersion || this.isOrderSelectionLocked()) { resolve(); return; }
+          app.setStoreName(catalog.store_name || '');
+          this.updateTotal();
+          this.refreshCalendar();
+          resolve(this.refreshQuote());
+        });
       });
-    }).catch(error => this.setData({ loading: false, error: error.message || '票种加载失败' }));
+    }).catch(error => {
+      if (version !== this.productVersion) return;
+      this.productLoading = false;
+      this.setData({ product: null, loading: false, error: error.message || '票种加载失败' });
+    });
   },
 
   retry() { this.loadProduct(); },
@@ -275,7 +294,7 @@ Page({
   },
 
   refreshQuote() {
-    if (!this.data.product || this.data.createdOrderNo || this.data.orderRecoveryPending) return Promise.resolve();
+    if (this.productLoading || !this.data.product || this.data.createdOrderNo || this.data.orderRecoveryPending) return Promise.resolve();
     if (this.data.product.purchase_blocked_reason) {
       this.setData({ quoteLoading: false, quoteReady: false, quoteToken: '', quoteError: '', totalText: promotion.money(Number(this.data.product.price_cents) * this.data.quantity) });
       return Promise.resolve();
@@ -342,6 +361,7 @@ Page({
   },
 
   invalidateMutableRequests() {
+    this.productVersion = (this.productVersion || 0) + 1;
     this.quoteVersion = (this.quoteVersion || 0) + 1;
     this.opportunityVersion = (this.opportunityVersion || 0) + 1;
     this.stopOpportunityTimer();
@@ -386,9 +406,11 @@ Page({
     const detail = String(error && error.message || '').trim();
     const baseMessage = detail || '订单校验未通过';
     this.setData({ submitting: false, orderRecoveryPending: false, contactIdCard: '', error: `${baseMessage}，已确认本次未创建订单，请核对信息并重新报价后提交` });
-    return this.refreshQuote().then(() => {
+    return this.loadProduct().then(() => {
       if (this.data.orderRecoveryPending) return;
-      const suffix = this.data.quoteReady ? '请核对最新报价后重新提交' : '请重新报价后提交';
+      const suffix = this.data.product
+        ? (this.data.quoteReady ? '请核对最新报价后重新提交' : '请重新报价后提交')
+        : '请重新加载商品后提交';
       this.setData({ error: `${baseMessage}，已确认本次未创建订单，${suffix}` });
     });
   },
@@ -415,8 +437,7 @@ Page({
       return;
     }
     if (includesErrorCode(ORDER_PRECHECK_ERROR_CODES, code)) {
-      this.releaseOrderRecovery(error);
-      return;
+      return this.releaseOrderRecovery(error);
     }
     this.enterUnknownOrderRecovery();
   },
@@ -477,7 +498,7 @@ Page({
   },
 
   submit() {
-    if (!this.data.product || this.data.submitting) return;
+    if (!this.data.product || this.data.submitting || this.productLoading) return;
     if (this.data.createdOrderNo) {
       xhs.redirectTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(this.data.createdOrderNo)}` });
       return;
@@ -505,12 +526,12 @@ Page({
     }
     if (!this.data.guestName.trim()) {
       this.promptContact('请填写联系人姓名', 'name', this.data.contactPhone.trim()
-        ? '请填写联系人姓名后继续支付。' : '请填写联系人姓名和手机号后继续支付。');
+        ? '请填写联系人姓名后继续下单。' : '请填写联系人姓名和手机号后继续下单。');
       return;
     }
     if (!this.isValidContactPhone(this.data.contactPhone)) {
       this.promptContact('请填写有效的手机号', 'phone', this.data.contactPhone.trim()
-        ? '手机号格式不正确，请检查后继续支付。' : '请填写联系人手机号后继续支付。');
+        ? '手机号格式不正确，请检查后继续下单。' : '请填写联系人手机号后继续下单。');
       return;
     }
     if (this.data.product.contact_real_name_required === true && !this.isValidContactIdCard(this.data.contactIdCard)) {

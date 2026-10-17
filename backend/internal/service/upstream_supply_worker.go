@@ -168,6 +168,10 @@ func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.Ord
 			date = item.UseDate.Format("2006-01-02")
 		}
 		request = zyb.SendCodeRequest{ThirdPartyOrderCode: order.OrderNo, ChildOrderCode: fmt.Sprintf("%s_%d", order.OrderNo, item.ID), ContactName: order.ContactName, ContactMobile: order.ContactPhone, GoodsCode: s.ExternalProductCode, GoodsName: item.ProductName, VisitDate: date + " 00:00:00", PriceCents: moneyCents(item.Price), Quantity: item.Quantity, PayMethod: "vm"}
+		if request.PriceCents == 0 {
+			// Explicit zero is a supplied price; an empty monetary field is not.
+			request.Price = "0.00"
+		}
 	}
 	// Only a fresh request may acquire the order-level identity. Persisted
 	// requests are immutable, including historical unattempted snapshots.

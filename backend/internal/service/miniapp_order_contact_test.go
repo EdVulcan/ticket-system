@@ -376,3 +376,30 @@ func TestXiaohongshuContactPolicyLegacyRevisionCreationSnapshotsFlag(t *testing.
 		t.Fatalf("legacy revision missing contact snapshot: %v", err)
 	}
 }
+
+func TestXiaohongshuContactPolicyEditImmediatelyRefreshesCatalog(t *testing.T) {
+	f := seedXiaohongshuOrderRegressionFixture(t)
+	previous := updateMiniappContactPolicy(t, f.tenantID, f.mapping.ProductID, false)
+	for _, required := range []bool{false, true, false, true} {
+		current := updateMiniappContactPolicy(t, f.tenantID, f.mapping.ProductID, required)
+		if current.CurrentRevisionID == previous.CurrentRevisionID {
+			t.Fatal("contact policy edit did not create a new supplier revision")
+		}
+		catalog, err := (MiniappService{}).ListCatalog(&f.customer)
+		if err != nil || len(catalog.Products) != 1 || catalog.Products[0].ContactRealNameRequired != required {
+			t.Fatalf("catalog lost saved contact policy: required=%t err=%v", required, err)
+		}
+		raw, err := json.Marshal(catalog.Products[0])
+		if err != nil || !strings.Contains(string(raw), fmt.Sprintf(`"contact_real_name_required":%t`, required)) {
+			t.Fatal("storefront did not return an explicit contact-policy boolean")
+		}
+		var soldRevision model.ProductRevision
+		if err := model.DB.First(&soldRevision, previous.CurrentRevisionID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if soldRevision.ContactRealNameRequired != previous.ContactRealNameRequired {
+			t.Fatal("contact edit changed historical product revision")
+		}
+		previous = current
+	}
+}

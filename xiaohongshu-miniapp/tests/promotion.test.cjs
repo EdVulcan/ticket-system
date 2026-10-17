@@ -130,8 +130,10 @@ test('orders receive only the fresh quote token and unknown network retry retain
 test('price conflict fetches a new quote and requires a subsequent submit', async () => {
   const requests = [];
   const page = loadConfirmation({
+    setStoreName() {},
     request(path, options) {
       requests.push({ path, options });
+      if (path === '/catalog') return Promise.resolve({ products: [{ id: 42, price_cents: 5000, product_kind: 'ticket' }] });
       if (path === '/orders') {
         const error = new Error('quote expired');
         error.data = { error_code: 'order_not_created' };
@@ -140,6 +142,7 @@ test('price conflict fetches a new quote and requires a subsequent submit', asyn
       return Promise.resolve({ original_amount_cents: 5000, discount_cents: 0, amount_cents: 5000, quote_token: 'replacement' });
     }
   });
+  page.mappingId = 42;
   page.data.product = { id: 42, price_cents: 5000 };
   page.data.quoteReady = true;
   page.data.quoteToken = 'expired-token';

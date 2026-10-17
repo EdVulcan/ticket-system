@@ -30,6 +30,8 @@ type MiniappRefundApplicationResult struct {
 
 const miniappRefundApplicationKeyPrefix = "customer-refund:"
 
+var errMiniappZeroPriceReturn = errors.New("零元订单暂不支持自助退券，请联系商家处理")
+
 func (s MiniappService) ApplyXiaohongshuRefund(customer *model.MiniappCustomer, orderNo string, input MiniappRefundApplicationInput) (*MiniappRefundApplicationResult, error) {
 	if customer == nil || customer.ID == 0 {
 		return nil, ErrMiniappUnauthenticated
@@ -54,6 +56,9 @@ func (s MiniappService) ApplyXiaohongshuRefund(customer *model.MiniappCustomer, 
 	ownedCustomer, err := loadMiniappRefundApplicationCustomer(customer, orderNo, s.now())
 	if err != nil {
 		return nil, err
+	}
+	if ownedCustomer.AmountCents == 0 {
+		return nil, errMiniappZeroPriceReturn
 	}
 	// Read-only supplier check. Cancellation happens only after the refund
 	// transaction has reserved the ticket and created durable payment work.
@@ -185,6 +190,9 @@ func validateXiaohongshuCustomerRefundApplicationTx(tx *gorm.DB, customer *model
 		order.Environment != "production" || order.Status != "paid" || len(order.Items) != 1 {
 		return nil, 0, errors.New("order is not eligible for a refund application")
 	}
+	if moneyCents(order.TotalAmount) == 0 {
+		return nil, 0, errMiniappZeroPriceReturn
+	}
 	item := &order.Items[0]
 	if item.Product.ProductKind == "hotel" || item.Quantity <= 0 || len(item.Tickets) == 0 {
 		return nil, 0, errors.New("order is not eligible for a refund application")
@@ -305,6 +313,8 @@ func miniappRefundApplicationMessage(err error) string {
 	}
 	message := strings.ToLower(err.Error())
 	switch {
+	case errors.Is(err, errMiniappZeroPriceReturn):
+		return errMiniappZeroPriceReturn.Error()
 	case errors.Is(err, ErrXiaohongshuRefundHold):
 		return "订单售后状态待核查，请联系景区客服"
 	case strings.Contains(message, "does not allow refunds"):

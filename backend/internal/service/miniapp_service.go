@@ -556,16 +556,11 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 				maxQuantity = maxXiaohongshuOrderCodeQuantity
 			}
 		}
-		purchaseBlockedReason := ""
-		if priceCents == 0 && account.Environment != "sandbox" {
-			purchaseBlockedReason = "零元商品暂未开放购买"
-		}
 		products = append(products, MiniappCatalogProduct{
 			ID: row.MappingID, Name: name, ScenicAreaName: row.ScenicAreaName,
 			ImageURL: row.ImageURL, Description: row.Description, ProductType: row.ProductType,
 			ContactRealNameRequired: row.ContactRealNameRequired,
 			ProductKind:             kind, SaleMode: row.SaleMode, PriceCents: priceCents, MaxQuantity: maxQuantity, Tags: parseProductTags(row.Tags),
-			PurchaseBlockedReason: purchaseBlockedReason,
 			ValidityType:          row.ValidityType, ValidityDays: row.ValidityDays,
 			RequiresUseDate: (row.PackageID != 0 && row.BookingMode != "after_purchase") || (row.PackageID == 0 && row.StockType == "daily") || (kind == "hotel" && row.SaleMode == "calendar_room"),
 			HotelName:       row.HotelName, RoomTypeName: row.RoomTypeName, RatePlanName: row.RatePlanName,
