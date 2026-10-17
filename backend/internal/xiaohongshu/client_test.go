@@ -392,6 +392,30 @@ func validProduct() LocalLifeProductRequest {
 	}
 }
 
+func TestZeroProductAndOrderPricesPreserved(t *testing.T) {
+	product := validProduct()
+	product.SKUs[0].OriginPrice = 0
+	product.SKUs[0].SalePrice = 0
+	if err := validateProduct(product); err != nil {
+		t.Fatal(err)
+	}
+	product.SKUs[0].SalePrice = -1
+	if err := validateProduct(product); err == nil {
+		t.Fatal("negative product price accepted")
+	}
+	order := validOrder()
+	order.Products[0].SalePrice = 0
+	order.Products[0].RealPrice = 0
+	order.Price.OrderPrice = 0
+	if err := validateOrder(order); err != nil {
+		t.Fatal(err)
+	}
+	order.Price.OrderPrice = -1
+	if err := validateOrder(order); err == nil {
+		t.Fatal("negative order price accepted")
+	}
+}
+
 func validOrder() OrderUpsertRequest {
 	return OrderUpsertRequest{
 		ExternalOrderID: "ORD-1", OpenID: "OPEN-1", Path: "/pages/order/detail?id=ORD-1", CreatedAt: 1786298400, ExpiresAt: 1786300200,

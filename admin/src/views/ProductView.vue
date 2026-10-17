@@ -29,6 +29,7 @@
             <el-tag size="small" type="info" v-if="row.code_mode === 'order'">一单一码</el-tag>
             <el-tag size="small" type="warning" v-else>一票一码</el-tag>
             <el-tag size="small" v-if="row.real_name_required">实名</el-tag>
+            <el-tag size="small" v-if="row.contact_real_name_required">小红书联系人实名</el-tag>
           </div>
         </template>
       </el-table-column>
@@ -359,6 +360,12 @@
             <el-form-item label="实名制要求">
               <el-switch v-model="form.product.real_name_required" active-text="强制实名 (需输入姓名+身份证)" />
             </el-form-item>
+            <el-form-item label="订单联系人实名">
+              <div>
+                <el-switch v-model="form.product.contact_real_name_required" aria-label="订单联系人实名（小红书）" active-text="订单联系人实名（小红书）" />
+                <p class="mt-1 text-xs leading-5 text-gray-500">仅适用于小红书：每笔订单填写一份联系人姓名、手机号及身份证；不代表逐游客实名，也不核验姓名与证件是否真实匹配。</p>
+              </div>
+            </el-form-item>
             
             <el-form-item label="限购数量">
               <div class="flex gap-4">
@@ -468,6 +475,7 @@ const form = reactive({
     daily_stock: 0,
     time_slot_config: '', // JSON string
     real_name_required: false,
+    contact_real_name_required: false,
     region_limit: '', // JSON string
     limit_per_phone: 0,
     limit_per_id: 0,
@@ -571,7 +579,7 @@ const handleAdd = () => {
     price: 0, settlement_price: 0, type: 'online', status: 'online', code_mode: 'order',
     validity_type: 'date', validity_days: 0, validity_start_date: null, validity_end_date: null,
     stock_type: 'unlimited', daily_stock: 0, time_slot_config: '',
-    real_name_required: false, region_limit: '', limit_per_phone: 0, limit_per_id: 0,
+    real_name_required: false, contact_real_name_required: false, region_limit: '', limit_per_phone: 0, limit_per_id: 0,
     refund_type: 'no_refund', refund_rule: '', tags: '', is_distributable: false,
     gate_voice_code: 'welcome'
   }
@@ -598,7 +606,7 @@ const handleEdit = (row: any) => {
   // Deep copy
   const data = JSON.parse(JSON.stringify(row))
   form.id = data.id
-  form.product = { ...data } // Copy all fields
+  form.product = { ...data, contact_real_name_required: data.contact_real_name_required === true } // Copy all fields
   form.rule = data.rule || {
     name: data.name, validity_type: 'date',
     groups: [{ group_name: '默认分组', max_total_check_in: 1, items: [{ check_point_id: null, max_per_check_in: 1 }] }]

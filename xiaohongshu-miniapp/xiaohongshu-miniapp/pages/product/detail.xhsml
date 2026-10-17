@@ -69,10 +69,11 @@
       <text class="section-title">商品介绍</text>
       <text class="description">{{product.description}}</text>
     </view>
+    <view class="section" xhs:if="{{product.purchase_blocked_reason}}"><text class="section-title">暂不可购买</text><text class="state-detail">{{product.purchase_blocked_reason}}</text></view>
     <view class="page-spacer"></view>
     <view class="purchase-bar">
       <view class="bar-price-group"><text class="bar-label">{{product.hasPromotionPrice ? '单张立减后' : '售价'}}</text><view class="bar-price-row"><text class="bar-price">¥{{product.displayPriceText}}</text><text class="original-price" xhs:if="{{product.hasPromotionPrice}}">¥{{product.originalPriceText}}</text></view></view>
-      <button class="buy-button {{navigating ? 'is-disabled' : ''}}" loading="{{navigating}}" disabled="{{navigating}}" bindtap="buy">立即选购</button>
+      <button class="buy-button {{navigating || product.purchase_blocked_reason ? 'is-disabled' : ''}}" loading="{{navigating}}" disabled="{{navigating || product.purchase_blocked_reason}}" bindtap="buy">{{product.purchase_blocked_reason ? '暂不可购买' : '立即选购'}}</button>
     </view>
   </view>
 </view>

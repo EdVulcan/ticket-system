@@ -57,11 +57,12 @@ func (e *MiniappOrderCreateError) Unwrap() error {
 }
 
 type xiaohongshuOrderIntent struct {
-	MappingID    uint   `json:"mapping_id"`
-	Quantity     int    `json:"quantity"`
-	UseDate      string `json:"use_date"`
-	GuestName    string `json:"guest_name"`
-	ContactPhone string `json:"contact_phone"`
+	MappingID     uint   `json:"mapping_id"`
+	Quantity      int    `json:"quantity"`
+	UseDate       string `json:"use_date"`
+	GuestName     string `json:"guest_name"`
+	ContactPhone  string `json:"contact_phone"`
+	ContactIDCard string `json:"contact_id_card,omitempty"`
 }
 
 // xiaohongshuProviderStatus returns the durable supplier status projection for
@@ -144,6 +145,7 @@ func miniappOrderIntentFingerprint(input MiniappOrderCreateInput) string {
 	intent := xiaohongshuOrderIntent{
 		MappingID: input.MappingID, Quantity: input.Quantity, UseDate: useDate,
 		GuestName: strings.TrimSpace(input.GuestName), ContactPhone: strings.TrimSpace(input.ContactPhone),
+		ContactIDCard: normalizeMiniappContactIDCard(input.ContactIDCard),
 	}
 	raw, _ := json.Marshal(intent)
 	digest := sha256.Sum256(raw)
@@ -326,7 +328,12 @@ func (s XiaohongshuOrderService) orderResult(link *model.XiaohongshuOrderLink, o
 		OriginalAmountCents: order.OriginalAmountCents, DiscountCents: order.DiscountCents,
 		OrderNo: order.OrderNo, PlatformOrderID: link.PlatformOrderID, AmountCents: moneyCents(order.TotalAmount),
 		ContactName: order.ContactName, ContactPhone: order.ContactPhone,
-		Status: displayStatus, CoreOrderStatus: order.Status, ProviderStatus: providerStatus, PlatformPaymentState: link.State, VoucherIssuanceStatus: link.VoucherIssuanceStatus, ExpiresAt: link.PayTokenExpiresAt,
+		ContactRealNameRequired: order.ContactRealNameRequired,
+		Status:                  displayStatus, CoreOrderStatus: order.Status, ProviderStatus: providerStatus, PlatformPaymentState: link.State, VoucherIssuanceStatus: link.VoucherIssuanceStatus, ExpiresAt: link.PayTokenExpiresAt,
+	}
+	result.ContactIDCardMasked, err = maskedMiniappContactIDCard(order.ContactIDCardCiphertext)
+	if err != nil {
+		return nil, err
 	}
 	type presentationRow struct {
 		ProductName string
@@ -468,7 +475,7 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 		return nil, errors.New("请选择票种、数量并提供有效的请求编号")
 	}
 	input.GuestName, input.ContactPhone = strings.TrimSpace(input.GuestName), strings.TrimSpace(input.ContactPhone)
-	fingerprint := miniappOrderIntentFingerprint(input)
+	input.ContactIDCard = normalizeMiniappContactIDCard(input.ContactIDCard)
 	var account model.ChannelAccount
 	var mapping model.ChannelProductMapping
 	var product model.Product
@@ -495,6 +502,11 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 			if err := tx.Preload("Items").Where("id = ? AND tenant_id = ?", previous.OrderID, customer.TenantID).First(&duplicateOrder).Error; err != nil {
 				return err
 			}
+			fingerprintInput := input
+			if !duplicateOrder.ContactRealNameRequired {
+				fingerprintInput.ContactIDCard = ""
+			}
+			fingerprint := miniappOrderIntentFingerprint(fingerprintInput)
 			if err := validateExistingXiaohongshuOrderRequestTx(tx, &previous, &duplicateOrder, fingerprint); err != nil {
 				return err
 			}
@@ -577,8 +589,11 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "请填写有效的入住人和联系电话")
 		}
 		totalCents := mapping.ChannelSaleCents * int64(input.Quantity)
-		if totalCents <= 0 {
+		if totalCents < 0 {
 			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "票种售价无效")
+		}
+		if totalCents == 0 && account.Environment != "sandbox" {
+			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "零元商品暂未开放购买，需先完成平台零元交易与退券联调")
 		}
 		if account.Environment == "sandbox" && totalCents > 10 {
 			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "测试小程序单笔订单金额不能超过 0.10 元")
@@ -624,6 +639,9 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "价格或立减资格已变化，请确认最新金额后重新提交")
 		}
 		if err := (&OrderService{}).createTx(tx, &order, func(tx *gorm.DB, created *model.Order) error {
+			if err := snapshotMiniappOrderContactTx(tx, created, &input, s.now()); err != nil {
+				return err
+			}
 			return applyMiniappPromotionPriceTx(tx, created, quote)
 		}); err != nil {
 			return err
@@ -646,7 +664,7 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 		if order.DiscountCents > 0 {
 			request.Products[0].Discounts = []xiaohongshu.Discount{{Name: "限时随机立减", Price: order.DiscountCents, Count: 1}}
 		}
-		payloadCiphertext, err := encryptXiaohongshuOrderSnapshot(request, fingerprint, config.ProductType, &config.Description)
+		payloadCiphertext, err := encryptXiaohongshuOrderSnapshot(request, miniappOrderIntentFingerprint(input), config.ProductType, &config.Description)
 		if err != nil {
 			return err
 		}
@@ -726,8 +744,14 @@ func (s XiaohongshuOrderService) refreshXiaohongshuOrder(ctx context.Context, cu
 	if link.PlatformOrderID != "" && platform.OrderID != "" && link.PlatformOrderID != platform.OrderID {
 		return nil, errors.New("小红书订单编号不匹配")
 	}
+	if moneyCents(order.TotalAmount) == 0 && (strings.TrimSpace(platform.OrderID) == "" || platform.OrderID != link.PlatformOrderID) {
+		return nil, errors.New("小红书零元订单编号凭据不完整")
+	}
 	switch platform.OrderStatus {
 	case 6, 7:
+		if moneyCents(order.TotalAmount) == 0 && !platform.PayAmountPresent {
+			return nil, errors.New("小红书零元成交凭据不完整")
+		}
 		if platform.PayAmount != moneyCents(order.TotalAmount) {
 			return nil, errors.New("小红书支付金额与本地订单不一致")
 		}
@@ -1000,7 +1024,7 @@ func decryptXiaohongshuOrderOperationPayload(ciphertext string) (*xiaohongshuOrd
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		return nil, fmt.Errorf("decode xiaohongshu order operation: %w", err)
 	}
-	if strings.TrimSpace(payload.Request.ExternalOrderID) == "" || strings.TrimSpace(payload.Request.OpenID) == "" || payload.Request.Price.OrderPrice <= 0 {
+	if strings.TrimSpace(payload.Request.ExternalOrderID) == "" || strings.TrimSpace(payload.Request.OpenID) == "" || payload.Request.Price.OrderPrice < 0 {
 		return nil, errors.New("xiaohongshu order operation payload is incomplete")
 	}
 	return &payload, nil
@@ -1077,7 +1101,7 @@ func (s XiaohongshuOrderService) executeXiaohongshuOrderRemoteStep(ctx context.C
 	if err != nil {
 		return false, err
 	}
-	if response.FinalPrice != payload.Request.Price.OrderPrice || response.OpenPayType != "life_gpay" || strings.TrimSpace(response.OrderID) == "" || strings.TrimSpace(response.PayToken) == "" {
+	if (payload.Request.Price.OrderPrice == 0 && !response.FinalPricePresent) || response.FinalPrice != payload.Request.Price.OrderPrice || response.OpenPayType != "life_gpay" || strings.TrimSpace(response.OrderID) == "" || strings.TrimSpace(response.PayToken) == "" {
 		return false, errors.New("xiaohongshu order amount, payment type, or payment token validation failed")
 	}
 	expiresAt := time.Unix(payload.Request.ExpiresAt, 0)

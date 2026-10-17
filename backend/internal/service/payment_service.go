@@ -561,6 +561,17 @@ func settleOrderIfFullyPaidTx(tx *gorm.DB, order *model.Order) error {
 		return err
 	}
 	totalCents := moneyCents(order.TotalAmount)
+	if order.Channel == xiaohongshuPaymentMethod && totalCents == 0 {
+		// Zero due is not evidence of provider completion. A scoped platform
+		// confirmation must exist before free orders can activate their rights.
+		var confirmations int64
+		if err := tx.Model(&model.Payment{}).Where("tenant_id = ? AND order_no = ? AND method = ? AND status = ? AND amount_cents = 0", order.TenantID, order.OrderNo, xiaohongshuPaymentMethod, "paid").Count(&confirmations).Error; err != nil {
+			return err
+		}
+		if confirmations == 0 {
+			return errors.New("零元小红书订单仍需平台确认成交")
+		}
+	}
 	if paidCents > totalCents {
 		return errors.New("paid amount exceeds order total")
 	}

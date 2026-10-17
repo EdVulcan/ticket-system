@@ -13,7 +13,7 @@ import (
 func applyMiniappPromotionPriceTx(tx *gorm.DB, order *model.Order, quote *MiniappPromotionQuote) error {
 	if order == nil || quote == nil || order.Channel != "xiaohongshu" || len(order.Items) != 1 ||
 		quote.OriginalAmountCents != moneyCents(order.TotalAmount) || quote.OriginalAmountCents > 9999999999 ||
-		quote.DiscountCents < 0 || quote.AmountCents <= 0 || quote.AmountCents+quote.DiscountCents != quote.OriginalAmountCents {
+		quote.DiscountCents < 0 || quote.AmountCents < 0 || (quote.AmountCents == 0 && quote.DiscountCents != 0) || quote.AmountCents+quote.DiscountCents != quote.OriginalAmountCents {
 		return errors.New("订单价格已变化，请重新确认金额")
 	}
 	order.OriginalAmountCents = quote.OriginalAmountCents

@@ -33,6 +33,7 @@ Page({
     useDate: '',
     guestName: '',
     contactPhone: '',
+    contactIdCard: '',
     contactFocus: '',
     minDate: '',
     maxDate: '',
@@ -88,6 +89,9 @@ Page({
     this.quoteVersion = (this.quoteVersion || 0) + 1;
     this.opportunityVersion = (this.opportunityVersion || 0) + 1;
     this.stopOpportunityTimer();
+    this.orderPayload = null;
+    this.orderRecoverySnapshot = null;
+    this.data.contactIdCard = '';
   },
 
   loadProduct() {
@@ -96,6 +100,8 @@ Page({
     app.request('/catalog').then(catalog => {
       const product = (catalog.products || []).find(item => Number(item.id) === this.mappingId);
       if (!product) throw new Error('票种当前不可购买');
+      product.contact_real_name_required = product.contact_real_name_required === true;
+      product.purchase_blocked_reason = String(product.purchase_blocked_reason || '').trim();
       product.priceText = (Number(product.price_cents) / 100).toFixed(2);
       product.isPackage = product.product_kind === 'scenic_hotel_package';
       product.kindLabel = product.isPackage ? '酒景套餐' : (product.product_kind === 'ticket' ? '景区门票' : '商品');
@@ -189,6 +195,26 @@ Page({
     this.setData({ contactPhone: event.detail.value || '', error: '' });
   },
 
+  onContactIdCardInput(event) {
+    if (this.isOrderSelectionLocked()) return;
+    this.setData({ contactIdCard: String(event.detail.value || '').toUpperCase(), error: '' });
+  },
+
+  normalizedContactIdCard() {
+    return String(this.data.contactIdCard || '').trim().toUpperCase();
+  },
+
+  isValidContactIdCard(value) {
+    const idCard = String(value || '').trim().toUpperCase();
+    if (!/^[1-9][0-9]{16}[0-9X]$/.test(idCard) || idCard.slice(14, 17) === '000') return false;
+    const birthday = `${idCard.slice(6, 10)}-${idCard.slice(10, 12)}-${idCard.slice(12, 14)}`;
+    if (!calendar.isDateWithin(birthday, '1900-01-01', calendar.formatDate(new Date()))) return false;
+    const weights = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
+    let sum = 0;
+    for (let index = 0; index < weights.length; index += 1) sum += Number(idCard[index]) * weights[index];
+    return '10X98765432'[sum % 11] === idCard[17];
+  },
+
   isValidContactPhone(value) {
     const phone = String(value || '').trim();
     return phone.length >= 6 && phone.length <= 20 && /^[0-9+()\-\s]+$/.test(phone) && /[0-9]/.test(phone);
@@ -250,6 +276,10 @@ Page({
 
   refreshQuote() {
     if (!this.data.product || this.data.createdOrderNo || this.data.orderRecoveryPending) return Promise.resolve();
+    if (this.data.product.purchase_blocked_reason) {
+      this.setData({ quoteLoading: false, quoteReady: false, quoteToken: '', quoteError: '', totalText: promotion.money(Number(this.data.product.price_cents) * this.data.quantity) });
+      return Promise.resolve();
+    }
     const version = (this.quoteVersion || 0) + 1;
     this.quoteVersion = version;
     this.setData({ quoteLoading: true, quoteReady: false, quoteToken: '', quoteError: '', hasDiscount: false, totalText: '—' });
@@ -283,7 +313,7 @@ Page({
   },
 
   buildOrderPayload() {
-    return {
+    const payload = {
       mapping_id: this.data.product.id,
       quantity: this.data.quantity,
       request_id: this.orderRequestId,
@@ -292,6 +322,8 @@ Page({
       guest_name: this.data.guestName.trim(),
       contact_phone: this.data.contactPhone.trim()
     };
+    if (this.data.product.contact_real_name_required === true) payload.contact_id_card = this.normalizedContactIdCard();
+    return payload;
   },
 
   captureOrderRecoverySnapshot(payload) {
@@ -323,6 +355,7 @@ Page({
       useDate: snapshot.useDate,
       guestName: snapshot.guestName,
       contactPhone: snapshot.contactPhone,
+      contactIdCard: this.orderPayload && this.orderPayload.contact_id_card || '',
       quoteLoading: false,
       quoteReady: Boolean(snapshot.quoteReady && snapshot.quoteToken),
       quoteToken: snapshot.quoteToken,
@@ -352,7 +385,7 @@ Page({
     this.orderRecoverySnapshot = null;
     const detail = String(error && error.message || '').trim();
     const baseMessage = detail || '订单校验未通过';
-    this.setData({ submitting: false, orderRecoveryPending: false, error: `${baseMessage}，已确认本次未创建订单，请核对信息并重新报价后提交` });
+    this.setData({ submitting: false, orderRecoveryPending: false, contactIdCard: '', error: `${baseMessage}，已确认本次未创建订单，请核对信息并重新报价后提交` });
     return this.refreshQuote().then(() => {
       if (this.data.orderRecoveryPending) return;
       const suffix = this.data.quoteReady ? '请核对最新报价后重新提交' : '请重新报价后提交';
@@ -368,7 +401,7 @@ Page({
     const message = errorCodeValue === 'idempotency_payload_mismatch'
       ? '原请求已关联其他订单选择，未自动发起支付；请打开原订单核对后继续。'
       : '原订单已创建但当前响应信息不足，未自动发起支付；请打开订单详情核对后继续。';
-    this.setData({ submitting: false, orderRecoveryPending: false, createdOrderNo: orderNo, error: message });
+    this.setData({ submitting: false, orderRecoveryPending: false, contactIdCard: '', createdOrderNo: orderNo, error: message });
     const url = orderNo
       ? `/pages/order/detail?order_no=${encodeURIComponent(orderNo)}`
       : '/pages/orders/index';
@@ -400,7 +433,13 @@ Page({
       }
       this.orderPayload = null;
       this.orderRecoverySnapshot = null;
-      this.setData({ createdOrderNo: order.order_no, orderRecoveryPending: false, calendarOpen: false });
+      this.setData({ createdOrderNo: order.order_no, orderRecoveryPending: false, contactIdCard: '', calendarOpen: false });
+      const status = order.core_order_status || order.status;
+      if (status !== 'unpaid') {
+        this.setData({ submitting: false, error: status ? '' : '订单支付状态暂未确认，订单已保留，请在订单详情查询' });
+        if (status && typeof xhs.redirectTo === 'function') xhs.redirectTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(order.order_no)}` });
+        return;
+      }
       const started = requestGuaranteeOrderPayment(xhs, order, {
         onSuccess: () => {
           xhs.redirectTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(order.order_no || '')}` });
@@ -451,6 +490,10 @@ Page({
       }
       return this.createOrder(this.orderPayload);
     }
+    if (this.data.product.purchase_blocked_reason) {
+      this.setData({ error: this.data.product.purchase_blocked_reason });
+      return;
+    }
     if (!this.data.quoteReady || !this.data.quoteToken) {
       if (!this.data.quoteLoading) this.refreshQuote();
       this.setData({ error: '正在更新优惠价格，请确认最新金额后提交' });
@@ -468,6 +511,11 @@ Page({
     if (!this.isValidContactPhone(this.data.contactPhone)) {
       this.promptContact('请填写有效的手机号', 'phone', this.data.contactPhone.trim()
         ? '手机号格式不正确，请检查后继续支付。' : '请填写联系人手机号后继续支付。');
+      return;
+    }
+    if (this.data.product.contact_real_name_required === true && !this.isValidContactIdCard(this.data.contactIdCard)) {
+      this.promptContact('请填写有效的联系人身份证号码', 'idCard', this.normalizedContactIdCard()
+        ? '联系人身份证号码格式不正确，请检查后继续。' : '本商品每笔订单需填写一位联系人的身份证号码，请填写后继续。');
       return;
     }
     const payload = this.buildOrderPayload();

@@ -276,8 +276,11 @@ func (s *OrderService) createTx(tx *gorm.DB, req *model.Order, beforePersist fun
 				if err := tx.Where("channel_account_id = ? AND product_id = ? AND status = ?", channelAccount.ID, listing.ID, "active").First(&mapping).Error; err != nil {
 					return errors.New("official channel product mapping is unavailable")
 				}
-				if mapping.ChannelSaleCents <= 0 {
+				if mapping.ChannelSaleCents < 0 || (channelAccount.Type == "ctrip" && mapping.ChannelSaleCents == 0) {
 					return errors.New("official channel product pricing is not configured")
+				}
+				if channelAccount.Type == "xiaohongshu" && mapping.ChannelSaleCents == 0 && channelAccount.Environment != "sandbox" {
+					return errors.New("零元商品暂未开放购买，需先完成平台零元交易与退券联调")
 				}
 				listingForResolution.Price = centsMoney(mapping.ChannelSaleCents)
 				if channelAccount.Type == "ctrip" {
@@ -590,7 +593,7 @@ func ensureProductRevisionTx(tx *gorm.DB, product *model.Product) (*model.Produc
 	if product.CreatedAt.IsZero() {
 		product.CreatedAt = time.Now()
 	}
-	revision = model.ProductRevision{ProductID: product.ID, TenantID: product.TenantID, ScenicAreaID: product.ScenicAreaID, Version: 1, Status: "active", PriceCents: moneyCents(product.Price), SettlementCents: moneyCents(product.SettlementPrice), GateVoiceCode: product.GateVoiceCode, SnapshotJSON: string(snapshot), EffectiveFrom: product.CreatedAt}
+	revision = model.ProductRevision{ProductID: product.ID, TenantID: product.TenantID, ScenicAreaID: product.ScenicAreaID, Version: 1, Status: "active", PriceCents: moneyCents(product.Price), SettlementCents: moneyCents(product.SettlementPrice), GateVoiceCode: product.GateVoiceCode, ContactRealNameRequired: product.ContactRealNameRequired, SnapshotJSON: string(snapshot), EffectiveFrom: product.CreatedAt}
 	if err := tx.Create(&revision).Error; err != nil {
 		return nil, err
 	}

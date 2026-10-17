@@ -166,10 +166,13 @@ type Product struct {
 	TimeSlotConfig string `gorm:"type:text" json:"time_slot_config"` // JSON
 
 	// RealName
-	RealNameRequired bool   `json:"real_name_required"`
-	RegionLimit      string `gorm:"size:255" json:"region_limit"` // JSON: ["3301"]
-	LimitPerPhone    int    `json:"limit_per_phone"`
-	LimitPerID       int    `json:"limit_per_id"`
+	RealNameRequired bool `json:"real_name_required"`
+	// ContactRealNameRequired collects one order contact for Xiaohongshu;
+	// it does not satisfy the separate per-visitor admission policy.
+	ContactRealNameRequired bool   `gorm:"not null;default:false" json:"contact_real_name_required"`
+	RegionLimit             string `gorm:"size:255" json:"region_limit"` // JSON: ["3301"]
+	LimitPerPhone           int    `json:"limit_per_phone"`
+	LimitPerID              int    `json:"limit_per_id"`
 
 	// Refund
 	RefundType string `gorm:"size:20;default:'no_refund'" json:"refund_type"` // no_refund, free, ladder
@@ -193,20 +196,24 @@ type Order struct {
 	MemberID    *uint   `gorm:"index" json:"member_id,omitempty"`
 	TotalAmount float64 `gorm:"type:decimal(10,2)" json:"total_amount"`
 	// Promotion values are immutable sale snapshots, never request prices.
-	OriginalAmountCents  int64      `gorm:"not null;default:0" json:"original_amount_cents"`
-	DiscountCents        int64      `gorm:"not null;default:0" json:"discount_cents"`
-	PromotionGrantID     uint       `gorm:"index;not null;default:0" json:"-"`
-	Status               string     `gorm:"size:20;default:'unpaid'" json:"status"` // unpaid, paid, cancelled, refunded, partial_refunded, completed
-	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
-	ContactName          string     `gorm:"size:50" json:"contact_name"`
-	ContactPhone         string     `gorm:"size:20" json:"contact_phone"`
-	VisitorID            string     `gorm:"size:50" json:"visitor_id,omitempty"`
-	VisitorRegion        string     `gorm:"size:50" json:"visitor_region,omitempty"`
-	Channel              string     `gorm:"size:50;default:'online';uniqueIndex:idx_order_external,priority:2" json:"channel"` // online, ota, window
-	Environment          string     `gorm:"size:20;not null;default:'production';index" json:"environment"`                    // production, sandbox
-	ChannelAccountID     uint       `gorm:"index" json:"channel_account_id"`
-	ChannelReservationID uint       `gorm:"index" json:"channel_reservation_id,omitempty"`
-	ExternalNo           *string    `gorm:"size:100;uniqueIndex:idx_order_external,priority:3" json:"external_no,omitempty"`
+	OriginalAmountCents int64      `gorm:"not null;default:0" json:"original_amount_cents"`
+	DiscountCents       int64      `gorm:"not null;default:0" json:"discount_cents"`
+	PromotionGrantID    uint       `gorm:"index;not null;default:0" json:"-"`
+	Status              string     `gorm:"size:20;default:'unpaid'" json:"status"` // unpaid, paid, cancelled, refunded, partial_refunded, completed
+	ExpiresAt           *time.Time `json:"expires_at,omitempty"`
+	ContactName         string     `gorm:"size:50" json:"contact_name"`
+	ContactPhone        string     `gorm:"size:20" json:"contact_phone"`
+	// The contact identity is an immutable sales snapshot, never a visitor or
+	// member identity. Generic orders cannot accept or expose these fields.
+	ContactRealNameRequired bool    `gorm:"not null;default:false" json:"-"`
+	ContactIDCardCiphertext string  `gorm:"type:text;not null;default:''" json:"-"`
+	VisitorID               string  `gorm:"size:50" json:"visitor_id,omitempty"`
+	VisitorRegion           string  `gorm:"size:50" json:"visitor_region,omitempty"`
+	Channel                 string  `gorm:"size:50;default:'online';uniqueIndex:idx_order_external,priority:2" json:"channel"` // online, ota, window
+	Environment             string  `gorm:"size:20;not null;default:'production';index" json:"environment"`                    // production, sandbox
+	ChannelAccountID        uint    `gorm:"index" json:"channel_account_id"`
+	ChannelReservationID    uint    `gorm:"index" json:"channel_reservation_id,omitempty"`
+	ExternalNo              *string `gorm:"size:100;uniqueIndex:idx_order_external,priority:3" json:"external_no,omitempty"`
 	// ClientRequestID is used by the window terminal to safely retry order
 	// creation after a network interruption. It is scoped by tenant and
 	// channel; the server never accepts it as an external/channel identity.

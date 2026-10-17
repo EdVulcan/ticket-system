@@ -19,6 +19,10 @@
       <text class="hint">{{product.isDeferredPackage ? '用于接收订单通知；支付后预约入住时可再填写实际入住人。' : (product.isPackage ? '用于订单通知和入住确认。' : '用于接收订单通知和售后联系。')}}</text>
       <view class="field-row"><text>姓名</text><input focus="{{contactFocus === 'name'}}" disabled="{{submitting || createdOrderNo || orderRecoveryPending}}" class="field-input" maxlength="50" placeholder="请输入联系人姓名" placeholder-class="field-placeholder" value="{{guestName}}" bindinput="onGuestNameInput" /></view>
       <view class="field-row"><text>手机号</text><input focus="{{contactFocus === 'phone'}}" disabled="{{submitting || createdOrderNo || orderRecoveryPending}}" class="field-input" type="number" maxlength="20" placeholder="请输入手机号" placeholder-class="field-placeholder" value="{{contactPhone}}" bindinput="onContactPhoneInput" /></view>
+      <view xhs:if="{{product.contact_real_name_required}}">
+        <text class="hint">每笔订单只需填写一位联系人身份证，不代表逐游客实名。</text>
+        <view class="field-row"><text>联系人身份证</text><input focus="{{contactFocus === 'idCard'}}" disabled="{{submitting || createdOrderNo || orderRecoveryPending}}" class="field-input" maxlength="18" placeholder="请输入18位居民身份证" placeholder-class="field-placeholder" value="{{contactIdCard}}" bindinput="onContactIdCardInput" /></view>
+      </view>
     </view>
     <view class="quantity-row">
       <view><text class="label">{{product.quantityLabel}}</text><text class="hint">{{product.quantityHint}}</text></view>
@@ -29,10 +33,11 @@
     <view class="summary"><view><text class="summary-label">商品原价</text><text>¥{{product.priceText}} × {{quantity}} · ¥{{originalTotalText}}</text></view><view xhs:if="{{hasDiscount}}"><text class="summary-label">随机立减</text><text class="discount">-¥{{discountText}}</text></view><view class="summary-total"><text>应付</text><text class="total">¥{{totalText}}</text></view></view>
     <view class="quote-state" xhs:if="{{quoteLoading}}">正在更新优惠价格...</view>
     <view class="quote-state error" xhs:elif="{{quoteError}}"><text>{{quoteError}}</text><button bindtap="refreshQuote">重新报价</button></view>
+    <view class="notice" xhs:if="{{product.purchase_blocked_reason}}"><text class="notice-title">暂不可购买</text><text>{{product.purchase_blocked_reason}}</text></view>
     <view class="notice recovery-notice" xhs:if="{{orderRecoveryPending}}"><text class="notice-title">订单创建结果待确认</text><text>已保留首次提交的日期、数量、游客信息和报价。请点击下方“重试确认订单”恢复原请求，不要修改当前选择。</text></view>
     <view class="notice" xhs:if="{{createdOrderNo}}"><text>订单已创建{{useDate ? ' · ' + useDate : ''}}。如需支付，请继续查看该订单。</text></view>
     <text class="inline-error" xhs:if="{{error}}">{{error}}</text>
     <view class="page-spacer"></view>
-    <view class="checkout-bar"><view><text class="checkout-label">应付</text><text class="checkout-total">¥{{totalText}}</text></view><button class="pay-button {{submitting || (!quoteReady && !createdOrderNo && !orderRecoveryPending) ? 'is-disabled' : ''}}" loading="{{submitting}}" disabled="{{submitting || (!quoteReady && !createdOrderNo && !orderRecoveryPending)}}" bindtap="submit">{{submitting ? (createdOrderNo ? '正在支付' : '正在创建订单') : (createdOrderNo ? '查看订单 · 继续支付' : (orderRecoveryPending ? '重试确认订单' : (quoteLoading ? '正在报价' : '确认并支付')))}}</button></view>
+    <view class="checkout-bar"><view><text class="checkout-label">应付</text><text class="checkout-total">¥{{totalText}}</text></view><button class="pay-button {{submitting || product.purchase_blocked_reason || (!quoteReady && !createdOrderNo && !orderRecoveryPending) ? 'is-disabled' : ''}}" loading="{{submitting}}" disabled="{{submitting || product.purchase_blocked_reason || (!quoteReady && !createdOrderNo && !orderRecoveryPending)}}" bindtap="submit">{{product.purchase_blocked_reason ? '暂不可购买' : (submitting ? (createdOrderNo ? '正在支付' : '正在创建订单') : (createdOrderNo ? '查看订单 · 继续支付' : (orderRecoveryPending ? '重试确认订单' : (quoteLoading ? '正在报价' : '确认并支付'))))}}</button></view>
   </view>
 </view>

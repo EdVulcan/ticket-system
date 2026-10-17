@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"sort"
 	"strings"
 	"ticket-backend/internal/model"
@@ -50,31 +49,33 @@ type MiniappPhoneVerificationInput struct {
 }
 
 type MiniappCatalogProduct struct {
-	ID                  uint     `json:"id"`
-	Name                string   `json:"name"`
-	ScenicAreaName      string   `json:"scenic_area_name,omitempty"`
-	ImageURL            string   `json:"image_url,omitempty"`
-	Description         string   `json:"description,omitempty"`
-	ProductType         int      `json:"product_type"`
-	ProductKind         string   `json:"product_kind"`
-	SaleMode            string   `json:"sale_mode,omitempty"`
-	PriceCents          int64    `json:"price_cents"`
-	MaxQuantity         int      `json:"max_quantity"`
-	Tags                []string `json:"tags"`
-	ValidityType        string   `json:"validity_type"`
-	ValidityDays        int      `json:"validity_days,omitempty"`
-	RequiresUseDate     bool     `json:"requires_use_date"`
-	HotelName           string   `json:"hotel_name,omitempty"`
-	RoomTypeName        string   `json:"room_type_name,omitempty"`
-	RatePlanName        string   `json:"rate_plan_name,omitempty"`
-	Nights              int      `json:"nights,omitempty"`
-	RoomsPerPackage     int      `json:"rooms_per_package,omitempty"`
-	BookingMode         string   `json:"booking_mode,omitempty"`
-	VoucherValidityDays int      `json:"voucher_validity_days,omitempty"`
-	MinAdvanceDays      int      `json:"min_advance_days,omitempty"`
-	MaxReschedules      int      `json:"max_reschedules,omitempty"`
-	StorefrontCategory  string   `json:"storefront_category"`
-	StorefrontOrder     int      `json:"storefront_order"`
+	ID                      uint     `json:"id"`
+	Name                    string   `json:"name"`
+	ScenicAreaName          string   `json:"scenic_area_name,omitempty"`
+	ImageURL                string   `json:"image_url,omitempty"`
+	Description             string   `json:"description,omitempty"`
+	ProductType             int      `json:"product_type"`
+	ProductKind             string   `json:"product_kind"`
+	ContactRealNameRequired bool     `json:"contact_real_name_required"`
+	SaleMode                string   `json:"sale_mode,omitempty"`
+	PriceCents              int64    `json:"price_cents"`
+	PurchaseBlockedReason   string   `json:"purchase_blocked_reason,omitempty"`
+	MaxQuantity             int      `json:"max_quantity"`
+	Tags                    []string `json:"tags"`
+	ValidityType            string   `json:"validity_type"`
+	ValidityDays            int      `json:"validity_days,omitempty"`
+	RequiresUseDate         bool     `json:"requires_use_date"`
+	HotelName               string   `json:"hotel_name,omitempty"`
+	RoomTypeName            string   `json:"room_type_name,omitempty"`
+	RatePlanName            string   `json:"rate_plan_name,omitempty"`
+	Nights                  int      `json:"nights,omitempty"`
+	RoomsPerPackage         int      `json:"rooms_per_package,omitempty"`
+	BookingMode             string   `json:"booking_mode,omitempty"`
+	VoucherValidityDays     int      `json:"voucher_validity_days,omitempty"`
+	MinAdvanceDays          int      `json:"min_advance_days,omitempty"`
+	MaxReschedules          int      `json:"max_reschedules,omitempty"`
+	StorefrontCategory      string   `json:"storefront_category"`
+	StorefrontOrder         int      `json:"storefront_order"`
 }
 
 type MiniappCatalogCategory struct {
@@ -99,6 +100,7 @@ type MiniappOrderCreateInput struct {
 	UseDate         string `json:"use_date"`
 	GuestName       string `json:"guest_name"`
 	ContactPhone    string `json:"contact_phone"`
+	ContactIDCard   string `json:"contact_id_card"`
 }
 
 type MiniappHotelStay struct {
@@ -155,6 +157,8 @@ type MiniappOrderResult struct {
 	ImageURL                 string                      `json:"image_url,omitempty"`
 	ContactName              string                      `json:"contact_name,omitempty"`
 	ContactPhone             string                      `json:"contact_phone,omitempty"`
+	ContactRealNameRequired  bool                        `json:"contact_real_name_required"`
+	ContactIDCardMasked      string                      `json:"contact_id_card_masked,omitempty"`
 	Quantity                 int                         `json:"quantity"`
 	PayToken                 string                      `json:"pay_token,omitempty"`
 	AmountCents              int64                       `json:"amount_cents"`
@@ -406,6 +410,7 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 		DisplayName             string
 		ProductName             string
 		ProductKind             string
+		ContactRealNameRequired bool
 		CodeMode                string
 		ScenicAreaName          string
 		ChannelSaleCents        int64
@@ -439,6 +444,7 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 	var rows []catalogRow
 	err := model.DB.Table("channel_product_mappings AS mapping").
 		Select(`mapping.id AS mapping_id, mapping.display_name, product.name AS product_name, product.product_kind,
+			COALESCE(fulfillment_revision.contact_real_name_required, fulfillment_product.contact_real_name_required, false) AS contact_real_name_required,
 			scenic.name AS scenic_area_name, mapping.channel_sale_cents, product.price AS product_price,
 			product.tags, product.validity_type, product.validity_days, product.stock_type, product.code_mode,
 			xhs_config.image_url, xhs_config.description, xhs_config.product_type,
@@ -451,6 +457,12 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 			hotel_product.nights AS hotel_product_nights, hotel_product.rooms_per_package AS hotel_product_rooms,
 			hotel_product.base_retail_price_cents AS hotel_product_retail_price`).
 		Joins("JOIN products AS product ON product.id = mapping.product_id AND product.tenant_id = ? AND product.deleted_at IS NULL", customer.TenantID).
+		Joins(`JOIN products AS fulfillment_product ON fulfillment_product.id = COALESCE(NULLIF(product.fulfillment_product_id, 0), NULLIF(product.source_product_id, 0), product.id)
+			AND fulfillment_product.tenant_id = COALESCE(NULLIF(product.fulfillment_tenant_id, 0), NULLIF(product.source_tenant_id, 0), product.tenant_id)
+			AND fulfillment_product.deleted_at IS NULL`).
+		Joins(`LEFT JOIN product_revisions AS fulfillment_revision ON fulfillment_revision.id = fulfillment_product.current_revision_id
+			AND fulfillment_revision.product_id = fulfillment_product.id AND fulfillment_revision.tenant_id = fulfillment_product.tenant_id
+			AND fulfillment_revision.deleted_at IS NULL`).
 		Joins(`JOIN tenants AS fulfillment_tenant ON fulfillment_tenant.id = COALESCE(NULLIF(product.fulfillment_tenant_id, 0), NULLIF(product.source_tenant_id, 0), product.tenant_id)
 			AND fulfillment_tenant.status = 'active' AND fulfillment_tenant.deleted_at IS NULL`).
 		Joins(`JOIN tenant_capabilities AS supplier_capability ON supplier_capability.tenant_id = fulfillment_tenant.id
@@ -530,8 +542,8 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 			// Hotel product prices belong to the product layer. A channel mapping
 			// must not flatten a stay-date price into one static ticket price.
 			priceCents = row.HotelProductRetailPrice
-		} else if priceCents <= 0 {
-			priceCents = int64(math.Round(row.ProductPrice * 100))
+		} else if priceCents < 0 {
+			continue
 		}
 		nights, rooms := row.Nights, row.RoomsPerPackage
 		if kind == "hotel" {
@@ -544,11 +556,17 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 				maxQuantity = maxXiaohongshuOrderCodeQuantity
 			}
 		}
+		purchaseBlockedReason := ""
+		if priceCents == 0 && account.Environment != "sandbox" {
+			purchaseBlockedReason = "零元商品暂未开放购买"
+		}
 		products = append(products, MiniappCatalogProduct{
 			ID: row.MappingID, Name: name, ScenicAreaName: row.ScenicAreaName,
 			ImageURL: row.ImageURL, Description: row.Description, ProductType: row.ProductType,
-			ProductKind: kind, SaleMode: row.SaleMode, PriceCents: priceCents, MaxQuantity: maxQuantity, Tags: parseProductTags(row.Tags),
-			ValidityType: row.ValidityType, ValidityDays: row.ValidityDays,
+			ContactRealNameRequired: row.ContactRealNameRequired,
+			ProductKind:             kind, SaleMode: row.SaleMode, PriceCents: priceCents, MaxQuantity: maxQuantity, Tags: parseProductTags(row.Tags),
+			PurchaseBlockedReason: purchaseBlockedReason,
+			ValidityType:          row.ValidityType, ValidityDays: row.ValidityDays,
 			RequiresUseDate: (row.PackageID != 0 && row.BookingMode != "after_purchase") || (row.PackageID == 0 && row.StockType == "daily") || (kind == "hotel" && row.SaleMode == "calendar_room"),
 			HotelName:       row.HotelName, RoomTypeName: row.RoomTypeName, RatePlanName: row.RatePlanName,
 			Nights: nights, RoomsPerPackage: rooms, BookingMode: row.BookingMode,

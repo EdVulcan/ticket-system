@@ -290,7 +290,7 @@ func (s XiaohongshuProductService) Sync(ctx context.Context, tenantID, accountID
 	}
 	originPrice := int64(math.Round(product.Price * 100))
 	salePrice := mapping.ChannelSaleCents
-	if salePrice <= 0 {
+	if salePrice < 0 {
 		return errors.New("Xiaohongshu product price is not configured")
 	}
 	if originPrice < salePrice {
@@ -350,7 +350,7 @@ func loadXiaohongshuMappingTx(tx *gorm.DB, tenantID, accountID, mappingID uint, 
 	if err := tx.Where("id = ? AND tenant_id = ? AND status = ?", current.ProductID, tenantID, "online").First(&currentProduct).Error; err != nil {
 		return errors.New("映射的本地产品不可售")
 	}
-	if current.Status != "active" || (current.ChannelSaleCents <= 0 && currentProduct.ProductKind != "hotel") {
+	if current.Status != "active" || (current.ChannelSaleCents < 0 && currentProduct.ProductKind != "hotel") {
 		return errors.New("小红书商品映射未启用或售价无效")
 	}
 	if mapping != nil {

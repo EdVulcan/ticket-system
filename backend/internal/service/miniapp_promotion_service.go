@@ -265,7 +265,7 @@ func loadMiniappQuoteMappingTx(tx *gorm.DB, tenantID, accountID, mappingID uint,
 		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
 	}
 	var mapping model.ChannelProductMapping
-	if err := query.First(&mapping).Error; err != nil || mapping.ChannelSaleCents <= 0 {
+	if err := query.First(&mapping).Error; err != nil || mapping.ChannelSaleCents < 0 {
 		return nil, ErrMiniappPromotionQuote
 	}
 	productQuery := tx.Where("id = ? AND tenant_id = ? AND status = ? AND product_kind <> ?", mapping.ProductID, tenantID, "online", "hotel")
@@ -341,7 +341,7 @@ func (s MiniappPromotionService) QuoteForCustomer(customer *model.MiniappCustome
 // LoadLockedQuoteTx is used inside the core order transaction. Lock ordering
 // is customer -> activity -> mapping/product -> grant.
 func (s MiniappPromotionService) LoadLockedQuoteTx(tx *gorm.DB, customer *model.MiniappCustomer, mappingID uint, quantity int, baseCents int64) (*MiniappPromotionQuote, error) {
-	if tx == nil || customer == nil || quantity <= 0 || baseCents <= 0 {
+	if tx == nil || customer == nil || quantity <= 0 || baseCents < 0 {
 		return nil, ErrMiniappPromotionQuote
 	}
 	lockedCustomer, err := lockMiniappPromotionCustomerTx(tx, customer)
@@ -361,7 +361,7 @@ func (s MiniappPromotionService) LoadLockedQuoteTx(tx *gorm.DB, customer *model.
 		return nil, err
 	}
 	quote := &MiniappPromotionQuote{MappingID: mappingID, OriginalAmountCents: baseCents, AmountCents: baseCents, Promotion: opportunity}
-	if activity == nil || !activity.Enabled || !containsPromotionMapping(opportunity.EligibleMappingIDs, mappingID) || opportunity.Status != "available" {
+	if baseCents == 0 || activity == nil || !activity.Enabled || !containsPromotionMapping(opportunity.EligibleMappingIDs, mappingID) || opportunity.Status != "available" {
 		quote.QuoteToken = s.quoteToken(lockedCustomer, mappingID, quantity, quote)
 		return quote, nil
 	}

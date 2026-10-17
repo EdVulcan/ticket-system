@@ -105,6 +105,10 @@ Page({
 
   buy() {
     if (!this.data.product || this.data.navigating) return;
+    if (this.data.product.purchase_blocked_reason) {
+      this.setData({ error: this.data.product.purchase_blocked_reason });
+      return;
+    }
     this.setData({ navigating: true });
     this.navigateTimer = setTimeout(() => this.setData({ navigating: false }), 1200);
     xhs.navigateTo({

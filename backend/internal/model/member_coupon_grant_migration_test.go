@@ -49,7 +49,7 @@ func TestMemberCouponGrantMigration154OwnershipAndImmutableReceipts(t *testing.T
 		}
 	}
 	var version int
-	if err := db.Model(&SchemaMigration{}).Select("MAX(version)").Scan(&version).Error; err != nil || version != 154 {
+	if err := db.Model(&SchemaMigration{}).Select("MAX(version)").Scan(&version).Error; err != nil || version != CurrentPostgresSchemaVersion {
 		t.Fatalf("version=%d err=%v", version, err)
 	}
 	var unchanged CommerceCouponGrant

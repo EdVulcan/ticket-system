@@ -137,6 +137,7 @@ func (s *ProductService) updateTx(tx *gorm.DB, id, tenantID uint, product *model
 		product.ScenicAreaID = existingProduct.ScenicAreaID
 		product.SettlementPrice = existingProduct.SettlementPrice
 		product.GateVoiceCode = existingProduct.GateVoiceCode
+		product.ContactRealNameRequired = existingProduct.ContactRealNameRequired
 		return tx.Model(&existingProduct).
 			Select("*").
 			Omit("id", "created_at", "updated_at", "deleted_at", "tenant_id", "rule_id",
@@ -256,7 +257,8 @@ func createProductRevisionTx(tx *gorm.DB, product *model.Product) (*model.Produc
 		ProductID: product.ID, TenantID: product.TenantID, ScenicAreaID: product.ScenicAreaID,
 		Version: version, Status: "active", PriceCents: moneyCents(product.Price),
 		SettlementCents: moneyCents(product.SettlementPrice), GateVoiceCode: product.GateVoiceCode,
-		SnapshotJSON: string(snapshot), EffectiveFrom: time.Now(),
+		ContactRealNameRequired: product.ContactRealNameRequired,
+		SnapshotJSON:            string(snapshot), EffectiveFrom: time.Now(),
 	}
 	if err := tx.Create(&revision).Error; err != nil {
 		return nil, err
@@ -516,6 +518,7 @@ func hydrateFulfillmentRules(products []model.Product) {
 			Where("id = ? AND tenant_id = ?", productID, tenantID).
 			First(&source).Error; err == nil {
 			products[i].Rule = source.Rule
+			products[i].ContactRealNameRequired = source.ContactRealNameRequired
 		}
 	}
 }
@@ -566,6 +569,7 @@ func (s *ProductService) Get(id, tenantID uint) (*model.Product, error) {
 		}
 		if err := model.DB.Preload("Rule").Preload("Rule.Groups").Preload("Rule.Groups.Items").Preload("Rule.Groups.Items.CheckPoint").Where("id = ? AND tenant_id = ?", productID, sourceTenantID).First(&source).Error; err == nil {
 			product.Rule = source.Rule
+			product.ContactRealNameRequired = source.ContactRealNameRequired
 		}
 	}
 	return &product, nil

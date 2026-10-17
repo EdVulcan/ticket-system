@@ -537,8 +537,8 @@ func (s *ChannelService) AddMapping(tenantID uint, mapping *model.ChannelProduct
 		if err := requireActiveScenicSupplier(tx, productFulfillmentTenantID(&product)); err != nil {
 			return errors.New("scenic supplier business is unavailable")
 		}
-		if (account.Type == "ctrip" || account.Type == "xiaohongshu") && (mapping.ChannelSaleCents <= 0 || mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents) {
-			return errors.New("official channel mapping requires a positive sale price and a cost price not greater than the sale price")
+		if (account.Type == "ctrip" || account.Type == "xiaohongshu") && (mapping.ChannelSaleCents < 0 || (account.Type == "ctrip" && mapping.ChannelSaleCents == 0) || mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents) {
+			return errors.New("channel sale price is invalid or cost exceeds sale price")
 		}
 		mapping.Base = model.Base{}
 		mapping.Status = "active"
@@ -574,7 +574,7 @@ func (s *ChannelService) UpdateMapping(tenantID, accountID, mappingID uint, inpu
 		if account.Type == "wechat_miniapp" {
 			return errors.New("微信商业渠道不使用景区票务商品映射，请在商业工作台配置发布绑定")
 		}
-		if (account.Type == "ctrip" || account.Type == "xiaohongshu") && input.ChannelSaleCents <= 0 {
+		if account.Type == "ctrip" && input.ChannelSaleCents <= 0 {
 			return errors.New("official channel mapping requires a positive sale price")
 		}
 		var mapping model.ChannelProductMapping

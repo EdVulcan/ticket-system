@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const CurrentPostgresSchemaVersion = 154
+const CurrentPostgresSchemaVersion = 155
 
 // PostgreSQL starts from the current domain schema. Historical migrations are
 // retained as source history, but are not replayed against a fresh database.
@@ -814,9 +814,12 @@ func runPostgresMigrations(db *gorm.DB) error {
 	if err := applyMemberCouponGrantGuards(db); err != nil {
 		return fmt.Errorf("install member coupon receipt guards: %w", err)
 	}
+	if err := applyMiniappOrderContactGuards(db); err != nil {
+		return err
+	}
 	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(&SchemaMigration{
 		Version:   CurrentPostgresSchemaVersion,
-		Name:      "manual member coupon grant receipts",
+		Name:      "xiaohongshu order contact identity snapshots",
 		AppliedAt: time.Now(),
 	}).Error
 }

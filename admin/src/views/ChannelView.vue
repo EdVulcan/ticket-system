@@ -189,11 +189,12 @@
           <el-option v-for="product in mappingProductOptions" :key="product.id" :label="product.name" :value="product.id" />
         </el-select>
         <el-input v-if="selectedAccount?.type === 'xiaohongshu'" v-model="mapping.display_name" placeholder="小程序展示名称" />
-        <el-input-number v-if="selectedAccount?.type === 'xiaohongshu'" v-model="mapping.channel_sale_yuan" :min="0.01" :precision="2" :step="1" controls-position="right" placeholder="小红书售价" class="w-full" />
+        <el-input-number v-if="selectedAccount?.type === 'xiaohongshu'" v-model="mapping.channel_sale_yuan" :min="0" :precision="2" :step="1" controls-position="right" placeholder="小红书售价" class="w-full" />
         <el-input-number v-if="selectedAccount?.type === 'ctrip'" v-model="mapping.channel_sale_yuan" :min="0.01" :precision="2" :step="1" controls-position="right" placeholder="携程销售价" class="w-full" />
         <el-input-number v-if="selectedAccount?.type === 'ctrip'" v-model="mapping.channel_cost_yuan" :min="0" :precision="2" :step="1" controls-position="right" placeholder="携程结算价" class="w-full" />
         <el-button v-if="canActiveWrite" type="primary" @click="addMapping">添加</el-button>
       </div>
+      <el-alert v-if="selectedAccount?.type === 'xiaohongshu' && mapping.channel_sale_yuan === 0" class="mb-4" type="info" :closable="false" title="零元商品可配置；正式下单待平台零元交易与退券联调，当前仅沙箱测试。" />
       <div v-if="selectedAccount?.type === 'ctrip'" class="flex flex-wrap items-center gap-2 mb-3">
         <el-date-picker v-model="syncDateRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" :clearable="false" />
         <span class="text-sm text-gray-500">同步范围最多 90 天</span>
@@ -235,7 +236,7 @@
           <el-form-item label="外部商品编码"><el-input v-model="xiaohongshuMapping.external_code" /></el-form-item>
           <el-form-item label="外部规格编码"><el-input v-model="xiaohongshuMapping.external_sku_id" placeholder="用于小红书 SKU 唯一标识" /></el-form-item>
           <el-form-item label="小程序展示名称"><el-input v-model="xiaohongshuMapping.display_name" placeholder="留空则使用本地产品名称" /></el-form-item>
-          <el-form-item label="小红书售价"><el-input-number v-model="xiaohongshuMapping.channel_sale_yuan" :min="0.01" :precision="2" :step="1" controls-position="right" class="w-full" /></el-form-item>
+          <el-form-item label="小红书售价"><el-input-number v-model="xiaohongshuMapping.channel_sale_yuan" :min="0" :precision="2" :step="1" controls-position="right" class="w-full" /><span v-if="xiaohongshuMapping.channel_sale_yuan === 0" class="mt-1 text-xs leading-5 text-gray-500">零元商品可配置；正式下单待平台零元交易与退券联调，当前仅沙箱测试。</span></el-form-item>
           <el-form-item label="小红书类目">
             <el-select v-model="xiaohongshuMapping.category_id" filterable class="w-full" :placeholder="xiaohongshuCategoryError ? '当前无法获取类目' : '选择支持交易的类目'">
               <el-option v-for="category in xiaohongshuCategories" :key="category.category_id" :label="category.name" :value="category.category_id" :disabled="category.support_trade === false" />
@@ -761,7 +762,7 @@ const openMapping = async (row: any) => {
 const addMapping = async () => {
   if (!mapping.external_code.trim() || !mapping.product_id) { ElMessage.warning('请选择产品并填写外部编码'); return }
   if (selectedAccount.value?.type === 'ctrip' && (mapping.channel_sale_yuan <= 0 || mapping.channel_cost_yuan < 0 || mapping.channel_cost_yuan > mapping.channel_sale_yuan)) { ElMessage.warning('携程销售价必须大于 0，结算价不能高于销售价'); return }
-  if (selectedAccount.value?.type === 'xiaohongshu' && mapping.channel_sale_yuan <= 0) { ElMessage.warning('小红书售价必须大于 0'); return }
+  if (selectedAccount.value?.type === 'xiaohongshu' && (!Number.isFinite(mapping.channel_sale_yuan) || mapping.channel_sale_yuan < 0)) { ElMessage.warning('小红书售价不能为负数，请填写有效金额'); return }
   const response = await request.post('/channel-accounts/mappings', { channel_account_id: selectedID.value, external_code: mapping.external_code.trim(), display_name: mapping.display_name.trim(), product_id: mapping.product_id, channel_sale_cents: Math.round(mapping.channel_sale_yuan * 100), channel_cost_cents: Math.round(mapping.channel_cost_yuan * 100) })
   mappings.value.unshift(response.data)
   Object.assign(mapping, { external_code: '', display_name: '', product_id: null, channel_sale_yuan: 0, channel_cost_yuan: 0 })
@@ -921,7 +922,7 @@ const openXiaohongshuMappingEdit = async (row: any) => {
   xiaohongshuMappingSaveNotice.value = null
   xiaohongshuMappingSaving.value = false
   xiaohongshuMappingSyncing.value = false
-  Object.assign(xiaohongshuMapping, { mapping_id: mappingID, external_code: row.external_code || '', external_sku_id: `${row.external_code || 'XHS'}_SKU`, display_name: row.display_name || '', channel_sale_yuan: Number(row.channel_sale_cents || 0) / 100, category_id: '', poi_ids: [], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, storefront_category: '', storefront_category_order: 9999, storefront_product_order: 9999, status: row.status || 'active', sync_status: '', last_sync_error: '', audit_status: '', audit_message: '', audited_at: '', audit_checked_at: '', audit_check_error: '' })
+  Object.assign(xiaohongshuMapping, { mapping_id: mappingID, external_code: row.external_code || '', external_sku_id: `${row.external_code || 'XHS'}_SKU`, display_name: row.display_name || '', channel_sale_yuan: Number(row.channel_sale_cents ?? 0) / 100, category_id: '', poi_ids: [], image_url: '', description: '', product_path: '/pages/index/index', order_path: '/pages/order/detail', product_type: 1, settle_type: 1, storefront_category: '', storefront_category_order: 9999, storefront_product_order: 9999, status: row.status || 'active', sync_status: '', last_sync_error: '', audit_status: '', audit_message: '', audited_at: '', audit_checked_at: '', audit_check_error: '' })
   xiaohongshuMappingDialog.value = true
   xiaohongshuMappingLoading.value = true
   xiaohongshuCategoryError.value = ''
@@ -983,7 +984,7 @@ const uploadXiaohongshuImage = async (file: UploadFile) => {
   }
 }
 const saveXiaohongshuMapping = async (syncAfterSave: boolean) => {
-  if (!selectedAccount.value || !xiaohongshuMapping.external_code.trim() || !xiaohongshuMapping.external_sku_id.trim() || xiaohongshuMapping.channel_sale_yuan <= 0 || !xiaohongshuMapping.category_id || !xiaohongshuMapping.image_url.trim() || !xiaohongshuMapping.description.trim()) { ElMessage.warning('请完整填写商品编码、规格编码、售价、类目、图片和商品说明'); return }
+  if (!selectedAccount.value || !xiaohongshuMapping.external_code.trim() || !xiaohongshuMapping.external_sku_id.trim() || !Number.isFinite(xiaohongshuMapping.channel_sale_yuan) || xiaohongshuMapping.channel_sale_yuan < 0 || !xiaohongshuMapping.category_id || !xiaohongshuMapping.image_url.trim() || !xiaohongshuMapping.description.trim()) { ElMessage.warning('请完整填写商品编码、规格编码、非负售价、类目、图片和商品说明'); return }
   if (!xiaohongshuMapping.product_path.startsWith('/') || !xiaohongshuMapping.order_path.startsWith('/')) { ElMessage.warning('小程序页面路径必须以 / 开头'); return }
   if (selectedAccount.value.status === 'sandbox' && Math.round(xiaohongshuMapping.channel_sale_yuan * 100) > 10) { ElMessage.warning('测试小程序售价不能高于 0.10 元，否则无法完成支付测试'); return }
   const accountID = selectedAccount.value.id

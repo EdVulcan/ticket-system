@@ -237,12 +237,13 @@ type OrderUpsertRequest struct {
 }
 
 type OrderUpsertResponse struct {
-	ExternalOrderID string `json:"out_order_id"`
-	OrderID         string `json:"order_id"`
-	FinalPrice      int64  `json:"final_price"`
-	PayToken        string `json:"pay_token"`
-	ExpiresAt       int64  `json:"expired_time"`
-	OpenPayType     string `json:"open_pay_type"`
+	FinalPricePresent bool   `json:"-"`
+	ExternalOrderID   string `json:"out_order_id"`
+	OrderID           string `json:"order_id"`
+	FinalPrice        int64  `json:"final_price"`
+	PayToken          string `json:"pay_token"`
+	ExpiresAt         int64  `json:"expired_time"`
+	OpenPayType       string `json:"open_pay_type"`
 }
 
 type GuaranteeOrderRequest struct {
@@ -253,9 +254,10 @@ type GuaranteeOrderRequest struct {
 }
 
 type VoucherInfo struct {
-	Code      string `json:"voucher_code"`
-	Status    int    `json:"voucher_status"`
-	PayAmount int64  `json:"pay_amount,omitempty"`
+	PayAmountPresent bool   `json:"-"`
+	Code             string `json:"voucher_code"`
+	Status           int    `json:"voucher_status"`
+	PayAmount        int64  `json:"pay_amount,omitempty"`
 }
 
 type BookDetail struct {
@@ -317,14 +319,15 @@ type PresaleBookStatusRequest struct {
 }
 
 type GuaranteeOrderResponse struct {
-	OrderID     string         `json:"order_id"`
-	PayAmount   int64          `json:"pay_amount"`
-	OrderStatus int            `json:"order_status"`
-	Vouchers    []VoucherInfo  `json:"voucher_infos,omitempty"`
-	Bookings    []BookDetail   `json:"book_details,omitempty"`
-	Products    []OrderProduct `json:"product_infos,omitempty"`
-	TradeNo     string         `json:"third_trade_no,omitempty"`
-	PayChannel  int            `json:"pay_channel,omitempty"`
+	PayAmountPresent bool           `json:"-"`
+	OrderID          string         `json:"order_id"`
+	PayAmount        int64          `json:"pay_amount"`
+	OrderStatus      int            `json:"order_status"`
+	Vouchers         []VoucherInfo  `json:"voucher_infos,omitempty"`
+	Bookings         []BookDetail   `json:"book_details,omitempty"`
+	Products         []OrderProduct `json:"product_infos,omitempty"`
+	TradeNo          string         `json:"third_trade_no,omitempty"`
+	PayChannel       int            `json:"pay_channel,omitempty"`
 }
 
 type VoucherCode struct {
@@ -547,7 +550,7 @@ func validateProduct(request LocalLifeProductRequest) error {
 		return errors.New("xiaohongshu local-life guarantee payment requires a settlement type")
 	}
 	for _, sku := range request.SKUs {
-		if strings.TrimSpace(sku.ExternalSKUID) == "" || strings.TrimSpace(sku.Name) == "" || strings.TrimSpace(sku.Image) == "" || sku.OriginPrice <= 0 || sku.SalePrice <= 0 {
+		if strings.TrimSpace(sku.ExternalSKUID) == "" || strings.TrimSpace(sku.Name) == "" || strings.TrimSpace(sku.Image) == "" || sku.OriginPrice < 0 || sku.SalePrice < 0 {
 			return errors.New("xiaohongshu SKU identifier, name, image and positive prices are required")
 		}
 	}

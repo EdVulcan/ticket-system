@@ -83,7 +83,7 @@ test('confirmation page keeps an existing order and visibly reports missing paym
 
 test('confirmation page reports cancellation rather than silently redirecting', async () => {
   let redirected = false;
-  const app = { request: () => Promise.resolve({ order_id: 'order-1', pay_token: 'pay-token', order_no: 'ORD-1' }) };
+  const app = { request: () => Promise.resolve({ order_id: 'order-1', pay_token: 'pay-token', order_no: 'ORD-1', status: 'unpaid' }) };
   const xhs = {
     requestGuaranteeOrderPayment(options) {
       options.fail({ errMsg: 'requestGuaranteeOrderPayment:fail cancel' });
@@ -109,7 +109,7 @@ test('created confirmation orders freeze selection and continue in that order wi
   let requests = 0;
   let destination = '';
   const page = loadPage('pages/order/confirm.js', {
-    request: () => { requests += 1; return Promise.resolve({ order_no: 'ORD-KEPT', order_id: 'order-1', pay_token: 'pay-token' }); }
+    request: () => { requests += 1; return Promise.resolve({ order_no: 'ORD-KEPT', order_id: 'order-1', pay_token: 'pay-token', status: 'unpaid' }); }
   }, {
     requestGuaranteeOrderPayment(options) { options.fail({ errMsg: 'cancel' }); options.complete(); },
     redirectTo: ({ url }) => { destination = url; }
@@ -142,7 +142,7 @@ test('unknown order creation freezes the first payload and retries it after atte
           firstCreate = false;
           return Promise.reject(new Error('网络连接失败，请稍后重试'));
         }
-        return Promise.resolve({ order_no: 'ORD-RECOVERED', order_id: 'order-1', pay_token: 'pay-1' });
+        return Promise.resolve({ order_no: 'ORD-RECOVERED', order_id: 'order-1', pay_token: 'pay-1', status: 'unpaid' });
       }
       if (url === '/order-quote') {
         const quantity = options.data.quantity;

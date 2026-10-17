@@ -23,6 +23,13 @@ func (s XiaohongshuOrderService) applyXiaohongshuVoucherIssuanceTx(tx *gorm.DB, 
 		"voucher_issuance_last_attempt_at": now,
 		"voucher_issuance_last_error":      "",
 	}
+	if moneyCents(order.TotalAmount) == 0 {
+		for _, voucher := range vouchers {
+			if !voucher.PayAmountPresent || voucher.PayAmount != 0 {
+				return errorsForVoucherGroup(tx, link, updates, "零元订单的平台券实付金额不一致")
+			}
+		}
+	}
 
 	var tickets []model.Ticket
 	if err := tx.Where("order_id = ? AND tenant_id = ?", order.ID, order.TenantID).Order("id ASC").Find(&tickets).Error; err != nil {
@@ -137,7 +144,7 @@ func (s XiaohongshuOrderService) applyXiaohongshuVoucherIssuanceTx(tx *gorm.DB, 
 			TenantID: link.TenantID, ChannelAccountID: link.ChannelAccountID, XiaohongshuOrderLinkID: link.ID,
 			TicketID: targets[index].ID, VoucherCodeHash: hash, VoucherCodeCiphertext: ciphertext, Status: voucher.Status,
 		}
-		if grouped || order.DiscountCents > 0 {
+		if grouped || order.DiscountCents > 0 || moneyCents(order.TotalAmount) == 0 {
 			amount := voucher.PayAmount
 			row.PayAmountCents = &amount
 		}
