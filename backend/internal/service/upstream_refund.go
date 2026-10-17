@@ -188,7 +188,7 @@ func queryUpstreamUsage(ctx context.Context, client UpstreamRefundClient, orderN
 // cancel-status confirmation. It never runs under a DB transaction. A
 // submitted cancel with no batch number is intentionally parked as pending so
 // an ambiguous network result cannot cause a second cancellation request.
-func (s *RefundService) processUpstreamRefundCancellation(ctx context.Context, refund *model.Refund) error {
+func (s *RefundService) processUpstreamRefundCancellation(ctx context.Context, refund *model.Refund) (resultErr error) {
 	if refund == nil || refund.ID == 0 {
 		return errors.New("退款尚未持久保存，不能取消供应商订单")
 	}
@@ -203,6 +203,7 @@ func (s *RefundService) processUpstreamRefundCancellation(ctx context.Context, r
 	if err := model.DB.Where("order_no = ? AND tenant_id = ?", root.OrderNo, root.TenantID).First(&order).Error; err != nil {
 		return err
 	}
+	defer func() { resultErr = protectUpstreamContactError(&order, resultErr) }()
 	var snapshots []model.OrderItemSupplySnapshot
 	if err := model.DB.Where("order_id = ? AND sales_tenant_id = ? AND mode = 'upstream'", order.ID, order.TenantID).Find(&snapshots).Error; err != nil {
 		return err
@@ -288,7 +289,11 @@ func (s *RefundService) processUpstreamRefundCancellation(ctx context.Context, r
 				if approved {
 					return bypass()
 				}
-				if e := updateUpstreamSnapshot(snapshot.ID, map[string]interface{}{"cancel_status": "failed", "last_error": result.Description}); e != nil {
+				description := result.Description
+				if order.ContactRealNameRequired {
+					description = "供应商拒绝退票，请核对供应商原订单与退款条件"
+				}
+				if e := updateUpstreamSnapshot(snapshot.ID, map[string]interface{}{"cancel_status": "failed", "last_error": description}); e != nil {
 					return e
 				}
 				return ErrUpstreamRefundRejected

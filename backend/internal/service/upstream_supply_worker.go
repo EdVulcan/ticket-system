@@ -105,11 +105,14 @@ func (w *UpstreamSupplyWorker) ProcessTasks(ctx context.Context, now time.Time, 
 	return processed, nil
 }
 
-func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.OrderItemSupplySnapshot) error {
+func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.OrderItemSupplySnapshot) (resultErr error) {
 	var order model.Order
 	if err := model.DB.Preload("Items.Tickets").Where("id = ? AND tenant_id = ?", s.OrderID, s.SalesTenantID).First(&order).Error; err != nil {
 		return err
 	}
+	defer func() {
+		resultErr = protectUpstreamContactError(&order, resultErr)
+	}()
 	if len(order.Items) != 1 {
 		return errors.New("上游订单必须对应一个票种")
 	}
@@ -150,6 +153,7 @@ func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.Ord
 		return err
 	}
 	var request zyb.SendCodeRequest
+	persistRequest := s.RequestPayloadCiphertext == ""
 	if s.RequestPayloadCiphertext != "" {
 		plain, e := utils.DecryptAES(s.RequestPayloadCiphertext)
 		if e != nil {
@@ -164,6 +168,29 @@ func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.Ord
 			date = item.UseDate.Format("2006-01-02")
 		}
 		request = zyb.SendCodeRequest{ThirdPartyOrderCode: order.OrderNo, ChildOrderCode: fmt.Sprintf("%s_%d", order.OrderNo, item.ID), ContactName: order.ContactName, ContactMobile: order.ContactPhone, GoodsCode: s.ExternalProductCode, GoodsName: item.ProductName, VisitDate: date + " 00:00:00", PriceCents: moneyCents(item.Price), Quantity: item.Quantity, PayMethod: "vm"}
+	}
+	// Only a fresh request may acquire the order-level identity. Persisted
+	// requests are immutable, including historical unattempted snapshots.
+	if s.IssueAttemptedAt == nil && s.ProviderOrderCode == "" && s.ProviderSubOrderCode == "" {
+		certificate, err := upstreamOrderContactCertificate(&order)
+		if err != nil {
+			return err
+		}
+		if request.CertificateNo != "" && request.CertificateNo != certificate {
+			return errors.New("上游联系人实名与原订单快照不一致")
+		}
+		if !persistRequest && request.CertificateNo != certificate {
+			return errUpstreamContactSnapshotMissing
+		}
+		if order.ContactRealNameRequired && (request.ContactName != order.ContactName || request.ContactMobile != order.ContactPhone) {
+			return errors.New("上游联系人姓名或手机号与原订单快照不一致")
+		}
+		if len(request.Credentials) != 0 && order.ContactRealNameRequired {
+			return errors.New("订单联系人实名不能作为逐游客实名发送")
+		}
+		request.CertificateNo = certificate
+	}
+	if persistRequest {
 		encoded, e := json.Marshal(request)
 		if e != nil {
 			return e
@@ -173,7 +200,14 @@ func (w *UpstreamSupplyWorker) processSnapshot(ctx context.Context, s *model.Ord
 			return e
 		}
 		if e = model.Write(func(tx *gorm.DB) error {
-			return tx.Model(s).Where("locked_at = ? AND request_payload_ciphertext = ''", s.LockedAt).Update("request_payload_ciphertext", cipher).Error
+			result := tx.Model(s).Where("locked_at = ? AND request_payload_ciphertext = ? AND issue_attempted_at IS NULL AND provider_order_code = '' AND provider_sub_order_code = ''", s.LockedAt, s.RequestPayloadCiphertext).Update("request_payload_ciphertext", cipher)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return errors.New("上游出票请求已被接管，请重新查询")
+			}
+			return nil
 		}); e != nil {
 			return e
 		}

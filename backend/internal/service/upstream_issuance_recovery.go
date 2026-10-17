@@ -14,7 +14,7 @@ import (
 
 // RecoverIssuance never sends a provider order itself. It checks the ORIGINAL
 // order, then queues query recovery or an explicitly approved same-number send.
-func (w *UpstreamSupplyWorker) RecoverIssuance(ctx context.Context, tenantID, userID uint, orderNo, reason string, confirmedAbsent bool) error {
+func (w *UpstreamSupplyWorker) RecoverIssuance(ctx context.Context, tenantID, userID uint, orderNo, reason string, confirmedAbsent bool) (resultErr error) {
 	if strings.TrimSpace(reason) == "" {
 		return errors.New("请填写出票恢复原因")
 	}
@@ -29,6 +29,7 @@ func (w *UpstreamSupplyWorker) RecoverIssuance(ctx context.Context, tenantID, us
 	if err := model.DB.Where("tenant_id = ? AND order_no = ? AND status = 'paid'", tenantID, orderNo).First(&order).Error; err != nil {
 		return errors.New("只有已付款且未退票的订单可以恢复出票")
 	}
+	defer func() { resultErr = protectUpstreamContactError(&order, resultErr) }()
 	var snapshot model.OrderItemSupplySnapshot
 	lease := time.Now().Truncate(time.Microsecond)
 	err := model.Write(func(tx *gorm.DB) error {
