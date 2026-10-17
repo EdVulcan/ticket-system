@@ -3,10 +3,10 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"ticket-backend/internal/model"
@@ -37,7 +37,7 @@ func zeroPriceMapping(t *testing.T, f xiaohongshuOrderRegressionFixture) {
 	}
 }
 
-func TestXiaohongshuZeroPriceCatalogAndProductionCheckout(t *testing.T) {
+func TestXiaohongshuZeroPriceCatalogAndProductionGate(t *testing.T) {
 	f := seedXiaohongshuOrderRegressionFixture(t)
 	zeroPriceMapping(t, f)
 	service, server := newXiaohongshuOrderRegressionService(t)
@@ -54,28 +54,26 @@ func TestXiaohongshuZeroPriceCatalogAndProductionCheckout(t *testing.T) {
 		t.Fatal(err)
 	}
 	catalog, err = NewMiniappService().ListCatalog(&f.customer)
-	if err != nil || len(catalog.Products) != 1 || catalog.Products[0].PriceCents != 0 || catalog.Products[0].PurchaseBlockedReason != "" {
+	if err != nil || len(catalog.Products) != 1 || catalog.Products[0].PriceCents != 0 || catalog.Products[0].PurchaseBlockedReason != "小红书暂不支持零元下单" {
 		t.Fatalf("production catalog=%+v err=%v", catalog, err)
 	}
 	created, err := service.CreateXiaohongshuOrder(context.Background(), &f.customer, MiniappOrderCreateInput{MappingID: f.mapping.ID, Quantity: 1, ClientRequestID: "zero-production", GuestName: "测试联系人", ContactPhone: "13800138000"})
-	if err != nil || created.AmountCents != 0 || created.CoreOrderStatus != "unpaid" || created.PayToken == "" {
-		t.Fatalf("production zero order=%v", err)
+	var rejected *MiniappOrderCreateError
+	if created != nil || !errors.As(err, &rejected) || rejected.Code != miniappOrderNotCreatedCode || rejected.Message != "小红书暂不支持零元下单" {
+		t.Fatalf("production zero gate result=%+v error=%v", created, err)
 	}
 	var count int64
 	if err := model.DB.Model(&model.Order{}).Where("tenant_id = ? AND environment = 'production' AND total_amount = 0 AND status = 'unpaid'", f.tenantID).Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 {
-		t.Fatalf("zero production order missing: %d", count)
+	if count != 0 {
+		t.Fatalf("zero production order persisted: %d", count)
 	}
 }
 
-func TestXiaohongshuZeroPriceRequiresProviderConfirmationAndSupportsClosure(t *testing.T) {
+func TestXiaohongshuZeroPriceMockSandboxRequiresProviderConfirmationAndSupportsClosure(t *testing.T) {
 	f := seedXiaohongshuOrderRegressionFixture(t)
 	zeroPriceMapping(t, f)
-	if err := model.DB.Model(&f.account).Updates(map[string]interface{}{"environment": "production", "status": "active"}).Error; err != nil {
-		t.Fatal(err)
-	}
 	var providerState atomic.Int32
 	providerState.Store(1)
 	var creates atomic.Int32
@@ -172,11 +170,24 @@ func TestXiaohongshuZeroPriceRequiresProviderConfirmationAndSupportsClosure(t *t
 		t.Fatalf("provider-confirmed zero order status=%s", order.Status)
 	}
 	projected, err := service.GetXiaohongshuOrder(context.Background(), &f.customer, order.OrderNo)
-	if err != nil || projected.CanApplyRefund || !strings.Contains(projected.RefundApplicationMessage, "零元") {
+	if err != nil || projected.CanApplyRefund || projected.RefundApplicationMessage == "" {
 		t.Fatalf("free order refund projection=%+v err=%v", projected, err)
 	}
-	if _, err := NewMiniappService().ApplyXiaohongshuRefund(&f.customer, order.OrderNo, MiniappRefundApplicationInput{ClientRequestID: "zero-return", Reason: "取消行程"}); err == nil || !strings.Contains(err.Error(), "零元") {
+	if _, err := NewMiniappService().ApplyXiaohongshuRefund(&f.customer, order.OrderNo, MiniappRefundApplicationInput{ClientRequestID: "zero-return", Reason: "取消行程"}); err == nil {
 		t.Fatalf("free return must explain current provider limitation: %v", err)
+	}
+	// Existing production zero-price sales retain their explicit refund policy;
+	// the new-sale gate and simulated sandbox fixture do not manufacture one.
+	var legacySale model.Order
+	if err := model.DB.Preload("Items").First(&legacySale, order.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	legacySale.Environment = "production"
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		_, _, err := validateXiaohongshuCustomerRefundApplicationTx(tx, &f.customer, &f.account, &legacySale, false)
+		return err
+	}); !errors.Is(err, errMiniappZeroPriceReturn) {
+		t.Fatalf("legacy zero-price refund eligibility=%v", err)
 	}
 	for _, target := range []interface{}{&model.Refund{}, &model.DigitalRefundTask{}, &model.AfterSaleRequest{}} {
 		var count int64

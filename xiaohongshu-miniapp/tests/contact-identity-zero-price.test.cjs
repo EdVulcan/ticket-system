@@ -249,6 +249,31 @@ test('unknown creation retries the frozen contact identity only in page memory a
   assert.equal(page.data.contactIdCard, '');
 });
 
+test('unknown creation shows one recovery explanation and preserves distinct actionable errors', async () => {
+  let creates = 0;
+  const page = confirmation(() => {
+    creates += 1;
+    return Promise.reject(new Error('network unavailable'));
+  });
+  await page.submit();
+  const frozenPayload = page.orderPayload;
+  const requestId = page.orderRequestId;
+  assert.equal(page.data.orderRecoveryPending, true);
+  assert.equal(Boolean(confirmTemplateExpression(/class="notice recovery-notice" xhs:if="\{\{([^}]+)\}\}"/, page.data)), true);
+  assert.equal(Boolean(confirmTemplateExpression(/class="inline-error" xhs:if="\{\{([^}]+)\}\}"/, page.data)), false);
+  assert.equal(confirmTemplateExpression(/bindtap="submit">\{\{(.+?)\}\}<\/button>/, page.data), '重试确认订单');
+  await page.submit();
+  assert.equal(creates, 2);
+  assert.equal(page.orderPayload, frozenPayload);
+  assert.equal(page.orderRequestId, requestId);
+  page.orderPayload = null;
+  page.submit();
+  assert.match(page.data.error, /恢复信息不可用.*订单列表/);
+  assert.equal(Boolean(confirmTemplateExpression(/class="inline-error" xhs:if="\{\{([^}]+)\}\}"/, page.data)), true);
+  assert.equal(page.data.orderRecoveryPending, true);
+  assert.equal(creates, 2);
+});
+
 test('explicit not-created response clears the identity and requires re-entry', async () => {
   let creates = 0;
   const page = confirmation(url => {

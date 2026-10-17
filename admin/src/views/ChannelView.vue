@@ -194,7 +194,7 @@
         <el-input-number v-if="selectedAccount?.type === 'ctrip'" v-model="mapping.channel_cost_yuan" :min="0" :precision="2" :step="1" controls-position="right" placeholder="携程结算价" class="w-full" />
         <el-button v-if="canActiveWrite" type="primary" @click="addMapping">添加</el-button>
       </div>
-      <el-alert v-if="selectedAccount?.type === 'xiaohongshu' && mapping.channel_sale_yuan === 0" class="mb-4" type="info" :closable="false" title="支持零元商品；订单成交和出票仍须由小红书平台确认。" />
+      <el-alert v-if="selectedAccount?.type === 'xiaohongshu' && mapping.channel_sale_yuan === 0" class="mb-4" type="warning" :closable="false" title="可保存零元配置；小红书当前购票接口要求订单金额大于 0，正式小程序不开放零元下单。" />
       <div v-if="selectedAccount?.type === 'ctrip'" class="flex flex-wrap items-center gap-2 mb-3">
         <el-date-picker v-model="syncDateRange" type="daterange" value-format="YYYY-MM-DD" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" :clearable="false" />
         <span class="text-sm text-gray-500">同步范围最多 90 天</span>
@@ -236,7 +236,7 @@
           <el-form-item label="外部商品编码"><el-input v-model="xiaohongshuMapping.external_code" /></el-form-item>
           <el-form-item label="外部规格编码"><el-input v-model="xiaohongshuMapping.external_sku_id" placeholder="用于小红书 SKU 唯一标识" /></el-form-item>
           <el-form-item label="小程序展示名称"><el-input v-model="xiaohongshuMapping.display_name" placeholder="留空则使用本地产品名称" /></el-form-item>
-          <el-form-item label="小红书售价"><el-input-number v-model="xiaohongshuMapping.channel_sale_yuan" :min="0" :precision="2" :step="1" controls-position="right" class="w-full" /><span v-if="xiaohongshuMapping.channel_sale_yuan === 0" class="mt-1 text-xs leading-5 text-gray-500">支持零元商品；订单成交和出票仍须由小红书平台确认。</span></el-form-item>
+          <el-form-item label="小红书售价"><el-input-number v-model="xiaohongshuMapping.channel_sale_yuan" :min="0" :precision="2" :step="1" controls-position="right" class="w-full" /><span v-if="xiaohongshuMapping.channel_sale_yuan === 0" class="mt-1 text-xs leading-5 text-gray-500">可保存零元配置；小红书当前购票接口要求订单金额大于 0，正式小程序不开放零元下单。</span></el-form-item>
           <el-form-item label="小红书类目">
             <el-select v-model="xiaohongshuMapping.category_id" filterable class="w-full" :placeholder="xiaohongshuCategoryError ? '当前无法获取类目' : '选择支持交易的类目'">
               <el-option v-for="category in xiaohongshuCategories" :key="category.category_id" :label="category.name" :value="category.category_id" :disabled="category.support_trade === false" />

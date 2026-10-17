@@ -148,37 +148,38 @@ type MiniappTicket struct {
 }
 
 type MiniappOrderResult struct {
-	OriginalAmountCents      int64                       `json:"original_amount_cents"`
-	DiscountCents            int64                       `json:"discount_cents"`
-	OrderNo                  string                      `json:"order_no"`
-	PlatformOrderID          string                      `json:"order_id,omitempty"`
-	ProductName              string                      `json:"product_name,omitempty"`
-	ProductDescription       *string                     `json:"product_description,omitempty"`
-	ImageURL                 string                      `json:"image_url,omitempty"`
-	ContactName              string                      `json:"contact_name,omitempty"`
-	ContactPhone             string                      `json:"contact_phone,omitempty"`
-	ContactRealNameRequired  bool                        `json:"contact_real_name_required"`
-	ContactIDCardMasked      string                      `json:"contact_id_card_masked,omitempty"`
-	Quantity                 int                         `json:"quantity"`
-	PayToken                 string                      `json:"pay_token,omitempty"`
-	AmountCents              int64                       `json:"amount_cents"`
-	Status                   string                      `json:"status"`
-	CoreOrderStatus          string                      `json:"core_order_status"`
-	ProviderStatus           string                      `json:"provider_status,omitempty"`
-	PlatformPaymentState     string                      `json:"platform_payment_state"`
-	VoucherIssuanceStatus    string                      `json:"voucher_issuance_status"`
-	TicketIssuanceStatus     string                      `json:"ticket_issuance_status"`
-	RefundPending            bool                        `json:"refund_pending"`
-	CanApplyRefund           bool                        `json:"can_apply_refund"`
-	RefundApplicationStatus  string                      `json:"refund_application_status"`
-	RefundApplicationNo      string                      `json:"refund_application_no"`
-	RefundApplicationMessage string                      `json:"refund_application_message"`
-	ExpiresAt                *time.Time                  `json:"expires_at,omitempty"`
-	TicketCodes              []string                    `json:"ticket_codes,omitempty"`
-	Tickets                  []MiniappTicket             `json:"tickets,omitempty"`
-	ProductKind              string                      `json:"product_kind"`
-	HotelStay                *MiniappHotelStay           `json:"hotel_stay,omitempty"`
-	PackageEntitlements      []MiniappPackageEntitlement `json:"package_entitlements,omitempty"`
+	OriginalAmountCents        int64                       `json:"original_amount_cents"`
+	DiscountCents              int64                       `json:"discount_cents"`
+	OrderNo                    string                      `json:"order_no"`
+	PlatformOrderID            string                      `json:"order_id,omitempty"`
+	ProductName                string                      `json:"product_name,omitempty"`
+	ProductDescription         *string                     `json:"product_description,omitempty"`
+	ImageURL                   string                      `json:"image_url,omitempty"`
+	ContactName                string                      `json:"contact_name,omitempty"`
+	ContactPhone               string                      `json:"contact_phone,omitempty"`
+	ContactRealNameRequired    bool                        `json:"contact_real_name_required"`
+	ContactIDCardMasked        string                      `json:"contact_id_card_masked,omitempty"`
+	Quantity                   int                         `json:"quantity"`
+	PayToken                   string                      `json:"pay_token,omitempty"`
+	AmountCents                int64                       `json:"amount_cents"`
+	Status                     string                      `json:"status"`
+	CoreOrderStatus            string                      `json:"core_order_status"`
+	ProviderStatus             string                      `json:"provider_status,omitempty"`
+	PlatformPaymentState       string                      `json:"platform_payment_state"`
+	OrderCreationBlockedReason string                      `json:"order_creation_blocked_reason,omitempty"`
+	VoucherIssuanceStatus      string                      `json:"voucher_issuance_status"`
+	TicketIssuanceStatus       string                      `json:"ticket_issuance_status"`
+	RefundPending              bool                        `json:"refund_pending"`
+	CanApplyRefund             bool                        `json:"can_apply_refund"`
+	RefundApplicationStatus    string                      `json:"refund_application_status"`
+	RefundApplicationNo        string                      `json:"refund_application_no"`
+	RefundApplicationMessage   string                      `json:"refund_application_message"`
+	ExpiresAt                  *time.Time                  `json:"expires_at,omitempty"`
+	TicketCodes                []string                    `json:"ticket_codes,omitempty"`
+	Tickets                    []MiniappTicket             `json:"tickets,omitempty"`
+	ProductKind                string                      `json:"product_kind"`
+	HotelStay                  *MiniappHotelStay           `json:"hotel_stay,omitempty"`
+	PackageEntitlements        []MiniappPackageEntitlement `json:"package_entitlements,omitempty"`
 }
 
 type MiniappOrderSummary struct {
@@ -556,12 +557,17 @@ func (s MiniappService) ListCatalog(customer *model.MiniappCustomer) (*MiniappCa
 				maxQuantity = maxXiaohongshuOrderCodeQuantity
 			}
 		}
+		purchaseBlockedReason := ""
+		if priceCents == 0 && account.Environment != "sandbox" {
+			purchaseBlockedReason = xiaohongshuZeroPriceBlockedReason
+		}
 		products = append(products, MiniappCatalogProduct{
 			ID: row.MappingID, Name: name, ScenicAreaName: row.ScenicAreaName,
 			ImageURL: row.ImageURL, Description: row.Description, ProductType: row.ProductType,
 			ContactRealNameRequired: row.ContactRealNameRequired,
+			PurchaseBlockedReason:   purchaseBlockedReason,
 			ProductKind:             kind, SaleMode: row.SaleMode, PriceCents: priceCents, MaxQuantity: maxQuantity, Tags: parseProductTags(row.Tags),
-			ValidityType:          row.ValidityType, ValidityDays: row.ValidityDays,
+			ValidityType: row.ValidityType, ValidityDays: row.ValidityDays,
 			RequiresUseDate: (row.PackageID != 0 && row.BookingMode != "after_purchase") || (row.PackageID == 0 && row.StockType == "daily") || (kind == "hotel" && row.SaleMode == "calendar_room"),
 			HotelName:       row.HotelName, RoomTypeName: row.RoomTypeName, RatePlanName: row.RatePlanName,
 			Nights: nights, RoomsPerPackage: rooms, BookingMode: row.BookingMode,

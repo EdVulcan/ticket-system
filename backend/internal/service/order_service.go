@@ -279,6 +279,9 @@ func (s *OrderService) createTx(tx *gorm.DB, req *model.Order, beforePersist fun
 				if mapping.ChannelSaleCents < 0 || (channelAccount.Type == "ctrip" && mapping.ChannelSaleCents == 0) {
 					return errors.New("official channel product pricing is not configured")
 				}
+				if channelAccount.Type == "xiaohongshu" && channelAccount.Environment != "sandbox" && mapping.ChannelSaleCents == 0 {
+					return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", xiaohongshuZeroPriceBlockedReason)
+				}
 				listingForResolution.Price = centsMoney(mapping.ChannelSaleCents)
 				if channelAccount.Type == "ctrip" {
 					if mapping.ChannelCostCents < 0 || mapping.ChannelCostCents > mapping.ChannelSaleCents {
@@ -425,6 +428,9 @@ func (s *OrderService) createTx(tx *gorm.DB, req *model.Order, beforePersist fun
 		if err := beforePersist(tx, req); err != nil {
 			return err
 		}
+	}
+	if channelAccount != nil && channelAccount.Type == "xiaohongshu" && channelAccount.Environment != "sandbox" && moneyCents(req.TotalAmount) == 0 {
+		return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", xiaohongshuZeroPriceBlockedReason)
 	}
 	if err := tx.Create(req).Error; err != nil {
 		return err

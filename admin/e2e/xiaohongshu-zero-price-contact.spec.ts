@@ -17,7 +17,7 @@ const product = {
     { group_name: '大门', max_total_check_in: 1, items: [{ check_point_id: 31, max_per_check_in: 1 }] },
   ] },
 }
-const zeroPriceNotice = '支持零元商品；订单成交和出票仍须由小红书平台确认。'
+const zeroPriceNotice = '可保存零元配置；小红书当前购票接口要求订单金额大于 0，正式小程序不开放零元下单。'
 
 async function json(route: Route, body: unknown) {
   await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })

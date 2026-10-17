@@ -19,8 +19,10 @@ import (
 )
 
 const (
-	xiaohongshuPaymentMethod       = "xiaohongshu"
-	xiaohongshuOrderOperationLease = 30 * time.Second
+	xiaohongshuPaymentMethod                  = "xiaohongshu"
+	xiaohongshuOrderOperationLease            = 30 * time.Second
+	xiaohongshuZeroPriceBlockedReason         = "小红书暂不支持零元下单"
+	xiaohongshuExistingZeroPriceBlockedReason = xiaohongshuZeroPriceBlockedReason + "，请联系商家处理"
 )
 
 const (
@@ -300,6 +302,9 @@ func (s XiaohongshuOrderService) GetXiaohongshuOrder(ctx context.Context, custom
 	if err := model.DB.Where("id = ? AND tenant_id = ?", link.OrderID, customer.TenantID).First(&order).Error; err != nil {
 		return nil, err
 	}
+	if link.State == "creating" && strings.TrimSpace(link.PlatformOrderID) == "" {
+		return s.orderResult(&link, &order, false)
+	}
 	if (link.State == "paid" && link.VoucherIssuanceStatus != "pending") || link.State == "cancelled" || link.State == "failed" {
 		return s.orderResult(&link, &order, false)
 	}
@@ -361,6 +366,9 @@ func (s XiaohongshuOrderService) orderResult(link *model.XiaohongshuOrderLink, o
 			return nil, err
 		}
 		result.ProductDescription = payload.ProductDescription
+		if xiaohongshuZeroPriceCreationBlocked(link, order, &original, payload) {
+			result.OrderCreationBlockedReason = xiaohongshuExistingZeroPriceBlockedReason
+		}
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
@@ -592,6 +600,9 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 		if totalCents < 0 {
 			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "票种售价无效")
 		}
+		if account.Environment != "sandbox" && totalCents == 0 {
+			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", xiaohongshuZeroPriceBlockedReason)
+		}
 		if account.Environment == "sandbox" && totalCents > 10 {
 			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "测试小程序单笔订单金额不能超过 0.10 元")
 		}
@@ -631,6 +642,9 @@ func (s XiaohongshuOrderService) CreateXiaohongshuOrder(ctx context.Context, cus
 				return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", err.Error())
 			}
 			return err
+		}
+		if account.Environment != "sandbox" && quote.AmountCents == 0 {
+			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", xiaohongshuZeroPriceBlockedReason)
 		}
 		if (input.QuoteToken != "" || quote.DiscountCents > 0) && !promotions.ValidateQuoteToken(customer, mapping.ID, input.Quantity, quote, input.QuoteToken) {
 			return newMiniappOrderCreateError(miniappOrderNotCreatedCode, "", "价格或立减资格已变化，请确认最新金额后重新提交")
@@ -1027,6 +1041,37 @@ func decryptXiaohongshuOrderOperationPayload(ciphertext string) (*xiaohongshuOrd
 	return &payload, nil
 }
 
+func xiaohongshuRejectedZeroPricePending(operation *model.XiaohongshuOrderOperation, payload *xiaohongshuOrderOperationPayload) bool {
+	if operation == nil || payload == nil || operation.Status != "pending" || payload.Request.Price.OrderPrice != 0 ||
+		operation.PlatformOrderID != "" || operation.PayTokenCiphertext != "" || operation.PayTokenExpiresAt != nil {
+		return false
+	}
+	message := strings.Join(strings.Fields(operation.LastError), "")
+	return strings.HasPrefix(message, "xiaohongshuAPIrejectedrequest(400001):") && strings.Contains(message, "订单总价必须大于0")
+}
+
+func xiaohongshuZeroPriceCreationBlocked(link *model.XiaohongshuOrderLink, order *model.Order, operation *model.XiaohongshuOrderOperation, payload *xiaohongshuOrderOperationPayload) bool {
+	return link != nil && order != nil && xiaohongshuRejectedZeroPricePending(operation, payload) &&
+		order.Environment == "production" && order.Channel == xiaohongshuPaymentMethod && order.Status == "unpaid" && moneyCents(order.TotalAmount) == 0 &&
+		link.State == "creating" && link.PlatformOrderID == "" && link.PayTokenCiphertext == "" && link.PayTokenExpiresAt == nil &&
+		link.ID == operation.XiaohongshuOrderLinkID && link.OrderID == order.ID &&
+		link.TenantID == order.TenantID && link.TenantID == operation.TenantID &&
+		link.ChannelAccountID == order.ChannelAccountID && link.ChannelAccountID == operation.ChannelAccountID &&
+		link.ExternalOrderID == payload.Request.ExternalOrderID
+}
+
+func (s XiaohongshuOrderService) deferRejectedXiaohongshuZeroPriceOperation(operation *model.XiaohongshuOrderOperation) error {
+	if operation.NextAttemptAt == nil {
+		return errors.New("xiaohongshu order operation lease is required")
+	}
+	// Match the lease and frozen failure so a newer remote success always wins.
+	return model.DB.Model(&model.XiaohongshuOrderOperation{}).
+		Where("id = ? AND tenant_id = ? AND channel_account_id = ? AND status = ? AND next_attempt_at = ?", operation.ID, operation.TenantID, operation.ChannelAccountID, "pending", *operation.NextAttemptAt).
+		Where("request_payload_ciphertext = ? AND last_error = ?", operation.RequestPayloadCiphertext, operation.LastError).
+		Where("platform_order_id = '' AND pay_token_ciphertext = '' AND pay_token_expires_at IS NULL").
+		UpdateColumn("next_attempt_at", s.now().Add(24*time.Hour)).Error
+}
+
 func (s XiaohongshuOrderService) processXiaohongshuOrderOperation(ctx context.Context, operationID uint) (bool, error) {
 	for step := 0; step < 3; step++ {
 		operation, claimed, err := s.claimXiaohongshuOrderOperation(operationID)
@@ -1081,6 +1126,19 @@ func (s XiaohongshuOrderService) executeXiaohongshuOrderRemoteStep(ctx context.C
 	payload, err := decryptXiaohongshuOrderOperationPayload(operation.RequestPayloadCiphertext)
 	if err != nil {
 		return false, err
+	}
+	if xiaohongshuRejectedZeroPricePending(operation, payload) {
+		var link model.XiaohongshuOrderLink
+		var order model.Order
+		if err := model.DB.Where("id = ? AND tenant_id = ? AND channel_account_id = ?", operation.XiaohongshuOrderLinkID, operation.TenantID, operation.ChannelAccountID).First(&link).Error; err != nil {
+			return false, err
+		}
+		if err := model.DB.Where("id = ? AND tenant_id = ? AND channel_account_id = ?", link.OrderID, operation.TenantID, operation.ChannelAccountID).First(&order).Error; err != nil {
+			return false, err
+		}
+		if xiaohongshuZeroPriceCreationBlocked(&link, &order, operation, payload) {
+			return false, s.deferRejectedXiaohongshuZeroPriceOperation(operation)
+		}
 	}
 	var account model.ChannelAccount
 	if err := model.DB.Where("id = ? AND tenant_id = ? AND type = ? AND status IN ?", operation.ChannelAccountID, operation.TenantID, "xiaohongshu", []string{"active", "sandbox"}).First(&account).Error; err != nil {

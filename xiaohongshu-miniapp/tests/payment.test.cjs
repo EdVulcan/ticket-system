@@ -105,6 +105,30 @@ test('confirmation page reports cancellation rather than silently redirecting', 
   assert.match(page.data.error, /取消支付/);
 });
 
+test('confirmation recovery opens a blocked original order without invoking payment or recreating it', async () => {
+  let creates = 0;
+  let destination = '';
+  const reason = '小红书暂不支持零元下单，请联系商家处理';
+  const page = loadPage('pages/order/confirm.js', {
+    request: () => { creates += 1; return Promise.resolve({ order_no: 'ORD-BLOCKED', status: 'unpaid', core_order_status: 'unpaid', platform_payment_state: 'creating', order_creation_blocked_reason: reason }); }
+  }, {
+    requestGuaranteeOrderPayment: () => assert.fail('blocked recovery must not call payment'),
+    redirectTo: ({ url }) => { destination = url; }
+  });
+  page.data.product = { id: 1, price_cents: 0 };
+  page.data.quoteReady = true; page.data.quoteToken = 'original-quote';
+  page.data.guestName = '测试联系人'; page.data.contactPhone = '13800138000';
+  page.orderRequestId = 'original-request';
+  await page.submit();
+  await flush();
+  assert.equal(page.data.submitting, false);
+  assert.equal(page.data.error, reason);
+  assert.equal(page.data.createdOrderNo, 'ORD-BLOCKED');
+  assert.equal(destination, '/pages/order/detail?order_no=ORD-BLOCKED');
+  page.submit();
+  assert.equal(creates, 1);
+});
+
 test('created confirmation orders freeze selection and continue in that order without a second create', async () => {
   let requests = 0;
   let destination = '';
@@ -301,6 +325,55 @@ test('missing payment fields remain visible after an unpaid order refresh', asyn
 
   assert.equal(page.data.status, 'unpaid');
   assert.match(page.data.error, /支付信息不完整/);
+});
+
+test('creating order detail stays pending without payment actions and later refreshes normally', async () => {
+  let response = { order_no: 'ORD-PENDING', status: 'unpaid', core_order_status: 'unpaid', platform_payment_state: 'creating', amount_cents: 0 };
+  let paymentCalls = 0;
+  const page = loadPage('pages/order/detail.js', { request: () => Promise.resolve(response) }, {
+    requestGuaranteeOrderPayment: () => { paymentCalls += 1; }
+  });
+  page.orderNo = 'ORD-PENDING';
+  page.pollCount = 0;
+  await page.loadOrder();
+  assert.equal(page.data.statusTitle, '正在确认订单');
+  assert.equal(page.data.statusDetail, '订单尚在处理中，请稍后刷新，不要重复下单');
+  assert.equal(page.data.status, 'unpaid');
+  assert.equal(page.data.error, '');
+  assert.equal(page.data.ticketCodes.length, 0);
+  assert.equal(page.pollCount, 1);
+  const template = fs.readFileSync(path.join(miniappRoot, 'pages/order/detail.xhsml'), 'utf8');
+  const paymentCondition = template.match(/xhs:if="\{\{([^}]+)\}\}"[^>]*bindtap="continuePayment"/)[1];
+  assert.equal(Boolean(vm.runInNewContext(paymentCondition, page.data)), false);
+  assert.equal(paymentCalls, 0);
+
+  response = { ...response, platform_payment_state: 'unpaid', order_id: 'platform-id', pay_token: 'test-token' };
+  await page.loadOrder();
+  assert.equal(page.data.statusTitle, '订单待支付');
+  assert.equal(Boolean(vm.runInNewContext(paymentCondition, page.data)), true);
+  assert.equal(paymentCalls, 0);
+});
+
+test('platform-rejected zero order detail explains the block without polling or starting payment', async () => {
+  const blocked = { order_no: 'ORD-BLOCKED', status: 'unpaid', core_order_status: 'unpaid', platform_payment_state: 'creating', amount_cents: 0,
+    order_creation_blocked_reason: '小红书暂不支持零元下单，请联系商家处理' };
+  let requests = 0;
+  const page = loadPage('pages/order/detail.js', { request: () => { requests += 1; return Promise.resolve(blocked); } }, {
+    requestGuaranteeOrderPayment: () => assert.fail('blocked order must not start payment')
+  });
+  page.orderNo = blocked.order_no;
+  page.pollCount = 0;
+  await page.loadOrder();
+  assert.equal(page.data.statusTitle, '订单创建受阻');
+  assert.equal(page.data.statusDetail, blocked.order_creation_blocked_reason);
+  assert.equal(page.data.status, 'unpaid');
+  assert.equal(page.data.ticketCodes.length, 0);
+  assert.equal(page.pollCount, 0);
+  assert.equal(page.timer, null);
+  await page.retry();
+  await flush();
+  assert.equal(requests, 2);
+  assert.equal(page.data.statusTitle, '订单创建受阻');
 });
 
 test('detail polling cannot clear payment feedback or re-enable payment while the SDK is active', async () => {

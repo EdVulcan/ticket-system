@@ -34,7 +34,7 @@
     <view class="quote-state" xhs:if="{{quoteLoading}}">正在更新优惠价格...</view>
     <view class="quote-state error" xhs:elif="{{quoteError}}"><text>{{quoteError}}</text><button bindtap="refreshQuote">重新报价</button></view>
     <view class="notice" xhs:if="{{product.purchase_blocked_reason}}"><text class="notice-title">暂不可购买</text><text>{{product.purchase_blocked_reason}}</text></view>
-    <view class="notice recovery-notice" xhs:if="{{orderRecoveryPending}}"><text class="notice-title">订单创建结果待确认</text><text>已保留首次提交的日期、数量、游客信息和报价。请点击下方“重试确认订单”恢复原请求，不要修改当前选择。</text></view>
+    <view class="notice recovery-notice" xhs:if="{{orderRecoveryPending}}"><text class="notice-title">订单结果待确认</text><text>请点击下方“重试确认订单”，继续核对本次提交；不要重复下单。</text></view>
     <view class="notice" xhs:if="{{createdOrderNo}}"><text>订单已创建{{useDate ? ' · ' + useDate : ''}}。如需支付，请继续查看该订单。</text></view>
     <text class="inline-error" xhs:if="{{error}}">{{error}}</text>
     <view class="page-spacer"></view>

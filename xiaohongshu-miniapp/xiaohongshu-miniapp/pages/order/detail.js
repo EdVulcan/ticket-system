@@ -133,7 +133,7 @@ Page({
       const issuanceStatus = order.ticket_issuance_status || order.voucher_issuance_status || '';
       const issuancePending = coreStatus === 'paid' && !order.refund_pending && !packageAwaitingBooking && ticketCodes.length === 0 && (issuanceStatus === 'pending' || issuanceStatus === '');
       const issuanceManualReview = coreStatus === 'paid' && !order.refund_pending && !packageAwaitingBooking && issuanceStatus === 'manual_review';
-      const view = this.statusView(displayStatus, order.product_kind, Boolean(order.pay_token), issuancePending, issuanceManualReview);
+      const view = this.statusView(displayStatus, order.product_kind, Boolean(order.pay_token), issuancePending, issuanceManualReview, order.platform_payment_state, order.order_creation_blocked_reason);
       order.amountText = (Number(order.amount_cents || 0) / 100).toFixed(2);
 	  order.discountText = (Number(order.discount_cents || 0) / 100).toFixed(2);
 	  order.originalAmountText = (Number(order.original_amount_cents || order.amount_cents || 0) / 100).toFixed(2);
@@ -176,7 +176,7 @@ Page({
       } else if (order.refund_pending && Number(this.refundPollCount || 0) < 48) {
         this.refundPollCount = Number(this.refundPollCount || 0) + 1;
         this.schedulePoll(2500);
-      } else if (coreStatus === 'unpaid' && this.pollCount < 15) {
+      } else if (coreStatus === 'unpaid' && !order.order_creation_blocked_reason && this.pollCount < 15) {
         this.pollCount += 1;
         this.schedulePoll(2000);
       }
@@ -335,8 +335,10 @@ Page({
 	  .map((code, index) => ({ code, index: index + 1, canvasId: `ticket-qr-${index + 1}` }));
   },
 
-  statusView(status, productKind, hasPayToken, issuancePending, issuanceManualReview) {
+  statusView(status, productKind, hasPayToken, issuancePending, issuanceManualReview, platformPaymentState, creationBlockedReason) {
     const isPackage = productKind === 'scenic_hotel_package';
+    if (status === 'unpaid' && platformPaymentState === 'creating' && creationBlockedReason) return { label: '待处理', title: '订单创建受阻', detail: creationBlockedReason };
+    if (status === 'unpaid' && platformPaymentState === 'creating') return { label: '确认中', title: '正在确认订单', detail: '订单尚在处理中，请稍后刷新，不要重复下单' };
     if (status === 'unpaid' && !hasPayToken) return { label: '确认中', title: '正在准备支付', detail: '支付信息正在确认，请稍候再试' };
     if (status === 'unpaid') return { label: '待支付', title: '订单待支付', detail: '完成支付后出票，无需重复下单' };
     if (status === 'paid' && issuanceManualReview) return { label: '已支付', title: '支付成功，出票待处理', detail: '票码正在人工核查，请联系商家确认' };

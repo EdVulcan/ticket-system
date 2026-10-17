@@ -395,7 +395,7 @@ Page({
     this.setData({
       submitting: false,
       orderRecoveryPending: true,
-      error: '订单创建结果暂时无法确认，已保留首次提交的日期、数量、游客信息和报价。请点击“重试确认订单”恢复原请求，不要修改当前选择。'
+      error: ''
     });
   },
 
@@ -456,6 +456,11 @@ Page({
       this.orderRecoverySnapshot = null;
       this.setData({ createdOrderNo: order.order_no, orderRecoveryPending: false, contactIdCard: '', calendarOpen: false });
       const status = order.core_order_status || order.status;
+      if (status === 'unpaid' && order.platform_payment_state === 'creating' && order.order_creation_blocked_reason) {
+        this.setData({ submitting: false, error: order.order_creation_blocked_reason });
+        if (typeof xhs.redirectTo === 'function') xhs.redirectTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(order.order_no)}` });
+        return;
+      }
       if (status !== 'unpaid') {
         this.setData({ submitting: false, error: status ? '' : '订单支付状态暂未确认，订单已保留，请在订单详情查询' });
         if (status && typeof xhs.redirectTo === 'function') xhs.redirectTo({ url: `/pages/order/detail?order_no=${encodeURIComponent(order.order_no)}` });
