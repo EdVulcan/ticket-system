@@ -58,9 +58,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import request from '@/utils/request'
+import { readStoredUser, tenantAuthorityKey } from '@/utils/tenantAccess'
 
 type Product = {
   id: number
@@ -80,8 +81,13 @@ const loadError = ref('')
 const products = ref<Product[]>([])
 const form = reactive({ enabled: false, minDiscountYuan: 0, maxDiscountYuan: 0, validityMinutes: 0, cooldownDays: 0, mappingIDs: [] as number[] })
 let session = 0
+let alive = true
+const token = localStorage.getItem('token')
+const authority = tenantAuthorityKey(readStoredUser())
+const isSessionCurrent = () => alive && token === localStorage.getItem('token') && authority === tenantAuthorityKey(readStoredUser())
+onBeforeUnmount(() => { alive = false; ++session })
 
-const isCurrent = (requestSession: number, accountID: number) => visible.value && session === requestSession && props.accountId === accountID
+const isCurrent = (requestSession: number, accountID: number) => isSessionCurrent() && visible.value && session === requestSession && props.accountId === accountID
 const cents = (value: number) => (Number(value || 0) / 100).toFixed(2)
 const hasEnabledValidValues = computed(() =>
   Number.isFinite(form.minDiscountYuan) &&
@@ -99,7 +105,7 @@ const canSave = computed(() => !form.enabled || hasEnabledValidValues.value)
 
 const load = async () => {
   const accountID = props.accountId
-  if (!visible.value || !accountID) return
+  if (!isSessionCurrent() || !visible.value || !accountID) return
   const requestSession = ++session
   loading.value = true
   saving.value = false
@@ -136,7 +142,7 @@ const load = async () => {
 
 const save = async () => {
   const accountID = props.accountId
-  if (!props.canWrite || !loaded.value || saving.value || !accountID || !visible.value || !canSave.value) return
+  if (!isSessionCurrent() || !props.canWrite || !loaded.value || saving.value || !accountID || !visible.value || !canSave.value) return
   const requestSession = session
   saving.value = true
   try {
@@ -147,10 +153,12 @@ const save = async () => {
       validity_minutes: form.validityMinutes,
       cooldown_days: form.cooldownDays,
       mapping_ids: form.mappingIDs,
-    })
+    }, { skipErrorToast: true } as any)
     if (!isCurrent(requestSession, accountID)) return
     ElMessage.success(form.enabled ? '随机立减活动已保存' : '随机立减活动已关闭并保存')
     visible.value = false
+  } catch (error: any) {
+    if (isCurrent(requestSession, accountID)) ElMessage.error(error.response?.data?.error || error.message || '随机立减保存失败，请稍后重试')
   } finally {
     if (isCurrent(requestSession, accountID)) saving.value = false
   }

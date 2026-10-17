@@ -421,6 +421,7 @@ func InitRouterWithMaintenance(r *gin.Engine, maintenanceService *service.Device
 	{
 		commerceLocationGroup.GET("", middleware.RequireTenantPermission(authz.PermissionCatalogRead), commerceOperationsController.ListLocations)
 		commerceLocationGroup.POST("", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.CreateLocation)
+		commerceLocationGroup.PUT("/:locationID", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.UpdateLocation)
 		commerceLocationGroup.PATCH("/:id/status", middleware.RequireTenantPermission(authz.PermissionCatalogWrite), commerceOperationsController.SetLocationStatus)
 	}
 	commerceInventoryGroup := protected.Group("/commerce/inventory")

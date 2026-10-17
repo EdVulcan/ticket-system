@@ -41,10 +41,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { UploadFilled } from '@element-plus/icons-vue'
 import { ElMessage, type UploadFile, type UploadInstance } from 'element-plus'
 import request from '@/utils/request'
+import { readStoredUser, tenantAuthorityKey } from '@/utils/tenantAccess'
 
 const props = defineProps<{ modelValue: boolean; accountId: number | null; canWrite: boolean }>()
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
@@ -59,12 +60,17 @@ const savedImageURL = ref('')
 const draftImageURL = ref('')
 const uploadRef = ref<UploadInstance>()
 let session = 0
+let alive = true
+const token = localStorage.getItem('token')
+const authority = tenantAuthorityKey(readStoredUser())
+const isSessionCurrent = () => alive && token === localStorage.getItem('token') && authority === tenantAuthorityKey(readStoredUser())
+onBeforeUnmount(() => { alive = false; ++session })
 
-const isCurrent = (requestSession: number, accountID: number) => visible.value && session === requestSession && props.accountId === accountID
+const isCurrent = (requestSession: number, accountID: number) => isSessionCurrent() && visible.value && session === requestSession && props.accountId === accountID
 
 const load = async () => {
   const accountID = props.accountId
-  if (!visible.value || !accountID) return
+  if (!isSessionCurrent() || !visible.value || !accountID) return
   const requestSession = ++session
   loading.value = true
   uploading.value = false
@@ -74,7 +80,7 @@ const load = async () => {
   savedImageURL.value = ''
   draftImageURL.value = ''
   try {
-    const response = await request.get(`/channel-accounts/${accountID}/storefront`)
+    const response = await request.get(`/channel-accounts/${accountID}/storefront`, { skipErrorToast: true } as any)
     if (!isCurrent(requestSession, accountID)) return
     savedImageURL.value = response.data.image_url || ''
     draftImageURL.value = savedImageURL.value
@@ -94,7 +100,7 @@ watch(() => [visible.value, props.accountId] as const, ([open]) => {
 
 const uploadImage = async (file: UploadFile) => {
   const accountID = props.accountId
-  if (!props.canWrite || !loaded.value || uploading.value || saving.value || !accountID || !file.raw || !visible.value) return
+  if (!isSessionCurrent() || !props.canWrite || !loaded.value || uploading.value || saving.value || !accountID || !file.raw || !visible.value) return
   if (!['image/jpeg', 'image/png'].includes(file.raw.type)) {
     ElMessage.warning('商城图片仅支持 JPG 或 PNG 格式')
     uploadRef.value?.clearFiles()
@@ -110,12 +116,12 @@ const uploadImage = async (file: UploadFile) => {
   try {
     const form = new FormData()
     form.append('image', file.raw)
-    const response = await request.post(`/channel-accounts/${accountID}/storefront-image`, form, { timeout: 30_000 })
+    const response = await request.post(`/channel-accounts/${accountID}/storefront-image`, form, { timeout: 30_000, skipErrorToast: true } as any)
     if (!isCurrent(requestSession, accountID)) return
     draftImageURL.value = response.data.image_url || draftImageURL.value
     ElMessage.success('商城图片已上传，请保存后应用')
-  } catch {
-    // The request utility reports the upload error. Leave the saved draft intact.
+  } catch (error: any) {
+    if (isCurrent(requestSession, accountID)) ElMessage.error(error.response?.data?.error || error.message || '图片上传失败，请稍后重试')
   } finally {
     if (isCurrent(requestSession, accountID)) uploading.value = false
     uploadRef.value?.clearFiles()
@@ -124,16 +130,16 @@ const uploadImage = async (file: UploadFile) => {
 
 const save = async () => {
   const accountID = props.accountId
-  if (!props.canWrite || !loaded.value || uploading.value || saving.value || !accountID || !visible.value) return
+  if (!isSessionCurrent() || !props.canWrite || !loaded.value || uploading.value || saving.value || !accountID || !visible.value) return
   const requestSession = session
   saving.value = true
   try {
-    await request.put(`/channel-accounts/${accountID}/storefront`, { image_url: draftImageURL.value })
+    await request.put(`/channel-accounts/${accountID}/storefront`, { image_url: draftImageURL.value }, { skipErrorToast: true } as any)
     if (!isCurrent(requestSession, accountID)) return
     savedImageURL.value = draftImageURL.value
     ElMessage.success(draftImageURL.value ? '商城图片已保存' : '商城图片已清除')
-  } catch {
-    // The request utility reports the save error. Keep the draft for an explicit retry.
+  } catch (error: any) {
+    if (isCurrent(requestSession, accountID)) ElMessage.error(error.response?.data?.error || error.message || '商城图片保存失败，请稍后重试')
   } finally {
     if (isCurrent(requestSession, accountID)) saving.value = false
   }

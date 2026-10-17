@@ -472,19 +472,69 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { ArrowDown, Plus, Refresh, UploadFilled } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox, type UploadFile, type UploadInstance } from 'element-plus'
-import request from '@/utils/request'
+import { ElMessage as channelMessage, ElMessageBox as channelMessageBox, type UploadFile, type UploadInstance } from 'element-plus'
+import type { AxiosRequestConfig } from 'axios'
+import apiRequest from '@/utils/request'
 import { localizeDisplayText } from '@/utils/localize'
 import { hasPermission } from '@/utils/permissions'
-import { activeBusinessCapabilitySet, activeCapabilitySet, isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
+import { activeBusinessCapabilitySet, activeCapabilitySet, isActiveScenicSupplier, isScenicHistorySupplier, readStoredUser, tenantAuthorityKey } from '@/utils/tenantAccess'
 import { usePendingRefundRefresh } from '@/composables/usePendingRefundRefresh'
 import ChannelStorefrontDialog from '@/components/ChannelStorefrontDialog.vue'
 import ChannelInstantDiscountDialog from '@/components/ChannelInstantDiscountDialog.vue'
 import OrderRefundDialog from '@/components/OrderRefundDialog.vue'
 
 const currentUser = readStoredUser()
+const channelIdentityKey = (user: any) => `${localStorage.getItem('token') || ''}:${tenantAuthorityKey(user)}`
+const channelSessionKey = channelIdentityKey(currentUser)
+let channelAlive = true
+let channelInvalidated = false
+const channelIsCurrent = () => channelAlive && channelSessionKey === channelIdentityKey(readStoredUser())
+class StaleChannelSession extends Error {}
+const assertChannelSession = () => { if (!channelIsCurrent()) throw new StaleChannelSession() }
+const channelAction = <Args extends any[],>(action: (...args: Args) => Promise<void>) => async (...args: Args) => {
+  if (!channelIsCurrent()) return
+  try { await action(...args) }
+  catch (error) { if (channelIsCurrent() && !(error instanceof StaleChannelSession) && error !== 'cancel' && error !== 'close') throw error }
+}
+const channelWait = async <T,>(promise: Promise<T>): Promise<T> => {
+  try { const result = await promise; assertChannelSession(); return result }
+  catch (error) { assertChannelSession(); throw error }
+}
+// App keys only this page by authority/session. The old component must also stop
+// its asynchronous work: an unmounted function can otherwise write or show a toast.
+const ElMessage = Object.fromEntries(['success', 'error', 'warning', 'info'].map(kind => [kind, (...args: any[]) => {
+  if (channelIsCurrent()) return (channelMessage[kind as 'success'] as any)(...args)
+}])) as Pick<typeof channelMessage, 'success' | 'error' | 'warning' | 'info'>
+let pendingChannelConfirms = 0
+const channelConfirm = async <T,>(open: () => Promise<T>): Promise<T> => {
+  assertChannelSession()
+  ++pendingChannelConfirms
+  try { return await channelWait(open()) }
+  finally { --pendingChannelConfirms }
+}
+const ElMessageBox = {
+  confirm: (...args: Parameters<typeof channelMessageBox.confirm>) => channelConfirm(() => channelMessageBox.confirm(...args)),
+  prompt: (...args: Parameters<typeof channelMessageBox.prompt>) => channelConfirm(() => channelMessageBox.prompt(...args)),
+}
+type ChannelRequestConfig = AxiosRequestConfig & { skipErrorToast?: boolean }
+const channelRequest = async (method: 'get' | 'post' | 'put' | 'patch', url: string, data?: any, config?: ChannelRequestConfig) => {
+  assertChannelSession()
+  try {
+    return await channelWait(apiRequest.request({ ...config, method, url, data, skipErrorToast: true } as ChannelRequestConfig))
+  } catch (error: any) {
+    assertChannelSession()
+    if (!config?.skipErrorToast && error.response?.status !== 401) ElMessage.error(error.response?.data?.error || error.message || '请求失败，请稍后重试')
+    throw error
+  }
+}
+const request = {
+  get: (url: string, config?: ChannelRequestConfig) => channelRequest('get', url, undefined, config),
+  post: (url: string, data?: any, config?: ChannelRequestConfig) => channelRequest('post', url, data, config),
+  put: (url: string, data?: any, config?: ChannelRequestConfig) => channelRequest('put', url, data, config),
+  patch: (url: string, data?: any, config?: ChannelRequestConfig) => channelRequest('patch', url, data, config),
+}
 const capabilities = activeCapabilitySet(currentUser)
 const businessCapabilities = activeBusinessCapabilitySet(currentUser)
 const hasWritePermission = hasPermission(currentUser, 'channels.write')
@@ -592,21 +642,24 @@ const pricing = reactive({ mapping_id: 0, channel_sale_yuan: 0, channel_cost_yua
 const dateValue = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 const syncEnd = new Date(); syncEnd.setDate(syncEnd.getDate() + 30)
 const syncDateRange = ref<[string, string]>([dateValue(new Date()), dateValue(syncEnd)])
+let accountsRequestVersion = 0
 
-const load = async () => {
+const load = channelAction(async () => {
+  const version = ++accountsRequestVersion
   loading.value = true
   try {
     const response = (await request.get('/channel-accounts')).data
+    if (version !== accountsRequestVersion) return
     accounts.value = response.data || []
     wechatServerDomain.value = response.wechat_miniapp_server_domain || ''
-  } finally { loading.value = false }
-}
+  } finally { if (version === accountsRequestVersion) loading.value = false }
+})
 const openCreateDialog = () => {
   Object.assign(form, { code: '', type: canActiveWrite ? 'core' : 'wechat_miniapp', app_id: '', secret: '', aes_key: '', aes_iv: '', status: canActiveWrite ? 'active' : 'active' })
   createDialog.value = true
 }
 const handleAdapterTypeChange = (type: string) => { form.status = ['ctrip', 'xiaohongshu'].includes(type) ? 'sandbox' : 'active'; form.app_id = ''; form.secret = ''; form.aes_key = ''; form.aes_iv = '' }
-const create = async () => {
+const create = channelAction(async () => {
   if (!form.code.trim()) { ElMessage.warning('请填写渠道编码'); return }
   if (form.type === 'ctrip' && (!form.app_id.trim() || !form.secret.trim() || form.aes_key.length !== 16 || form.aes_iv.length !== 16)) { ElMessage.warning('请完整填写携程接口参数，AES 密钥和初始向量必须为 16 位'); return }
   if (['xiaohongshu', 'wechat_miniapp'].includes(form.type) && (!form.app_id.trim() || !form.secret.trim())) { ElMessage.warning(`请完整填写${form.type === 'wechat_miniapp' ? '微信' : '小红书'}小程序 AppID 和 AppSecret`); return }
@@ -618,16 +671,16 @@ const create = async () => {
     Object.assign(form, { code: '', type: 'core', app_id: '', secret: '', aes_key: '', aes_iv: '', status: 'active' })
     await load()
   } finally { saving.value = false }
-}
+})
 const openCtripConfig = (row: any) => { selectedAccount.value = row; Object.assign(ctripConfig, { account_id: row.app_id || '', sign_key: '', aes_key: '', aes_iv: '' }); ctripConfigDialog.value = true }
 const openStorefront = (row: any) => { storefrontAccount.value = row; storefrontDialog.value = true }
 const openInstantDiscount = (row: any) => { instantDiscountAccount.value = row; instantDiscountDialog.value = true }
-const saveCtripConfig = async () => {
+const saveCtripConfig = channelAction(async () => {
   if (!selectedAccount.value || !ctripConfig.account_id.trim() || !ctripConfig.sign_key.trim() || ctripConfig.aes_key.length !== 16 || ctripConfig.aes_iv.length !== 16) { ElMessage.warning('请完整填写参数，AES 密钥和初始向量必须为 16 位'); return }
   ctripConfigSaving.value = true
   try { await request.put(`/channel-accounts/${selectedAccount.value.id}/ctrip-config`, { ...ctripConfig }); ctripConfigDialog.value = false; ElMessage.success('携程接口参数已保存'); await load() }
   finally { ctripConfigSaving.value = false }
-}
+})
 const openXiaohongshuConfig = (row: any) => {
   selectedAccount.value = row
   Object.assign(xiaohongshuConfig, { app_id: row.app_id || '', app_secret: '', message_token: '', encoding_aes_key: '' })
@@ -639,7 +692,7 @@ const openWechatConfig = (row: any) => {
   Object.assign(wechatConfig, { app_id: row.app_id || '', app_secret: '' })
   wechatConfigDialog.value = true
 }
-const saveWechatConfig = async () => {
+const saveWechatConfig = channelAction(async () => {
   if (!selectedAccount.value || !wechatConfig.app_id.trim() || !wechatConfig.app_secret.trim()) { ElMessage.warning('请完整填写微信小程序 AppID 和 AppSecret'); return }
   wechatConfigSaving.value = true
   try {
@@ -649,8 +702,8 @@ const saveWechatConfig = async () => {
     ElMessage.success('微信小程序参数已保存')
     await load()
   } finally { wechatConfigSaving.value = false }
-}
-const diagnoseXiaohongshu = async (row: any) => {
+})
+const diagnoseXiaohongshu = channelAction(async (row: any) => {
   selectedAccount.value = row
   xiaohongshuDiagnostic.value = null
   xiaohongshuDiagnosticDialog.value = true
@@ -662,7 +715,7 @@ const diagnoseXiaohongshu = async (row: any) => {
   } finally {
     xiaohongshuDiagnosticLoading.value = false
   }
-}
+})
 const diagnosticChecks = (diagnostic: any) => [
   { key: 'credentials', label: '调用凭证', ...diagnostic.credentials },
   { key: 'categories', label: '交易类目', ...diagnostic.categories },
@@ -682,12 +735,12 @@ const generateXiaohongshuMessageKeys = () => {
   xiaohongshuConfigSaved.value = false
 }
 const xiaohongshuEndpoint = () => `${window.location.origin}/api/v1/integrations/xiaohongshu/events/${xiaohongshuConfig.app_id.trim()}`
-const copyText = async (value: string, label: string) => {
+const copyText = channelAction(async (value: string, label: string) => {
   if (!value) { ElMessage.warning(`请先填写或生成${label}`); return }
   await navigator.clipboard.writeText(value)
   ElMessage.success(`${label}已复制`)
-}
-const saveXiaohongshuConfig = async () => {
+})
+const saveXiaohongshuConfig = channelAction(async () => {
   if (!selectedAccount.value || !xiaohongshuConfig.app_id.trim() || !xiaohongshuConfig.app_secret.trim() || !/^[A-Za-z0-9]{3,32}$/.test(xiaohongshuConfig.message_token) || !/^[A-Za-z0-9]{43}$/.test(xiaohongshuConfig.encoding_aes_key)) { ElMessage.warning('请完整填写 AppID、AppSecret，并生成符合要求的 Token 和 EncodingAESKey'); return }
   xiaohongshuConfigSaving.value = true
   try {
@@ -697,10 +750,10 @@ const saveXiaohongshuConfig = async () => {
     ElMessage.success('参数已保存，请继续配置小红书后台')
     await load()
   } finally { xiaohongshuConfigSaving.value = false }
-}
-const copyCtripEndpoint = async () => { await navigator.clipboard.writeText(ctripEndpoint); ElMessage.success('接口地址已复制') }
+})
+const copyCtripEndpoint = channelAction(async () => { await navigator.clipboard.writeText(ctripEndpoint); ElMessage.success('接口地址已复制') })
 const openCtripSandboxConsume = (row: any) => { selectedAccount.value = row; ctripSandboxSupplierOrderID.value = ''; ctripSandboxConsumeDialog.value = true }
-const simulateCtripSandboxConsumption = async () => {
+const simulateCtripSandboxConsumption = channelAction(async () => {
   if (!selectedAccount.value || !ctripSandboxSupplierOrderID.value.trim()) { ElMessage.warning('请填写供应商订单号'); return }
   await ElMessageBox.confirm('该操作会把指定沙箱订单标记为已核销并向携程发送核销通知，确认继续？', '确认沙箱核销', { type: 'warning' })
   ctripSandboxConsuming.value = true
@@ -709,17 +762,17 @@ const simulateCtripSandboxConsumption = async () => {
     ctripSandboxConsumeDialog.value = false
     ElMessage.success('核销通知已进入可靠发送队列')
   } finally { ctripSandboxConsuming.value = false }
-}
-const toggleStatus = async (row: any) => { const status = row.status === 'disabled' ? (row.environment === 'sandbox' ? 'sandbox' : 'active') : 'disabled'; await request.patch(`/channel-accounts/${row.id}/status`, { status }); row.status = status; ElMessage.success('状态已更新') }
-const toggleMemberMode = async (row: any) => {
+})
+const toggleStatus = channelAction(async (row: any) => { const status = row.status === 'disabled' ? (row.environment === 'sandbox' ? 'sandbox' : 'active') : 'disabled'; await request.patch(`/channel-accounts/${row.id}/status`, { status }); row.status = status; ElMessage.success('状态已更新') })
+const toggleMemberMode = channelAction(async (row: any) => {
   const memberMode = row.member_mode === 'first_party' ? 'disabled' : 'first_party'
   const action = memberMode === 'first_party' ? '启用' : '停用'
   await ElMessageBox.confirm(`${action}后将${memberMode === 'first_party' ? '为该自营渠道的新登录用户建立会员身份，并纳入消费统计' : '停止该渠道的新会员归属；历史订单和会员记录保留'}，确认继续？`, `${action}会员身份`, { type: memberMode === 'first_party' ? 'warning' : 'info' })
   await request.patch(`/channel-accounts/${row.id}/member-mode`, { member_mode: memberMode })
   row.member_mode = memberMode
   ElMessage.success(`会员身份已${action}`)
-}
-const switchXiaohongshuEnvironment = async (row: any) => {
+})
+const switchXiaohongshuEnvironment = channelAction(async (row: any) => {
   const status = row.status === 'sandbox' ? 'active' : 'sandbox'
   const label = status === 'sandbox' ? '测试环境' : '正式环境'
   await ElMessageBox.confirm(`切换后将立即使用小红书${label}接口和当前环境凭据，确认继续？`, '切换运行环境', { type: 'warning' })
@@ -727,9 +780,9 @@ const switchXiaohongshuEnvironment = async (row: any) => {
   row.status = status
   row.environment = status === 'sandbox' ? 'sandbox' : 'production'
   ElMessage.success(`已切换到${label}`)
-}
-const rotate = async (row: any) => { await ElMessageBox.confirm('轮换后旧密钥立即失效，确认继续？', '确认轮换', { type: 'warning' }); const response = await request.post(`/channel-accounts/${row.id}/rotate-secret`); newSecret.value = response.data.secret; secretDialog.value = true }
-const handleAccountCommand = async (command: string, row: any) => {
+})
+const rotate = channelAction(async (row: any) => { await ElMessageBox.confirm('轮换后旧密钥立即失效，确认继续？', '确认轮换', { type: 'warning' }); const response = await request.post(`/channel-accounts/${row.id}/rotate-secret`); newSecret.value = response.data.secret; secretDialog.value = true })
+const handleAccountCommand = channelAction(async (command: string, row: any) => {
   if (command === 'storefront') await openStorefront(row)
   if (command === 'instant-discount') await openInstantDiscount(row)
   if (command === 'xiaohongshu-config') await openXiaohongshuConfig(row)
@@ -743,9 +796,9 @@ const handleAccountCommand = async (command: string, row: any) => {
   if (command === 'toggle-status') await toggleStatus(row)
   if (command === 'toggle-member-mode') await toggleMemberMode(row)
   if (command === 'rotate-secret') await rotate(row)
-}
+})
 const productName = (id: number) => products.value.find((product: any) => Number(product.id) === Number(id))?.name || '已下架或不可见产品'
-const openMapping = async (row: any) => {
+const openMapping = channelAction(async (row: any) => {
   selectedAccount.value = row; selectedID.value = row.id
   mappingProductType.value = 'online'
   Object.assign(mapping, { external_code: '', display_name: '', product_id: null, channel_sale_yuan: 0, channel_cost_yuan: 0 })
@@ -753,20 +806,21 @@ const openMapping = async (row: any) => {
     request.get('/channel-accounts/mappings', { params: { channel_account_id: row.id } }),
     request.get('/products', { params: { page: 1, page_size: 100 } }),
   ])
+  assertChannelSession()
   mappings.value = mappingResponse.data.data || []
   products.value = (productResponse.data.data || []).filter((product: any) => product.product_kind !== 'hotel')
   ctripSyncTasks.value = []
   if (row.type === 'ctrip') await loadCtripSyncTasks()
   mappingDialog.value = true
-}
-const addMapping = async () => {
+})
+const addMapping = channelAction(async () => {
   if (!mapping.external_code.trim() || !mapping.product_id) { ElMessage.warning('请选择产品并填写外部编码'); return }
   if (selectedAccount.value?.type === 'ctrip' && (mapping.channel_sale_yuan <= 0 || mapping.channel_cost_yuan < 0 || mapping.channel_cost_yuan > mapping.channel_sale_yuan)) { ElMessage.warning('携程销售价必须大于 0，结算价不能高于销售价'); return }
   if (selectedAccount.value?.type === 'xiaohongshu' && (!Number.isFinite(mapping.channel_sale_yuan) || mapping.channel_sale_yuan < 0)) { ElMessage.warning('小红书售价不能为负数，请填写有效金额'); return }
   const response = await request.post('/channel-accounts/mappings', { channel_account_id: selectedID.value, external_code: mapping.external_code.trim(), display_name: mapping.display_name.trim(), product_id: mapping.product_id, channel_sale_cents: Math.round(mapping.channel_sale_yuan * 100), channel_cost_cents: Math.round(mapping.channel_cost_yuan * 100) })
   mappings.value.unshift(response.data)
   Object.assign(mapping, { external_code: '', display_name: '', product_id: null, channel_sale_yuan: 0, channel_cost_yuan: 0 })
-}
+})
 const xiaohongshuResourceError = (error: any) => error?.response?.data?.error || '暂时无法加载，请稍后重试'
 const loadXiaohongshuResources = async (accountID: number) => {
   const resources = { categories: [] as any[], pois: [] as any[], categoryError: '', poiError: '' }
@@ -776,12 +830,14 @@ const loadXiaohongshuResources = async (accountID: number) => {
     const categoryResult = await request.get(`/channel-accounts/${accountID}/xiaohongshu-categories`, { skipErrorToast: true } as any)
     resources.categories = categoryResult.data.data || []
   } catch (error: any) {
+    assertChannelSession()
     resources.categoryError = xiaohongshuResourceError(error)
   }
   try {
     const poiResult = await request.get(`/channel-accounts/${accountID}/xiaohongshu-pois`, { params: { page: 1, page_size: 100 }, skipErrorToast: true } as any)
     resources.pois = poiResult.data.data || []
   } catch (error: any) {
+    assertChannelSession()
     resources.poiError = xiaohongshuResourceError(error)
   }
   return resources
@@ -853,6 +909,7 @@ const refreshXiaohongshuMappingState = async (accountID: number, mappingID: numb
     request.get('/channel-accounts/mappings', { params: { channel_account_id: accountID }, skipErrorToast: true } as any),
     request.get(`/channel-accounts/${accountID}/mappings/${mappingID}/xiaohongshu-product`, { skipErrorToast: true } as any),
   ])
+  assertChannelSession()
   if (!isCurrentXiaohongshuMappingDialog(session, accountID, mappingID)) return { ...state, errors: ['发布配置窗口已关闭，未能更新当前页面'] }
   if (mappingResult.status === 'fulfilled') {
     const rows = Array.isArray(mappingResult.value.data?.data) ? mappingResult.value.data.data : []
@@ -889,7 +946,7 @@ const stopXiaohongshuAuditRefresh = () => {
     xiaohongshuAuditRefreshTimer = undefined
   }
 }
-const refreshXiaohongshuAudit = async (queryUpstream = false) => {
+const refreshXiaohongshuAudit = channelAction(async (queryUpstream = false) => {
   const session = xiaohongshuMappingDialogSession
   const generation = xiaohongshuAuditProjectionGeneration
   const accountID = selectedAccount.value?.id
@@ -907,12 +964,12 @@ const refreshXiaohongshuAudit = async (queryUpstream = false) => {
   } finally {
     xiaohongshuAuditRefreshing.value = false
   }
-}
+})
 const startXiaohongshuAuditRefresh = () => {
   stopXiaohongshuAuditRefresh()
   xiaohongshuAuditRefreshTimer = window.setInterval(() => { void refreshXiaohongshuAudit() }, xiaohongshuAuditRefreshIntervalMs)
 }
-const openXiaohongshuMappingEdit = async (row: any) => {
+const openXiaohongshuMappingEdit = channelAction(async (row: any) => {
   if (!selectedAccount.value) return
   stopXiaohongshuAuditRefresh()
   const session = ++xiaohongshuMappingDialogSession
@@ -932,6 +989,7 @@ const openXiaohongshuMappingEdit = async (row: any) => {
       loadXiaohongshuResources(accountID),
       request.get(`/channel-accounts/${accountID}/mappings/${mappingID}/xiaohongshu-product`),
     ])
+    assertChannelSession()
     if (!isCurrentXiaohongshuMappingDialog(session, accountID, mappingID)) return
     if (resourceResult.status === 'fulfilled') applyXiaohongshuResources(resourceResult.value)
     if (configResult.status === 'fulfilled') {
@@ -943,8 +1001,8 @@ const openXiaohongshuMappingEdit = async (row: any) => {
   } finally {
     if (isCurrentXiaohongshuMappingDialog(session, accountID, mappingID)) xiaohongshuMappingLoading.value = false
   }
-}
-const reloadXiaohongshuResources = async () => {
+})
+const reloadXiaohongshuResources = channelAction(async () => {
   const session = xiaohongshuMappingDialogSession
   const accountID = selectedAccount.value?.id
   const mappingID = xiaohongshuMapping.mapping_id
@@ -958,8 +1016,8 @@ const reloadXiaohongshuResources = async () => {
   } finally {
     if (isCurrentXiaohongshuMappingDialog(session, accountID, mappingID)) xiaohongshuResourceLoading.value = false
   }
-}
-const uploadXiaohongshuImage = async (file: UploadFile) => {
+})
+const uploadXiaohongshuImage = channelAction(async (file: UploadFile) => {
   if (!selectedAccount.value || !xiaohongshuMapping.mapping_id || !file.raw) return
   if (!['image/jpeg', 'image/png'].includes(file.raw.type)) {
     ElMessage.warning('商品图片仅支持 JPG 或 PNG 格式')
@@ -982,8 +1040,8 @@ const uploadXiaohongshuImage = async (file: UploadFile) => {
     xiaohongshuImageUploading.value = false
     xiaohongshuImageUpload.value?.clearFiles()
   }
-}
-const saveXiaohongshuMapping = async (syncAfterSave: boolean) => {
+})
+const saveXiaohongshuMapping = channelAction(async (syncAfterSave: boolean) => {
   if (!selectedAccount.value || !xiaohongshuMapping.external_code.trim() || !xiaohongshuMapping.external_sku_id.trim() || !Number.isFinite(xiaohongshuMapping.channel_sale_yuan) || xiaohongshuMapping.channel_sale_yuan < 0 || !xiaohongshuMapping.category_id || !xiaohongshuMapping.image_url.trim() || !xiaohongshuMapping.description.trim()) { ElMessage.warning('请完整填写商品编码、规格编码、非负售价、类目、图片和商品说明'); return }
   if (!xiaohongshuMapping.product_path.startsWith('/') || !xiaohongshuMapping.order_path.startsWith('/')) { ElMessage.warning('小程序页面路径必须以 / 开头'); return }
   if (selectedAccount.value.status === 'sandbox' && Math.round(xiaohongshuMapping.channel_sale_yuan * 100) > 10) { ElMessage.warning('测试小程序售价不能高于 0.10 元，否则无法完成支付测试'); return }
@@ -1025,6 +1083,7 @@ const saveXiaohongshuMapping = async (syncAfterSave: boolean) => {
       if (isCurrentXiaohongshuMappingDialog(session, accountID, mappingID)) ElMessage.success('小红书商品发布配置已保存')
     }
   } catch (error: any) {
+    if (!channelIsCurrent()) return
     const refreshed = await refreshXiaohongshuMappingState(accountID, mappingID, session, mappingPayload, configPayload)
     const errorMessage = error?.response?.data?.error || error?.message || '请求失败，请稍后重试'
     let message = ''
@@ -1052,12 +1111,12 @@ const saveXiaohongshuMapping = async (syncAfterSave: boolean) => {
       xiaohongshuMappingSyncing.value = false
     }
   }
-}
-const loadCtripSyncTasks = async () => {
+})
+const loadCtripSyncTasks = channelAction(async () => {
   if (!selectedAccount.value || selectedAccount.value.type !== 'ctrip') return
   ctripSyncTasks.value = (await request.get(`/channel-accounts/${selectedAccount.value.id}/ctrip-sync-tasks`, { params: { limit: 100 } })).data.data || []
-}
-const syncMapping = async (row: any) => {
+})
+const syncMapping = channelAction(async (row: any) => {
   if (!selectedAccount.value || syncDateRange.value.length !== 2) return
   syncingMappingID.value = row.id
   try {
@@ -1065,9 +1124,9 @@ const syncMapping = async (row: any) => {
     ElMessage.success('价格和库存已进入同步队列')
     await loadCtripSyncTasks()
   } finally { syncingMappingID.value = 0 }
-}
+})
 const openPricing = (row: any) => { Object.assign(pricing, { mapping_id: row.id, channel_sale_yuan: Number(row.channel_sale_cents || 0) / 100, channel_cost_yuan: Number(row.channel_cost_cents || 0) / 100 }); pricingDialog.value = true }
-const savePricing = async () => {
+const savePricing = channelAction(async () => {
   if (!selectedAccount.value || pricing.channel_sale_yuan <= 0 || pricing.channel_cost_yuan < 0 || pricing.channel_cost_yuan > pricing.channel_sale_yuan) { ElMessage.warning('携程销售价必须大于 0，结算价不能高于销售价'); return }
   pricingSaving.value = true
   try {
@@ -1077,7 +1136,7 @@ const savePricing = async () => {
     pricingDialog.value = false
     ElMessage.success('携程渠道价格已更新，请按需要重新同步')
   } finally { pricingSaving.value = false }
-}
+})
 const dateTime = (value: string) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '-'
 const xiaohongshuSyncAlertType = computed(() => {
   if (xiaohongshuMapping.sync_status === 'failed') return 'error'
@@ -1124,7 +1183,7 @@ const afterSaleTypeText = (type: string) => ({ refund: '退票', reschedule: '�
 const afterSaleStatusText = (status: string) => ({ pending: '待审核', approved: '已批准', processing: '处理中', completed: '已完成', rejected: '已拒绝', failed: '处理失败' } as Record<string, string>)[status] || '未知状态'
 const operationText = (operation: string) => ({ sale: '销售', payment: '收款', cancel: '取消', refund: '退款' } as Record<string, string>)[operation] || '其他'
 const orderTickets = (order: any) => (order?.items || []).flatMap((item: any) => (item.tickets || []).map((ticket: any) => ({ ...ticket, product_name: item.product_name })))
-const loadOrders = async (page = 1, skipErrorToast = false, silent = false) => {
+const loadOrders = channelAction(async (page = 1, skipErrorToast = false, silent = false) => {
   if (!selectedAccount.value) return
   const accountID = selectedAccount.value.id
   const requestVersion = ++orderListRequestVersion
@@ -1136,21 +1195,21 @@ const loadOrders = async (page = 1, skipErrorToast = false, silent = false) => {
     channelOrders.value = response.data.data || []
     orderTotal.value = Number(response.data.total || 0)
   } finally { if (requestVersion === orderListRequestVersion && !silent) ordersLoading.value = false }
-}
-const openOrders = async (row: any) => {
+})
+const openOrders = channelAction(async (row: any) => {
   selectedAccount.value = row
   orderSearch.value = ''
   orderStatus.value = ''
   ordersDialog.value = true
   await loadOrders(1)
-}
-const openOrderDetail = async (row: any, skipErrorToast = false) => {
+})
+const openOrderDetail = channelAction(async (row: any, skipErrorToast = false) => {
   if (!selectedAccount.value) return
   orderDetail.value = null
   orderDetailDialog.value = true
   await loadOrderDetail(row.order_no, skipErrorToast)
-}
-const loadOrderDetail = async (orderNo: string, skipErrorToast = false, silent = false) => {
+})
+const loadOrderDetail = channelAction(async (orderNo: string, skipErrorToast = false, silent = false) => {
   if (!selectedAccount.value) return
   const accountID = selectedAccount.value.id
   const requestVersion = ++orderDetailRequestVersion
@@ -1160,12 +1219,12 @@ const loadOrderDetail = async (orderNo: string, skipErrorToast = false, silent =
     if (requestVersion !== orderDetailRequestVersion || !orderDetailDialog.value || selectedAccount.value?.id !== accountID) return
     orderDetail.value = response.data
   } finally { if (requestVersion === orderDetailRequestVersion && !silent) orderDetailLoading.value = false }
-}
+})
 const openOrderRefund = (row: any) => {
   if (!canOpenOrderRefund(row)) return
   orderRefundDialog.value?.open(row.order_no, `/channel-accounts/${selectedAccount.value.id}/orders/${encodeURIComponent(row.order_no)}`)
 }
-const refreshRefundOrders = async () => {
+const refreshRefundOrders = channelAction(async () => {
   const detailOrder = orderDetail.value?.order
   try {
     await loadOrders(orderPage.value, true)
@@ -1173,7 +1232,7 @@ const refreshRefundOrders = async () => {
   } catch {
     ElMessage.warning('退款结果已返回，但订单信息刷新失败，请手动刷新查看')
   }
-}
+})
 const hasPendingRefund = (order: any, refunds: any[] = []) => Boolean(order?.refund_pending) || refunds.some(refund =>
   ['pending', 'group_pending', 'processing', 'submitted', 'manual_review', 'group_manual_review'].includes(refund?.status))
 const canOpenOrderRefund = (order: any, refunds: any[] = []) => {
@@ -1189,7 +1248,7 @@ usePendingRefundRefresh(
   },
   () => ordersLoading.value || orderDetailLoading.value
 )
-const loadRequests = async () => {
+const loadRequests = channelAction(async () => {
   if (!selectedAccount.value) return
   requestsLoading.value = true
   try {
@@ -1197,9 +1256,9 @@ const loadRequests = async () => {
     channelRequests.value = response.data.data || []
     requestTotal.value = Number(response.data.total || 0)
   } finally { requestsLoading.value = false }
-}
-const openRequests = async (row: any) => { selectedAccount.value = row; requestStatus.value = ''; requestsDialog.value = true; await loadRequests() }
-const authorizeRetry = async (row: any) => {
+})
+const openRequests = channelAction(async (row: any) => { selectedAccount.value = row; requestStatus.value = ''; requestsDialog.value = true; await loadRequests() })
+const authorizeRetry = channelAction(async (row: any) => {
   if (!selectedAccount.value) return
   try {
     const result = await ElMessageBox.prompt('确认故障原因已排除，并填写授权重试原因。渠道方仍需使用相同请求编号和相同正文重新发送。', '授权渠道重试', { inputType: 'textarea', inputValidator: value => value.trim() ? true : '授权原因必填' })
@@ -1209,14 +1268,14 @@ const authorizeRetry = async (row: any) => {
   } catch (action: any) {
     if (action !== 'cancel' && action !== 'close') ElMessage.error(action.response?.data?.error || '授权重试失败')
   }
-}
-const loadReconciliations = async () => {
+})
+const loadReconciliations = channelAction(async () => {
   if (!selectedAccount.value) return
   reconciliationsLoading.value = true
   try { reconciliations.value = (await request.get(`/channel-accounts/${selectedAccount.value.id}/reconciliations`, { params: { page: 1, page_size: 100 } })).data.data || [] }
   finally { reconciliationsLoading.value = false }
-}
-const openReconciliations = async (row: any) => { selectedAccount.value = row; reconciliationsDialog.value = true; await loadReconciliations() }
+})
+const openReconciliations = channelAction(async (row: any) => { selectedAccount.value = row; reconciliationsDialog.value = true; await loadReconciliations() })
 const parseBill = () => billText.value.split(/\r?\n/).map(line => line.trim()).filter(Boolean).map((line, index) => {
   const cells = line.split(/[\t,，]/).map(value => value.trim())
   if (index === 0 && /外部单号|external/i.test(cells[0] || '')) return null
@@ -1227,7 +1286,7 @@ const parseBill = () => billText.value.split(/\r?\n/).map(line => line.trim()).f
   if (occurred && Number.isNaN(occurred.getTime())) throw new Error(`第 ${index + 1} 行时间格式不正确`)
   return { external_no: cells[0], operation, amount_cents: Math.round(amount * 100), currency: 'CNY', external_occurred_at: occurred?.toISOString() }
 }).filter(Boolean)
-const importBill = async () => {
+const importBill = channelAction(async () => {
   if (!selectedAccount.value || !billBatchKey.value.trim() || !billText.value.trim()) { ElMessage.warning('批次号和账单内容必填'); return }
   billImporting.value = true
   try {
@@ -1240,14 +1299,14 @@ const importBill = async () => {
     await loadReconciliations()
   } catch (e: any) { ElMessage.error(e.response?.data?.error || e.message || '账单导入失败') }
   finally { billImporting.value = false }
-}
-const openReconciliationDetail = async (row: any) => {
+})
+const openReconciliationDetail = channelAction(async (row: any) => {
   if (!selectedAccount.value) return
   reconciliationDetailDialog.value = true
   reconciliationDetailLoading.value = true
   try { reconciliationDetail.value = (await request.get(`/channel-accounts/${selectedAccount.value.id}/reconciliations/${row.id}`)).data }
   finally { reconciliationDetailLoading.value = false }
-}
+})
 watch(xiaohongshuMappingDialog, visible => {
   if (!visible) {
     ++xiaohongshuMappingDialogSession
@@ -1255,13 +1314,39 @@ watch(xiaohongshuMappingDialog, visible => {
     stopXiaohongshuAuditRefresh()
   }
 })
-onMounted(load)
-onUnmounted(() => {
+const invalidateChannelSession = () => {
+  if (channelInvalidated || channelIsCurrent()) return
+  channelInvalidated = true
+  channelAlive = false
+  if (pendingChannelConfirms) channelMessageBox.close()
   stopXiaohongshuAuditRefresh()
   orderListRequestVersion += 1
   orderDetailRequestVersion += 1
-  ordersDialog.value = false
-  orderDetailDialog.value = false
+  ;[createDialog, mappingDialog, secretDialog, requestsDialog, storefrontDialog, instantDiscountDialog, ordersDialog, orderDetailDialog,
+    reconciliationsDialog, billImportDialog, reconciliationDetailDialog, ctripConfigDialog, xiaohongshuConfigDialog, wechatConfigDialog,
+    wechatDomainsDialog, xiaohongshuDiagnosticDialog, ctripSandboxConsumeDialog, xiaohongshuMappingDialog, pricingDialog].forEach(dialog => { dialog.value = false })
+  ;[form, ctripConfig, wechatConfig, xiaohongshuConfig, xiaohongshuMapping, mapping, pricing].forEach(draft => {
+    Object.assign(draft, Object.fromEntries(Object.entries(draft).map(([key, value]) => [key, typeof value === 'string' ? '' : Array.isArray(value) ? [] : 0])))
+  })
+  ;[accounts, mappings, products, channelOrders, channelRequests, reconciliations, ctripSyncTasks, xiaohongshuCategories, xiaohongshuPOIs].forEach(rows => { rows.value = [] })
+  ;[selectedAccount, storefrontAccount, instantDiscountAccount, orderDetail, reconciliationDetail, xiaohongshuDiagnostic].forEach(selected => { selected.value = null })
+  selectedID.value = 0
+  orderTotal.value = 0
+  requestTotal.value = 0
+  newSecret.value = ''
+  billText.value = ''
+  billBatchKey.value = ''
+  ctripSandboxSupplierOrderID.value = ''
+  orderRefundDialog.value?.close()
+}
+onMounted(() => {
+  window.addEventListener('tenant-identity-refreshed', invalidateChannelSession)
+  void load()
+})
+onBeforeUnmount(() => {
+  channelAlive = false
+  invalidateChannelSession()
+  window.removeEventListener('tenant-identity-refreshed', invalidateChannelSession)
 })
 </script>
 

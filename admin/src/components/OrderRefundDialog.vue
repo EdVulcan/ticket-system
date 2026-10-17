@@ -30,11 +30,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { hasPermission } from '@/utils/permissions'
-import { isScenicHistorySupplier, readStoredUser } from '@/utils/tenantAccess'
+import { isScenicHistorySupplier, readStoredUser, tenantAuthorityKey } from '@/utils/tenantAccess'
 
 const emit = defineEmits<{ changed: [] }>()
 const visible = ref(false)
@@ -76,12 +76,61 @@ let requestKey = ''
 let payload: Record<string, unknown> | null = null
 let loadVersion = 0
 let orderDetailURL = ''
+let refundAlive = true
+let refundSessionKey = ''
+const refundIdentityKey = () => `${localStorage.getItem('token') || ''}:${tenantAuthorityKey(readStoredUser())}`
+const pendingRefundConfirms = new Set<object>()
+const refundContext = () => ({ version: loadVersion, session: refundSessionKey })
+const isRefundContextCurrent = (context: ReturnType<typeof refundContext>) => refundAlive && context.version === loadVersion &&
+  context.session === refundSessionKey && context.session === refundIdentityKey()
+class StaleRefundContext extends Error {}
+const assertRefundContext = (context: ReturnType<typeof refundContext>) => { if (!isRefundContextCurrent(context)) throw new StaleRefundContext() }
+const refundWait = async <T,>(context: ReturnType<typeof refundContext>, promise: Promise<T>): Promise<T> => {
+  try { const result = await promise; assertRefundContext(context); return result }
+  catch (cause) { assertRefundContext(context); throw cause }
+}
+const refundAction = <Args extends any[],>(action: (...args: Args) => Promise<void>) => async (...args: Args) => {
+  try { await action(...args) }
+  catch (cause) { if (refundAlive && !(cause instanceof StaleRefundContext) && cause !== 'cancel' && cause !== 'close') throw cause }
+}
+const refundConfirm = async (context: ReturnType<typeof refundContext>, ...args: Parameters<typeof ElMessageBox.confirm>) => {
+  assertRefundContext(context)
+  const pending = {}
+  pendingRefundConfirms.add(pending)
+  try { return await refundWait(context, ElMessageBox.confirm(...args)) }
+  finally { pendingRefundConfirms.delete(pending) }
+}
+const close = () => {
+  ++loadVersion
+  visible.value = false
+  order.value = null
+  reason.value = ''
+  error.value = ''
+  businessNotice.value = ''
+  unavailable.value = ''
+  submitting.value = false
+  checking.value = false
+  loading.value = false
+  payload = null
+  requestKey = ''
+  orderDetailURL = ''
+  overridePolicy.value = false
+  confirmUpstream.value = false
+  if (pendingRefundConfirms.size) ElMessageBox.close()
+  pendingRefundConfirms.clear()
+}
+const onRefundIdentityRefresh = () => {
+  if (refundSessionKey && refundSessionKey !== refundIdentityKey()) close()
+}
 
 // Read fresh scoped facts before confirming. All authorization, sale-time
 // policy, amount and ticket reservation checks remain in RefundService.
-const open = async (orderNo: string, detailURL?: string) => {
+const open = refundAction(async (orderNo: string, detailURL?: string) => {
+  if (!refundAlive) return
   if (submitting.value || checking.value) return
   const version = ++loadVersion
+  refundSessionKey = refundIdentityKey()
+  const context = refundContext()
   visible.value = true
   loading.value = true
   submitted.value = false
@@ -99,7 +148,7 @@ const open = async (orderNo: string, detailURL?: string) => {
   payload = null
   orderDetailURL = detailURL || `/orders/${encodeURIComponent(orderNo)}`
   try {
-    const { data } = await request.get(orderDetailURL)
+    const { data } = await refundWait(context, request.get(orderDetailURL, { skipErrorToast: true } as any))
     if (version !== loadVersion) return
     order.value = data.order
     if (!order.value || order.value.order_no !== orderNo) throw new Error('订单详情不匹配，请重新打开')
@@ -119,14 +168,15 @@ const open = async (orderNo: string, detailURL?: string) => {
     else if (needsPolicyOverride.value && !canOverridePolicy.value) unavailable.value = '该订单购买时不可退，仅本商户景区初始管理员可申请例外退款'
     else if (hasUsedTickets.value && !canUsedTicketRefund.value) unavailable.value = '订单包含已核销票券，仅本商户景区初始管理员可按误核销例外申请退款'
   } catch (cause: any) {
+    if (!isRefundContextCurrent(context)) return
     if (version === loadVersion) {
       order.value = null
       error.value = cause.response?.data?.error || cause.message || '订单详情加载失败，请重新打开'
     }
   } finally {
-    if (version === loadVersion) loading.value = false
+    if (isRefundContextCurrent(context)) loading.value = false
   }
-}
+})
 
 // Only an authoritative refund result can confirm receipt or completion.
 const showResult = (status: string) => {
@@ -144,12 +194,14 @@ const showResult = (status: string) => {
   return true
 }
 
-const queryResult = async () => {
+const queryResult = refundAction(async () => {
   if (checking.value || !payload) return
   const version = loadVersion
+  const context = refundContext()
+  if (!isRefundContextCurrent(context)) return
   checking.value = true
   try {
-    const { data } = await request.get(orderDetailURL, { skipErrorToast: true } as any)
+    const { data } = await refundWait(context, request.get(orderDetailURL, { skipErrorToast: true } as any))
     if (version !== loadVersion || !visible.value) return
     if (data?.order?.order_no !== payload.order_no) return
     const refund = (Array.isArray(data.refunds) ? data.refunds : []).find((item: any) =>
@@ -162,22 +214,28 @@ const queryResult = async () => {
     }
   } catch {
     // A read failure says nothing about whether the original refund committed.
-  } finally { checking.value = false }
-}
+  } finally { if (isRefundContextCurrent(context)) checking.value = false }
+})
 
-const submit = async () => {
+const submit = refundAction(async () => {
   if (checking.value || loading.value || submitting.value || submitted.value || unavailable.value || !order.value || !reason.value.trim() ||
     (requiresExceptionAcknowledgement.value && (!canAuthorizeException.value || !overridePolicy.value))) return
+  const context = refundContext()
+  if (!visible.value || !isRefundContextCurrent(context)) return
+  const originalOrder = order.value
+  const originalReason = reason.value.trim()
+  const originalTicketCodes = tickets.value.map(ticket => ticket.ticket_code)
   submitting.value = true
   if (!payload && order.value.has_upstream_supply) {
     try {
-      const { data } = await request.post('/payments/refunds/upstream-check', { order_no: order.value.order_no }, { skipErrorToast: true } as any)
+      const { data } = await refundWait(context, request.post('/payments/refunds/upstream-check', { order_no: originalOrder.order_no }, { skipErrorToast: true } as any))
       if (data.requires_confirmation) {
         if (!canOverridePolicy.value) { error.value = '供应商状态不允许普通退款，请联系本景区初始管理员处理'; submitting.value = false; return }
-        await ElMessageBox.confirm(data.message, '确认供应商状态冲突', { type: 'warning', confirmButtonText: '确认仍然退款', cancelButtonText: '返回检查' })
+        await refundConfirm(context, data.message, '确认供应商状态冲突', { type: 'warning', confirmButtonText: '确认仍然退款', cancelButtonText: '返回检查' })
         confirmUpstream.value = true
       }
     } catch (cause: any) {
+      if (!isRefundContextCurrent(context)) return
       if (cause !== 'cancel' && cause !== 'close') error.value = cause.response?.data?.error || '供应商状态检查失败，请重试'
       submitting.value = false; return
     }
@@ -185,29 +243,32 @@ const submit = async () => {
   if (!payload && requiresExceptionAcknowledgement.value) {
     try {
       const usedNotice = hasUsedTickets.value ? '原核销记录会保留，退款成功后票券失效。' : ''
-      await ElMessageBox.confirm(`订单 ${order.value.order_no} 将申请整单原路退款 ¥${Number(order.value.total_amount || 0).toFixed(2)}。例外原因：${reason.value.trim()}。${usedNotice}本操作将记录审计，渠道确认成功后才算退款完成。`, '确认管理员例外退款', {
+      await refundConfirm(context, `订单 ${originalOrder.order_no} 将申请整单原路退款 ¥${Number(originalOrder.total_amount || 0).toFixed(2)}。例外原因：${originalReason}。${usedNotice}本操作将记录审计，渠道确认成功后才算退款完成。`, '确认管理员例外退款', {
         confirmButtonText: '确认提交例外退款', cancelButtonText: '返回检查', type: 'warning',
       })
     } catch {
+      if (!isRefundContextCurrent(context)) return
       submitting.value = false
       return
     }
   }
   // A retry within this dialog replays the same request, even when its response
   // was lost. Do not turn a timeout into a second refund application.
-  if (!payload) payload = { order_no: order.value.order_no, idempotency_key: requestKey,
-    amount: order.value.total_amount, ticket_codes: tickets.value.map(ticket => ticket.ticket_code), reason: reason.value.trim(),
+  assertRefundContext(context)
+  if (!payload) payload = { order_no: originalOrder.order_no, idempotency_key: requestKey,
+    amount: originalOrder.total_amount, ticket_codes: originalTicketCodes, reason: originalReason,
     ...(confirmUpstream.value ? { confirm_upstream_refund: true } : {}),
     ...(needsPolicyOverride.value ? { override_refund_policy: true } : {}) }
   attempted.value = true
   error.value = ''
   businessNotice.value = ''
   try {
-    const { data } = await request.post('/payments/refunds/mixed', payload, { skipErrorToast: true } as any)
+    const { data } = await refundWait(context, request.post('/payments/refunds/mixed', payload, { skipErrorToast: true } as any))
     if (showResult(data?.status)) return
     uncertain.value = true
     await queryResult()
   } catch (cause: any) {
+    if (!isRefundContextCurrent(context)) return
     const status = cause.response?.status
     const message = cause.response?.data?.error
     const genericFailure = ['请求失败，请稍后重试', '操作失败，请稍后重试', '请求超时，请稍后重试', '网络连接失败，请检查网络后重试'].includes(message)
@@ -221,10 +282,16 @@ const submit = async () => {
       uncertain.value = true
       await queryResult()
     }
-  } finally { submitting.value = false }
-}
+  } finally { if (isRefundContextCurrent(context)) submitting.value = false }
+})
 
-defineExpose({ open })
+onMounted(() => window.addEventListener('tenant-identity-refreshed', onRefundIdentityRefresh))
+onBeforeUnmount(() => {
+  refundAlive = false
+  close()
+  window.removeEventListener('tenant-identity-refreshed', onRefundIdentityRefresh)
+})
+defineExpose({ open, close })
 </script>
 
 <style scoped>

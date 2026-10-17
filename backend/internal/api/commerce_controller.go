@@ -362,6 +362,24 @@ func (c *CommerceOperationsController) CreateLocation(ctx *gin.Context) {
 	ctx.JSON(http.StatusCreated, row)
 }
 
+func (c *CommerceOperationsController) UpdateLocation(ctx *gin.Context) {
+	locationID, err := parseCommerceID(ctx, "locationID")
+	if err != nil {
+		return
+	}
+	var input service.CreateCommerceLocationInput
+	if err := ctx.ShouldBindJSON(&input); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"error": "履约地点信息格式不正确"})
+		return
+	}
+	row, err := c.Service.UpdateLocation(ctx.GetUint("tenant_id"), locationID, input)
+	if err != nil {
+		commerceCatalogError(ctx, err)
+		return
+	}
+	ctx.JSON(http.StatusOK, row)
+}
+
 func (c *CommerceOperationsController) SetLocationStatus(ctx *gin.Context) {
 	locationID, err := parseCommerceID(ctx, "id")
 	if err != nil {

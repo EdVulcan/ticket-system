@@ -164,6 +164,9 @@ func TestCommerceControllersFailClosedWhenBusinessCapabilitySuspended(t *testing
 				{"create location", invokeCommerceController(t, http.MethodPost, "/commerce/locations", tenant.ID, map[string]interface{}{
 					"business_type": businessType, "name": "Blocked location", "tenant_id": tenant.ID,
 				}, nil, operationsController.CreateLocation)},
+				{"update location", invokeCommerceController(t, http.MethodPut, "/commerce/locations/"+locationID, tenant.ID, map[string]interface{}{
+					"business_type": businessType, "name": "Blocked update", "location_type": "pickup", "status": "inactive",
+				}, gin.Params{{Key: "locationID", Value: locationID}}, operationsController.UpdateLocation)},
 				{"set location status", invokeCommerceController(t, http.MethodPatch, "/commerce/locations/"+locationID+"/status", tenant.ID, map[string]string{"status": "inactive"}, gin.Params{{Key: "id", Value: locationID}}, operationsController.SetLocationStatus)},
 				{"list inventory", invokeCommerceController(t, http.MethodGet, "/commerce/inventory?business_type="+businessType, tenant.ID, nil, nil, operationsController.ListInventory)},
 				{"set inventory", invokeCommerceController(t, http.MethodPut, "/commerce/inventory", tenant.ID, map[string]interface{}{
@@ -279,5 +282,61 @@ func TestCommerceControllerCrossTenantProductIsNotReadableOrWritable(t *testing.
 	}
 	if stored.TenantID != owner.ID || stored.Status != "online" {
 		t.Fatalf("cross-tenant update changed owner product: %+v", stored)
+	}
+}
+
+func TestCommerceControllerLocationUpdateUsesAuthenticatedTenantAndOriginalBusiness(t *testing.T) {
+	db := openCommerceBoundaryControllerDB(t)
+	owner := createCommerceControllerTenant(t, db, "location owner", "retail")
+	foreign := createCommerceControllerTenant(t, db, "foreign location tenant", "retail")
+	if err := db.Create(&model.TenantBusinessCapability{TenantID: owner.ID, BusinessType: "restaurant", Status: "active"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, location, _ := createCommerceControllerDomainData(t, owner.ID, "retail")
+	controller := &CommerceOperationsController{Service: service.CommerceOperationsService{}}
+	locationID := strconv.FormatUint(uint64(location.ID), 10)
+	params := gin.Params{{Key: "locationID", Value: locationID}}
+	payload := map[string]interface{}{
+		"tenant_id": foreign.ID, "id": location.ID + 1000, "business_type": "retail",
+		"name": "Edited warehouse", "location_type": "warehouse", "status": "inactive",
+	}
+	checks := []struct {
+		name     string
+		tenantID uint
+		body     interface{}
+		params   gin.Params
+		wantCode int
+	}{
+		{"foreign tenant", foreign.ID, payload, params, http.StatusNotFound},
+		{"another enabled business", owner.ID, map[string]string{"business_type": "restaurant", "name": "Moved"}, params, http.StatusNotFound},
+		{"invalid name", owner.ID, map[string]string{"business_type": "retail", "name": " "}, params, http.StatusBadRequest},
+		{"invalid id", owner.ID, payload, gin.Params{{Key: "locationID", Value: "0"}}, http.StatusBadRequest},
+		{"invalid payload", owner.ID, []string{"invalid"}, params, http.StatusBadRequest},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			response := invokeCommerceController(t, http.MethodPut, "/commerce/locations/"+locationID, check.tenantID, check.body, check.params, controller.UpdateLocation)
+			if response.Code != check.wantCode {
+				t.Fatalf("status=%d body=%s, want %d", response.Code, response.Body.String(), check.wantCode)
+			}
+			var stored model.CommerceFulfillmentLocation
+			if err := db.First(&stored, location.ID).Error; err != nil {
+				t.Fatal(err)
+			}
+			if stored.Name != location.Name || stored.TenantID != owner.ID || stored.BusinessType != "retail" || stored.Status != "active" {
+				t.Fatalf("rejected request changed location: %+v", stored)
+			}
+		})
+	}
+	response := invokeCommerceController(t, http.MethodPut, "/commerce/locations/"+locationID, owner.ID, payload, params, controller.UpdateLocation)
+	if response.Code != http.StatusOK {
+		t.Fatalf("owner update status=%d body=%s, want 200", response.Code, response.Body.String())
+	}
+	var updated model.CommerceFulfillmentLocation
+	if err := json.Unmarshal(response.Body.Bytes(), &updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != location.ID || updated.TenantID != owner.ID || updated.BusinessType != "retail" || updated.Name != "Edited warehouse" || updated.LocationType != "warehouse" || updated.Status != "inactive" {
+		t.Fatalf("request ownership fields changed update identity: %+v", updated)
 	}
 }

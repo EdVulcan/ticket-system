@@ -140,11 +140,14 @@
                   <el-tag :type="row.status === 'active' ? 'success' : 'info'" effect="plain">{{ locationStatusLabel(row.status) }}</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="130" fixed="right" align="right">
+              <el-table-column label="操作" width="160" fixed="right" align="right">
                 <template #default="{ row }">
-                  <el-button v-if="canWrite" link :type="row.status === 'active' ? 'danger' : 'success'" @click="toggleLocationStatus(row)">
-                    {{ row.status === 'active' ? '停用' : '启用' }}
-                  </el-button>
+                  <template v-if="canWrite">
+                    <el-button link type="primary" @click="openLocationDialog(row)">编辑</el-button>
+                    <el-button link :type="row.status === 'active' ? 'danger' : 'success'" @click="toggleLocationStatus(row)">
+                      {{ row.status === 'active' ? '停用' : '启用' }}
+                    </el-button>
+                  </template>
                   <span v-else class="secondary-cell">只读</span>
                 </template>
               </el-table-column>
@@ -580,13 +583,13 @@
       <template #footer><el-button @click="optionDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveOption">保存{{ optionNoun }}</el-button></template>
     </el-dialog>
 
-    <el-dialog v-model="locationDialogVisible" :title="`新增${locationNoun}`" width="min(520px, calc(100vw - 32px))" destroy-on-close>
-      <el-form :model="locationForm" label-position="top" class="commerce-form">
+    <el-dialog v-model="locationDialogVisible" :title="`${locationForm.id ? '编辑' : '新增'}${locationNoun}`" width="min(520px, calc(100vw - 32px))" destroy-on-close @close="invalidateLocationMutation">
+      <el-form :model="locationForm" :disabled="locationSaving" label-position="top" class="commerce-form">
         <el-form-item :label="`${locationNoun}名称`" required><el-input v-model="locationForm.name" maxlength="120" :placeholder="locationPlaceholder" /></el-form-item>
         <el-form-item label="地点类型"><el-select v-model="locationForm.location_type" class="full-width"><el-option v-for="option in locationTypeOptions" :key="option.value" :label="option.label" :value="option.value" /></el-select></el-form-item>
         <el-form-item label="状态"><el-select v-model="locationForm.status" class="full-width"><el-option label="启用" value="active" /><el-option label="停用" value="inactive" /></el-select></el-form-item>
       </el-form>
-      <template #footer><el-button @click="locationDialogVisible = false">取消</el-button><el-button type="primary" :loading="saving" @click="saveLocation">保存{{ locationNoun }}</el-button></template>
+      <template #footer><el-button @click="locationDialogVisible = false">取消</el-button><el-button v-if="canWrite" type="primary" :loading="locationSaving" @click="saveLocation">保存{{ locationNoun }}</el-button></template>
     </el-dialog>
 
     <el-dialog v-model="inventoryDialogVisible" :title="inventoryForm.id ? '设置库存' : '设置库存'" width="min(560px, calc(100vw - 32px))" destroy-on-close>
@@ -948,6 +951,7 @@ let commerceContextVersion = 0
 let productDetailRequestVersion = 0
 let orderDetailRequestVersion = 0
 let productEditMutationVersion = 0
+let locationMutationVersion = 0
 const orderDetailLoading = ref(false)
 const orderDetailVisible = ref(false)
 const selectedOrder = ref<any | null>(null)
@@ -1012,6 +1016,7 @@ const skuDialogVisible = ref(false)
 const optionGroupDialogVisible = ref(false)
 const optionDialogVisible = ref(false)
 const locationDialogVisible = ref(false)
+const locationSaving = ref(false)
 const inventoryDialogVisible = ref(false)
 const adjustmentDialogVisible = ref(false)
 
@@ -1037,7 +1042,7 @@ const productEditForm = reactive({
 const skuForm = reactive<ProductSKU>(newSkuForm())
 const optionGroupForm = reactive({ id: 0, name: '', required: false, min_selections: 0, max_selections: 1 })
 const optionForm = reactive({ id: 0, group_id: 0, name: '', price_delta: 0, status: 'active' })
-const locationForm = reactive({ name: '', location_type: 'store', status: 'active' })
+const locationForm = reactive({ id: 0, name: '', location_type: 'store', status: 'active' })
 const inventoryForm = reactive({ id: 0, sku_id: 0, location_id: 0, available_qty: 0 })
 const adjustmentForm = reactive({ delta: 0 })
 const adjustmentRow = ref<any | null>(null)
@@ -1190,6 +1195,11 @@ function invalidateProductEditMutation() {
   productEditSaving.value = false
 }
 
+function invalidateLocationMutation() {
+  locationMutationVersion += 1
+  locationSaving.value = false
+}
+
 function invalidateCommerceContext() {
   commerceContextVersion += 1
   productsRequestVersion += 1
@@ -1200,6 +1210,7 @@ function invalidateCommerceContext() {
   productDetailRequestVersion += 1
   orderDetailRequestVersion += 1
   productEditMutationVersion += 1
+  invalidateLocationMutation()
 
   loading.value = false
   saving.value = false
@@ -2370,30 +2381,47 @@ async function removeOption(group: any, option: any) {
   }
 }
 
-function openLocationDialog() {
-  Object.assign(locationForm, { name: '', location_type: isRestaurant.value ? 'store' : 'warehouse', status: 'active' })
+function openLocationDialog(row?: any) {
+  if (!canWrite.value) return
+  invalidateLocationMutation()
+  Object.assign(locationForm, {
+    id: Number(row?.id || 0),
+    name: row?.name || '',
+    location_type: row?.location_type || (isRestaurant.value ? 'store' : 'warehouse'),
+    status: row?.status || 'active',
+  })
   locationDialogVisible.value = true
 }
 
 async function saveLocation() {
-  if (!canWrite.value) return
+  if (!canWrite.value || !locationDialogVisible.value || locationSaving.value) return
   if (!locationForm.name.trim()) {
     ElMessage.warning(`请填写${locationNoun.value}名称`)
     return
   }
-  saving.value = true
+  const context = captureCommerceContext()
+  const mutationVersion = ++locationMutationVersion
+  const locationID = locationForm.id
+  const payload = {
+    business_type: context.domain,
+    name: locationForm.name.trim(),
+    location_type: locationForm.location_type,
+    status: locationForm.status,
+  }
+  const isCurrentMutation = () => mutationVersion === locationMutationVersion
+    && isCommerceContextCurrent(context) && locationDialogVisible.value && locationForm.id === locationID
+  locationSaving.value = true
   try {
-    await request.post('/commerce/locations', {
-      business_type: currentDomain.value,
-      name: locationForm.name.trim(),
-      location_type: locationForm.location_type,
-      status: locationForm.status,
-    })
+    if (locationID) await request.put(`/commerce/locations/${locationID}`, payload)
+    else await request.post('/commerce/locations', payload)
+    if (!isCurrentMutation()) return
+    await loadLocations()
+    if (!isCurrentMutation()) return
     locationDialogVisible.value = false
     ElMessage.success(`${locationNoun.value}已保存`)
-    await loadLocations()
-  } finally {
-    saving.value = false
+  } catch { /* request interceptor already reported the error; keep the form for retry */ }
+  finally {
+    if (mutationVersion === locationMutationVersion && isCommerceContextCurrent(context)) locationSaving.value = false
   }
 }
 
@@ -2492,6 +2520,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  invalidateLocationMutation()
   window.removeEventListener('tenant-identity-refreshed', handleIdentityRefresh)
 })
 </script>

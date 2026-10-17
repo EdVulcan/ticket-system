@@ -2,7 +2,8 @@ export type TenantIdentity = Record<string, any>
 
 const REFRESH_CACHE_MS = 2_000
 let lastRefreshAt = 0
-let refreshPromise: Promise<TenantIdentity> | null = null
+let lastRefreshToken: string | null = null
+let refreshInFlight: { token: string; promise: Promise<TenantIdentity> } | null = null
 
 export const readStoredUser = (): TenantIdentity => {
   try {
@@ -10,6 +11,21 @@ export const readStoredUser = (): TenantIdentity => {
   } catch {
     return {}
   }
+}
+
+// Stable authority snapshot for local view invalidation; it is not authorization.
+// Display-name refreshes and reordered lists must not discard an editing draft.
+export const tenantAuthorityKey = (user: TenantIdentity): string => {
+  user = user || {}
+  const grants = (items: any) => (Array.isArray(items) ? items : [])
+    .filter((item: any) => item && typeof item === 'object')
+    .map((item: any) => JSON.stringify([item.capability ?? item.business_type, item.status, item.expires_at ?? null]))
+    .sort()
+  return JSON.stringify([
+    user.scope, user.id, user.tenant_id, user.role, user.is_initial_admin === true, user.tenant_status || 'active',
+    [...(Array.isArray(user.permissions) ? user.permissions : [])].sort(),
+    grants(user.capabilities), grants(user.supplier_business_types), grants(user.business_capabilities),
+  ])
 }
 
 export const capabilityIsActive = (item: any, now = Date.now()) => {
@@ -80,34 +96,43 @@ export const refreshStoredTenantIdentity = async (force = false): Promise<Tenant
   const current = readStoredUser()
   const token = localStorage.getItem('token')
   if (!token || current.scope !== 'tenant') return current
-  if (!force && Date.now() - lastRefreshAt < REFRESH_CACHE_MS) return current
-  if (refreshPromise) return refreshPromise
+  if (!force && token === lastRefreshToken && Date.now() - lastRefreshAt < REFRESH_CACHE_MS) return current
+  if (refreshInFlight?.token === token) return refreshInFlight.promise
 
-  refreshPromise = (async () => {
+  const promise = (async () => {
     try {
       const baseURL = String(import.meta.env.VITE_API_URL || '/api/v1').replace(/\/$/, '')
       const response = await fetch(`${baseURL}/tenants/me`, {
         headers: { Authorization: `Bearer ${token}` },
       })
+      // A previous session may finish after another merchant has logged in.
+      if (localStorage.getItem('token') !== token) return readStoredUser()
       if (response.status === 401) {
         localStorage.removeItem('token')
         localStorage.removeItem('user')
         window.dispatchEvent(new CustomEvent('auth-session-expired'))
         return {}
       }
-      if (!response.ok) return current
+      if (!response.ok) return readStoredUser()
       const tenant = await response.json()
-      const next = mergeTenantIdentity(current, tenant)
+      if (localStorage.getItem('token') !== token) return readStoredUser()
+      // The trusted endpoint may correct stale local tenant metadata for this token.
+      const next = mergeTenantIdentity(readStoredUser(), tenant)
       localStorage.setItem('user', JSON.stringify(next))
+      lastRefreshToken = token
       lastRefreshAt = Date.now()
       window.dispatchEvent(new CustomEvent('tenant-identity-refreshed', { detail: next }))
       return next
     } catch {
-      return current
-    } finally {
-      refreshPromise = null
+      return readStoredUser()
     }
   })()
 
-  return refreshPromise
+  const flight = { token, promise }
+  refreshInFlight = flight
+  try {
+    return await promise
+  } finally {
+    if (refreshInFlight === flight) refreshInFlight = null
+  }
 }

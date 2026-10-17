@@ -117,7 +117,7 @@
           <div class="content-frame">
             <RouterView v-slot="{ Component }">
               <transition name="page-fade" mode="out-in">
-                <component :is="Component" />
+                <component :is="Component" :key="route.path === '/channels' ? channelContextVersion : undefined" />
               </transition>
             </RouterView>
           </div>
@@ -164,6 +164,7 @@ import {
   configuredSupplierBusinessTypeSet,
   readStoredUser,
   refreshStoredTenantIdentity,
+  tenantAuthorityKey,
 } from '@/utils/tenantAccess'
 
 type NavItem = { path: string; label: string; icon: any }
@@ -173,6 +174,9 @@ const route = useRoute()
 const router = useRouter()
 const isSuperAdmin = ref(false)
 const user = ref<any>({})
+const channelContextVersion = ref(0)
+let channelContextToken = localStorage.getItem('token')
+let channelContextAuthority = tenantAuthorityKey(readStoredUser())
 const sidebarCollapsed = ref(localStorage.getItem('admin_sidebar_collapsed') === '1')
 const mobileSidebarOpen = ref(false)
 const passwordDialogVisible = ref(false)
@@ -359,6 +363,13 @@ const copyCode = async () => {
 }
 
 const applyUser = (next: any) => {
+  const token = localStorage.getItem('token')
+  const authority = tenantAuthorityKey(next || {})
+  if (token !== channelContextToken || authority !== channelContextAuthority) {
+    channelContextToken = token
+    channelContextAuthority = authority
+    channelContextVersion.value++
+  }
   user.value = next || {}
   isSuperAdmin.value = user.value.scope === 'platform'
 }

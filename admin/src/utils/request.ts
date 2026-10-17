@@ -32,10 +32,15 @@ service.interceptors.response.use(
     return response
   },
   (error) => {
+    const token = localStorage.getItem('token')
+    const authorization = String(error.config?.headers?.Authorization || '')
+    // An old account's failure must not log out or notify the new account.
+    if (authorization !== (token ? `Bearer ${token}` : '')) return Promise.reject(error)
     const skipErrorToast = Boolean((error.config as any)?.skipErrorToast)
     if (error.response) {
       const status = error.response.status
       if (status === 401) {
+        if (!token || !authorization) return Promise.reject(error)
         let loginPath = router.currentRoute.value.path.startsWith('/platform') ? '/platform/login' : '/login'
         try {
           const user = JSON.parse(localStorage.getItem('user') || '{}')

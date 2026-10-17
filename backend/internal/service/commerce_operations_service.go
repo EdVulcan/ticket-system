@@ -399,6 +399,33 @@ func (s *CommerceOperationsService) CreateLocation(tenantID uint, input CreateCo
 	return result, err
 }
 
+func (s *CommerceOperationsService) UpdateLocation(tenantID, locationID uint, input CreateCommerceLocationInput) (*model.CommerceFulfillmentLocation, error) {
+	input, err := normalizeLocationInput(input)
+	if err != nil {
+		return nil, err
+	}
+	var result *model.CommerceFulfillmentLocation
+	err = s.write(func(tx *gorm.DB) error {
+		var location model.CommerceFulfillmentLocation
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND tenant_id = ? AND business_type = ?", locationID, tenantID, input.BusinessType).
+			First(&location).Error; err != nil {
+			return err
+		}
+		if err := requireActiveCommerceCapability(tx, tenantID, location.BusinessType); err != nil {
+			return err
+		}
+		if err := tx.Model(&location).Updates(map[string]interface{}{
+			"name": input.Name, "location_type": input.LocationType, "status": input.Status,
+		}).Error; err != nil {
+			return err
+		}
+		result = &location
+		return nil
+	})
+	return result, err
+}
+
 func (s *CommerceOperationsService) ListLocations(tenantID uint, businessType, status string) ([]model.CommerceFulfillmentLocation, error) {
 	db := s.db()
 	businessType = strings.TrimSpace(businessType)
